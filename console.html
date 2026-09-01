@@ -532,7 +532,7 @@ function openModal(ch) {
   $('#f-enabled').value = ch ? String(ch.enabled !== false) : 'true';
   $('#f-baseUrl').value = ch ? ch.baseUrl : '';
   $('#f-apiKey').value = ch ? ch.apiKey : '';
-  $('#f-autoAlias').checked = ch ? ch.autoAlias !== false : true;
+  $('#f-autoAlias').checked = ch ? ch.autoAlias === true : false;
   state.probedModels = [];
   state.modalChannel = ch;
   state.modalModels = ch && ch.models ? Object.entries(ch.models).map(([alias, upstream]) => ({ alias, upstream })) : [];
