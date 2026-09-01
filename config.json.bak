@@ -1,7 +1,13 @@
 {
   "port": 8787,
-  "health": { "intervalSec": 300, "timeoutMs": 8000 },
-  "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
+  "health": {
+    "intervalSec": 300,
+    "timeoutMs": 8000
+  },
+  "retries": {
+    "perChannel": 1,
+    "maxModelFallbacks": 99
+  },
   "channels": [
     {
       "id": "bqgy",
@@ -19,6 +25,26 @@
         "kimi-k3-free": "kimi-k3-free",
         "minimax-m3-free": "minimax-m3-free",
         "step-3.7-flash-free": "step-3.7-flash-free"
+      }
+    },
+    {
+      "id": "FKK",
+      "name": "小食堂芙卡卡",
+      "baseUrl": "https://api.fuka.win/v1",
+      "apiKey": "sk-03miVvCUQQb8cgsHxtvxaqQCjkNYXw7mRAEtc544F3tJx0En",
+      "protocol": "openai",
+      "priority": 0,
+      "enabled": true,
+      "autoAlias": false,
+      "models": {
+        "[浣溪沙]gpt-5.6-luna①": "[浣溪沙]gpt-5.6-luna①",
+        "[浣溪沙]gpt-5.6-sol③": "[浣溪沙]gpt-5.6-sol③",
+        "[浣溪沙]gpt-5.6-terra②": "[浣溪沙]gpt-5.6-terra②",
+        "[百香果]claude-4.8-opus③": "[百香果]claude-4.8-opus③",
+        "[百香果]claude-5-opus③": "[百香果]claude-5-opus③",
+        "[蝶恋花]deepseek-v4-flash①": "[蝶恋花]deepseek-v4-flash①",
+        "[蝶恋花]deepseek-v4-pro①": "[蝶恋花]deepseek-v4-pro①",
+        "[采桑子]glm-5.2②": "[采桑子]glm-5.2②"
       }
     }
   ]

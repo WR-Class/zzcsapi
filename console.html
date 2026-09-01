@@ -535,7 +535,9 @@ function openModal(ch) {
   $('#f-autoAlias').checked = ch ? ch.autoAlias === true : false;
   state.probedModels = [];
   state.modalChannel = ch;
-  state.modalModels = ch && ch.models ? Object.entries(ch.models).map(([alias, upstream]) => ({ alias, upstream })) : [];
+  state.modalModels = ch && ch.aliases && ch.aliases.length
+    ? ch.aliases.map((a) => ({ alias: a.alias, upstream: a.upstream }))
+    : (ch && ch.models ? Object.entries(ch.models).map(([alias, upstream]) => ({ alias, upstream })) : []);
   renderModelsEditor();
   $('#probe-add-list').style.display = 'none';
   $('#probe-add-list').innerHTML = '';
