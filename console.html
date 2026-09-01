@@ -183,11 +183,10 @@
 
     <!-- 模型列表（行式编辑器） -->
     <div class="field">
-      <label>模型 <span class="small" id="models-count">— 0 个</span></label>
+      <label>模型 <span class="small" id="models-count">— 0 个</span> <span class="small" id="probe-status" style="margin-left:8px"></span></label>
       <div class="probe-row" style="margin-bottom:6px">
-        <button id="btn-add-model" type="button">+ 添加一行</button>
-        <button id="btn-probe" type="button" class="primary">🔍 探测获取</button>
-        <span class="grow small" id="probe-status"></span>
+        <button id="btn-add-model" type="button" class="primary">+ 添加一行</button>
+        <button id="btn-probe" type="button" class="ghost" style="background:transparent;border:1px dashed #2c3140;color:#8a93a6;font-size:11px;padding:3px 10px">从上游探测更多</button>
       </div>
       <div id="models-editor" style="border:1px solid #2c3140;border-radius:6px;background:#11141b;max-height:260px;overflow:auto"></div>
       <div class="small" id="probe-add-list" style="display:none;margin-top:6px"></div>
@@ -554,7 +553,7 @@ function renderModelsEditor() {
   const root = $('#models-editor');
   const rows = state.modalModels || [];
   if (!rows.length) {
-    root.innerHTML = '<div class="model-empty">还没有模型。点「+ 添加一行」手动加，或「🔍 探测获取」从上游拉。</div>';
+    root.innerHTML = '<div class="model-empty">还没有模型。点「+ 添加一行」手动加，<br>或用「从上游探测更多」从上游拉取后再勾选。</div>';
   } else {
     let html = '<div class="model-row head"><div>对外名称（alias）</div><div>上游真实模型</div><div></div><div></div></div>';
     for (let i = 0; i < rows.length; i++) {
@@ -568,7 +567,7 @@ function renderModelsEditor() {
     }
     root.innerHTML = html;
   }
-  $('#models-count').textContent = `— ${rows.length} 个`;
+  $('#models-count').textContent = `· ${rows.length} 个`;
 
   // 绑定事件
   $$('#models-editor .model-row').forEach((row) => {
