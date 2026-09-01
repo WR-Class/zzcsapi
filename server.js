@@ -9,7 +9,92 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
+const { spawn } = require('child_process');
 const { URL } = require('url');
+
+// 检测响应是否 Cloudflare WAF 拦截（JA3/TLS 指纹被识别为机器人）
+function isCloudflareBlock(status, body) {
+  if (status === 403 && body && body.length > 100 && /cloudflare|cf-wrapper|attention required/i.test(body.slice(0, 800))) return true;
+  if (status === 403 && body && /<html/i.test(body.slice(0, 500))) return true;
+  return false;
+}
+
+// 通过 PowerShell (Invoke-WebRequest) 发起请求 — 用 .NET Schannel/TLS，绕过 Cloudflare JA3 拦截
+// 仅在 Windows 上有效。返回 {status, headers, body, error}
+function psHttpRequest(method, url, headers, body, timeoutMs) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      return resolve({ status: 0, headers: {}, body: '', error: 'psHttpRequest only on Windows' });
+    }
+    // 构造 PowerShell 命令 — headers 必须是 hashtable
+    const hdrsPs = Object.entries(headers || {}).map(([k, v]) => {
+      const k2 = String(k).replace(/'/g, "''");
+      const v2 = String(v).replace(/'/g, "''");
+      return `'${k2}' = '${v2}'`;
+    }).join(';\n');
+    const bodyArg = body ? ` -Body @'\n${body}\n'@` : '';
+    const ps = `
+$ErrorActionPreference = 'Stop'
+try {
+  $hdrs = @{
+${hdrsPs}
+  }
+  $r = Invoke-WebRequest -Uri '${String(url).replace(/'/g, "''")}' -Method '${method}' -Headers $hdrs -TimeoutSec ${Math.max(1, Math.floor((timeoutMs || 30000) / 1000))} -UseBasicParsing${bodyArg}
+  $bytes = $r.RawContentStream.ToArray()
+  Write-Output ('STATUS=' + [int]$r.StatusCode)
+  foreach ($h in $r.Headers.GetEnumerator()) {
+    foreach ($v in $h.Value) { Write-Output ('HDR=' + $h.Key + ': ' + $v) }
+  }
+  Write-Output '---BODY---'
+  [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
+  [Console]::Out.Flush()
+} catch {
+  $r2 = $_.Exception.Response
+  if ($r2) {
+    Write-Output ('STATUS=' + [int]$r2.StatusCode)
+    $s = $r2.GetResponseStream()
+    $sr = New-Object System.IO.StreamReader($s)
+    Write-Output '---BODY---'
+    Write-Output $sr.ReadToEnd()
+  } else {
+    Write-Output ('STATUS=0')
+    Write-Output '---BODY---'
+    Write-Output $_.Exception.Message
+  }
+}
+`;
+    const child = spawn('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true });
+    let stdout = Buffer.alloc(0);
+    let stderr = '';
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} resolve({ status: 0, headers: {}, body: '', error: 'ps timeout' }); }, (timeoutMs || 30000) + 5000);
+    child.stdout.on('data', (c) => { stdout = Buffer.concat([stdout, c]); });
+    child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const text = stdout.toString('utf8');
+      const m = text.match(/^STATUS=(\d+)\r?\n([\s\S]*?)^---BODY---\r?\n?([\s\S]*)$/m);
+      if (!m) {
+        resolve({ status: 0, headers: {}, body: '', error: 'ps parse fail: ' + (stderr || text.slice(0, 200)) });
+        return;
+      }
+      const status = Number(m[1]);
+      const hdrLines = m[2].split(/\r?\n/).filter((l) => l.startsWith('HDR='));
+      const headersOut = {};
+      for (const l of hdrLines) {
+        const kv = l.slice(4).split(': ');
+        const k = kv[0].toLowerCase();
+        if (!headersOut[k]) headersOut[k] = [];
+        headersOut[k].push(kv.slice(1).join(': '));
+      }
+      // body 解析：m[3] 是从 ---BODY--- 之后到结尾的内容，stdout 末尾可能没换行符，所以是完整 buffer
+      const bodyStart = text.indexOf('---BODY---') + '---BODY---'.length;
+      const body = text.slice(bodyStart).replace(/^\r?\n/, '');
+      resolve({ status, headers: headersOut, body, error: null });
+    });
+    child.on('error', (err) => { clearTimeout(timer); resolve({ status: 0, headers: {}, body: '', error: 'ps spawn: ' + err.message }); });
+  });
+}
 
 // ─────────────────────────── 鉴权 ───────────────────────────
 const GATEWAY_KEY = process.env.GATEWAY_KEY || ''; // 客户端调 /v1/* / /anthropic/* / /gemini/*
@@ -261,12 +346,26 @@ async function probeDef(def, timeoutMs) {
     const resp = await fetch(probeUrlForDef(def), { method: 'GET', headers: probeHeadersForDef(def), signal: ctrl.signal });
     clearTimeout(timer);
     const ms = Date.now() - t0;
-    if (!resp.ok) {
-      return { ok: false, status: resp.status, error: `HTTP ${resp.status}`, latencyMs: ms };
+    if (resp.ok) {
+      const j = await resp.json().catch(() => null);
+      const models = extractModelIds(j, def.protocol || 'openai');
+      return { ok: true, models, latencyMs: ms, status: 200 };
     }
-    const j = await resp.json().catch(() => null);
-    const models = extractModelIds(j, def.protocol || 'openai');
-    return { ok: true, models, latencyMs: ms, status: 200 };
+    // 4xx/5xx: 读 body 判断是不是 Cloudflare 拦截
+    let body = '';
+    try { body = await resp.text(); } catch {}
+    if (isCloudflareBlock(resp.status, body)) {
+      // 用 PowerShell 走 .NET Schannel，绕过 JA3
+      const ps = await psHttpRequest('GET', probeUrlForDef(def), probeHeadersForDef(def), null, timeoutMs || 12000);
+      const ms2 = Date.now() - t0;
+      if (ps.status >= 200 && ps.status < 300) {
+        const j = safeJson(ps.body);
+        const models = extractModelIds(j, def.protocol || 'openai');
+        return { ok: true, models, latencyMs: ms2, status: ps.status, via: 'ps-fallback' };
+      }
+      return { ok: false, status: ps.status, error: `HTTP ${ps.status} (ps-fallback): ${ps.error || 'no body'}`, latencyMs: ms2, via: 'ps-fallback' };
+    }
+    return { ok: false, status: resp.status, error: `HTTP ${resp.status}: ${body.slice(0, 120)}`, latencyMs: ms };
   } catch (err) {
     clearTimeout(timer);
     return { ok: false, error: String(err && err.message || err), latencyMs: Date.now() - t0 };
@@ -994,31 +1093,62 @@ async function tryChannel(opts) {
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
   const headers = buildOutgoingHeaders(ch);
+  const bodyStr = JSON.stringify(outgoing);
+  const timeoutMs = ch.def.timeoutMs || 120_000;
 
   const t0 = Date.now();
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), (ch.def.timeoutMs || 120_000));
   let resp;
+  let usedFallback = false;
+  let respBody = null;
+
+  // 第一次尝试：Node fetch (undici)
   try {
-    resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(outgoing), signal: ctrl.signal });
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+    } finally { clearTimeout(to); }
   } catch (err) {
-    clearTimeout(to);
     recordFailure(ch, String(err && err.message || err));
     return `network: ${err.message || err}`;
   }
-  clearTimeout(to);
+
+  // 如果 fetch 被 Cloudflare 拦了（403 + HTML），且是非流请求，回退到 PowerShell (.NET Schannel)
+  if (resp.status === 403 && !isStream) {
+    let cfBody = '';
+    try { cfBody = await resp.text(); } catch {}
+    if (isCloudflareBlock(403, cfBody)) {
+      const ps = await psHttpRequest('POST', target, headers, bodyStr, timeoutMs);
+      if (ps.status > 0) {
+        usedFallback = true;
+        // 包装成 fetch-like
+        respBody = ps.body;
+        resp = {
+          status: ps.status,
+          ok: ps.status >= 200 && ps.status < 300,
+          headers: { get: (k) => {
+            const v = ps.headers[String(k).toLowerCase()];
+            return Array.isArray(v) ? v[0] : v;
+          } },
+          text: async () => ps.body,
+          json: async () => safeJson(ps.body) || {},
+          body: null,
+        };
+      }
+    }
+  }
 
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    recordFailure(ch, `HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    const text = usedFallback ? (respBody || '') : (await resp.text().catch(() => ''));
+    recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
     if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
       // 客户端错误：直接把上游响应转发
-      const ct = resp.headers.get('content-type') || '';
+      const ct = (resp.headers && resp.headers.get('content-type')) || '';
       res.writeHead(resp.status, { 'Content-Type': ct || 'application/json' });
       res.end(text);
       return 'fatal_client';
     }
-    return `upstream ${resp.status}`;
+    return `upstream ${resp.status}${usedFallback ? ' (via ps-fallback)' : ''}`;
   }
 
   // 成功
@@ -1036,6 +1166,12 @@ async function tryChannel(opts) {
       'X-Accel-Buffering': 'no',
       'X-ZZCSAPI-Channel': candidate.channelId,
     });
+    // PS 回退模式下没有流：直接把完整 body 写一次（仍满足"非空"语义）
+    if (usedFallback) {
+      if (respBody) res.write(respBody);
+      res.end();
+      return 'success';
+    }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';

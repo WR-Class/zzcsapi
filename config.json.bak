@@ -46,6 +46,20 @@
         "[蝶恋花]deepseek-v4-pro①": "[蝶恋花]deepseek-v4-pro①",
         "[采桑子]glm-5.2②": "[采桑子]glm-5.2②"
       }
+    },
+    {
+      "id": "docode",
+      "name": "docode",
+      "baseUrl": "https://docode.cc/v1",
+      "apiKey": "sk-OpXln0ZCOLCNLaGi9YdrNlRMBM43YF8uUXH7hl95H1fEI2F6",
+      "protocol": "openai",
+      "priority": 0,
+      "enabled": true,
+      "autoAlias": false,
+      "models": {
+        "gpt-5.6-sol": "gpt-5.6-sol",
+        "gpt-5.6-terra": "gpt-5.6-terra"
+      }
     }
   ]
 }
