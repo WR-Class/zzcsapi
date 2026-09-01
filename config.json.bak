@@ -60,6 +60,20 @@
         "gpt-5.6-sol": "gpt-5.6-sol",
         "gpt-5.6-terra": "gpt-5.6-terra"
       }
+    },
+    {
+      "id": "gorouter",
+      "name": "gorouter",
+      "baseUrl": "https://gorouter.app/v1",
+      "apiKey": "sk-hhPGemIygDCgRoUbBSSAZHa8z2AVO7gtH5kBGDv7JDahciPG",
+      "protocol": "openai",
+      "priority": 0,
+      "enabled": true,
+      "autoAlias": false,
+      "models": {
+        "claude-opus-5": "claude-opus-5",
+        "claude-opus-5-thinking": "claude-opus-5-thinking"
+      }
     }
   ]
 }

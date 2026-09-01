@@ -876,7 +876,15 @@ async function handleAdminApi(req, res, url) {
           bodyOut = { model: c.upstream, max_tokens: 16, messages: [{ role: 'user', content: prompt }] };
         }
         resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(bodyOut), signal: ctrl.signal });
-        const text = await resp.text();
+        let text = await resp.text();
+        // Cloudflare 拦截 → PS Schannel 回退
+        if (!resp.ok && isCloudflareBlock(resp.status, text)) {
+          const ps = await psHttpRequest('POST', target, headers, JSON.stringify(bodyOut), Math.min(60000, Number(body.timeoutMs) || 30000));
+          if (ps.status > 0) {
+            text = ps.body;
+            resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status };
+          }
+        }
         ttfb = Date.now() - t0;
         let parsed = null;
         try { parsed = JSON.parse(text); } catch {}
