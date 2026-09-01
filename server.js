@@ -184,8 +184,12 @@ function aggregateModels(protocol) {
   for (const ch of channels.values()) {
     const chProto = ch.def.protocol || 'openai';
     if (protocol && chProto !== protocol) continue;
+    // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
-    for (const m of ch.models) all.add(m);
+    // 探测到的真模型仅在 autoAlias 时算可路由
+    if (ch.def.autoAlias === true) {
+      for (const m of ch.models) all.add(m);
+    }
   }
   return Array.from(all).sort();
 }
