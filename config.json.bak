@@ -71,8 +71,7 @@
       "enabled": true,
       "autoAlias": false,
       "models": {
-        "claude-opus-5": "claude-opus-5",
-        "claude-opus-5-thinking": "claude-opus-5-thinking"
+        "claude-opus-5": "claude-opus-5"
       }
     }
   ]

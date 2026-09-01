@@ -285,13 +285,27 @@ async function probeChannel(ch) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), HEALTH.timeoutMs || 8000);
   const probeUrl = probeUrlFor(ch);
+  let resp;
+  let usedFallback = false;
   try {
-    const resp = await fetch(probeUrl, {
+    resp = await fetch(probeUrl, {
       method: probeMethodFor(ch),
       headers: probeHeadersFor(ch),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
+    // Cloudflare 拦截 → PS Schannel 回退
+    if (resp.status === 403) {
+      let body = '';
+      try { body = await resp.text(); } catch {}
+      if (isCloudflareBlock(403, body)) {
+        const ps = await psHttpRequest(probeMethodFor(ch), probeUrl, probeHeadersFor(ch), null, HEALTH.timeoutMs || 8000);
+        if (ps.status > 0) {
+          usedFallback = true;
+          resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status, text: async () => ps.body };
+        }
+      }
+    }
     const ms = Date.now() - t0;
     if (!resp.ok) {
       ch.status = 'down';
@@ -300,7 +314,8 @@ async function probeChannel(ch) {
       ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
       return;
     }
-    const j = await resp.json().catch(() => null);
+    const text = await resp.text();
+    const j = safeJson(text);
     const ids = extractModelIds(j, ch.def.protocol || 'openai');
     ch.models = ids;
     ch.latencyMs = ms;
@@ -889,6 +904,15 @@ async function handleAdminApi(req, res, url) {
         let parsed = null;
         try { parsed = JSON.parse(text); } catch {}
         const errText = (parsed && (parsed.error?.message || parsed.message)) || (resp.ok ? '' : text.slice(0, 200));
+        // 测试成功时清零 channel 失败计数并标 ok（与主调度一致）
+        if (resp.ok) {
+          ch.consecutiveFail = 0;
+          ch.cooldownUntil = 0;
+          ch.lastError = null;
+          if (ch.status !== 'ok') ch.status = 'ok';
+          ch.latencyMs = ttfb;
+          ch.lastCheck = Date.now();
+        }
         results.push({
           channelId: c.channelId,
           ok: resp.ok,
