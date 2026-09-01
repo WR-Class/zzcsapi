@@ -465,7 +465,12 @@ const server = http.createServer(async (req, res) => {
     // 控制台 HTML
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/console' || url.pathname === '/console/')) {
       if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      });
       return res.end(CONSOLE_HTML);
     }
 
