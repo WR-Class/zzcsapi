@@ -74,6 +74,21 @@
   .toggle input { accent-color: #3a7afe; }
   .small { font-size: 11px; color: #6e7691; }
   .hidden { display: none; }
+  .access-box { background: #181c25; border: 1px solid #262b38; border-radius: 10px; padding: 14px 16px; margin-bottom: 18px; }
+  .access-box h2 { margin: 0 0 10px; color: #d8dde6; font-size: 15px; }
+  .access-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+  .access-item { background: #11141b; border: 1px solid #2c3140; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+  .access-item .label { color: #8a93a6; font-size: 11.5px; }
+  .access-item .val { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+  .access-item .row { display: flex; gap: 6px; align-items: center; }
+  .access-item .row .val { flex: 1; }
+  .copy-btn { background: #2a3140; border: 1px solid #2c3140; border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; color: #cbd2e0; }
+  .copy-btn:hover { background: #353c4d; }
+  .copy-btn.ok { background: #2c5f3a; border-color: #2c5f3a; color: white; }
+  .recheck-log { margin-top: 8px; padding: 8px 10px; background: #11141b; border: 1px solid #2c3140; border-radius: 6px; font-size: 12px; max-height: 180px; overflow: auto; }
+  .recheck-log .ok { color: #79e6b3; }
+  .recheck-log .fail { color: #e15759; }
+  .recheck-log .row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
 </style>
 </head>
 <body>
@@ -87,6 +102,24 @@
   </div>
 </header>
 <main>
+  <div class="access-box">
+    <h2>本地接入 <span class="hint" id="access-hint"></span></h2>
+    <div class="access-grid" id="access-grid">
+      <div class="access-item"><span class="label">OpenAI 兼容 baseURL</span>
+        <div class="row"><span class="val" id="acc-openai">—</span><button class="copy-btn" data-copy="acc-openai">复制</button></div></div>
+      <div class="access-item"><span class="label">Anthropic 兼容 baseURL</span>
+        <div class="row"><span class="val" id="acc-anthropic">—</span><button class="copy-btn" data-copy="acc-anthropic">复制</button></div></div>
+      <div class="access-item"><span class="label">Gemini 兼容 baseURL</span>
+        <div class="row"><span class="val" id="acc-gemini">—</span><button class="copy-btn" data-copy="acc-gemini">复制</button></div></div>
+      <div class="access-item"><span class="label">客户端 Key <span class="small" id="acc-gw-req"></span></span>
+        <div class="row"><span class="val" id="acc-gwkey">—</span><button class="copy-btn" data-copy="acc-gwkey">复制</button></div></div>
+      <div class="access-item"><span class="label">控制台 Key</span>
+        <div class="row"><span class="val" id="acc-adminkey">—</span><button class="copy-btn" data-copy="acc-adminkey">复制</button></div></div>
+      <div class="access-item"><span class="label">控制台地址</span>
+        <div class="row"><span class="val" id="acc-console">—</span><button class="copy-btn" data-copy="acc-console">复制</button></div></div>
+    </div>
+    <div class="small" id="access-warning" style="margin-top:8px"></div>
+  </div>
   <h2>渠道 <span class="hint" id="refresh-hint"></span></h2>
   <div id="channels" class="grid"></div>
   <h2>聚合模型</h2>
@@ -262,18 +295,99 @@ function renderModels(data) {
   root.innerHTML = sections.join('') || '<div class="empty">无模型</div>';
 }
 
+let accessCfg = null;
+function renderAccess(cfg) {
+  accessCfg = cfg;
+  $('#acc-openai').textContent = cfg.urls.openai;
+  $('#acc-anthropic').textContent = cfg.urls.anthropic;
+  $('#acc-gemini').textContent = cfg.urls.gemini;
+  $('#acc-gwkey').textContent = cfg.gatewayKey || '（未设置，留空也能用 — 仅本机访问）';
+  $('#acc-adminkey').textContent = cfg.adminKey || '（未设置，留空也能用 — 仅本机访问）';
+  $('#acc-console').textContent = cfg.urls.console + (cfg.adminKey ? '?key=' + cfg.adminKey : '');
+  $('#acc-gw-req').textContent = cfg.gatewayKeyRequired ? '（客户端必须带此 key）' : '（可选）';
+  const warns = [];
+  if (!cfg.gatewayKey) warns.push('⚠ GATEWAY_KEY 未设置，任何人连得上 8787 都能用你的渠道。建议设一个。');
+  if (!cfg.adminKey) warns.push('⚠ ADMIN_KEY 未设置，本机外任何人能改你的渠道配置。建议设一个。');
+  $('#access-warning').innerHTML = warns.join('<br>');
+  $('#access-hint').textContent = '在客户端（DSH / Cursor / Cline 等）填上面的 baseURL 和 Key 即可';
+}
+
 async function refresh() {
   try {
-    const data = await api('/admin/api/status');
+    const [data, cfg] = await Promise.all([api('/admin/api/status'), api('/admin/api/config').catch(() => null)]);
     $('#meta').textContent = `${data.channels.length} 个渠道 · ${new Date().toLocaleTimeString()}`;
     renderChannels(data);
     renderModels(data);
+    if (cfg) renderAccess(cfg);
   } catch {}
 }
 
 $('#btn-refresh').onclick = refresh;
-$('#btn-recheck').onclick = async () => { await api('/admin/api/recheck', { method: 'POST' }); toast('已发起全量探测'); refresh(); };
+
+$('#btn-recheck').onclick = async () => {
+  const btn = $('#btn-recheck');
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ 探测中…';
+  try {
+    const r = await api('/admin/api/recheck', { method: 'POST' });
+    const s = r.summary || { ok: 1, fail: 0, total: 1 };
+    if (s.fail === 0) toast(`✓ 全部 ${s.total} 个渠道探测完成（${s.ok} 正常）`);
+    else toast(`⚠ ${s.ok} 正常 / ${s.fail} 失败，共 ${s.total}。详情见控制台。`);
+    // 显示详细日志（找或建一个日志区域；这里直接 alert 失败清单）
+    const fails = (r.results || []).filter((x) => x.status === 'down');
+    if (fails.length) {
+      console.warn('[zzcsapi] recheck failures:', fails);
+      // 在 meta 行下显示一个浮层
+      showRecheckLog(r.results);
+    }
+    refresh();
+  } catch (e) {
+    toast('探测失败：' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+};
+
+function showRecheckLog(results) {
+  let box = $('#recheck-log');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'recheck-log';
+    box.className = 'recheck-log';
+    $('#access-warning').parentNode.appendChild(box);
+  }
+  box.innerHTML = '<div style="color:#aab1c2;margin-bottom:4px">上次探测结果：</div>' +
+    results.map((r) => {
+      const cls = (r.status === 'ok' || r.status === 'degraded') ? 'ok' : 'fail';
+      const tag = r.status === 'ok' ? '✓' : r.status === 'degraded' ? '~' : '✗';
+      return `<div class="row"><span class="${cls}">${tag} ${escapeHtml(r.id)} <span class="small">→ ${r.status} · ${r.modelCount} 模型 · ${r.latencyMs < 0 ? '—' : r.latencyMs + 'ms'}</span></span><span class="small" style="color:#6e7691">${r.error ? escapeHtml(r.error.slice(0, 80)) : ''}</span></div>`;
+    }).join('');
+  setTimeout(() => { if (box) box.remove(); }, 15000);
+}
+
 $('#btn-add').onclick = () => openModal(null);
+
+// 复制按钮
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('.copy-btn');
+  if (!b) return;
+  const id = b.dataset.copy;
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = el.textContent.trim();
+  try {
+    await navigator.clipboard.writeText(text);
+    const old = b.textContent;
+    b.classList.add('ok'); b.textContent = '✓ 已复制';
+    setTimeout(() => { b.classList.remove('ok'); b.textContent = old; }, 1200);
+  } catch (err) {
+    // 回退
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('已复制'); } catch { toast('复制失败'); }
+    document.body.removeChild(ta);
+  }
+});
 
 // 模态框
 function openModal(ch) {

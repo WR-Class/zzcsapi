@@ -600,16 +600,57 @@ async function handleAdminApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/admin/api/status') {
     return sendJson(res, 200, channelStatusAll());
   }
+  // 暴露给控制台展示接入信息（含 key 与 URL）。仅本机 admin 可用。
+  if (req.method === 'GET' && url.pathname === '/admin/api/config') {
+    const base = `http://127.0.0.1:${PORT}`;
+    return sendJson(res, 200, {
+      port: PORT,
+      gatewayKey: GATEWAY_KEY || '',
+      adminKey: ADMIN_KEY || '',
+      gatewayKeyRequired: !!GATEWAY_KEY,
+      adminKeyRequired: !!ADMIN_KEY,
+      urls: {
+        openai: `${base}/v1`,
+        anthropic: `${base}/anthropic`,
+        gemini: `${base}/gemini/v1beta`,
+        console: `${base}/console`,
+        health: `${base}/healthz`,
+      },
+    });
+  }
   if (req.method === 'POST' && url.pathname === '/admin/api/recheck') {
     const body = await safeReadJson(req);
     if (body && body.id) {
       const ch = channels.get(body.id);
       if (!ch) return sendJson(res, 404, { error: 'channel not found' });
+      const before = ch.status;
       await probeChannel(ch);
-      return sendJson(res, 200, { ok: true, id: body.id, status: ch.status, latencyMs: ch.latencyMs });
+      return sendJson(res, 200, {
+        ok: true,
+        results: [{
+          id: body.id,
+          status: ch.status,
+          before,
+          latencyMs: ch.latencyMs,
+          modelCount: ch.models.length,
+          error: ch.lastError,
+        }],
+      });
     }
+    // 全部：先记下探测前状态，然后逐个探测后产出摘要
+    const before = new Map();
+    for (const ch of channels.values()) before.set(ch.def.id, ch.status);
     await probeAll();
-    return sendJson(res, 200, { ok: true, checked: channels.size });
+    const results = Array.from(channels.values()).map((ch) => ({
+      id: ch.def.id,
+      status: ch.status,
+      before: before.get(ch.def.id) || 'unknown',
+      latencyMs: ch.latencyMs,
+      modelCount: ch.models.length,
+      error: ch.lastError,
+    }));
+    const summary = { ok: results.filter((r) => r.status === 'ok' || r.status === 'degraded').length, fail: results.filter((r) => r.status === 'down').length, total: results.length };
+    return sendJson(res, 200, { ok: true, summary, results });
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/channel') {
     const body = await safeReadJson(req);
