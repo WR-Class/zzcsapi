@@ -98,6 +98,7 @@
   <div class="toolbar">
     <button id="btn-refresh">刷新</button>
     <button id="btn-recheck" class="primary">立即探测全部</button>
+    <button id="btn-test-model" class="primary">🧪 测试模型</button>
     <button id="btn-add" class="primary">+ 添加渠道</button>
   </div>
 </header>
@@ -246,6 +247,7 @@ function renderChannels(data) {
           </div>
           <button data-act="save-prio">保存</button>
           <button data-act="probe">探测</button>
+          <button data-act="test">🧪 测试</button>
           <button data-act="edit">编辑</button>
           <button data-act="toggle" class="${ch.enabled ? '' : 'primary'}">${ch.enabled ? '停用' : '启用'}</button>
           <button data-act="delete" class="danger">删除</button>
@@ -265,6 +267,15 @@ function renderChannels(data) {
     card.querySelector('[data-act=probe]').onclick = async () => {
       await api('/admin/api/recheck', { method: 'POST', body: JSON.stringify({ id }) });
       toast('已探测'); refresh();
+    };
+    card.querySelector('[data-act=test]').onclick = async () => {
+      const ch = state.channels.find(c => c.id === id);
+      // 优先用一个 alias，没有就用 upstreamModels 第一个
+      const candidates = (ch && ch.aliases.length) ? ch.aliases.map(a => a.alias) : (ch ? ch.upstreamModels : []);
+      if (!candidates.length) return err('该渠道无可测试模型（先"探测"或加 alias）');
+      const model = candidates.length === 1 ? candidates[0] : (prompt('选择要测试的模型：\n' + candidates.map((m, i) => (i + 1) + '. ' + m).join('\n') + '\n\n输入序号或模型名', candidates[0]) || '');
+      if (!model) return;
+      await runTest({ model, channelId: id });
     };
     card.querySelector('[data-act=edit]').onclick = () => openModal(state.channels.find(c => c.id === id));
     card.querySelector('[data-act=toggle]').onclick = async () => {
@@ -366,6 +377,56 @@ function showRecheckLog(results) {
 }
 
 $('#btn-add').onclick = () => openModal(null);
+
+async function runTest({ model, channelId, prompt: promptText }) {
+  let box = $('#test-log');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'test-log';
+    box.className = 'recheck-log';
+    box.innerHTML = '<div style="color:#aab1c2;margin-bottom:4px">模型测试结果：</div><div id="test-log-body"></div>';
+    $('#access-warning').parentNode.appendChild(box);
+  }
+  const body = box.querySelector('#test-log-body');
+  const body0 = `<div data-pending><div class="row"><span class="small">⏳ 正在测试 "${escapeHtml(model)}"${channelId ? '（仅渠道 ' + escapeHtml(channelId) + '）' : '（走完整调度）'}…</span></div></div>`;
+  body.insertAdjacentHTML('afterbegin', body0);
+  const t0 = Date.now();
+  try {
+    const r = await api('/admin/api/test', { method: 'POST', body: JSON.stringify({ model, channelId, prompt: promptText || 'Reply with one short sentence.' }) });
+    const elapsed = Date.now() - t0;
+    // 替换最早一条 pending
+    const pending = box.querySelector('[data-pending]');
+    if (pending) pending.remove();
+    const lines = (r.results || []).map((res) => {
+      const cls = res.ok ? 'ok' : 'fail';
+      const tag = res.ok ? '✓' : '✗';
+      let info = `${res.latencyMs}ms`;
+      if (res.promptTokens || res.completionTokens) info += ` · ${res.promptTokens || 0}+${res.completionTokens || 0} tokens`;
+      if (res.status) info += ` · HTTP ${res.status}`;
+      const reply = res.reply ? ` <span class="small">"${escapeHtml(String(res.reply).slice(0, 80))}"</span>` : '';
+      const err = res.error ? ` <span class="small" style="color:#e15759">${escapeHtml(String(res.error).slice(0, 120))}</span>` : '';
+      return `<div class="row"><span class="${cls}">${tag} <b>${escapeHtml(res.channelId)}</b> · ${info}${reply}</span>${err ? '<span></span>' : ''}</div>${err ? `<div class="row" style="padding-left:14px"><span class="small" style="color:#e15759">${escapeHtml(String(res.error).slice(0, 200))}</span></div>` : ''}`;
+    }).join('');
+    body.insertAdjacentHTML('afterbegin', `<div data-pending><div class="row"><span class="small">${escapeHtml(model)}：用时 ${elapsed}ms</span></div>${lines}</div>`);
+    const okCount = r.results.filter(x => x.ok).length;
+    if (okCount === r.results.length) toast(`✓ ${model} 测试通过（${okCount}/${r.results.length}）`);
+    else if (okCount === 0) toast(`✗ ${model} 全部失败`);
+    else toast(`⚠ ${model} ${okCount}/${r.results.length} 通过`);
+  } catch (e) {
+    const pending = box.querySelector('[data-pending]');
+    if (pending) pending.remove();
+    body.insertAdjacentHTML('afterbegin', `<div class="row"><span class="fail">✗ ${escapeHtml(model)} 测试出错：${escapeHtml(e.message)}</span></div>`);
+  }
+}
+
+$('#btn-test-model').onclick = () => {
+  // 弹出输入：模型名（必填）+ 可选提示词
+  const models = (state.channels || []).flatMap(c => [...c.aliases.map(a => a.alias), ...c.upstreamModels]);
+  const uniqModels = Array.from(new Set(models));
+  const model = prompt('要测试的模型名：\n可用：' + (uniqModels.length ? uniqModels.slice(0, 30).join(', ') + (uniqModels.length > 30 ? '…' : '') : '（无）'), uniqModels[0] || '');
+  if (!model) return;
+  runTest({ model });
+};
 
 // 复制按钮
 document.addEventListener('click', async (e) => {

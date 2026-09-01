@@ -448,6 +448,18 @@ function openAIStreamToGeminiSSE(chunks) {
   return out;
 }
 
+// 从协议原生响应里抽 reply 文本
+function extractReply(parsed, proto) {
+  if (!parsed) return '';
+  if (proto === 'anthropic') {
+    return parsed.content?.[0]?.text || '';
+  }
+  if (proto === 'gemini') {
+    return parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  }
+  return parsed.choices?.[0]?.message?.content || '';
+}
+
 // ─────────────────────────── 路由 ───────────────────────────
 const CONSOLE_HTML = loadConsoleHtml();
 
@@ -709,6 +721,82 @@ async function handleAdminApi(req, res, url) {
     };
     const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
     return sendJson(res, 200, r);
+  }
+  // 真模型测试：发一个最小 chat 请求，返回首字延迟 / 总耗时 / 错误
+  if (req.method === 'POST' && url.pathname === '/admin/api/test') {
+    const body = await safeReadJson(req) || {};
+    const model = String(body.model || '').trim();
+    if (!model) return sendJson(res, 400, { error: 'model required' });
+    const onlyChannel = body.channelId ? channels.get(body.channelId) : null;
+    if (body.channelId && !onlyChannel) return sendJson(res, 404, { error: 'channel not found' });
+
+    const candidates = onlyChannel
+      ? [{
+          channelId: onlyChannel.def.id,
+          upstream: model,
+          priority: 0,
+          status: onlyChannel.status,
+          latencyMs: onlyChannel.latencyMs,
+          cooldownUntil: 0,
+          consecutiveFail: onlyChannel.consecutiveFail,
+          protocol: onlyChannel.def.protocol || 'openai',
+        }]
+      : channelsServing(model, 'openai'); // 简化：测试只走 openai 协议
+    if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
+
+    const prompt = String(body.prompt || 'Reply with "ok".');
+    const results = [];
+    for (const c of candidates) {
+      const ch = channels.get(c.channelId);
+      const t0 = Date.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), Math.min(60000, Number(body.timeoutMs) || 30000));
+      let ttfb = 0;
+      let resp;
+      try {
+        // 走 dispatchRequest 复用出站请求构造
+        // 简化：自己拼一个最小 chat 请求
+        const target = ch.def.protocol === 'anthropic'
+          ? joinUrl(ch.def.baseUrl, 'v1/messages')
+          : ch.def.protocol === 'gemini'
+            ? joinUrl(ch.def.baseUrl, 'v1beta/models/' + encodeURIComponent(c.upstream) + ':generateContent')
+            : joinUrl(ch.def.baseUrl, 'chat/completions');
+        const headers = ch.def.protocol === 'anthropic'
+          ? { 'Content-Type': 'application/json', 'x-api-key': ch.def.apiKey, 'anthropic-version': '2023-06-01' }
+          : ch.def.protocol === 'gemini'
+            ? { 'Content-Type': 'application/json', 'x-goog-api-key': ch.def.apiKey }
+            : { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` };
+        let bodyOut;
+        if (ch.def.protocol === 'anthropic') {
+          bodyOut = { model: c.upstream, max_tokens: 16, messages: [{ role: 'user', content: prompt }] };
+        } else if (ch.def.protocol === 'gemini') {
+          bodyOut = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 16 } };
+        } else {
+          bodyOut = { model: c.upstream, max_tokens: 16, messages: [{ role: 'user', content: prompt }] };
+        }
+        resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(bodyOut), signal: ctrl.signal });
+        const text = await resp.text();
+        ttfb = Date.now() - t0;
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch {}
+        const errText = (parsed && (parsed.error?.message || parsed.message)) || (resp.ok ? '' : text.slice(0, 200));
+        results.push({
+          channelId: c.channelId,
+          ok: resp.ok,
+          status: resp.status,
+          latencyMs: ttfb,
+          promptTokens: parsed?.usage?.prompt_tokens,
+          completionTokens: parsed?.usage?.completion_tokens,
+          reply: extractReply(parsed, ch.def.protocol || 'openai'),
+          error: errText || undefined,
+        });
+      } catch (err) {
+        results.push({ channelId: c.channelId, ok: false, latencyMs: Date.now() - t0, error: String(err && err.message || err) });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    return sendJson(res, 200, { model, prompt, results });
   }
   if (req.method === 'DELETE' && url.pathname === '/admin/api/channels') {
     const body = await safeReadJson(req);
