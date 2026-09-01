@@ -1,10 +1,8 @@
-// ZZCSAPI - 轻量级本地 OpenAI 兼容聚合网关
+// ZZCSAPI - 本地多渠道 OpenAI / Anthropic / Gemini 兼容聚合网关
 // 用法：  1) node server.js                        （用 ./config.json）
 //        2) DSH 模型地址填 http://127.0.0.1:8787/v1
 // 目标：多渠道 API key 统一调度，失败自动切换，全失败才报错
 // 依赖：仅 Node 18+ 自带 fetch / ReadableStream / setTimeout
-//
-// 配置字段：见 config.example.json
 
 'use strict';
 
@@ -12,6 +10,23 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { URL } = require('url');
+
+// ─────────────────────────── 鉴权 ───────────────────────────
+const GATEWAY_KEY = process.env.GATEWAY_KEY || ''; // 客户端调 /v1/* / /anthropic/* / /gemini/*
+const ADMIN_KEY   = process.env.ADMIN_KEY   || ''; // 调 /admin/* + Web 控制台
+function checkAuth(req, kind) {
+  // kind: 'gateway' | 'admin'
+  if (kind === 'admin' && !ADMIN_KEY) return true;       // 没设置就放行（仅本机）
+  if (kind === 'gateway' && !GATEWAY_KEY) return true;   // 没设置就放行
+  const need = kind === 'admin' ? ADMIN_KEY : GATEWAY_KEY;
+  const h = req.headers['authorization'] || '';
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  if (m && m[1] === need) return true;
+  // 兼容 ?key=...
+  const u = new URL(req.url, 'http://127.0.0.1');
+  if (u.searchParams.get('key') === need) return true;
+  return false;
+}
 
 // ─────────────────────────── 加载配置 ───────────────────────────
 const CONFIG_PATH = process.env.ZZCSAPI_CONFIG || path.join(__dirname, 'config.json');
@@ -37,7 +52,8 @@ function loadConfig() {
     if (!ch.apiKey) throw new Error(`渠道 ${ch.id} 缺少 apiKey`);
     if (ch.enabled === undefined) ch.enabled = true;
     if (ch.priority === undefined) ch.priority = 0;
-    ch.models = ch.models || {}; // alias -> upstream
+    if (!ch.protocol) ch.protocol = 'openai'; // openai | anthropic | gemini
+    ch.models = ch.models || {};
   }
   return cfg;
 }
@@ -48,21 +64,23 @@ const HEALTH = config.health || { intervalSec: 300, timeoutMs: 8000 };
 const RETRIES = config.retries || { perChannel: 1, maxModelFallbacks: 99 };
 
 // ─────────────────────────── 渠道运行时状态 ───────────────────────────
-const channels = new Map(); // id -> {def, status, lastCheck, latencyMs, models, consecutiveFail, cooldownUntil, lastError}
+const channels = new Map();
 
 function upsertChannel(def) {
   const cur = channels.get(def.id);
   if (cur) {
     Object.assign(cur.def, def);
     cur.def.models = def.models || {};
+    cur.def.protocol = def.protocol || cur.def.protocol || 'openai';
+    cur.aliasMap = buildAliasMap(def.models);
     return cur;
   }
   const state = {
     def,
-    status: 'unknown',         // 'ok' | 'degraded' | 'down' | 'unknown'
+    status: 'unknown',
     lastCheck: 0,
     latencyMs: -1,
-    models: [],                 // 探测到的真实模型 id 列表
+    models: [],
     aliasMap: buildAliasMap(def.models),
     consecutiveFail: 0,
     cooldownUntil: 0,
@@ -73,7 +91,6 @@ function upsertChannel(def) {
 }
 
 function buildAliasMap(models) {
-  // alias（用户面向）-> upstream name
   const m = new Map();
   for (const [alias, upstream] of Object.entries(models || {})) {
     m.set(alias.toLowerCase(), upstream);
@@ -84,13 +101,15 @@ function buildAliasMap(models) {
 for (const ch of config.channels) upsertChannel(ch);
 
 // ─────────────────────────── 模型索引 ───────────────────────────
-// 用户请求模型 -> [{channelId, alias, upstream, priority, status, ...}]
-function channelsServing(model) {
+function channelsServing(model, protocol) {
   const want = String(model || '').toLowerCase().trim();
   if (!want) return [];
   const out = [];
   for (const ch of channels.values()) {
     if (!ch.def.enabled) continue;
+    // 只匹配同协议
+    const chProto = ch.def.protocol || 'openai';
+    if (protocol && chProto !== protocol) continue;
     if (ch.aliasMap.has(want)) {
       out.push({
         channelId: ch.def.id,
@@ -100,9 +119,9 @@ function channelsServing(model) {
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
         consecutiveFail: ch.consecutiveFail,
+        protocol: chProto,
       });
     } else if (ch.models.includes(want)) {
-      // 渠道探测到该模型但用户未在 models 显式映射——仍允许，但优先级低
       out.push({
         channelId: ch.def.id,
         upstream: want,
@@ -111,10 +130,10 @@ function channelsServing(model) {
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
         consecutiveFail: ch.consecutiveFail,
+        protocol: chProto,
       });
     }
   }
-  // 排序：可用 > 未知；冷却中排最后；同状态按优先级 > 延迟
   out.sort((a, b) => {
     const healthy = (c) => (c.cooldownUntil > Date.now() ? 2 : c.status === 'down' ? 1 : 0);
     const ha = healthy(a), hb = healthy(b);
@@ -127,10 +146,11 @@ function channelsServing(model) {
   return out;
 }
 
-// 全局聚合模型清单
-function aggregateModels() {
+function aggregateModels(protocol) {
   const all = new Set();
   for (const ch of channels.values()) {
+    const chProto = ch.def.protocol || 'openai';
+    if (protocol && chProto !== protocol) continue;
     for (const alias of ch.aliasMap.keys()) all.add(alias);
     for (const m of ch.models) all.add(m);
   }
@@ -142,11 +162,11 @@ async function probeChannel(ch) {
   const t0 = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), HEALTH.timeoutMs || 8000);
+  const probeUrl = probeUrlFor(ch);
   try {
-    const url = joinUrl(ch.def.baseUrl, 'models');
-    const resp = await fetch(url, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${ch.def.apiKey}` },
+    const resp = await fetch(probeUrl, {
+      method: probeMethodFor(ch),
+      headers: probeHeadersFor(ch),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -154,12 +174,12 @@ async function probeChannel(ch) {
     if (!resp.ok) {
       ch.status = 'down';
       ch.consecutiveFail++;
-      ch.lastError = `models ${resp.status}`;
+      ch.lastError = `probe ${resp.status}`;
       ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
       return;
     }
     const j = await resp.json().catch(() => null);
-    const ids = (j && Array.isArray(j.data)) ? j.data.map((m) => m.id).filter(Boolean) : [];
+    const ids = extractModelIds(j, ch.def.protocol || 'openai');
     ch.models = ids;
     ch.latencyMs = ms;
     ch.lastCheck = Date.now();
@@ -176,9 +196,38 @@ async function probeChannel(ch) {
   }
 }
 
-async function probeAll() {
-  await Promise.all(Array.from(channels.values()).map((ch) => probeChannel(ch)));
+function probeUrlFor(ch) {
+  const proto = ch.def.protocol || 'openai';
+  if (proto === 'anthropic') return joinUrl(ch.def.baseUrl, 'v1/models');
+  if (proto === 'gemini')    return joinUrl(ch.def.baseUrl, 'v1beta/models');
+  return joinUrl(ch.def.baseUrl, 'models');
 }
+function probeMethodFor(ch) {
+  const proto = ch.def.protocol || 'openai';
+  return proto === 'gemini' ? 'GET' : 'GET';
+}
+function probeHeadersFor(ch) {
+  const proto = ch.def.protocol || 'openai';
+  if (proto === 'anthropic') {
+    return { 'x-api-key': ch.def.apiKey, 'anthropic-version': '2023-06-01' };
+  }
+  if (proto === 'gemini') {
+    return { 'x-goog-api-key': ch.def.apiKey };
+  }
+  return { 'Authorization': `Bearer ${ch.def.apiKey}` };
+}
+function extractModelIds(j, proto) {
+  if (!j) return [];
+  if (proto === 'anthropic') {
+    return Array.isArray(j.data) ? j.data.map((m) => m.id).filter(Boolean) : [];
+  }
+  if (proto === 'gemini') {
+    return Array.isArray(j.models) ? j.models.map((m) => (m.name || '').replace(/^models\//, '')).filter(Boolean) : [];
+  }
+  return Array.isArray(j.data) ? j.data.map((m) => m.id).filter(Boolean) : [];
+}
+
+async function probeAll() { await Promise.all(Array.from(channels.values()).map((ch) => probeChannel(ch))); }
 
 if (HEALTH.intervalSec > 0) {
   probeAll().catch(() => {});
@@ -191,117 +240,230 @@ function joinUrl(base, p) {
   const s = p.replace(/^\/+/, '');
   return `${b}/${s}`;
 }
+function readBody(req) { return new Promise((resolve, reject) => { const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); }); }
+function sendJson(res, code, obj) { const body = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) }); res.end(body); }
+function unauthorized(res, kind) { sendJson(res, 401, { error: { message: `${kind} key required` } }); }
+function upstreamErrorPayload(status, msg) { return { error: { message: msg, type: 'upstream_error', code: status } }; }
+function safeJson(t) { try { return JSON.parse(t); } catch { return null; } }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
+// ─────────────────────────── Anthropic ↔ OpenAI 转换 ───────────────────────────
+// 极简适配。功能：
+//   Anthropic Request -> OpenAI Chat Request
+//   OpenAI Chat Response -> Anthropic Response (non-stream)
+//   OpenAI Chat Stream chunks -> Anthropic SSE events
+function anthropicToOpenAI(body) {
+  const out = {
+    model: body.model,
+    messages: [],
+    max_tokens: body.max_tokens || 4096,
+    temperature: body.temperature,
+    top_p: body.top_p,
+    stop: body.stop_sequences,
+    stream: body.stream,
+  };
+  if (body.system) {
+    const sys = Array.isArray(body.system)
+      ? body.system.map((s) => s.text || '').join('\n')
+      : String(body.system);
+    out.messages.push({ role: 'system', content: sys });
+  }
+  for (const m of body.messages || []) {
+    if (typeof m.content === 'string') {
+      out.messages.push({ role: m.role, content: m.content });
+    } else if (Array.isArray(m.content)) {
+      const parts = [];
+      for (const b of m.content) {
+        if (b.type === 'text') parts.push({ type: 'text', text: b.text });
+        else if (b.type === 'image') {
+          // 简化：转成 OpenAI image_url 形式（仅支持 base64）
+          parts.push({ type: 'image_url', image_url: { url: `data:${b.source?.media_type || 'image/png'};base64,${b.source?.data || ''}` } });
+        }
+      }
+      out.messages.push({ role: m.role, content: parts });
+    }
+  }
+  return out;
 }
 
-function sendJson(res, code, obj) {
-  const body = JSON.stringify(obj);
-  res.writeHead(code, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(body),
-  });
-  res.end(body);
+function openAIToAnthropicResponse(oai, modelAlias) {
+  const choice = oai.choices && oai.choices[0];
+  const text = choice ? (choice.message?.content || '') : '';
+  return {
+    id: oai.id || `msg_${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    model: oai.model || modelAlias,
+    content: [{ type: 'text', text }],
+    stop_reason: choice ? mapFinishReason(choice.finish_reason) : 'end_turn',
+    stop_sequence: null,
+    usage: {
+      input_tokens: oai.usage?.prompt_tokens || 0,
+      output_tokens: oai.usage?.completion_tokens || 0,
+    },
+  };
 }
 
-function upstreamErrorPayload(status, msg) {
-  // 兼容 OpenAI / Anthropic 错误体
-  return { error: { message: msg, type: 'upstream_error', code: status } };
+function mapFinishReason(r) {
+  switch (r) {
+    case 'stop': return 'end_turn';
+    case 'length': return 'max_tokens';
+    case 'tool_calls': return 'tool_use';
+    case 'content_filter': return 'refusal';
+    default: return 'end_turn';
+  }
+}
+
+// 把 OpenAI 流式 chunk 转 Anthropic SSE
+function* openAIStreamToAnthropicSSE(chunks, modelAlias) {
+  let msgId = `msg_${Date.now()}`;
+  yield { event: 'message_start', data: { type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: modelAlias, content: [], stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } } } };
+  let startedText = false;
+  let finishReason = null;
+  let usage = { input_tokens: 0, output_tokens: 0 };
+  for (const c of chunks) {
+    const choice = c.choices?.[0];
+    const delta = choice?.delta?.content;
+    if (delta) {
+      if (!startedText) {
+        yield { event: 'content_block_start', data: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } };
+        startedText = true;
+      }
+      yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } } };
+    }
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    if (c.usage) usage = { input_tokens: c.usage.prompt_tokens || 0, output_tokens: c.usage.completion_tokens || 0 };
+  }
+  if (startedText) {
+    yield { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } };
+  }
+  yield { event: 'message_delta', data: { type: 'message_delta', delta: { stop_reason: mapFinishReason(finishReason), stop_sequence: null }, usage } };
+  yield { event: 'message_stop', data: { type: 'message_stop' } };
+}
+
+function sseEncode(eventName, data) {
+  return `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+// ─────────────────────────── Gemini 转换 ───────────────────────────
+function geminiToOpenAI(body, model) {
+  const contents = body.contents || [];
+  const messages = [];
+  let sysText = body.systemInstruction?.parts?.map((p) => p.text).join('\n') || '';
+  if (body.system_instruction?.parts) sysText = body.system_instruction.parts.map((p) => p.text).join('\n');
+  if (sysText) messages.push({ role: 'system', content: sysText });
+  for (const c of contents) {
+    const role = c.role === 'model' ? 'assistant' : 'user';
+    const text = (c.parts || []).map((p) => p.text || '').join('');
+    if (text) messages.push({ role, content: text });
+  }
+  const gen = body.generationConfig || {};
+  return {
+    model,
+    messages,
+    max_tokens: gen.maxOutputTokens,
+    temperature: gen.temperature,
+    top_p: gen.topP,
+    stream: !!body.stream,
+  };
+}
+
+function openAIToGeminiResponse(oai) {
+  const choice = oai.choices?.[0];
+  const text = choice?.message?.content || '';
+  return {
+    candidates: [{
+      content: { role: 'model', parts: [{ text }] },
+      finishReason: choice?.finish_reason === 'length' ? 'MAX_TOKENS' : 'STOP',
+      index: 0,
+    }],
+    usageMetadata: {
+      promptTokenCount: oai.usage?.prompt_tokens || 0,
+      candidatesTokenCount: oai.usage?.completion_tokens || 0,
+      totalTokenCount: (oai.usage?.prompt_tokens || 0) + (oai.usage?.completion_tokens || 0),
+    },
+    modelVersion: oai.model,
+  };
+}
+
+function openAIStreamToGeminiSSE(chunks) {
+  const out = [];
+  for (const c of chunks) {
+    const choice = c.choices?.[0];
+    const text = choice?.delta?.content || '';
+    if (text) {
+      out.push({ candidates: [{ content: { role: 'model', parts: [{ text }] }, index: 0 }] });
+    }
+  }
+  return out;
 }
 
 // ─────────────────────────── 路由 ───────────────────────────
-//
-// GET  /v1/models                              聚合模型清单
-// POST /v1/chat/completions                    自动调度 chat（流式 + 非流式）
-// POST /v1/embeddings                          透传
-// POST /v1/responses                           透传
-// GET  /healthz                                网关自身健康
-// GET  /admin/status                           渠道状态（无需鉴权：仅监听 127.0.0.1）
+const CONSOLE_HTML = loadConsoleHtml();
+
+function loadConsoleHtml() {
+  try {
+    return fs.readFileSync(path.join(__dirname, 'console.html'), 'utf8');
+  } catch {
+    return '<!doctype html><meta charset="utf-8"><title>zzcsapi</title><p>console.html missing</p>';
+  }
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   try {
-    // —— /healthz
+    // 控制台 HTML
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/console' || url.pathname === '/console/')) {
+      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(CONSOLE_HTML);
+    }
+
     if (req.method === 'GET' && url.pathname === '/healthz') {
-      return sendJson(res, 200, { ok: true, channels: channels.size });
+      return sendJson(res, 200, { ok: true, channels: channels.size, gatewayKey: !!GATEWAY_KEY, adminKey: !!ADMIN_KEY });
     }
 
-    // —— /v1/models
+    // 控制台 API（用 admin key 鉴权）
+    if (url.pathname.startsWith('/admin/api/')) {
+      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      return handleAdminApi(req, res, url);
+    }
+
+    // 兼容旧的 admin 路径
+    if (url.pathname === '/admin/status') {
+      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      return sendJson(res, 200, channelStatusAll());
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/recheck') {
+      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      await probeAll();
+      return sendJson(res, 200, { ok: true, checked: channels.size });
+    }
+
+    // OpenAI 兼容
     if (req.method === 'GET' && url.pathname === '/v1/models') {
-      const now = Date.now();
-      return sendJson(res, 200, {
-        object: 'list',
-        data: aggregateModels().map((id) => ({ id, object: 'model', created: 0, owned_by: 'zzcsapi' })),
-        _zzcsapi: {
-          generatedAt: now,
-          channels: Array.from(channels.values()).map((ch) => ({
-            id: ch.def.id,
-            name: ch.def.name || ch.def.id,
-            status: ch.status,
-            latencyMs: ch.latencyMs,
-            consecutiveFail: ch.consecutiveFail,
-            aliasCount: ch.aliasMap.size,
-            upstreamModelCount: ch.models.length,
-            lastError: ch.lastError,
-          })),
-        },
-      });
+      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      return sendJson(res, 200, { object: 'list', data: aggregateModels('openai').map((id) => ({ id, object: 'model', created: 0, owned_by: 'zzcsapi' })) });
     }
-
-    // —— chat / embed / responses
     if (req.method === 'POST' && (
       url.pathname === '/v1/chat/completions' ||
       url.pathname === '/v1/embeddings' ||
       url.pathname === '/v1/responses' ||
       url.pathname === '/v1/completions'
     )) {
-      const raw = await readBody(req);
-      let body;
-      try { body = JSON.parse(raw.toString('utf8') || '{}'); }
-      catch { return sendJson(res, 400, upstreamErrorPayload(400, 'invalid JSON body')); }
-
-      const requested = body.model;
-      if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
-
-      const candidates = channelsServing(requested);
-      if (candidates.length === 0) {
-        return sendJson(res, 404, upstreamErrorPayload(404, `no channel configured for model "${requested}"`));
-      }
-
-      return dispatchRequest(req, res, url, body, candidates);
+      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      return handleOpenAIRequest(req, res, url);
     }
 
-    // —— admin
-    if (url.pathname === '/admin/status') {
-      return sendJson(res, 200, {
-        channels: Array.from(channels.values()).map((ch) => ({
-          id: ch.def.id,
-          name: ch.def.name || ch.def.id,
-          baseUrl: ch.def.baseUrl,
-          priority: ch.def.priority ?? 0,
-          enabled: ch.def.enabled !== false,
-          status: ch.status,
-          lastCheck: ch.lastCheck,
-          latencyMs: ch.latencyMs,
-          consecutiveFail: ch.consecutiveFail,
-          cooldownUntil: ch.cooldownUntil,
-          lastError: ch.lastError,
-          aliases: Array.from(ch.aliasMap.entries()).map(([a, u]) => ({ alias: a, upstream: u })),
-          upstreamModels: ch.models,
-        })),
-        aggregated: aggregateModels(),
-      });
+    // Anthropic 兼容：/anthropic/v1/messages
+    if (url.pathname.startsWith('/anthropic/')) {
+      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      return handleAnthropicRequest(req, res, url);
     }
 
-    if (req.method === 'POST' && url.pathname === '/admin/recheck') {
-      await probeAll();
-      return sendJson(res, 200, { ok: true, checked: channels.size });
+    // Gemini 兼容：/gemini/v1beta/models/{model}:{action}
+    if (url.pathname.startsWith('/gemini/')) {
+      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      return handleGeminiRequest(req, res, url);
     }
 
     return sendJson(res, 404, upstreamErrorPayload(404, 'not found'));
@@ -311,11 +473,218 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// ─────────────────────────── 调度核心 ───────────────────────────
-async function dispatchRequest(req, res, url, body, candidates) {
-  const isStream = !!body.stream;
+function channelStatusAll() {
+  return {
+    channels: Array.from(channels.values()).map((ch) => ({
+      id: ch.def.id,
+      name: ch.def.name || ch.def.id,
+      baseUrl: ch.def.baseUrl,
+      protocol: ch.def.protocol || 'openai',
+      priority: ch.def.priority ?? 0,
+      enabled: ch.def.enabled !== false,
+      status: ch.status,
+      lastCheck: ch.lastCheck,
+      latencyMs: ch.latencyMs,
+      consecutiveFail: ch.consecutiveFail,
+      cooldownUntil: ch.cooldownUntil,
+      lastError: ch.lastError,
+      aliases: Array.from(ch.aliasMap.entries()).map(([a, u]) => ({ alias: a, upstream: u })),
+      upstreamModels: ch.models,
+    })),
+    aggregated: {
+      openai: aggregateModels('openai'),
+      anthropic: aggregateModels('anthropic'),
+      gemini: aggregateModels('gemini'),
+    },
+  };
+}
+
+async function handleAdminApi(req, res, url) {
+  // /admin/api/status        GET   渠道状态
+  // /admin/api/recheck       POST  立即重探测
+  // /admin/api/channel       POST  修改渠道 {id, priority?, enabled?}
+  if (req.method === 'GET' && url.pathname === '/admin/api/status') {
+    return sendJson(res, 200, channelStatusAll());
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/recheck') {
+    const body = await safeReadJson(req);
+    if (body && body.id) {
+      const ch = channels.get(body.id);
+      if (!ch) return sendJson(res, 404, { error: 'channel not found' });
+      await probeChannel(ch);
+      return sendJson(res, 200, { ok: true, id: body.id, status: ch.status, latencyMs: ch.latencyMs });
+    }
+    await probeAll();
+    return sendJson(res, 200, { ok: true, checked: channels.size });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/channel') {
+    const body = await safeReadJson(req);
+    if (!body || !body.id) return sendJson(res, 400, { error: 'missing id' });
+    const ch = channels.get(body.id);
+    if (!ch) return sendJson(res, 404, { error: 'channel not found' });
+    if (body.priority !== undefined) ch.def.priority = Number(body.priority);
+    if (body.enabled !== undefined) ch.def.enabled = !!body.enabled;
+    return sendJson(res, 200, { ok: true, id: body.id, priority: ch.def.priority, enabled: ch.def.enabled });
+  }
+  return sendJson(res, 404, { error: 'unknown admin api' });
+}
+
+async function safeReadJson(req) {
+  try {
+    const buf = await readBody(req);
+    return JSON.parse(buf.toString('utf8') || '{}');
+  } catch { return null; }
+}
+
+// ─────────────────────────── OpenAI 调度 ───────────────────────────
+async function handleOpenAIRequest(req, res, url) {
+  const raw = await readBody(req);
+  let body;
+  try { body = JSON.parse(raw.toString('utf8') || '{}'); }
+  catch { return sendJson(res, 400, upstreamErrorPayload(400, 'invalid JSON body')); }
+  const requested = body.model;
+  if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
+  const candidates = channelsServing(requested, 'openai');
+  if (candidates.length === 0) {
+    return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"`));
+  }
+  return dispatchRequest({
+    kind: 'openai',
+    res,
+    url,
+    body,
+    candidates,
+    encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
+    buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, url.pathname.replace(/^\/v1\//, '')),
+    buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
+    onSuccessNonStream: async (oai, candidate) => {
+      const text = await oai.text();
+      res.writeHead(200, { 'Content-Type': oai.headers.get('content-type') || 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+      res.end(text);
+    },
+  });
+}
+
+// ─────────────────────────── Anthropic 调度 ───────────────────────────
+async function handleAnthropicRequest(req, res, url) {
+  // /anthropic/v1/messages  -> 去掉 /anthropic 前缀
+  const inner = url.pathname.replace(/^\/anthropic/, '');
+  if (req.method === 'GET' && inner === '/v1/models') {
+    return sendJson(res, 200, { data: aggregateModels('anthropic').map((id) => ({ id, type: 'model' })) });
+  }
+  if (req.method === 'POST' && inner === '/v1/messages') {
+    const raw = await readBody(req);
+    let body;
+    try { body = JSON.parse(raw.toString('utf8') || '{}'); }
+    catch { return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON' } }); }
+    const requested = body.model;
+    if (!requested) return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'missing model' } });
+    const candidates = channelsServing(requested, 'anthropic');
+    if (candidates.length === 0) {
+      return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no anthropic channel for model "${requested}"` } });
+    }
+    const isStream = !!body.stream;
+    const oaiBody = anthropicToOpenAI(body);
+    return dispatchRequest({
+      kind: 'anthropic',
+      res,
+      url: { ...url, pathname: '/v1/chat/completions' }, // 复用 OpenAI 上游路径
+      body: oaiBody,
+      candidates,
+      isStream,
+      encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
+      buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, 'chat/completions'),
+      buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
+      onSuccessNonStream: async (oai, candidate) => {
+        const oaiBody = await oai.json();
+        const ant = openAIToAnthropicResponse(oaiBody, requested);
+        res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+        res.end(JSON.stringify(ant));
+      },
+      onStreamChunk: (oaiChunk, candidate) => {
+        // oaiChunk 是 OpenAI SSE 的一行（data: {...}）
+        const line = oaiChunk.trim();
+        if (!line.startsWith('data:')) return null;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') {
+          return sseEncode('message_stop', { type: 'message_stop' });
+        }
+        try {
+          const j = JSON.parse(data);
+          // 解析为单 chunk 然后转 SSE
+          const fakeChunks = [j];
+          let out = '';
+          for (const ev of openAIStreamToAnthropicSSE(fakeChunks, requested)) {
+            out += sseEncode(ev.event, ev.data);
+          }
+          return out;
+        } catch {
+          return null;
+        }
+      },
+      streamPrelude: () => '',
+    });
+  }
+  return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: 'not found' } });
+}
+
+// ─────────────────────────── Gemini 调度 ───────────────────────────
+async function handleGeminiRequest(req, res, url) {
+  // /gemini/v1beta/models/{model}:{action}  ->  去掉 /gemini 前缀
+  const inner = url.pathname.replace(/^\/gemini/, '');
+  const m = inner.match(/^\/v1beta\/models\/([^:]+):(generateContent|streamGenerateContent)$/);
+  if (!m) return sendJson(res, 404, { error: { code: 404, message: 'unsupported path' } });
+  const model = decodeURIComponent(m[1]);
+  const action = m[2];
+  const isStream = action === 'streamGenerateContent';
+
+  const raw = await readBody(req);
+  let body;
+  try { body = JSON.parse(raw.toString('utf8') || '{}'); }
+  catch { return sendJson(res, 400, { error: { code: 400, message: 'invalid JSON' } }); }
+
+  const candidates = channelsServing(model, 'gemini');
+  if (candidates.length === 0) {
+    return sendJson(res, 404, { error: { code: 404, message: `no gemini channel for model "${model}"`, status: 'NOT_FOUND' } });
+  }
+
+  const oaiBody = geminiToOpenAI(body, model);
+  return dispatchRequest({
+    kind: 'gemini',
+    res,
+    url: { ...url, pathname: '/v1/chat/completions' },
+    body: oaiBody,
+    candidates,
+    isStream,
+    encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
+    buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, 'chat/completions'),
+    buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
+    onSuccessNonStream: async (oai, candidate) => {
+      const oaiBody = await oai.json();
+      const gem = openAIToGeminiResponse(oaiBody);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+      res.end(JSON.stringify(gem));
+    },
+    onStreamChunk: (line) => {
+      const t = line.trim();
+      if (!t.startsWith('data:')) return null;
+      const data = t.slice(5).trim();
+      if (data === '[DONE]') return null;
+      try {
+        const j = JSON.parse(data);
+        const gems = openAIStreamToGeminiSSE([j]);
+        return gems.map((g) => `data: ${JSON.stringify(g)}\n\n`).join('');
+      } catch { return null; }
+    },
+  });
+}
+
+// ─────────────────────────── 调度核心（统一） ───────────────────────────
+async function dispatchRequest(opts) {
+  const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk } = opts;
   const errors = [];
   let attemptedAny = false;
+  const stream = !!isStream;
 
   for (let i = 0; i < Math.min(candidates.length, RETRIES.maxModelFallbacks || 99); i++) {
     const c = candidates[i];
@@ -324,45 +693,31 @@ async function dispatchRequest(req, res, url, body, candidates) {
       continue;
     }
     attemptedAny = true;
-    const result = await tryChannel(req, res, url, body, c, isStream);
+    const result = await tryChannel({
+      res, url, body, candidate: c, isStream: stream,
+      encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk,
+    });
     if (result === 'success') return;
-    if (result === 'fatal_client') return; // 4xx 类（参数错）不重试
+    if (result === 'fatal_client') return;
     errors.push({ ch: c.channelId, err: result });
   }
-
-  if (!attemptedAny) {
-    return sendJson(res, 503, upstreamErrorPayload(503, 'all channels in cooldown'));
-  }
-  return sendJson(res, 502, {
-    error: {
-      message: `all channels failed for model "${body.model}"`,
-      type: 'gateway_error',
-      attempts: errors,
-    },
-  });
+  if (!attemptedAny) return sendJson(res, 503, upstreamErrorPayload(503, 'all channels in cooldown'));
+  return sendJson(res, 502, { error: { message: `all channels failed`, type: 'gateway_error', attempts: errors } });
 }
 
-async function tryChannel(req, res, url, body, candidate, isStream) {
+async function tryChannel(opts) {
+  const { res, url, body, candidate, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk } = opts;
   const ch = channels.get(candidate.channelId);
-  const upstream = { ...body, model: candidate.upstream };
-  const target = joinUrl(ch.def.baseUrl, url.pathname.replace(/^\/v1\//, ''));
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${ch.def.apiKey}`,
-  };
-  if (req.headers['accept']) headers['Accept'] = req.headers['accept'];
+  const outgoing = encodeOutgoing(body, candidate);
+  const target = buildOutgoingUrl(ch);
+  const headers = buildOutgoingHeaders(ch);
 
   const t0 = Date.now();
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), (ch.def.timeoutMs || 120_000));
   let resp;
   try {
-    resp = await fetch(target, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(upstream),
-      signal: ctrl.signal,
-    });
+    resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(outgoing), signal: ctrl.signal });
   } catch (err) {
     clearTimeout(to);
     recordFailure(ch, String(err && err.message || err));
@@ -374,14 +729,16 @@ async function tryChannel(req, res, url, body, candidate, isStream) {
     const text = await resp.text().catch(() => '');
     recordFailure(ch, `HTTP ${resp.status}: ${text.slice(0, 200)}`);
     if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
-      // 4xx 客户端问题：模型名错、参数错 — 不要再重试别的渠道
-      sendJson(res, resp.status, safeJson(text) || upstreamErrorPayload(resp.status, text));
+      // 客户端错误：直接把上游响应转发
+      const ct = resp.headers.get('content-type') || '';
+      res.writeHead(resp.status, { 'Content-Type': ct || 'application/json' });
+      res.end(text);
       return 'fatal_client';
     }
     return `upstream ${resp.status}`;
   }
 
-  // 成功 —— 记录指标
+  // 成功
   ch.consecutiveFail = 0;
   ch.cooldownUntil = 0;
   ch.lastError = null;
@@ -397,27 +754,34 @@ async function tryChannel(req, res, url, body, candidate, isStream) {
       'X-ZZCSAPI-Channel': candidate.channelId,
     });
     const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (!res.write(value)) {
-          await new Promise((r) => res.once('drain', r));
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+          if (onStreamChunk) {
+            const out = onStreamChunk(line + '\n', candidate);
+            if (out) res.write(out);
+          } else {
+            res.write(line + '\n');
+          }
         }
       }
-    } catch (err) {
-      // 上游断开 —— 此时已经返回 200，无法再换渠道
-    }
+      // 收尾
+      if (buf.length && onStreamChunk) {
+        const out = onStreamChunk(buf + '\n', candidate);
+        if (out) res.write(out);
+      }
+    } catch (err) { /* 上游已断 */ }
     res.end();
     return 'success';
   } else {
-    const text = await resp.text();
-    res.writeHead(200, {
-      'Content-Type': resp.headers.get('content-type') || 'application/json',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
-    res.end(text);
-    return 'success';
+    return onSuccessNonStream(resp, candidate);
   }
 }
 
@@ -428,15 +792,12 @@ function recordFailure(ch, msg) {
   if (ch.consecutiveFail >= 3) ch.status = 'down';
 }
 
-function safeJson(text) {
-  try { return JSON.parse(text); } catch { return null; }
-}
-
 // ─────────────────────────── 启动 ───────────────────────────
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[zzcsapi] listening on http://127.0.0.1:${PORT}`);
-  console.log(`[zzcsapi] channels: ${Array.from(channels.values()).map((c) => `${c.def.id}(${c.aliasMap.size})`).join(', ')}`);
-  console.log(`[zzcsapi] aggregated models: ${aggregateModels().join(', ') || '(empty, 等待健康探测)'}`);
+  console.log(`[zzcsapi] auth: gateway=${GATEWAY_KEY ? 'on' : 'off'} admin=${ADMIN_KEY ? 'on' : 'off'}`);
+  console.log(`[zzcsapi] channels: ${Array.from(channels.values()).map((c) => `${c.def.id}/${c.def.protocol}(${c.aliasMap.size})`).join(', ')}`);
+  console.log(`[zzcsapi] aggregated: openai=[${aggregateModels('openai').join(', ')}] anthropic=[${aggregateModels('anthropic').join(', ')}] gemini=[${aggregateModels('gemini').join(', ')}]`);
 });
 
 process.on('SIGINT', () => { console.log('\n[zzcsapi] bye'); process.exit(0); });

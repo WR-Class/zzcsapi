@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZZCSAPI 控制台</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #0f1115; color: #d8dde6; }
+  header { padding: 14px 22px; background: #181c25; border-bottom: 1px solid #2a2f3d; display: flex; align-items: center; gap: 16px; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header .meta { color: #8a93a6; font-size: 12px; }
+  .toolbar { margin-left: auto; display: flex; gap: 8px; }
+  button, select, input[type=text] { background: #1f2430; color: #d8dde6; border: 1px solid #2c3140; border-radius: 6px; padding: 6px 12px; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { background: #2a3140; }
+  button.primary { background: #3a7afe; border-color: #3a7afe; color: white; }
+  button.primary:hover { background: #4d88ff; }
+  button.danger { background: #c13a3a; border-color: #c13a3a; color: white; }
+  main { padding: 18px 22px; }
+  h2 { font-size: 15px; margin: 22px 0 10px; color: #aab1c2; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
+  .card { background: #181c25; border: 1px solid #262b38; border-radius: 10px; padding: 14px; }
+  .card h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .card .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12.5px; gap: 8px; }
+  .card .row .k { color: #8a93a6; flex-shrink: 0; }
+  .card .row .v { text-align: right; word-break: break-all; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; }
+  .dot.ok { background: #3ddc97; }
+  .dot.degraded { background: #f5b94a; }
+  .dot.down { background: #e15759; }
+  .dot.unknown { background: #6e7691; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: #2a3140; color: #cbd2e0; }
+  .badge.openai { background: #103a23; color: #79e6b3; }
+  .badge.anthropic { background: #4a2a18; color: #ffb68a; }
+  .badge.gemini { background: #1a2c4a; color: #8ab4ff; }
+  .alias-list { max-height: 110px; overflow: auto; background: #11141b; border-radius: 6px; padding: 6px 8px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11.5px; }
+  .alias-list .pair { display: flex; justify-content: space-between; gap: 8px; }
+  .alias-list .pair .up { color: #6e7691; }
+  .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .actions button { padding: 3px 8px; font-size: 12px; }
+  .prio { display: flex; align-items: center; gap: 4px; }
+  .prio input { width: 60px; padding: 3px 6px; }
+  .models { color: #8a93a6; font-size: 12px; margin-top: 4px; }
+  .err { color: #e15759; font-size: 11.5px; margin-top: 4px; }
+  .empty { color: #6e7691; font-size: 12px; padding: 20px; text-align: center; }
+  .toast { position: fixed; bottom: 18px; right: 18px; background: #2a3140; color: #d8dde6; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .refresh-hint { color: #6e7691; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ZZCSAPI 控制台</h1>
+  <span class="meta" id="meta">—</span>
+  <div class="toolbar">
+    <button id="btn-refresh">刷新</button>
+    <button id="btn-recheck" class="primary">立即探测全部</button>
+  </div>
+</header>
+<main>
+  <h2>渠道状态 <span class="refresh-hint" id="refresh-hint"></span></h2>
+  <div id="channels" class="grid"></div>
+  <h2>聚合模型</h2>
+  <div id="models"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  // 同源调用，浏览器会自动带上 cookie；如果用 ?key= 则免鉴权
+  // 这里采用同源 fetch 加上用户填入的 admin key（从 sessionStorage）
+  const k = sessionStorage.getItem('adminKey');
+  if (k) headers['Authorization'] = 'Bearer ' + k;
+  const r = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+  if (r.status === 401) { toast('未授权：在控制台 URL 上加 ?key=YOUR_ADMIN_KEY，或将 key 存进 sessionStorage'); throw new Error('401'); }
+  return r.json();
+}
+
+function statusBadge(s) {
+  const map = { ok: '正常', degraded: '降级', down: '不可用', unknown: '未知' };
+  return `<span class="dot ${s}"></span><span>${map[s] || s}</span>`;
+}
+
+function protocolBadge(p) { return `<span class="badge ${p}">${p}</span>`; }
+
+function renderChannels(data) {
+  const root = $('#channels');
+  if (!data.channels.length) { root.innerHTML = '<div class="empty">尚未配置渠道</div>'; return; }
+  root.innerHTML = data.channels.map((ch) => {
+    const aliases = ch.aliases.map(a => `<div class="pair"><span>${a.alias}</span><span class="up">→ ${a.upstream}</span></div>`).join('') || '<div class="empty">无别名</div>';
+    const err = ch.lastError ? `<div class="err">${ch.lastError}</div>` : '';
+    const checked = ch.lastCheck ? new Date(ch.lastCheck).toLocaleTimeString() : '—';
+    return `
+      <div class="card" data-id="${ch.id}">
+        <h3>${protocolBadge(ch.protocol)} ${ch.name} <span class="badge">${ch.id}</span></h3>
+        <div class="row"><span class="k">状态</span><span class="v">${statusBadge(ch.status)}</span></div>
+        <div class="row"><span class="k">端点</span><span class="v">${ch.baseUrl}</span></div>
+        <div class="row"><span class="k">延迟</span><span class="v">${ch.latencyMs < 0 ? '—' : ch.latencyMs + ' ms'}</span></div>
+        <div class="row"><span class="k">探测时间</span><span class="v">${checked}</span></div>
+        <div class="row"><span class="k">上游模型</span><span class="v">${ch.upstreamModels.length}</span></div>
+        <div class="row"><span class="k">别名</span><span class="v">${ch.aliases.length}</span></div>
+        <div class="alias-list">${aliases}</div>
+        ${err}
+        <div class="actions">
+          <div class="prio">
+            <span class="k">优先级</span>
+            <input type="text" value="${ch.priority}" data-edit="priority">
+          </div>
+          <button data-act="save">保存</button>
+          <button data-act="probe">探测</button>
+          <button data-act="toggle" class="${ch.enabled ? 'danger' : 'primary'}">${ch.enabled ? '停用' : '启用'}</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  root.querySelectorAll('.card').forEach((card) => {
+    const id = card.dataset.id;
+    card.querySelector('[data-act=save]').onclick = async () => {
+      const priority = Number(card.querySelector('[data-edit=priority]').value);
+      await api('/admin/api/channel', { method: 'POST', body: JSON.stringify({ id, priority }) });
+      toast('已保存'); refresh();
+    };
+    card.querySelector('[data-act=probe]').onclick = async () => {
+      await api('/admin/api/recheck', { method: 'POST', body: JSON.stringify({ id }) });
+      toast('已探测'); refresh();
+    };
+    card.querySelector('[data-act=toggle]').onclick = async () => {
+      const cur = data.channels.find(c => c.id === id);
+      await api('/admin/api/channel', { method: 'POST', body: JSON.stringify({ id, enabled: !cur.enabled }) });
+      toast(cur.enabled ? '已停用' : '已启用'); refresh();
+    };
+  });
+}
+
+function renderModels(data) {
+  const root = $('#models');
+  const sections = [];
+  for (const [proto, list] of Object.entries(data.aggregated)) {
+    if (!list.length) continue;
+    sections.push(`
+      <div class="card" style="margin-bottom:12px">
+        <h3>${protocolBadge(proto)} <span>${list.length} 个模型</span></h3>
+        <div class="alias-list" style="max-height:none">${list.map(m => `<div class="pair"><span>${m}</span></div>`).join('')}</div>
+      </div>
+    `);
+  }
+  root.innerHTML = sections.join('') || '<div class="empty">无模型</div>';
+}
+
+async function refresh() {
+  try {
+    const data = await api('/admin/api/status');
+    $('#meta').textContent = `${data.channels.length} 个渠道 · ${new Date().toLocaleTimeString()}`;
+    renderChannels(data);
+    renderModels(data);
+  } catch {}
+}
+
+$('#btn-refresh').onclick = refresh;
+$('#btn-recheck').onclick = async () => { await api('/admin/api/recheck', { method: 'POST' }); toast('已发起全量探测'); refresh(); };
+
+// 自动：URL 上有 ?key= 则存到 sessionStorage 并去掉
+const url = new URL(location.href);
+if (url.searchParams.get('key')) {
+  sessionStorage.setItem('adminKey', url.searchParams.get('key'));
+  url.searchParams.delete('key');
+  history.replaceState(null, '', url.toString());
+}
+refresh();
+setInterval(refresh, 8000);
+</script>
+</body>
+</html>

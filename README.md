@@ -1,17 +1,18 @@
-# ZZCSAPI — 本地多渠道 OpenAI 兼容聚合网关
+# ZZCSAPI — 本地多渠道 AI 聚合网关
 
-类似 new-api / sub2-api / one-api 的轻量自部署版，零依赖，**仅 Node 18+**。
-把所有中转 API key 集中在一处，对外只暴露一个 OpenAI 兼容地址。
+类似 new-api / sub2-api / one-api 的轻量自部署版，**零依赖，仅 Node 18+**。
+把所有中转 API key 集中在一处，对外同时暴露 **OpenAI / Anthropic / Gemini** 三种兼容端点。
 
 ## 特性
 
-- 🚦 **多渠道自动调度**：同一模型在多个渠道之间按 priority + 健康状态排序调用
+- 🚦 **多协议、多渠道自动调度**：同一模型在多个渠道之间按 priority + 健康状态排序调用
 - 🔁 **失败自动切换**：4xx 客户端错误之外，遇到 5xx / 超时 / 网络错误立刻试下一个渠道
 - 🛡 **熔断冷却**：连续失败的渠道进入指数退避冷却期（1s, 2s, 4s ... 上限 60s）
-- 🔍 **后台健康探测**：定时 GET `{base}/models`，聚合 `latency / 状态 / 真实模型清单`
-- 🌊 **流式透传**：SSE 全程转发，已发出 200 不会中途切换（避免半截回复）
-- 📊 **统一模型清单**：`/v1/models` 自动合并所有渠道的别名 + 探测到的真实模型
-- 🧰 **管理面板**：`/admin/status` 查看所有渠道，`POST /admin/recheck` 立即重探测
+- 🔍 **后台健康探测**：定时 GET 渠道的 models 端点，聚合 latency / 状态 / 真实模型清单
+- 🌊 **流式透传**：SSE 全程转发；上游响应是 OpenAI 协议时自动转成 Anthropic/Gemini 流
+- 🔐 **双层鉴权**：`GATEWAY_KEY`（客户端）+ `ADMIN_KEY`（控制台与管理 API）
+- 🖥 **Web 控制台**：浏览器打开 `http://127.0.0.1:8787/console` 看渠道状态、改优先级、启停渠道
+- 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
 
 ## 快速开始
 
@@ -19,21 +20,53 @@
 # 1) 首次运行自动从 config.example.json 生成 config.json
 node server.js
 
-# 2) 编辑 config.json 填入你的渠道
-#    然后再次启动
+# 2) 编辑 config.json 填入真实渠道，再重启
 node server.js
 ```
 
-## 在 DSH 里配置
+可选环境变量：
 
-把 DSH 里的 OpenAI 兼容 API 地址改成：
+```bash
+GATEWAY_KEY=xxx  node server.js    # 客户端必须带 Bearer xxx
+ADMIN_KEY=yyy    node server.js    # 控制台 + /admin/* 必须带 Bearer yyy
+```
+
+不设置则只允许本机 127.0.0.1 访问（不强制鉴权）。
+
+## 在 DSH / Cursor / Cline 等客户端里配置
+
+### OpenAI 协议
+```
+baseURL = http://127.0.0.1:8787/v1
+apiKey  = <GATEWAY_KEY 的值，没设就随便填>
+model   = <channels[*].models 里 alias，左边的键>
+```
+
+### Anthropic 协议（DSH 的 Anthropic 兼容地址）
+```
+baseURL = http://127.0.0.1:8787/anthropic
+apiKey  = <GATEWAY_KEY>
+model   = <alias>
+```
+
+### Gemini 协议
+```
+baseURL = http://127.0.0.1:8787/gemini/v1beta
+apiKey  = <GATEWAY_KEY>
+```
+
+## Web 控制台
 
 ```
-http://127.0.0.1:8787/v1
+http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 ```
 
-API Key 随便填一个非空字符串（网关目前不强制鉴权，留待 `ADMIN_KEY` 后续扩展）。
-模型名用 `config.json` 里 channels[*].models 配置的 **alias**（左边的键）。
+打开后把 key 存进 sessionStorage（URL 自动脱敏），可：
+
+- 实时看每个渠道的健康 / 延迟 / 错误 / 探测时间
+- 改 priority、启停某个渠道
+- 触发单渠道或全量重新探测
+- 看每个协议聚合后的模型清单
 
 ## 配置示例 (`config.example.json`)
 
@@ -44,69 +77,91 @@ API Key 随便填一个非空字符串（网关目前不强制鉴权，留待 `A
   "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
   "channels": [
     {
-      "id": "vendor-a",
-      "name": "中转A",
+      "id": "vendor-a-openai",
+      "name": "中转A (OpenAI)",
       "baseUrl": "https://api.example-a.com/v1",
       "apiKey": "sk-xxx",
-      "priority": 10,                // 数字越大越优先
+      "protocol": "openai",                  // openai | anthropic | gemini
+      "priority": 10,
       "enabled": true,
-      "models": {                     // alias(对外) -> upstream(实际)
+      "models": {                            // alias -> upstream
         "gpt-4o": "gpt-4o",
-        "gpt-4o-mini": "gpt-4o-mini",
-        "my-coding": "gpt-4o"         // 同一渠道同一 upstream 可挂多个别名
+        "gpt-4o-mini": "gpt-4o-mini"
       }
     },
     {
-      "id": "vendor-b",
-      "name": "中转B",
-      "baseUrl": "https://api.example-b.com/v1",
-      "apiKey": "sk-yyy",
-      "priority": 5,
-      "enabled": true,
+      "id": "vendor-anthropic",
+      "name": "Anthropic 中转",
+      "baseUrl": "https://api.example-c.com",
+      "apiKey": "sk-ant-xxx",
+      "protocol": "anthropic",
+      "priority": 10,
       "models": {
-        "gpt-4o": "gpt-4o"            // 同一个 alias 的备胎
+        "claude-3-5-sonnet": "claude-3-5-sonnet-20241022"
+      }
+    },
+    {
+      "id": "vendor-gemini",
+      "name": "Gemini 中转",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "apiKey": "AIza-xxx",
+      "protocol": "gemini",
+      "priority": 10,
+      "models": {
+        "gemini-1.5-pro": "gemini-1.5-pro-latest"
       }
     }
   ]
 }
 ```
 
+### 协议说明
+
+| protocol     | 探活 URL                  | 鉴权头              | 网关对外路径                          |
+| ------------ | ------------------------- | ------------------- | ------------------------------------- |
+| `openai`     | `GET /models`             | `Authorization: Bearer ...` | `/v1/chat/completions` 之类     |
+| `anthropic`  | `GET /v1/models`          | `x-api-key: ...`    | `/anthropic/v1/messages`              |
+| `gemini`     | `GET /v1beta/models`      | `x-goog-api-key: ...` | `/gemini/v1beta/models/{m}:{action}` |
+
+> 中转渠道如果用 OpenAI 兼容但 `protocol` 想挂到 Anthropic 端点用，把 `protocol` 设成 `anthropic` 即可——网关会把请求体自动转成 OpenAI 格式丢给它，再把响应转回 Anthropic 格式。同理 Gemini。
+
 ## 调度顺序
 
-对用户请求的模型 `M`：
-
-1. 在所有 `enabled` 渠道里查找 `M` 是否在 alias 映射中
-2. 候选 = 命中的渠道 ∪ 自动从探测结果中识别出 M 的渠道（优先级 -0.5）
-3. 排序：
-   - 冷却中 → 最末
-   - 状态为 down → 倒数
-   - 同状态 → priority 大的先
-   - 再看 latency
-4. 依次尝试直到成功；所有失败后返回 `502` + 错误详情
+1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias
+2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（优先级 -0.5）
+3. 排序：冷却中 → 末位；`down` → 倒数；同状态按 `priority` 降序，再看 latency
+4. 依次尝试直到成功；全部失败返回 502 + 错误详情
 
 ## 端点
 
-| 路径                          | 方法 | 说明                                   |
-| ----------------------------- | ---- | -------------------------------------- |
-| `/v1/models`                  | GET  | 聚合模型清单（带渠道状态）             |
-| `/v1/chat/completions`        | POST | 调度 chat（支持 stream）               |
-| `/v1/embeddings`              | POST | 透传（不做特殊处理）                   |
-| `/v1/responses`               | POST | 透传                                   |
-| `/v1/completions`             | POST | 透传                                   |
-| `/healthz`                    | GET  | 网关自身存活探针                       |
-| `/admin/status`               | GET  | 渠道详细状态                           |
-| `/admin/recheck`              | POST | 立即触发一次所有渠道健康探测           |
+| 路径                                | 方法 | 鉴权        | 说明                                  |
+| ----------------------------------- | ---- | ----------- | ------------------------------------- |
+| `/healthz`                          | GET  | 无          | 网关自身存活探针                      |
+| `/console`                          | GET  | admin       | Web 控制台 HTML                       |
+| `/admin/api/status`                 | GET  | admin       | 渠道详细状态（控制台用）              |
+| `/admin/api/recheck`                | POST | admin       | 立即重探测（body 可传 `{id}`）        |
+| `/admin/api/channel`                | POST | admin       | 改渠道（`{id, priority?, enabled?}`） |
+| `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
+| `/v1/models`                        | GET  | gateway     | OpenAI 聚合模型                       |
+| `/v1/chat/completions`              | POST | gateway     | OpenAI chat（支持 stream）            |
+| `/v1/embeddings`                    | POST | gateway     | 透传                                  |
+| `/v1/responses` / `/v1/completions` | POST | gateway     | 透传                                  |
+| `/anthropic/v1/models`              | GET  | gateway     | Anthropic 聚合模型                    |
+| `/anthropic/v1/messages`            | POST | gateway     | Anthropic Messages（支持 stream）     |
+| `/gemini/v1beta/models/{m}:generateContent`        | POST | gateway | Gemini 非流式        |
+| `/gemini/v1beta/models/{m}:streamGenerateContent`  | POST | gateway | Gemini 流式          |
 
 ## 行为细节
 
-- **4xx 重试规则**：`400/401/403/422` 等明确是请求本身错的不再切渠道；`408/429` 会切。
-- **流式失败**：已经开始向客户端写 200 + 任意 chunk 后，上游断开不会再换渠道。
+- **4xx 重试规则**：`400/401/403/422` 等明确请求本身错的不再切渠道；`408/429` 会切。
+- **流式失败**：已经开始向客户端写 200 + 任意 chunk 后，上游断开不会再换渠道（避免半截回复）。
+- **协议转换**：OpenAI ↔ Anthropic 走内部 OpenAI 协议中转；Anthropic 渠道里跑的是 OpenAI 也能用。
 - **冷启动**：第一次请求时 `status=unknown` 仍然会被选中（health 探测在后台进行）。
 - **别名区分大小写不敏感**，upstream 透传原样。
 
 ## 计划中
 
-- 鉴权 (`ADMIN_KEY` env)
-- 简易 Web 控制台
-- 渠道权重与加权轮询
-- Anthropic / Gemini 适配
+- 加权轮询（不是单纯 priority 优先）
+- 用量统计 / 配额
+- Anthropic tool_use 完整转换
+- Gemini 多模态（图片）适配
