@@ -1,0 +1,22 @@
+services:
+  zzcsapi:
+    build: .
+    image: zzcsapi:local
+    container_name: zzcsapi
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      TZ: Asia/Shanghai
+      PORT: "8787"
+      ADMIN_KEY: ${ZZCSAPI_ADMIN_KEY:-zz-admin-change-me}
+      GATEWAY_KEY: ${ZZCSAPI_GATEWAY_KEY:-zz-gw-change-me}
+      ZZCSAPI_CONFIG: /app/config.json
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./config.d:/app/config.d:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

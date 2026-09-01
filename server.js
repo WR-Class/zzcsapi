@@ -499,10 +499,47 @@ function channelStatusAll() {
   };
 }
 
+// 持久化到 config.json（写之前备份到 config.bak.json）
+function persistConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) return;
+  try {
+    if (fs.existsSync(CONFIG_PATH)) fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak');
+  } catch (e) { /* ignore */ }
+  const out = {
+    port: config.port,
+    health: config.health,
+    retries: config.retries,
+    channels: Array.from(channels.values()).map((ch) => ({
+      id: ch.def.id,
+      name: ch.def.name,
+      baseUrl: ch.def.baseUrl,
+      apiKey: ch.def.apiKey,
+      protocol: ch.def.protocol || 'openai',
+      priority: ch.def.priority ?? 0,
+      enabled: ch.def.enabled !== false,
+      models: ch.def.models || {},
+    })),
+  };
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(out, null, 2) + '\n', 'utf8');
+}
+
+function validateChannelDef(def) {
+  if (!def || typeof def !== 'object') return 'body must be an object';
+  if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
+  if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
+  if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
+  if (def.protocol && !['openai', 'anthropic', 'gemini'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini';
+  if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
+  return null;
+}
+
 async function handleAdminApi(req, res, url) {
   // /admin/api/status        GET   渠道状态
-  // /admin/api/recheck       POST  立即重探测
-  // /admin/api/channel       POST  修改渠道 {id, priority?, enabled?}
+  // /admin/api/recheck       POST  立即重探测（body 可选 {id}）
+  // /admin/api/channel       POST  改 priority/enabled（不持久化的轻量操作）
+  // /admin/api/channels      POST  完整 upsert（持久化到 config.json）
+  // /admin/api/channels      DELETE {id}  删除
+  // /admin/api/channels      GET   列表
   if (req.method === 'GET' && url.pathname === '/admin/api/status') {
     return sendJson(res, 200, channelStatusAll());
   }
@@ -526,6 +563,50 @@ async function handleAdminApi(req, res, url) {
     if (body.enabled !== undefined) ch.def.enabled = !!body.enabled;
     return sendJson(res, 200, { ok: true, id: body.id, priority: ch.def.priority, enabled: ch.def.enabled });
   }
+
+  // 完整 CRUD：channels 集合
+  if (req.method === 'GET' && url.pathname === '/admin/api/channels') {
+    return sendJson(res, 200, { channels: Array.from(channels.values()).map((ch) => ({
+      id: ch.def.id,
+      name: ch.def.name,
+      baseUrl: ch.def.baseUrl,
+      apiKey: ch.def.apiKey,
+      protocol: ch.def.protocol || 'openai',
+      priority: ch.def.priority ?? 0,
+      enabled: ch.def.enabled !== false,
+      models: ch.def.models || {},
+    })) });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/channels') {
+    const body = await safeReadJson(req);
+    const err = validateChannelDef(body);
+    if (err) return sendJson(res, 400, { error: err });
+    const def = {
+      id: body.id,
+      name: body.name || body.id,
+      baseUrl: body.baseUrl.replace(/\/+$/, ''),
+      apiKey: body.apiKey,
+      protocol: body.protocol || 'openai',
+      priority: body.priority !== undefined ? Number(body.priority) : 0,
+      enabled: body.enabled !== false,
+      models: body.models || {},
+    };
+    const existed = channels.has(def.id);
+    const ch = upsertChannel(def);
+    persistConfig();
+    // 立即探测一次，便于前端立刻显示健康状态
+    probeChannel(ch).catch(() => {});
+    return sendJson(res, 200, { ok: true, id: def.id, existed, channel: { id: def.id, name: def.name, baseUrl: def.baseUrl, protocol: def.protocol, priority: def.priority, enabled: def.enabled, models: def.models } });
+  }
+  if (req.method === 'DELETE' && url.pathname === '/admin/api/channels') {
+    const body = await safeReadJson(req);
+    if (!body || !body.id) return sendJson(res, 400, { error: 'missing id' });
+    if (!channels.has(body.id)) return sendJson(res, 404, { error: 'channel not found' });
+    channels.delete(body.id);
+    persistConfig();
+    return sendJson(res, 200, { ok: true, id: body.id });
+  }
+
   return sendJson(res, 404, { error: 'unknown admin api' });
 }
 

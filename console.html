@@ -8,24 +8,28 @@
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body { font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #0f1115; color: #d8dde6; }
-  header { padding: 14px 22px; background: #181c25; border-bottom: 1px solid #2a2f3d; display: flex; align-items: center; gap: 16px; }
+  header { padding: 14px 22px; background: #181c25; border-bottom: 1px solid #2a2f3d; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
   header h1 { margin: 0; font-size: 17px; font-weight: 600; }
   header .meta { color: #8a93a6; font-size: 12px; }
-  .toolbar { margin-left: auto; display: flex; gap: 8px; }
-  button, select, input[type=text] { background: #1f2430; color: #d8dde6; border: 1px solid #2c3140; border-radius: 6px; padding: 6px 12px; font: inherit; }
+  .toolbar { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  button, select, input[type=text], input[type=number], input[type=password], textarea { background: #1f2430; color: #d8dde6; border: 1px solid #2c3140; border-radius: 6px; padding: 6px 12px; font: inherit; }
+  textarea { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; padding: 8px 10px; resize: vertical; }
   button { cursor: pointer; }
   button:hover { background: #2a3140; }
   button.primary { background: #3a7afe; border-color: #3a7afe; color: white; }
   button.primary:hover { background: #4d88ff; }
   button.danger { background: #c13a3a; border-color: #c13a3a; color: white; }
+  button.danger:hover { background: #d04a4a; }
+  button.ghost { background: transparent; }
   main { padding: 18px 22px; }
-  h2 { font-size: 15px; margin: 22px 0 10px; color: #aab1c2; }
+  h2 { font-size: 15px; margin: 22px 0 10px; color: #aab1c2; display: flex; align-items: center; gap: 10px; }
+  h2 .hint { color: #6e7691; font-size: 11px; font-weight: normal; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
-  .card { background: #181c25; border: 1px solid #262b38; border-radius: 10px; padding: 14px; }
-  .card h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .card { background: #181c25; border: 1px solid #262b38; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .card h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .card .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12.5px; gap: 8px; }
   .card .row .k { color: #8a93a6; flex-shrink: 0; }
-  .card .row .v { text-align: right; word-break: break-all; }
+  .card .row .v { text-align: right; word-break: break-all; max-width: 70%; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; }
   .dot.ok { background: #3ddc97; }
   .dot.degraded { background: #f5b94a; }
@@ -38,16 +42,28 @@
   .alias-list { max-height: 110px; overflow: auto; background: #11141b; border-radius: 6px; padding: 6px 8px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11.5px; }
   .alias-list .pair { display: flex; justify-content: space-between; gap: 8px; }
   .alias-list .pair .up { color: #6e7691; }
-  .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
   .actions button { padding: 3px 8px; font-size: 12px; }
   .prio { display: flex; align-items: center; gap: 4px; }
   .prio input { width: 60px; padding: 3px 6px; }
   .models { color: #8a93a6; font-size: 12px; margin-top: 4px; }
   .err { color: #e15759; font-size: 11.5px; margin-top: 4px; }
   .empty { color: #6e7691; font-size: 12px; padding: 20px; text-align: center; }
-  .toast { position: fixed; bottom: 18px; right: 18px; background: #2a3140; color: #d8dde6; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  .toast { position: fixed; bottom: 18px; right: 18px; background: #2a3140; color: #d8dde6; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 1000; }
   .toast.show { opacity: 1; }
   .refresh-hint { color: #6e7691; font-size: 11px; }
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .mask.show { display: flex; }
+  .modal { background: #181c25; border: 1px solid #2c3140; border-radius: 10px; padding: 18px 20px; width: 100%; max-width: 520px; max-height: 90vh; overflow: auto; box-shadow: 0 18px 50px rgba(0,0,0,0.4); }
+  .modal h2 { margin: 0 0 12px; color: #d8dde6; }
+  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  .field label { color: #8a93a6; font-size: 12px; }
+  .field input, .field select, .field textarea { width: 100%; }
+  .field-row { display: flex; gap: 10px; }
+  .field-row .field { flex: 1; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  .help { color: #6e7691; font-size: 11px; }
+  .pill { display: inline-flex; align-items: center; gap: 4px; background: #1f2430; border: 1px solid #2c3140; border-radius: 12px; padding: 2px 8px; font-size: 11.5px; }
 </style>
 </head>
 <body>
@@ -57,84 +73,149 @@
   <div class="toolbar">
     <button id="btn-refresh">刷新</button>
     <button id="btn-recheck" class="primary">立即探测全部</button>
+    <button id="btn-add" class="primary">+ 添加渠道</button>
   </div>
 </header>
 <main>
-  <h2>渠道状态 <span class="refresh-hint" id="refresh-hint"></span></h2>
+  <h2>渠道 <span class="hint" id="refresh-hint"></span></h2>
   <div id="channels" class="grid"></div>
   <h2>聚合模型</h2>
   <div id="models"></div>
 </main>
 <div class="toast" id="toast"></div>
 
+<div class="mask" id="mask">
+  <div class="modal">
+    <h2 id="modal-title">添加渠道</h2>
+    <div class="field">
+      <label>渠道 ID <span class="help">（英文/数字/下划线/短横线，全局唯一）</span></label>
+      <input id="f-id" type="text" placeholder="vendor-x">
+    </div>
+    <div class="field">
+      <label>显示名称</label>
+      <input id="f-name" type="text" placeholder="中转 X">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>协议</label>
+        <select id="f-protocol">
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+          <option value="gemini">gemini</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>优先级</label>
+        <input id="f-priority" type="number" value="0">
+      </div>
+      <div class="field" style="flex:0 0 110px">
+        <label>启用</label>
+        <select id="f-enabled">
+          <option value="true">是</option>
+          <option value="false">否</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Base URL <span class="help">（不含尾斜杠；openai 协议通常是 https://host/v1，anthropic 是 https://host，gemini 是 https://generativelanguage.googleapis.com）</span></label>
+      <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
+    </div>
+    <div class="field">
+      <label>API Key</label>
+      <input id="f-apiKey" type="password" placeholder="sk-...">
+    </div>
+    <div class="field">
+      <label>模型映射 <span class="help">JSON：左键=对外 alias，右值=上游真实模型名。一行一个 alias</span></label>
+      <textarea id="f-models" rows="6" placeholder='{"gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"}'></textarea>
+    </div>
+    <div class="modal-actions">
+      <button id="btn-cancel" class="ghost">取消</button>
+      <button id="btn-save" class="primary">保存</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (s) => document.querySelector(s);
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1800); }
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200); }
+function err(msg) { toast('⚠️ ' + msg); }
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
-  // 同源调用，浏览器会自动带上 cookie；如果用 ?key= 则免鉴权
-  // 这里采用同源 fetch 加上用户填入的 admin key（从 sessionStorage）
   const k = sessionStorage.getItem('adminKey');
   if (k) headers['Authorization'] = 'Bearer ' + k;
   const r = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
-  if (r.status === 401) { toast('未授权：在控制台 URL 上加 ?key=YOUR_ADMIN_KEY，或将 key 存进 sessionStorage'); throw new Error('401'); }
-  return r.json();
+  if (r.status === 401) { err('未授权'); throw new Error('401'); }
+  const j = await r.json().catch(() => null);
+  if (!r.ok) { err(j && j.error || ('HTTP ' + r.status)); throw new Error('http ' + r.status); }
+  return j;
 }
+
+const state = { channels: [] };
 
 function statusBadge(s) {
   const map = { ok: '正常', degraded: '降级', down: '不可用', unknown: '未知' };
   return `<span class="dot ${s}"></span><span>${map[s] || s}</span>`;
 }
-
 function protocolBadge(p) { return `<span class="badge ${p}">${p}</span>`; }
 
 function renderChannels(data) {
+  state.channels = data.channels;
   const root = $('#channels');
-  if (!data.channels.length) { root.innerHTML = '<div class="empty">尚未配置渠道</div>'; return; }
+  if (!data.channels.length) { root.innerHTML = '<div class="empty" style="grid-column:1/-1">尚未配置渠道。点右上角"+ 添加渠道"开始。</div>'; return; }
   root.innerHTML = data.channels.map((ch) => {
-    const aliases = ch.aliases.map(a => `<div class="pair"><span>${a.alias}</span><span class="up">→ ${a.upstream}</span></div>`).join('') || '<div class="empty">无别名</div>';
-    const err = ch.lastError ? `<div class="err">${ch.lastError}</div>` : '';
+    const aliases = ch.aliases.map(a => `<div class="pair"><span>${escapeHtml(a.alias)}</span><span class="up">→ ${escapeHtml(a.upstream)}</span></div>`).join('') || '<div class="empty">无别名</div>';
+    const err1 = ch.lastError ? `<div class="err">${escapeHtml(ch.lastError)}</div>` : '';
     const checked = ch.lastCheck ? new Date(ch.lastCheck).toLocaleTimeString() : '—';
     return `
-      <div class="card" data-id="${ch.id}">
-        <h3>${protocolBadge(ch.protocol)} ${ch.name} <span class="badge">${ch.id}</span></h3>
+      <div class="card" data-id="${escapeHtml(ch.id)}">
+        <h3>${protocolBadge(ch.protocol)} ${escapeHtml(ch.name)} <span class="badge">${escapeHtml(ch.id)}</span></h3>
         <div class="row"><span class="k">状态</span><span class="v">${statusBadge(ch.status)}</span></div>
-        <div class="row"><span class="k">端点</span><span class="v">${ch.baseUrl}</span></div>
+        <div class="row"><span class="k">端点</span><span class="v">${escapeHtml(ch.baseUrl)}</span></div>
         <div class="row"><span class="k">延迟</span><span class="v">${ch.latencyMs < 0 ? '—' : ch.latencyMs + ' ms'}</span></div>
         <div class="row"><span class="k">探测时间</span><span class="v">${checked}</span></div>
         <div class="row"><span class="k">上游模型</span><span class="v">${ch.upstreamModels.length}</span></div>
         <div class="row"><span class="k">别名</span><span class="v">${ch.aliases.length}</span></div>
         <div class="alias-list">${aliases}</div>
-        ${err}
+        ${err1}
         <div class="actions">
           <div class="prio">
             <span class="k">优先级</span>
             <input type="text" value="${ch.priority}" data-edit="priority">
           </div>
-          <button data-act="save">保存</button>
+          <button data-act="save-prio">保存</button>
           <button data-act="probe">探测</button>
-          <button data-act="toggle" class="${ch.enabled ? 'danger' : 'primary'}">${ch.enabled ? '停用' : '启用'}</button>
+          <button data-act="edit">编辑</button>
+          <button data-act="toggle" class="${ch.enabled ? '' : 'primary'}">${ch.enabled ? '停用' : '启用'}</button>
+          <button data-act="delete" class="danger">删除</button>
         </div>
       </div>
     `;
   }).join('');
 
-  root.querySelectorAll('.card').forEach((card) => {
+  $$('.card').forEach((card) => {
     const id = card.dataset.id;
-    card.querySelector('[data-act=save]').onclick = async () => {
+    card.querySelector('[data-act=save-prio]').onclick = async () => {
       const priority = Number(card.querySelector('[data-edit=priority]').value);
+      if (Number.isNaN(priority)) return err('优先级必须为数字');
       await api('/admin/api/channel', { method: 'POST', body: JSON.stringify({ id, priority }) });
-      toast('已保存'); refresh();
+      toast('已保存优先级'); refresh();
     };
     card.querySelector('[data-act=probe]').onclick = async () => {
       await api('/admin/api/recheck', { method: 'POST', body: JSON.stringify({ id }) });
       toast('已探测'); refresh();
     };
+    card.querySelector('[data-act=edit]').onclick = () => openModal(state.channels.find(c => c.id === id));
     card.querySelector('[data-act=toggle]').onclick = async () => {
-      const cur = data.channels.find(c => c.id === id);
+      const cur = state.channels.find(c => c.id === id);
       await api('/admin/api/channel', { method: 'POST', body: JSON.stringify({ id, enabled: !cur.enabled }) });
       toast(cur.enabled ? '已停用' : '已启用'); refresh();
+    };
+    card.querySelector('[data-act=delete]').onclick = async () => {
+      if (!confirm('确定要删除渠道 “' + id + '” 吗？\n（config.json 同时会修改，建议先备份）')) return;
+      await api('/admin/api/channels', { method: 'DELETE', body: JSON.stringify({ id }) });
+      toast('已删除'); refresh();
     };
   });
 }
@@ -147,12 +228,14 @@ function renderModels(data) {
     sections.push(`
       <div class="card" style="margin-bottom:12px">
         <h3>${protocolBadge(proto)} <span>${list.length} 个模型</span></h3>
-        <div class="alias-list" style="max-height:none">${list.map(m => `<div class="pair"><span>${m}</span></div>`).join('')}</div>
+        <div class="alias-list" style="max-height:none">${list.map(m => `<div class="pair"><span>${escapeHtml(m)}</span></div>`).join('')}</div>
       </div>
     `);
   }
   root.innerHTML = sections.join('') || '<div class="empty">无模型</div>';
 }
+
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 async function refresh() {
   try {
@@ -165,8 +248,53 @@ async function refresh() {
 
 $('#btn-refresh').onclick = refresh;
 $('#btn-recheck').onclick = async () => { await api('/admin/api/recheck', { method: 'POST' }); toast('已发起全量探测'); refresh(); };
+$('#btn-add').onclick = () => openModal(null);
 
-// 自动：URL 上有 ?key= 则存到 sessionStorage 并去掉
+// 模态框
+function openModal(ch) {
+  $('#mask').classList.add('show');
+  $('#modal-title').textContent = ch ? '编辑渠道：' + ch.id : '添加渠道';
+  $('#f-id').value = ch ? ch.id : '';
+  $('#f-id').disabled = !!ch;  // 编辑时 ID 不可改
+  $('#f-name').value = ch ? ch.name : '';
+  $('#f-protocol').value = ch ? ch.protocol : 'openai';
+  $('#f-priority').value = ch ? ch.priority : 0;
+  $('#f-enabled').value = ch ? String(ch.enabled !== false) : 'true';
+  $('#f-baseUrl').value = ch ? ch.baseUrl : '';
+  $('#f-apiKey').value = ch ? ch.apiKey : '';
+  $('#f-models').value = ch ? JSON.stringify(ch.models, null, 2) : '{"gpt-4o": "gpt-4o"}';
+}
+$('#btn-cancel').onclick = () => $('#mask').classList.remove('show');
+$('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
+
+$('#btn-save').onclick = async () => {
+  const id = $('#f-id').value.trim();
+  if (!id) return err('ID 必填');
+  let models = {};
+  const mt = $('#f-models').value.trim();
+  if (mt) {
+    try { models = JSON.parse(mt); }
+    catch (e) { return err('模型映射 JSON 解析失败：' + e.message); }
+  }
+  const body = {
+    id,
+    name: $('#f-name').value.trim() || id,
+    protocol: $('#f-protocol').value,
+    priority: Number($('#f-priority').value),
+    enabled: $('#f-enabled').value === 'true',
+    baseUrl: $('#f-baseUrl').value.trim(),
+    apiKey: $('#f-apiKey').value,
+    models,
+  };
+  if (!body.baseUrl) return err('Base URL 必填');
+  if (!body.apiKey) return err('API Key 必填');
+  try {
+    await api('/admin/api/channels', { method: 'POST', body: JSON.stringify(body) });
+    toast('已保存到 config.json'); $('#mask').classList.remove('show'); refresh();
+  } catch {}
+};
+
+// 启动：URL ?key= 写入 sessionStorage
 const url = new URL(location.href);
 if (url.searchParams.get('key')) {
   sessionStorage.setItem('adminKey', url.searchParams.get('key'));
