@@ -195,6 +195,27 @@
   </div>
 </div>
 
+<div class="mask" id="test-mask">
+  <div class="modal" style="max-width:560px">
+    <h2>测试模型 <span class="small" id="test-modal-subtitle"></span></h2>
+    <div class="field">
+      <div class="probe-row">
+        <span class="grow small" id="test-summary">—</span>
+        <label class="toggle"><input type="checkbox" id="test-select-all" checked> 全选</label>
+      </div>
+    </div>
+    <div id="test-model-list" style="max-height:50vh;overflow:auto;border:1px solid #2c3140;border-radius:6px;background:#11141b;padding:6px;margin-bottom:12px"></div>
+    <div class="field">
+      <label>提示词 <span class="small">（默认 "hi"，可改成你自己的简短测试）</span></label>
+      <input id="test-prompt" type="text" value="hi">
+    </div>
+    <div class="modal-actions">
+      <button id="test-cancel" class="ghost">取消</button>
+      <button id="test-run" class="primary">运行测试</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -268,14 +289,9 @@ function renderChannels(data) {
       await api('/admin/api/recheck', { method: 'POST', body: JSON.stringify({ id }) });
       toast('已探测'); refresh();
     };
-    card.querySelector('[data-act=test]').onclick = async () => {
+    card.querySelector('[data-act=test]').onclick = () => {
       const ch = state.channels.find(c => c.id === id);
-      // 优先用一个 alias，没有就用 upstreamModels 第一个
-      const candidates = (ch && ch.aliases.length) ? ch.aliases.map(a => a.alias) : (ch ? ch.upstreamModels : []);
-      if (!candidates.length) return err('该渠道无可测试模型（先"探测"或加 alias）');
-      const model = candidates.length === 1 ? candidates[0] : (prompt('选择要测试的模型：\n' + candidates.map((m, i) => (i + 1) + '. ' + m).join('\n') + '\n\n输入序号或模型名', candidates[0]) || '');
-      if (!model) return;
-      await runTest({ model, channelId: id });
+      openTestModal({ restrictChannelId: id, ch });
     };
     card.querySelector('[data-act=edit]').onclick = () => openModal(state.channels.find(c => c.id === id));
     card.querySelector('[data-act=toggle]').onclick = async () => {
@@ -419,14 +435,59 @@ async function runTest({ model, channelId, prompt: promptText }) {
   }
 }
 
-$('#btn-test-model').onclick = () => {
-  // 弹出输入：模型名（必填）+ 可选提示词
-  const models = (state.channels || []).flatMap(c => [...c.aliases.map(a => a.alias), ...c.upstreamModels]);
-  const uniqModels = Array.from(new Set(models));
-  const model = prompt('要测试的模型名：\n可用：' + (uniqModels.length ? uniqModels.slice(0, 30).join(', ') + (uniqModels.length > 30 ? '…' : '') : '（无）'), uniqModels[0] || '');
-  if (!model) return;
-  runTest({ model });
-};
+$('#btn-test-model').onclick = () => openTestModal();
+
+// 测试模型弹窗
+function openTestModal(opts) {
+  opts = opts || {};
+  $('#test-mask').classList.add('show');
+  const restrictedCh = opts.restrictChannelId ? state.channels.find(c => c.id === opts.restrictChannelId) : null;
+  $('#test-modal-subtitle').textContent = restrictedCh ? '（仅渠道 ' + restrictedCh.id + '）' : '（走完整调度）';
+
+  // 收集模型：仅显示各渠道 aliases 里的（即用户配置的可路由模型），按渠道分组
+  const grouped = [];
+  for (const ch of state.channels) {
+    if (restrictedCh && ch.id !== restrictedCh.id) continue;
+    if (!ch.enabled) continue;
+    const items = [];
+    for (const a of ch.aliases) {
+      items.push({ model: a.alias, channelId: ch.id, label: a.alias + ' → ' + a.upstream, via: ch.name || ch.id });
+    }
+    if (items.length) grouped.push({ channel: ch, items });
+  }
+
+  let html = '';
+  if (!grouped.length) html = '<div class="empty">暂无可测试模型（先添加渠道并配置 alias，或"获取模型"勾选模型保存）</div>';
+  else {
+    for (const g of grouped) {
+      html += `<div style="padding:4px 6px;color:#aab1c2;font-size:12px;font-weight:600">${escapeHtml(g.channel.name || g.channel.id)} <span class="small">${g.items.length} 个</span></div>`;
+      for (const it of g.items) {
+        html += `<label style="display:flex;gap:6px;align-items:center;padding:4px 6px;font-size:12.5px;cursor:pointer;border-radius:4px"><input type="checkbox" data-test-model="${escapeHtml(it.model)}" data-test-channel="${escapeHtml(it.channelId)}" checked><span>${escapeHtml(it.label)}</span></label>`;
+      }
+    }
+  }
+  $('#test-model-list').innerHTML = html;
+  $('#test-summary').textContent = grouped.reduce((s, g) => s + g.items.length, 0) + ' 个模型可选';
+
+  // 全选切换
+  const sa = $('#test-select-all');
+  sa.checked = true;
+  sa.onchange = () => {
+    $$('#test-model-list input[type=checkbox]').forEach((c) => { c.checked = sa.checked; });
+  };
+
+  $('#test-cancel').onclick = () => $('#test-mask').classList.remove('show');
+  $('#test-mask').onclick = (e) => { if (e.target.id === 'test-mask') $('#test-mask').classList.remove('show'); };
+  $('#test-run').onclick = async () => {
+    const picks = $$('#test-model-list input[type=checkbox]:checked').map((c) => ({ model: c.dataset.testModel, channelId: c.dataset.testChannel }));
+    if (!picks.length) return err('至少勾选一个模型');
+    const promptText = $('#test-prompt').value.trim() || 'hi';
+    $('#test-mask').classList.remove('show');
+    for (const p of picks) {
+      await runTest({ model: p.model, channelId: restrictedCh ? restrictedCh.id : p.channelId, prompt: promptText });
+    }
+  };
+}
 
 // 复制按钮
 document.addEventListener('click', async (e) => {
