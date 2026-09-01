@@ -10,47 +10,6 @@
   },
   "channels": [
     {
-      "id": "vendor-a-openai",
-      "name": "中转站A (OpenAI 协议)",
-      "baseUrl": "https://api.example-a.com/v1",
-      "apiKey": "sk-xxxxxxxx",
-      "protocol": "openai",
-      "priority": 10,
-      "enabled": true,
-      "autoAlias": true,
-      "models": {
-        "gpt-4o": "gpt-4o",
-        "gpt-4o-mini": "gpt-4o-mini"
-      }
-    },
-    {
-      "id": "vendor-b-openai",
-      "name": "中转站B (OpenAI 协议的备胎)",
-      "baseUrl": "https://api.example-b.com/v1",
-      "apiKey": "sk-yyyyyyyy",
-      "protocol": "openai",
-      "priority": 5,
-      "enabled": true,
-      "autoAlias": true,
-      "models": {
-        "gpt-4o": "gpt-4o"
-      }
-    },
-    {
-      "id": "vendor-anthropic",
-      "name": "Anthropic 中转",
-      "baseUrl": "https://api.example-c.com",
-      "apiKey": "sk-ant-xxxx",
-      "protocol": "anthropic",
-      "priority": 10,
-      "enabled": true,
-      "autoAlias": true,
-      "models": {
-        "claude-3-5-sonnet": "claude-3-5-sonnet-20241022",
-        "claude-3-haiku": "claude-3-haiku-20240307"
-      }
-    },
-    {
       "id": "vendor-gemini",
       "name": "Gemini 中转",
       "baseUrl": "https://generativelanguage.googleapis.com",
@@ -65,15 +24,22 @@
       }
     },
     {
-      "id": "empty-models",
-      "name": "???",
-      "baseUrl": "https://api.example-x.com/v1",
-      "apiKey": "sk-xxx",
+      "id": "bqgy",
+      "name": "霸气公益",
+      "baseUrl": "https://ai.121628.xyz/v1",
+      "apiKey": "sk-PAYk4PkTh4OmuXwgnEVtToShGAy5j1tEXKQPzLW8cZ0A61MV",
       "protocol": "openai",
-      "priority": 50,
+      "priority": 0,
       "enabled": true,
       "autoAlias": true,
-      "models": {}
+      "models": {
+        "deepseek-v4-flash-free": "deepseek-v4-flash-free",
+        "deepseek-v4-pro-free": "deepseek-v4-pro-free",
+        "glm-5.2-free": "glm-5.2-free",
+        "kimi-k3-free": "kimi-k3-free",
+        "minimax-m3-free": "minimax-m3-free",
+        "step-3.7-flash-free": "step-3.7-flash-free"
+      }
     }
   ]
 }

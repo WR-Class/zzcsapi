@@ -141,7 +141,7 @@
       <div class="probe-row">
         <button id="btn-probe" type="button">🔍 获取模型</button>
         <span class="grow" id="probe-status">点击按钮探测渠道模型列表</span>
-        <label class="toggle"><input type="checkbox" id="f-autoAlias" checked> 自动路由探测到的模型</label>
+        <label class="toggle"><input type="checkbox" id="f-autoAlias"> 自动路由探测到的所有模型（不勾则只暴露下方"获取模型"里勾选的）</label>
       </div>
       <div class="model-list hidden" id="model-list"></div>
       <div class="small" id="model-summary"></div>
@@ -151,7 +151,7 @@
     <div class="field">
       <label class="toggle"><input type="checkbox" id="f-useCustom"> 自定义 alias（高级）</label>
       <textarea id="f-models" rows="5" class="hidden" placeholder='{"my-coding": "gpt-4o"}'></textarea>
-      <span class="small">默认不需要：勾选「自动路由」时，DSH 直接用上游模型名即可。打开此项可手动把多个 alias 指向同一个上游，或改名字。</span>
+      <span class="small">默认不需要：点「获取模型」勾选要用的即可。打开此项可手动给同一个上游起多个 alias，或改名字。</span>
     </div>
 
     <div class="modal-actions">

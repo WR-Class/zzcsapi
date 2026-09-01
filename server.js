@@ -41,7 +41,7 @@ function loadConfig() {
       throw new Error(`配置文件不存在: ${CONFIG_PATH}`);
     }
   }
-  const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+  const raw = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
   const cfg = JSON.parse(raw);
   if (!Array.isArray(cfg.channels) || cfg.channels.length === 0) {
     throw new Error('config.json 缺少 channels 数组');
@@ -53,7 +53,7 @@ function loadConfig() {
     if (ch.enabled === undefined) ch.enabled = true;
     if (ch.priority === undefined) ch.priority = 0;
     if (!ch.protocol) ch.protocol = 'openai'; // openai | anthropic | gemini
-    if (ch.autoAlias === undefined) ch.autoAlias = true; // 探测到的模型自动可路由
+    if (ch.autoAlias === undefined) ch.autoAlias = false; // 探测到的模型自动可路由（默认关闭，按需开启）
     ch.models = ch.models || {};
   }
   return cfg;
@@ -68,7 +68,7 @@ const RETRIES = config.retries || { perChannel: 1, maxModelFallbacks: 99 };
 const channels = new Map();
 
 function upsertChannel(def) {
-  def.autoAlias = def.autoAlias !== false;
+  def.autoAlias = !!def.autoAlias;
   const cur = channels.get(def.id);
   if (cur) {
     Object.assign(cur.def, def);
@@ -638,7 +638,7 @@ async function handleAdminApi(req, res, url) {
       protocol: body.protocol || 'openai',
       priority: body.priority !== undefined ? Number(body.priority) : 0,
       enabled: body.enabled !== false,
-      autoAlias: body.autoAlias !== false,
+      autoAlias: body.autoAlias === true,
       models: body.models || {},
     };
     const existed = channels.has(def.id);
