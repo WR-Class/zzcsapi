@@ -66,6 +66,17 @@
   .probe-box { background: #11141b; border: 1px solid #2c3140; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
   .probe-box .probe-row { display: flex; gap: 8px; align-items: center; }
   .probe-box .probe-row .grow { flex: 1; color: #8a93a6; font-size: 12px; }
+  .model-row { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 4px; padding: 4px 6px; align-items: center; border-bottom: 1px solid #1c2030; }
+  .model-row:last-child { border-bottom: none; }
+  .model-row.head { color: #8a93a6; font-size: 11px; padding: 6px; background: #181c25; }
+  .model-row input { background: #0f1219; border: 1px solid #2c3140; border-radius: 4px; padding: 4px 8px; font: inherit; font-size: 12.5px; color: #d8dde6; }
+  .model-row input:focus { border-color: #3a7afe; outline: none; }
+  .model-row .arrow { color: #6e7691; text-align: center; font-size: 12px; }
+  .model-row .del { background: transparent; border: 1px solid #2c3140; color: #e15759; border-radius: 4px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+  .model-row .del:hover { background: #2a1818; }
+  .model-row .test { background: transparent; border: 1px solid #2c3140; color: #8ab4ff; border-radius: 4px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+  .model-row .test:hover { background: #1a2238; }
+  .model-empty { padding: 20px; text-align: center; color: #6e7691; font-size: 12px; }
   .model-list { max-height: 220px; overflow: auto; border: 1px solid #2c3140; border-radius: 6px; padding: 4px; background: #11141b; margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px; }
   .model-list label { display: flex; gap: 6px; align-items: center; padding: 4px 6px; font-size: 12px; cursor: pointer; border-radius: 4px; }
   .model-list label:hover { background: #1a1f29; }
@@ -170,22 +181,20 @@
       <input id="f-apiKey" type="password" placeholder="sk-...">
     </div>
 
-    <!-- 模型选择区 -->
-    <div class="probe-box">
-      <div class="probe-row">
-        <button id="btn-probe" type="button">🔍 获取模型</button>
-        <span class="grow" id="probe-status">点击按钮探测渠道模型列表</span>
-        <label class="toggle"><input type="checkbox" id="f-autoAlias"> 自动路由探测到的所有模型（不勾则只暴露下方"获取模型"里勾选的）</label>
+    <!-- 模型列表（行式编辑器） -->
+    <div class="field">
+      <label>模型 <span class="small" id="models-count">— 0 个</span></label>
+      <div class="probe-row" style="margin-bottom:6px">
+        <button id="btn-add-model" type="button">+ 添加一行</button>
+        <button id="btn-probe" type="button" class="primary">🔍 探测获取</button>
+        <span class="grow small" id="probe-status"></span>
       </div>
-      <div class="model-list hidden" id="model-list"></div>
-      <div class="small" id="model-summary"></div>
+      <div id="models-editor" style="border:1px solid #2c3140;border-radius:6px;background:#11141b;max-height:260px;overflow:auto"></div>
+      <div class="small" id="probe-add-list" style="display:none;margin-top:6px"></div>
     </div>
 
-    <!-- 自定义 alias（可选） -->
     <div class="field">
-      <label class="toggle"><input type="checkbox" id="f-useCustom"> 自定义 alias（高级）</label>
-      <textarea id="f-models" rows="5" class="hidden" placeholder='{"my-coding": "gpt-4o"}'></textarea>
-      <span class="small">默认不需要：点「获取模型」勾选要用的即可。打开此项可手动给同一个上游起多个 alias，或改名字。</span>
+      <label class="toggle"><input type="checkbox" id="f-autoAlias"> 自动路由上游所有模型（不勾则只暴露上表里列的）</label>
     </div>
 
     <div class="modal-actions">
@@ -525,31 +534,74 @@ function openModal(ch) {
   $('#f-apiKey').value = ch ? ch.apiKey : '';
   $('#f-autoAlias').checked = ch ? ch.autoAlias !== false : true;
   state.probedModels = [];
-
-  // 自定义 alias 区
-  const hasCustom = ch && ch.models && Object.keys(ch.models).length > 0;
-  $('#f-useCustom').checked = !!hasCustom;
-  $('#f-models').classList.toggle('hidden', !hasCustom);
-  $('#f-models').value = hasCustom ? JSON.stringify(ch.models, null, 2) : '';
-
-  // 探测区
-  $('#model-list').classList.add('hidden');
-  $('#model-list').innerHTML = '';
-  $('#model-summary').textContent = '';
-  $('#probe-status').textContent = '点击按钮探测渠道模型列表';
+  state.modalChannel = ch;
+  state.modalModels = ch && ch.models ? Object.entries(ch.models).map(([alias, upstream]) => ({ alias, upstream })) : [];
+  renderModelsEditor();
+  $('#probe-add-list').style.display = 'none';
+  $('#probe-add-list').innerHTML = '';
+  $('#probe-status').textContent = '';
   $('#btn-probe').disabled = false;
-  $('#btn-probe').textContent = '🔍 获取模型';
+  $('#btn-probe').textContent = '🔍 探测获取';
 }
 
 $('#btn-cancel').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
 
-$('#f-useCustom').onchange = (e) => {
-  $('#f-models').classList.toggle('hidden', !e.target.checked);
-  if (e.target.checked && !$('#f-models').value) $('#f-models').value = '{\n  "my-alias": "upstream-model-name"\n}';
+// 行式编辑器
+function renderModelsEditor() {
+  const root = $('#models-editor');
+  const rows = state.modalModels || [];
+  if (!rows.length) {
+    root.innerHTML = '<div class="model-empty">还没有模型。点「+ 添加一行」手动加，或「🔍 探测获取」从上游拉。</div>';
+  } else {
+    let html = '<div class="model-row head"><div>对外名称（alias）</div><div>上游真实模型</div><div></div><div></div></div>';
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      html += `<div class="model-row" data-i="${i}">
+        <input type="text" data-k="alias" value="${escapeHtml(r.alias)}" placeholder="对外名称">
+        <input type="text" data-k="upstream" value="${escapeHtml(r.upstream)}" placeholder="上游真实模型">
+        <button class="test" data-act="test">测</button>
+        <button class="del" data-act="del">✕</button>
+      </div>`;
+    }
+    root.innerHTML = html;
+  }
+  $('#models-count').textContent = `— ${rows.length} 个`;
+
+  // 绑定事件
+  $$('#models-editor .model-row').forEach((row) => {
+    if (row.classList.contains('head')) return;
+    const i = Number(row.dataset.i);
+    row.querySelectorAll('input').forEach((inp) => {
+      inp.oninput = () => { state.modalModels[i][inp.dataset.k] = inp.value; };
+    });
+    const del = row.querySelector('[data-act=del]');
+    if (del) del.onclick = () => { state.modalModels.splice(i, 1); renderModelsEditor(); };
+    const test = row.querySelector('[data-act=test]');
+    if (test) test.onclick = async () => {
+      const ch = state.modalChannel;
+      if (!ch) return err('请先保存渠道再测试单个模型');
+      const m = state.modalModels[i];
+      if (!m.upstream) return err('上游模型名为空');
+      $('#mask').classList.remove('show');
+      await runTest({ model: m.upstream, channelId: ch.id });
+    };
+  });
+}
+
+$('#btn-add-model').onclick = () => {
+  state.modalModels.push({ alias: '', upstream: '' });
+  renderModelsEditor();
+  // 焦点到刚加的那行 alias 输入
+  const rows = $$('#models-editor .model-row:not(.head)');
+  if (rows.length) {
+    const last = rows[rows.length - 1];
+    const aliasIn = last.querySelector('input[data-k=alias]');
+    if (aliasIn) aliasIn.focus();
+  }
 };
 
-// 探测模型
+// 探测：把未在表里的新模型显示出来，让用户点击加进来（不覆盖现有）
 $('#btn-probe').onclick = async () => {
   const baseUrl = $('#f-baseUrl').value.trim();
   const apiKey = $('#f-apiKey').value;
@@ -562,20 +614,41 @@ $('#btn-probe').onclick = async () => {
   try {
     const r = await api('/admin/api/probe', { method: 'POST', body: JSON.stringify({ baseUrl, apiKey, protocol }) });
     if (!r.ok) {
-      $('#probe-status').textContent = '探测失败：' + (r.error || r.status || '未知');
+      $('#probe-status').textContent = '✗ 探测失败：' + (r.error || r.status || '未知');
       btn.disabled = false; btn.textContent = '🔍 重新探测';
       return;
     }
     const models = r.models || [];
     state.probedModels = models;
-    const list = $('#model-list');
-    list.innerHTML = models.length
-      ? models.map((m) => `<label><input type="checkbox" data-mid="${escapeHtml(m)}" checked><span>${escapeHtml(m)}</span></label>`).join('')
-      : '<div class="empty" style="grid-column:1/-1">返回了空模型列表</div>';
-    list.classList.remove('hidden');
-    $('#probe-status').textContent = `✓ 探测成功，${models.length} 个模型，${r.latencyMs}ms`;
-    $('#model-summary').textContent = '勾选要路由的模型，未勾选的不会出现在 DSH 列表中（默认全选）。';
+    $('#probe-status').textContent = `✓ ${models.length} 个模型，${r.latencyMs}ms`;
     btn.textContent = '🔍 重新探测';
+
+    // 已有 alias/upstream 名集合（用于过滤已存在）
+    const existing = new Set();
+    for (const m of state.modalModels) {
+      if (m.upstream) existing.add(m.upstream);
+      if (m.alias) existing.add(m.alias);
+    }
+    const newOnes = models.filter((m) => !existing.has(m));
+    const box = $('#probe-add-list');
+    if (!newOnes.length) {
+      box.innerHTML = '<span style="color:#6e7691">探测到的所有模型都已经在表里。</span>';
+    } else {
+      box.innerHTML = `<div style="color:#aab1c2;margin-bottom:4px">探测到 ${newOnes.length} 个新模型（点 + 加进表里）：</div>` +
+        newOnes.map((m) => `<button type="button" class="copy-btn" data-add-model="${escapeHtml(m)}" style="margin:2px">+ ${escapeHtml(m)}</button>`).join('');
+      box.querySelectorAll('[data-add-model]').forEach((b) => {
+        b.onclick = () => {
+          const mid = b.dataset.addModel;
+          if (!state.modalModels.find((x) => x.upstream === mid || x.alias === mid)) {
+            state.modalModels.push({ alias: mid, upstream: mid });
+            renderModelsEditor();
+            b.remove();
+            toast('已添加 ' + mid);
+          }
+        };
+      });
+    }
+    box.style.display = 'block';
   } catch (e) {
     $('#probe-status').textContent = '探测出错：' + e.message;
   } finally {
@@ -591,20 +664,18 @@ $('#btn-save').onclick = async () => {
   if (!baseUrl) return err('Base URL 必填');
   if (!apiKey) return err('API Key 必填');
 
-  // 收集模型映射：
-  // 1) 勾选了"自定义 alias"：用 f-models 的 JSON
-  // 2) 否则：把探测到的被勾选的模型全部作为 alias → 上游同名的映射（即便用户没显式存，
-  //    后端也会把 ch.models 里的真模型当作可路由的——这里存的话更直观）
-  let models = {};
-  if ($('#f-useCustom').checked) {
-    const t = $('#f-models').value.trim();
-    if (t) {
-      try { models = JSON.parse(t); }
-      catch (e) { return err('自定义 alias JSON 解析失败：' + e.message); }
-    }
-  } else {
-    const checked = $$('#model-list input[type=checkbox]:checked').map((c) => c.dataset.mid);
-    for (const m of checked) models[m] = m;
+  // 从行式编辑器收集
+  const models = {};
+  const seen = new Set();
+  for (const r of state.modalModels) {
+    const alias = (r.alias || '').trim();
+    const upstream = (r.upstream || '').trim();
+    if (!alias && !upstream) continue;     // 空行
+    if (!upstream) return err('行：alias="' + alias + '" 缺上游模型名');
+    const a = alias || upstream;
+    if (seen.has(a)) return err('重复的 alias：' + a);
+    seen.add(a);
+    models[a] = upstream;
   }
 
   const body = {

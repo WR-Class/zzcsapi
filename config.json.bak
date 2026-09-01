@@ -1,28 +1,8 @@
 {
   "port": 8787,
-  "health": {
-    "intervalSec": 300,
-    "timeoutMs": 8000
-  },
-  "retries": {
-    "perChannel": 1,
-    "maxModelFallbacks": 99
-  },
+  "health": { "intervalSec": 300, "timeoutMs": 8000 },
+  "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
   "channels": [
-    {
-      "id": "vendor-gemini",
-      "name": "Gemini 中转",
-      "baseUrl": "https://generativelanguage.googleapis.com",
-      "apiKey": "AIza-xxxx",
-      "protocol": "gemini",
-      "priority": 10,
-      "enabled": true,
-      "autoAlias": true,
-      "models": {
-        "gemini-1.5-pro": "gemini-1.5-pro-latest",
-        "gemini-1.5-flash": "gemini-1.5-flash-latest"
-      }
-    },
     {
       "id": "bqgy",
       "name": "霸气公益",
@@ -31,7 +11,7 @@
       "protocol": "openai",
       "priority": 0,
       "enabled": true,
-      "autoAlias": true,
+      "autoAlias": false,
       "models": {
         "deepseek-v4-flash-free": "deepseek-v4-flash-free",
         "deepseek-v4-pro-free": "deepseek-v4-pro-free",
