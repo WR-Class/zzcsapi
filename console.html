@@ -21,6 +21,7 @@
   button.danger { background: #c13a3a; border-color: #c13a3a; color: white; }
   button.danger:hover { background: #d04a4a; }
   button.ghost { background: transparent; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   main { padding: 18px 22px; }
   h2 { font-size: 15px; margin: 22px 0 10px; color: #aab1c2; display: flex; align-items: center; gap: 10px; }
   h2 .hint { color: #6e7691; font-size: 11px; font-weight: normal; }
@@ -46,24 +47,33 @@
   .actions button { padding: 3px 8px; font-size: 12px; }
   .prio { display: flex; align-items: center; gap: 4px; }
   .prio input { width: 60px; padding: 3px 6px; }
-  .models { color: #8a93a6; font-size: 12px; margin-top: 4px; }
   .err { color: #e15759; font-size: 11.5px; margin-top: 4px; }
   .empty { color: #6e7691; font-size: 12px; padding: 20px; text-align: center; }
-  .toast { position: fixed; bottom: 18px; right: 18px; background: #2a3140; color: #d8dde6; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 1000; }
+  .toast { position: fixed; bottom: 18px; right: 18px; background: #2a3140; color: #d8dde6; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 1000; max-width: 50vw; }
   .toast.show { opacity: 1; }
   .refresh-hint { color: #6e7691; font-size: 11px; }
   .mask { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
   .mask.show { display: flex; }
-  .modal { background: #181c25; border: 1px solid #2c3140; border-radius: 10px; padding: 18px 20px; width: 100%; max-width: 520px; max-height: 90vh; overflow: auto; box-shadow: 0 18px 50px rgba(0,0,0,0.4); }
+  .modal { background: #181c25; border: 1px solid #2c3140; border-radius: 10px; padding: 18px 20px; width: 100%; max-width: 620px; max-height: 90vh; overflow: auto; box-shadow: 0 18px 50px rgba(0,0,0,0.4); }
   .modal h2 { margin: 0 0 12px; color: #d8dde6; }
   .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-  .field label { color: #8a93a6; font-size: 12px; }
+  .field label { color: #8a93a6; font-size: 12px; display: flex; align-items: center; gap: 6px; }
   .field input, .field select, .field textarea { width: 100%; }
   .field-row { display: flex; gap: 10px; }
   .field-row .field { flex: 1; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
   .help { color: #6e7691; font-size: 11px; }
-  .pill { display: inline-flex; align-items: center; gap: 4px; background: #1f2430; border: 1px solid #2c3140; border-radius: 12px; padding: 2px 8px; font-size: 11.5px; }
+  .probe-box { background: #11141b; border: 1px solid #2c3140; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .probe-box .probe-row { display: flex; gap: 8px; align-items: center; }
+  .probe-box .probe-row .grow { flex: 1; color: #8a93a6; font-size: 12px; }
+  .model-list { max-height: 220px; overflow: auto; border: 1px solid #2c3140; border-radius: 6px; padding: 4px; background: #11141b; margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px; }
+  .model-list label { display: flex; gap: 6px; align-items: center; padding: 4px 6px; font-size: 12px; cursor: pointer; border-radius: 4px; }
+  .model-list label:hover { background: #1a1f29; }
+  .model-list input { accent-color: #3a7afe; }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .toggle input { accent-color: #3a7afe; }
+  .small { font-size: 11px; color: #6e7691; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -87,8 +97,9 @@
 <div class="mask" id="mask">
   <div class="modal">
     <h2 id="modal-title">添加渠道</h2>
+
     <div class="field">
-      <label>渠道 ID <span class="help">（英文/数字/下划线/短横线，全局唯一）</span></label>
+      <label>渠道 ID <span class="help">（英文/数字/下划线/短横线）</span></label>
       <input id="f-id" type="text" placeholder="vendor-x">
     </div>
     <div class="field">
@@ -108,7 +119,7 @@
         <label>优先级</label>
         <input id="f-priority" type="number" value="0">
       </div>
-      <div class="field" style="flex:0 0 110px">
+      <div class="field" style="flex:0 0 100px">
         <label>启用</label>
         <select id="f-enabled">
           <option value="true">是</option>
@@ -117,17 +128,32 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">（不含尾斜杠；openai 协议通常是 https://host/v1，anthropic 是 https://host，gemini 是 https://generativelanguage.googleapis.com）</span></label>
+      <label>Base URL <span class="help">（不含尾斜杠。openai 通常 https://host/v1，anthropic https://host，gemini https://generativelanguage.googleapis.com）</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
     </div>
     <div class="field">
       <label>API Key</label>
       <input id="f-apiKey" type="password" placeholder="sk-...">
     </div>
-    <div class="field">
-      <label>模型映射 <span class="help">JSON：左键=对外 alias，右值=上游真实模型名。一行一个 alias</span></label>
-      <textarea id="f-models" rows="6" placeholder='{"gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"}'></textarea>
+
+    <!-- 模型选择区 -->
+    <div class="probe-box">
+      <div class="probe-row">
+        <button id="btn-probe" type="button">🔍 获取模型</button>
+        <span class="grow" id="probe-status">点击按钮探测渠道模型列表</span>
+        <label class="toggle"><input type="checkbox" id="f-autoAlias" checked> 自动路由探测到的模型</label>
+      </div>
+      <div class="model-list hidden" id="model-list"></div>
+      <div class="small" id="model-summary"></div>
     </div>
+
+    <!-- 自定义 alias（可选） -->
+    <div class="field">
+      <label class="toggle"><input type="checkbox" id="f-useCustom"> 自定义 alias（高级）</label>
+      <textarea id="f-models" rows="5" class="hidden" placeholder='{"my-coding": "gpt-4o"}'></textarea>
+      <span class="small">默认不需要：勾选「自动路由」时，DSH 直接用上游模型名即可。打开此项可手动把多个 alias 指向同一个上游，或改名字。</span>
+    </div>
+
     <div class="modal-actions">
       <button id="btn-cancel" class="ghost">取消</button>
       <button id="btn-save" class="primary">保存</button>
@@ -138,8 +164,9 @@
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2200); }
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2400); }
 function err(msg) { toast('⚠️ ' + msg); }
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -148,11 +175,11 @@ async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
   if (r.status === 401) { err('未授权'); throw new Error('401'); }
   const j = await r.json().catch(() => null);
-  if (!r.ok) { err(j && j.error || ('HTTP ' + r.status)); throw new Error('http ' + r.status); }
+  if (!r.ok) { err(j && (j.error || j.message) || ('HTTP ' + r.status)); throw new Error('http ' + r.status); }
   return j;
 }
 
-const state = { channels: [] };
+const state = { channels: [], probedModels: [] };
 
 function statusBadge(s) {
   const map = { ok: '正常', degraded: '降级', down: '不可用', unknown: '未知' };
@@ -213,7 +240,7 @@ function renderChannels(data) {
       toast(cur.enabled ? '已停用' : '已启用'); refresh();
     };
     card.querySelector('[data-act=delete]').onclick = async () => {
-      if (!confirm('确定要删除渠道 “' + id + '” 吗？\n（config.json 同时会修改，建议先备份）')) return;
+      if (!confirm('确定要删除渠道 “' + id + '” 吗？')) return;
       await api('/admin/api/channels', { method: 'DELETE', body: JSON.stringify({ id }) });
       toast('已删除'); refresh();
     };
@@ -235,8 +262,6 @@ function renderModels(data) {
   root.innerHTML = sections.join('') || '<div class="empty">无模型</div>';
 }
 
-function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-
 async function refresh() {
   try {
     const data = await api('/admin/api/status');
@@ -255,46 +280,115 @@ function openModal(ch) {
   $('#mask').classList.add('show');
   $('#modal-title').textContent = ch ? '编辑渠道：' + ch.id : '添加渠道';
   $('#f-id').value = ch ? ch.id : '';
-  $('#f-id').disabled = !!ch;  // 编辑时 ID 不可改
+  $('#f-id').disabled = !!ch;
   $('#f-name').value = ch ? ch.name : '';
   $('#f-protocol').value = ch ? ch.protocol : 'openai';
   $('#f-priority').value = ch ? ch.priority : 0;
   $('#f-enabled').value = ch ? String(ch.enabled !== false) : 'true';
   $('#f-baseUrl').value = ch ? ch.baseUrl : '';
   $('#f-apiKey').value = ch ? ch.apiKey : '';
-  $('#f-models').value = ch ? JSON.stringify(ch.models, null, 2) : '{"gpt-4o": "gpt-4o"}';
+  $('#f-autoAlias').checked = ch ? ch.autoAlias !== false : true;
+  state.probedModels = [];
+
+  // 自定义 alias 区
+  const hasCustom = ch && ch.models && Object.keys(ch.models).length > 0;
+  $('#f-useCustom').checked = !!hasCustom;
+  $('#f-models').classList.toggle('hidden', !hasCustom);
+  $('#f-models').value = hasCustom ? JSON.stringify(ch.models, null, 2) : '';
+
+  // 探测区
+  $('#model-list').classList.add('hidden');
+  $('#model-list').innerHTML = '';
+  $('#model-summary').textContent = '';
+  $('#probe-status').textContent = '点击按钮探测渠道模型列表';
+  $('#btn-probe').disabled = false;
+  $('#btn-probe').textContent = '🔍 获取模型';
 }
+
 $('#btn-cancel').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
+
+$('#f-useCustom').onchange = (e) => {
+  $('#f-models').classList.toggle('hidden', !e.target.checked);
+  if (e.target.checked && !$('#f-models').value) $('#f-models').value = '{\n  "my-alias": "upstream-model-name"\n}';
+};
+
+// 探测模型
+$('#btn-probe').onclick = async () => {
+  const baseUrl = $('#f-baseUrl').value.trim();
+  const apiKey = $('#f-apiKey').value;
+  const protocol = $('#f-protocol').value;
+  if (!baseUrl) return err('先填 Base URL');
+  if (!apiKey) return err('先填 API Key');
+  const btn = $('#btn-probe');
+  btn.disabled = true; btn.textContent = '⏳ 探测中…';
+  $('#probe-status').textContent = '请求中…';
+  try {
+    const r = await api('/admin/api/probe', { method: 'POST', body: JSON.stringify({ baseUrl, apiKey, protocol }) });
+    if (!r.ok) {
+      $('#probe-status').textContent = '探测失败：' + (r.error || r.status || '未知');
+      btn.disabled = false; btn.textContent = '🔍 重新探测';
+      return;
+    }
+    const models = r.models || [];
+    state.probedModels = models;
+    const list = $('#model-list');
+    list.innerHTML = models.length
+      ? models.map((m) => `<label><input type="checkbox" data-mid="${escapeHtml(m)}" checked><span>${escapeHtml(m)}</span></label>`).join('')
+      : '<div class="empty" style="grid-column:1/-1">返回了空模型列表</div>';
+    list.classList.remove('hidden');
+    $('#probe-status').textContent = `✓ 探测成功，${models.length} 个模型，${r.latencyMs}ms`;
+    $('#model-summary').textContent = '勾选要路由的模型，未勾选的不会出现在 DSH 列表中（默认全选）。';
+    btn.textContent = '🔍 重新探测';
+  } catch (e) {
+    $('#probe-status').textContent = '探测出错：' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 $('#btn-save').onclick = async () => {
   const id = $('#f-id').value.trim();
   if (!id) return err('ID 必填');
+  const baseUrl = $('#f-baseUrl').value.trim();
+  const apiKey = $('#f-apiKey').value;
+  if (!baseUrl) return err('Base URL 必填');
+  if (!apiKey) return err('API Key 必填');
+
+  // 收集模型映射：
+  // 1) 勾选了"自定义 alias"：用 f-models 的 JSON
+  // 2) 否则：把探测到的被勾选的模型全部作为 alias → 上游同名的映射（即便用户没显式存，
+  //    后端也会把 ch.models 里的真模型当作可路由的——这里存的话更直观）
   let models = {};
-  const mt = $('#f-models').value.trim();
-  if (mt) {
-    try { models = JSON.parse(mt); }
-    catch (e) { return err('模型映射 JSON 解析失败：' + e.message); }
+  if ($('#f-useCustom').checked) {
+    const t = $('#f-models').value.trim();
+    if (t) {
+      try { models = JSON.parse(t); }
+      catch (e) { return err('自定义 alias JSON 解析失败：' + e.message); }
+    }
+  } else {
+    const checked = $$('#model-list input[type=checkbox]:checked').map((c) => c.dataset.mid);
+    for (const m of checked) models[m] = m;
   }
+
   const body = {
     id,
     name: $('#f-name').value.trim() || id,
     protocol: $('#f-protocol').value,
     priority: Number($('#f-priority').value),
     enabled: $('#f-enabled').value === 'true',
-    baseUrl: $('#f-baseUrl').value.trim(),
-    apiKey: $('#f-apiKey').value,
+    baseUrl,
+    apiKey,
+    autoAlias: $('#f-autoAlias').checked,
     models,
   };
-  if (!body.baseUrl) return err('Base URL 必填');
-  if (!body.apiKey) return err('API Key 必填');
   try {
     await api('/admin/api/channels', { method: 'POST', body: JSON.stringify(body) });
     toast('已保存到 config.json'); $('#mask').classList.remove('show'); refresh();
   } catch {}
 };
 
-// 启动：URL ?key= 写入 sessionStorage
+// URL ?key=
 const url = new URL(location.href);
 if (url.searchParams.get('key')) {
   sessionStorage.setItem('adminKey', url.searchParams.get('key'));

@@ -53,6 +53,7 @@ function loadConfig() {
     if (ch.enabled === undefined) ch.enabled = true;
     if (ch.priority === undefined) ch.priority = 0;
     if (!ch.protocol) ch.protocol = 'openai'; // openai | anthropic | gemini
+    if (ch.autoAlias === undefined) ch.autoAlias = true; // 探测到的模型自动可路由
     ch.models = ch.models || {};
   }
   return cfg;
@@ -67,11 +68,13 @@ const RETRIES = config.retries || { perChannel: 1, maxModelFallbacks: 99 };
 const channels = new Map();
 
 function upsertChannel(def) {
+  def.autoAlias = def.autoAlias !== false;
   const cur = channels.get(def.id);
   if (cur) {
     Object.assign(cur.def, def);
     cur.def.models = def.models || {};
     cur.def.protocol = def.protocol || cur.def.protocol || 'openai';
+    cur.def.autoAlias = def.autoAlias;
     cur.aliasMap = buildAliasMap(def.models);
     return cur;
   }
@@ -105,12 +108,15 @@ function channelsServing(model, protocol) {
   const want = String(model || '').toLowerCase().trim();
   if (!want) return [];
   const out = [];
+  const hasAny = { explicit: false, auto: false, blind: false };
   for (const ch of channels.values()) {
     if (!ch.def.enabled) continue;
-    // 只匹配同协议
     const chProto = ch.def.protocol || 'openai';
     if (protocol && chProto !== protocol) continue;
+    // 关闭 autoAlias 时跳过自动 alias
+    const autoAlias = ch.def.autoAlias !== false;
     if (ch.aliasMap.has(want)) {
+      hasAny.explicit = true;
       out.push({
         channelId: ch.def.id,
         upstream: ch.aliasMap.get(want),
@@ -120,8 +126,10 @@ function channelsServing(model, protocol) {
         cooldownUntil: ch.cooldownUntil,
         consecutiveFail: ch.consecutiveFail,
         protocol: chProto,
+        kind: 'explicit',
       });
-    } else if (ch.models.includes(want)) {
+    } else if (autoAlias && ch.models.includes(want)) {
+      hasAny.auto = true;
       out.push({
         channelId: ch.def.id,
         upstream: want,
@@ -131,7 +139,32 @@ function channelsServing(model, protocol) {
         cooldownUntil: ch.cooldownUntil,
         consecutiveFail: ch.consecutiveFail,
         protocol: chProto,
+        kind: 'auto',
       });
+    }
+  }
+  // 冷启动兜底：上面都没命中，但有同协议、已启用、且从来没探测过的渠道
+  // 仍把模型名当上游名尝试，priority 最低（-1e9），让前两类优先
+  if (!hasAny.explicit && !hasAny.auto) {
+    for (const ch of channels.values()) {
+      if (!ch.def.enabled) continue;
+      const chProto = ch.def.protocol || 'openai';
+      if (protocol && chProto !== protocol) continue;
+      const autoAlias = ch.def.autoAlias !== false;
+      if (!autoAlias) continue;
+      if (out.find((o) => o.channelId === ch.def.id)) continue;
+      out.push({
+        channelId: ch.def.id,
+        upstream: want,
+        priority: -1e9,
+        status: ch.status,
+        latencyMs: ch.latencyMs,
+        cooldownUntil: ch.cooldownUntil,
+        consecutiveFail: ch.consecutiveFail,
+        protocol: chProto,
+        kind: 'blind',
+      });
+      hasAny.blind = true;
     }
   }
   out.sort((a, b) => {
@@ -196,36 +229,50 @@ async function probeChannel(ch) {
   }
 }
 
-function probeUrlFor(ch) {
-  const proto = ch.def.protocol || 'openai';
-  if (proto === 'anthropic') return joinUrl(ch.def.baseUrl, 'v1/models');
-  if (proto === 'gemini')    return joinUrl(ch.def.baseUrl, 'v1beta/models');
-  return joinUrl(ch.def.baseUrl, 'models');
+function probeUrlForDef(def) {
+  const proto = def.protocol || 'openai';
+  if (proto === 'anthropic') return joinUrl(def.baseUrl, 'v1/models');
+  if (proto === 'gemini')    return joinUrl(def.baseUrl, 'v1beta/models');
+  return joinUrl(def.baseUrl, 'models');
 }
-function probeMethodFor(ch) {
-  const proto = ch.def.protocol || 'openai';
-  return proto === 'gemini' ? 'GET' : 'GET';
-}
-function probeHeadersFor(ch) {
-  const proto = ch.def.protocol || 'openai';
-  if (proto === 'anthropic') {
-    return { 'x-api-key': ch.def.apiKey, 'anthropic-version': '2023-06-01' };
-  }
-  if (proto === 'gemini') {
-    return { 'x-goog-api-key': ch.def.apiKey };
-  }
-  return { 'Authorization': `Bearer ${ch.def.apiKey}` };
+function probeHeadersForDef(def) {
+  const proto = def.protocol || 'openai';
+  if (proto === 'anthropic') return { 'x-api-key': def.apiKey, 'anthropic-version': '2023-06-01' };
+  if (proto === 'gemini')    return { 'x-goog-api-key': def.apiKey };
+  return { 'Authorization': `Bearer ${def.apiKey}` };
 }
 function extractModelIds(j, proto) {
   if (!j) return [];
-  if (proto === 'anthropic') {
-    return Array.isArray(j.data) ? j.data.map((m) => m.id).filter(Boolean) : [];
-  }
-  if (proto === 'gemini') {
-    return Array.isArray(j.models) ? j.models.map((m) => (m.name || '').replace(/^models\//, '')).filter(Boolean) : [];
-  }
+  if (proto === 'anthropic') return Array.isArray(j.data) ? j.data.map((m) => m.id).filter(Boolean) : [];
+  if (proto === 'gemini')    return Array.isArray(j.models) ? j.models.map((m) => (m.name || '').replace(/^models\//, '')).filter(Boolean) : [];
   return Array.isArray(j.data) ? j.data.map((m) => m.id).filter(Boolean) : [];
 }
+
+// 探测一个 def（不要求它是已注册的渠道），返回 {ok, models, latencyMs, status, error}
+async function probeDef(def, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || HEALTH.timeoutMs || 8000);
+  const t0 = Date.now();
+  try {
+    const resp = await fetch(probeUrlForDef(def), { method: 'GET', headers: probeHeadersForDef(def), signal: ctrl.signal });
+    clearTimeout(timer);
+    const ms = Date.now() - t0;
+    if (!resp.ok) {
+      return { ok: false, status: resp.status, error: `HTTP ${resp.status}`, latencyMs: ms };
+    }
+    const j = await resp.json().catch(() => null);
+    const models = extractModelIds(j, def.protocol || 'openai');
+    return { ok: true, models, latencyMs: ms, status: 200 };
+  } catch (err) {
+    clearTimeout(timer);
+    return { ok: false, error: String(err && err.message || err), latencyMs: Date.now() - t0 };
+  }
+}
+
+// 兼容旧签名：仍以 ch 为参数
+function probeUrlFor(ch) { return probeUrlForDef(ch.def); }
+function probeMethodFor() { return 'GET'; }
+function probeHeadersFor(ch) { return probeHeadersForDef(ch.def); }
 
 async function probeAll() { await Promise.all(Array.from(channels.values()).map((ch) => probeChannel(ch))); }
 
@@ -517,6 +564,7 @@ function persistConfig() {
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
       enabled: ch.def.enabled !== false,
+      autoAlias: ch.def.autoAlias !== false,
       models: ch.def.models || {},
     })),
   };
@@ -574,6 +622,7 @@ async function handleAdminApi(req, res, url) {
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
       enabled: ch.def.enabled !== false,
+      autoAlias: ch.def.autoAlias !== false,
       models: ch.def.models || {},
     })) });
   }
@@ -589,6 +638,7 @@ async function handleAdminApi(req, res, url) {
       protocol: body.protocol || 'openai',
       priority: body.priority !== undefined ? Number(body.priority) : 0,
       enabled: body.enabled !== false,
+      autoAlias: body.autoAlias !== false,
       models: body.models || {},
     };
     const existed = channels.has(def.id);
@@ -596,7 +646,19 @@ async function handleAdminApi(req, res, url) {
     persistConfig();
     // 立即探测一次，便于前端立刻显示健康状态
     probeChannel(ch).catch(() => {});
-    return sendJson(res, 200, { ok: true, id: def.id, existed, channel: { id: def.id, name: def.name, baseUrl: def.baseUrl, protocol: def.protocol, priority: def.priority, enabled: def.enabled, models: def.models } });
+    return sendJson(res, 200, { ok: true, id: def.id, existed, channel: { id: def.id, name: def.name, baseUrl: def.baseUrl, protocol: def.protocol, priority: def.priority, enabled: def.enabled, autoAlias: def.autoAlias, models: def.models } });
+  }
+  // 临时探测（不落库），用于「获取模型」按钮
+  if (req.method === 'POST' && url.pathname === '/admin/api/probe') {
+    const body = await safeReadJson(req);
+    if (!body || !body.baseUrl || !body.apiKey) return sendJson(res, 400, { error: 'baseUrl & apiKey required' });
+    const def = {
+      baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
+      apiKey: String(body.apiKey),
+      protocol: ['openai', 'anthropic', 'gemini'].includes(body.protocol) ? body.protocol : 'openai',
+    };
+    const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
+    return sendJson(res, 200, r);
   }
   if (req.method === 'DELETE' && url.pathname === '/admin/api/channels') {
     const body = await safeReadJson(req);
