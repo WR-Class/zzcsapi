@@ -1,0 +1,37 @@
+{
+  "port": 8787,
+  "logDiscovery": true,
+  "health": {
+    "intervalSec": 300,
+    "timeoutMs": 8000
+  },
+  "retries": {
+    "perChannel": 1,
+    "maxModelFallbacks": 99
+  },
+  "channels": [
+    {
+      "id": "vendor-a",
+      "name": "中转站A",
+      "baseUrl": "https://api.example-a.com/v1",
+      "apiKey": "sk-xxxxxxxx",
+      "priority": 10,
+      "enabled": true,
+      "models": {
+        "gpt-4o": "gpt-4o",
+        "gpt-4o-mini": "gpt-4o-mini"
+      }
+    },
+    {
+      "id": "vendor-b",
+      "name": "中转站B（同一模型的备胎）",
+      "baseUrl": "https://api.example-b.com/v1",
+      "apiKey": "sk-yyyyyyyy",
+      "priority": 5,
+      "enabled": true,
+      "models": {
+        "gpt-4o": "gpt-4o"
+      }
+    }
+  ]
+}
