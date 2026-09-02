@@ -1082,11 +1082,46 @@ async function safeReadJson(req) {
 }
 
 // ─────────────────────────── OpenAI 调度 ───────────────────────────
+// Bedrock 等上游要求 tool id 匹配 ^[a-zA-Z0-9_-]+$；客户端可能发出空 id 或含非法字符。
+// 统一清洗：保证合法且 assistant.tool_calls[].id 与 role:'tool' 的 tool_call_id 配对一致。
+function sanitizeToolId(id, seen) {
+  let s = String(id || '');
+  s = s.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!s) s = 'toolu_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  if (s.length > 128) s = s.slice(0, 128);
+  if (seen) { if (seen.has(id)) return seen.get(id); seen.set(id, s); }
+  return s;
+}
+
+function sanitizeOpenAIToolIds(body) {
+  if (!body || !Array.isArray(body.messages)) return body;
+  const idMap = new Map(); // 原id → 新id（保证 assistant 与 tool 消息配对一致）
+  let fixedCount = 0;
+  for (const m of body.messages) {
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        const orig = tc.id;
+        const fixed = sanitizeToolId(orig, null);
+        if (orig !== fixed) { tc.id = fixed; fixedCount++; console.log('[sanitize] tool_call id "' + String(orig).slice(0, 60) + '" → "' + fixed.slice(0, 60) + '"'); }
+        if (orig != null) idMap.set(String(orig), fixed); // 空字符串也要配对记录
+      }
+    }
+    if (m.role === 'tool' && m.tool_call_id != null) {
+      const orig = m.tool_call_id;
+      const fixed = idMap.has(String(orig)) ? idMap.get(String(orig)) : sanitizeToolId(orig, null);
+      if (orig !== fixed) { m.tool_call_id = fixed; fixedCount++; console.log('[sanitize] tool_call_id "' + String(orig).slice(0, 60) + '" → "' + fixed.slice(0, 60) + '"'); }
+    }
+  }
+  if (fixedCount) console.log('[sanitize] fixed ' + fixedCount + ' invalid tool id(s) for model=' + (body.model || '?'));
+  return body;
+}
+
 async function handleOpenAIRequest(req, res, url) {
   const raw = await readBody(req);
   let body;
   try { body = JSON.parse(raw.toString('utf8') || '{}'); }
   catch { return sendJson(res, 400, upstreamErrorPayload(400, 'invalid JSON body')); }
+  sanitizeOpenAIToolIds(body); // 清洗工具 id（空/非法字符 → 合法，保持配对）
   const requested = body.model;
   if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
   const candidates = channelsServing(requested, 'openai');
@@ -1131,7 +1166,7 @@ async function handleAnthropicRequest(req, res, url) {
       return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
     const isStream = !!body.stream;
-    const oaiBody = anthropicToOpenAI(body);
+    const oaiBody = sanitizeOpenAIToolIds(anthropicToOpenAI(body)); // 转换 + 清洗工具 id
     return dispatchRequest({
       kind: 'anthropic',
       res,
