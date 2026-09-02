@@ -73,6 +73,53 @@
       "models": {
         "claude-opus-5": "claude-opus-5"
       }
+    },
+    {
+      "id": "tabitoken",
+      "name": "tabitoken",
+      "baseUrl": "https://tabitoken.com/v1",
+      "apiKey": "sk-8kQ2Zj78xirKWYBYSMGAngcovcTC0UVyyiWqCoYk5LcpmC6u",
+      "protocol": "openai",
+      "priority": 0,
+      "enabled": true,
+      "autoAlias": false,
+      "models": {
+        "claude-opus-5": "claude-opus-5"
+      }
+    },
+    {
+      "id": "lzhiyu",
+      "name": "辉哥",
+      "baseUrl": "https://lzhiyu.ccwu.cc/v1",
+      "apiKey": "sk-gw-a885b081798c190e387ae2a0ebeb0dee96face66df409330",
+      "protocol": "openai",
+      "priority": 0,
+      "enabled": true,
+      "autoAlias": false,
+      "models": {
+        "deepseek-v4-pro": "deepseek-v4-pro",
+        "deepseek-v4-flash": "deepseek-v4-flash",
+        "glm-5.2": "glm-5.2",
+        "grok-4.6": "grok-4.6",
+        "minimax-m3": "minimax-m3"
+      }
+    },
+    {
+      "id": "hcnsec",
+      "name": "新疆幻城",
+      "baseUrl": "https://api.hcnsec.cn/v1",
+      "apiKey": "sk-kKqQ14PKFKW7zUn4dc3x51yLMNnP4ikTytRVSBrVrLjX9FHx",
+      "protocol": "openai",
+      "priority": 0,
+      "enabled": true,
+      "autoAlias": false,
+      "models": {
+        "DeepSeek-V4-Flash": "DeepSeek-V4-Flash",
+        "DeepSeek-V4-Pro": "DeepSeek-V4-Pro",
+        "kimi-k3": "kimi-k3",
+        "MiniMax-M3": "MiniMax-M3",
+        "Qwen3.8-27B": "Qwen3.8-27B"
+      }
     }
   ]
 }

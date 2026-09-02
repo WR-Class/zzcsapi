@@ -20,13 +20,52 @@ function isCloudflareBlock(status, body) {
   return false;
 }
 
-// 通过 PowerShell (Invoke-WebRequest) 发起请求 — 用 .NET Schannel/TLS，绕过 Cloudflare JA3 拦截
-// 仅在 Windows 上有效。返回 {status, headers, body, error}
+// 通过外部进程发起请求，绕过 Cloudflare JA3 拦截：
+//  - Windows: PowerShell (Invoke-WebRequest) → .NET Schannel TLS
+//  - Linux/macOS: curl → 系统 OpenSSL TLS
+// 返回 {status, headers, body, error}
 function psHttpRequest(method, url, headers, body, timeoutMs) {
+  if (process.platform === 'win32') return psHttpRequestWin(method, url, headers, body, timeoutMs);
+  return curlHttpRequest(method, url, headers, body, timeoutMs);
+}
+
+// curl 版（Linux/macOS Docker 环境）
+// 用 -w '\n__HTTPCODE__%{http_code}' 输出状态码到 stdout 末尾；body 走 stdout。
+function curlHttpRequest(method, url, headers, body, timeoutMs) {
   return new Promise((resolve) => {
-    if (process.platform !== 'win32') {
-      return resolve({ status: 0, headers: {}, body: '', error: 'psHttpRequest only on Windows' });
+    const args = ['-sS', '-X', String(method).toUpperCase(), '--max-time', String(Math.max(1, Math.floor((timeoutMs || 30000) / 1000)))];
+    // 模拟浏览器指纹 + 常见头，尽量绕过 WAF
+    args.push('-A', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    args.push('-H', 'Accept: application/json, text/plain, */*');
+    args.push('-H', 'Accept-Language: en-US,en;q=0.5');
+    args.push('--compressed');
+    for (const [k, v] of Object.entries(headers || {})) {
+      args.push('-H', `${k}: ${v}`);
     }
+    if (body) args.push('--data-raw', String(body));
+    args.push('-w', '\n__ZZCODE__%{http_code}');
+    args.push(String(url));
+    const child = spawn('curl', args, { windowsHide: true });
+    let stdout = Buffer.alloc(0);
+    let stderr = '';
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} resolve({ status: 0, headers: {}, body: '', error: 'curl timeout' }); }, (timeoutMs || 30000) + 5000);
+    child.stdout.on('data', (c) => { stdout = Buffer.concat([stdout, c]); });
+    child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
+    child.on('close', () => {
+      clearTimeout(timer);
+      const text = stdout.toString('utf8');
+      const m = text.match(/__ZZCODE__(\d+)\s*$/);
+      if (!m) { resolve({ status: 0, headers: {}, body: text, error: stderr ? stderr.slice(0, 300) : 'curl parse fail' }); return; }
+      const body = text.slice(0, text.lastIndexOf('__ZZCODE__')).replace(/\n$/, '');
+      resolve({ status: Number(m[1]), headers: {}, body, error: null });
+    });
+    child.on('error', (err) => { clearTimeout(timer); resolve({ status: 0, headers: {}, body: '', error: 'curl spawn: ' + err.message }); });
+  });
+}
+
+// PowerShell 版（Windows）— 用 .NET Schannel/TLS
+function psHttpRequestWin(method, url, headers, body, timeoutMs) {
+  return new Promise((resolve) => {
     // 构造 PowerShell 命令 — headers 必须是 hashtable
     const hdrsPs = Object.entries(headers || {}).map(([k, v]) => {
       const k2 = String(k).replace(/'/g, "''");
@@ -99,10 +138,12 @@ ${hdrsPs}
 // ─────────────────────────── 鉴权 ───────────────────────────
 const GATEWAY_KEY = process.env.GATEWAY_KEY || ''; // 客户端调 /v1/* / /anthropic/* / /gemini/*
 const ADMIN_KEY   = process.env.ADMIN_KEY   || ''; // 调 /admin/* + Web 控制台
+const NOAUTH = process.env.ZZCSAPI_NOAUTH === '1';  // 本地开发：完全关闭鉴权
 function checkAuth(req, kind) {
   // kind: 'gateway' | 'admin'
-  if (kind === 'admin' && !ADMIN_KEY) return true;       // 没设置就放行（仅本机）
-  if (kind === 'gateway' && !GATEWAY_KEY) return true;   // 没设置就放行
+  if (NOAUTH) return true;                            // 本地免鉴权
+  if (kind === 'admin' && !ADMIN_KEY) return true;    // 没设置就放行（仅本机）
+  if (kind === 'gateway' && !GATEWAY_KEY) return true; // 没设置就放行
   const need = kind === 'admin' ? ADMIN_KEY : GATEWAY_KEY;
   const h = req.headers['authorization'] || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
@@ -426,6 +467,23 @@ function anthropicToOpenAI(body) {
     stop: body.stop_sequences,
     stream: body.stream,
   };
+  // Anthropic tools → OpenAI function tools
+  if (Array.isArray(body.tools) && body.tools.length) {
+    out.tools = body.tools.map((t) => ({
+      type: 'function',
+      function: {
+        name: t.name,
+        description: t.description || '',
+        parameters: t.input_schema || { type: 'object', properties: {} },
+      },
+    }));
+  }
+  if (body.tool_choice) {
+    const tc = body.tool_choice;
+    if (tc.type === 'auto') out.tool_choice = 'auto';
+    else if (tc.type === 'any') out.tool_choice = 'required';
+    else if (tc.type === 'tool') out.tool_choice = { type: 'function', function: { name: tc.name } };
+  }
   if (body.system) {
     const sys = Array.isArray(body.system)
       ? body.system.map((s) => s.text || '').join('\n')
@@ -435,16 +493,44 @@ function anthropicToOpenAI(body) {
   for (const m of body.messages || []) {
     if (typeof m.content === 'string') {
       out.messages.push({ role: m.role, content: m.content });
-    } else if (Array.isArray(m.content)) {
-      const parts = [];
-      for (const b of m.content) {
-        if (b.type === 'text') parts.push({ type: 'text', text: b.text });
-        else if (b.type === 'image') {
-          // 简化：转成 OpenAI image_url 形式（仅支持 base64）
-          parts.push({ type: 'image_url', image_url: { url: `data:${b.source?.media_type || 'image/png'};base64,${b.source?.data || ''}` } });
+      continue;
+    }
+    if (!Array.isArray(m.content)) continue;
+    // 分类收集
+    const textParts = [];
+    const imageParts = [];
+    const toolUses = [];   // assistant 的 tool_use
+    const toolResults = []; // user 的 tool_result
+    for (const b of m.content) {
+      if (b.type === 'text') textParts.push({ type: 'text', text: b.text });
+      else if (b.type === 'image') {
+        imageParts.push({ type: 'image_url', image_url: { url: `data:${b.source?.media_type || 'image/png'};base64,${b.source?.data || ''}` } });
+      } else if (b.type === 'tool_use') {
+        toolUses.push({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } });
+      } else if (b.type === 'tool_result') {
+        // tool_result 内容可能是 string 或 blocks
+        let contentText = '';
+        if (typeof b.content === 'string') contentText = b.content;
+        else if (Array.isArray(b.content)) {
+          contentText = b.content.map((c) => (c.type === 'text' ? c.text : '')).join('\n');
         }
+        toolResults.push({ tool_call_id: b.tool_use_id, content: contentText || '(ok)' });
       }
-      out.messages.push({ role: m.role, content: parts });
+    }
+    if (m.role === 'assistant') {
+      // assistant：文本 + tool_calls 合并
+      const msg = { role: 'assistant', content: textParts.map((p) => p.text).join('') || null };
+      if (toolUses.length) msg.tool_calls = toolUses;
+      if (imageParts.length) msg.content = [...textParts, ...imageParts];
+      out.messages.push(msg);
+    } else {
+      // user：文本/图片 作为 user 消息；tool_result 转成 role:'tool'
+      if (textParts.length || imageParts.length) {
+        out.messages.push({ role: 'user', content: [...textParts, ...imageParts] });
+      }
+      for (const tr of toolResults) {
+        out.messages.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
+      }
     }
   }
   return out;
@@ -452,13 +538,24 @@ function anthropicToOpenAI(body) {
 
 function openAIToAnthropicResponse(oai, modelAlias) {
   const choice = oai.choices && oai.choices[0];
-  const text = choice ? (choice.message?.content || '') : '';
+  const msg = choice ? (choice.message || {}) : {};
+  const text = msg.content || '';
+  const content = [];
+  if (text) content.push({ type: 'text', text });
+  // OpenAI tool_calls → Anthropic tool_use blocks
+  if (Array.isArray(msg.tool_calls)) {
+    for (const tc of msg.tool_calls) {
+      let input = {};
+      try { input = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+      content.push({ type: 'tool_use', id: tc.id || `toolu_${Date.now()}`, name: tc.function?.name || '', input });
+    }
+  }
   return {
     id: oai.id || `msg_${Date.now()}`,
     type: 'message',
     role: 'assistant',
     model: oai.model || modelAlias,
-    content: [{ type: 'text', text }],
+    content: content.length ? content : [{ type: 'text', text: '' }],
     stop_reason: choice ? mapFinishReason(choice.finish_reason) : 'end_turn',
     stop_sequence: null,
     usage: {
@@ -482,24 +579,58 @@ function mapFinishReason(r) {
 function* openAIStreamToAnthropicSSE(chunks, modelAlias) {
   let msgId = `msg_${Date.now()}`;
   yield { event: 'message_start', data: { type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: modelAlias, content: [], stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } } } };
-  let startedText = false;
+  let nextIndex = 0;
+  let textIndex = -1;
   let finishReason = null;
   let usage = { input_tokens: 0, output_tokens: 0 };
+  // tool_calls 增量：OpenAI 按 index 分流，每个 index 一个 tool_use block
+  const toolBlock = new Map(); // deltaIndex → { index: anthropicIndex, id, name, argsBuf }
   for (const c of chunks) {
     const choice = c.choices?.[0];
     const delta = choice?.delta?.content;
     if (delta) {
-      if (!startedText) {
-        yield { event: 'content_block_start', data: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } };
-        startedText = true;
+      if (textIndex < 0) {
+        textIndex = nextIndex++;
+        yield { event: 'content_block_start', data: { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } } };
       }
-      yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: delta } } };
+      yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: delta } } };
+    }
+    // tool_calls 增量
+    if (Array.isArray(choice?.delta?.tool_calls)) {
+      for (const tc of choice.delta.tool_calls) {
+        const di = tc.index ?? 0;
+        let blk = toolBlock.get(di);
+        if (!blk) {
+          const idx = nextIndex++;
+          blk = { index: idx, id: tc.id || '', name: '', argsBuf: '', started: false };
+          toolBlock.set(di, blk);
+        }
+        if (tc.id && !blk.id) blk.id = tc.id;
+        if (tc.function?.name && !blk.name) blk.name = tc.function.name;
+        if (tc.function?.arguments) blk.argsBuf += tc.function.arguments;
+        if (!blk.started && (blk.name || blk.id)) {
+          blk.started = true;
+          yield { event: 'content_block_start', data: { type: 'content_block_start', index: blk.index, content_block: { type: 'tool_use', id: blk.id || `toolu_${Date.now()}`, name: blk.name } } };
+          yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: blk.index, delta: { type: 'input_json_delta', partial_json: '' } } };
+        }
+      }
     }
     if (choice?.finish_reason) finishReason = choice.finish_reason;
     if (c.usage) usage = { input_tokens: c.usage.prompt_tokens || 0, output_tokens: c.usage.completion_tokens || 0 };
   }
-  if (startedText) {
-    yield { event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } };
+  // 关闭 text block
+  if (textIndex >= 0) {
+    yield { event: 'content_block_stop', data: { type: 'content_block_stop', index: textIndex } };
+  }
+  // 关闭 tool blocks（把累计的参数 JSON 一次性作为 partial_json 发完）
+  for (const [, blk] of toolBlock) {
+    if (blk.started) {
+      // 前面已发空 partial_json；这里补发完整参数
+      const args = blk.argsBuf || '{}';
+      try { JSON.parse(args); } catch { /* 保留原样 */ }
+      yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: blk.index, delta: { type: 'input_json_delta', partial_json: args } } };
+      yield { event: 'content_block_stop', data: { type: 'content_block_stop', index: blk.index } };
+    }
   }
   yield { event: 'message_delta', data: { type: 'message_delta', delta: { stop_reason: mapFinishReason(finishReason), stop_sequence: null }, usage } };
   yield { event: 'message_stop', data: { type: 'message_stop' } };
@@ -993,9 +1124,11 @@ async function handleAnthropicRequest(req, res, url) {
     catch { return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON' } }); }
     const requested = body.model;
     if (!requested) return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'missing model' } });
-    const candidates = channelsServing(requested, 'anthropic');
+    // 优先 anthropic 协议渠道；没有则回落 openai 协议（网关做 Anthropic↔OpenAI 转换）
+    let candidates = channelsServing(requested, 'anthropic');
+    if (candidates.length === 0) candidates = channelsServing(requested, 'openai');
     if (candidates.length === 0) {
-      return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no anthropic channel for model "${requested}"` } });
+      return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
     const isStream = !!body.stream;
     const oaiBody = anthropicToOpenAI(body);
@@ -1057,9 +1190,10 @@ async function handleGeminiRequest(req, res, url) {
   try { body = JSON.parse(raw.toString('utf8') || '{}'); }
   catch { return sendJson(res, 400, { error: { code: 400, message: 'invalid JSON' } }); }
 
-  const candidates = channelsServing(model, 'gemini');
+  let candidates = channelsServing(model, 'gemini');
+  if (candidates.length === 0) candidates = channelsServing(model, 'openai');
   if (candidates.length === 0) {
-    return sendJson(res, 404, { error: { code: 404, message: `no gemini channel for model "${model}"`, status: 'NOT_FOUND' } });
+    return sendJson(res, 404, { error: { code: 404, message: `no channel for model "${model}"`, status: 'NOT_FOUND' } });
   }
 
   const oaiBody = geminiToOpenAI(body, model);
@@ -1244,7 +1378,7 @@ function recordFailure(ch, msg) {
 }
 
 // ─────────────────────────── 启动 ───────────────────────────
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, process.env.ZZCSAPI_BIND || '127.0.0.1', () => {
   console.log(`[zzcsapi] listening on http://127.0.0.1:${PORT}`);
   console.log(`[zzcsapi] auth: gateway=${GATEWAY_KEY ? 'on' : 'off'} admin=${ADMIN_KEY ? 'on' : 'off'}`);
   console.log(`[zzcsapi] channels: ${Array.from(channels.values()).map((c) => `${c.def.id}/${c.def.protocol}(${c.aliasMap.size})`).join(', ')}`);

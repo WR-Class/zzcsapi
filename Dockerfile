@@ -1,4 +1,6 @@
 FROM node:20-alpine
+# curl 用于绕过 Cloudflare 的 Linux 回退
+RUN apk add --no-cache curl
 WORKDIR /app
 COPY server.js ./
 COPY console.html ./
