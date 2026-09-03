@@ -132,6 +132,8 @@
   .model-wall .m.p-openai::before { background: var(--green); }
   .model-wall .m.p-anthropic::before { background: var(--amber); }
   .model-wall .m.p-gemini::before { background: var(--blue); }
+  .model-wall .m.dead { opacity: .42; }
+  .model-wall .m.dead::before { background: var(--tx3); }
 
   /* 接入面板（新） */
   .access { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px 15px; margin-bottom: 6px; }
@@ -213,6 +215,41 @@
   .toast { position: fixed; bottom: 20px; right: 20px; background: var(--card2); color: var(--tx); padding: 10px 16px; border-radius: 10px; border: 1px solid var(--line); opacity: 0; transition: all .25s; pointer-events: none; z-index: 1000; font-size: 12.5px; box-shadow: var(--shadow); transform: translateY(6px); }
   .toast.show { opacity: 1; transform: none; }
 
+  /* 总览渠道摘要条 */
+  .ov-grid { display: flex; flex-direction: column; gap: 8px; }
+  .ov-ch { display: flex; align-items: center; gap: 11px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 9px 14px; cursor: pointer; transition: border .15s; }
+  .ov-ch:hover { border-color: #33405c; }
+  .ov-ch .dot { width: 8px; height: 8px; flex-shrink: 0; }
+  .ov-ch .nm { font-weight: 600; font-size: 13px; min-width: 110px; }
+  .ov-ch .st { font-size: 11.5px; color: var(--tx2); }
+  .ov-ch .st.ok { color: var(--green); }
+  .ov-ch .st.down { color: var(--red); }
+  .ov-ch .st.degraded { color: var(--amber); }
+  .ov-ch .lat { margin-left: auto; font-size: 11.5px; color: var(--tx3); font-variant-numeric: tabular-nums; }
+  .ov-ch .arw { color: var(--tx3); font-size: 12px; }
+  .ov-ch.dis { opacity: .5; }
+
+  /* 模型来源表 */
+  .src-list { display: flex; flex-direction: column; gap: 8px; }
+  .src { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 9px 14px; }
+  .src .m { font-family: var(--mono); font-size: 12.5px; color: var(--tx); font-weight: 600; }
+  .src .chs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .src .chs .c { font-size: 11px; padding: 2px 9px; border-radius: 20px; background: var(--bg2); border: 1px solid var(--line); color: var(--tx2); }
+  .src .chs .c.ok { border-color: rgba(52,211,153,.4); color: var(--green); }
+  .src .chs .c.down { border-color: rgba(248,113,113,.4); color: var(--red); }
+  .src .chs .c.dis { opacity: .45; text-decoration: line-through; }
+
+  /* 接入示例代码块 */
+  .ex-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+  .ex { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+  .ex .hd { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--card); gap: 8px; }
+  .ex .hd .t { font-size: 11.5px; font-weight: 600; color: var(--tx2); }
+  .ex .hd .cbtn { margin-left: auto; }
+  .ex pre { margin: 0; padding: 11px 13px; font-family: var(--mono); font-size: 11px; line-height: 1.65; color: var(--tx2); white-space: pre; overflow-x: auto; }
+  .ex pre .cm { color: var(--tx3); }
+  .ex pre .k { color: #7ca5ff; }
+  .ex pre .s { color: var(--green); }
+
   .hidden { display: none !important; }
 
   /* 响应式 */
@@ -261,7 +298,7 @@
       </div>
     </div>
 
-    <div class="content" id="page-overview">
+    <div class="content" id="page-overview" data-page>
       <!-- 统计条 -->
       <div class="stats">
         <div class="stat"><div class="k">渠道总数</div><div class="v" id="st-total">0</div></div>
@@ -271,8 +308,38 @@
         <div class="stat"><div class="k">聚合模型</div><div class="v" id="st-models">0</div></div>
       </div>
 
-      <!-- 接入信息 -->
-      <div class="sec-head" id="sec-access">
+      <!-- 总览：渠道摘要（只读） -->
+      <div class="sec-head">
+        <h2>▤ 渠道健康</h2>
+        <span class="hint">各渠道当前状态一览 · 点「渠道管理」页操作</span>
+      </div>
+      <div id="overview-channels" class="ov-grid"></div>
+    </div>
+
+    <div class="content hidden" id="page-channels" data-page>
+      <div class="sec-head">
+        <h2>▤ 渠道管理</h2>
+        <span class="hint">同模型自动调度 · 失败自动切换</span>
+      </div>
+      <div id="channels" class="ch-grid"><div class="empty-state" style="grid-column:1/-1"><div class="big">▤</div>加载渠道中…<br><span style="font-size:11px">若长时间空白，请确认网关进程正在运行</span></div></div>
+    </div>
+
+    <div class="content hidden" id="page-models" data-page>
+      <div class="sec-head">
+        <h2>✦ 聚合模型</h2>
+        <span class="hint">对外统一暴露的模型名 · 客户端填这些名字即可</span>
+      </div>
+      <div id="models"><div class="empty-state"><div class="big">✦</div>加载聚合模型中…</div></div>
+      <!-- 模型 → 渠道映射表 -->
+      <div class="sec-head" style="margin-top:22px">
+        <h2>⇢ 模型来源</h2>
+        <span class="hint">每个模型由哪些渠道提供（按优先级排序）</span>
+      </div>
+      <div id="model-source"></div>
+    </div>
+
+    <div class="content hidden" id="page-access" data-page>
+      <div class="sec-head">
         <h2>⇌ 接入信息</h2>
         <span class="hint">在客户端（DSH / Cursor / Cline 等）填 baseURL + Key</span>
       </div>
@@ -288,19 +355,11 @@
         <div class="warn" id="access-warning"></div>
       </div>
 
-      <!-- 渠道 -->
-      <div class="sec-head" id="sec-channels">
-        <h2>▤ 渠道 <span class="hint" id="ch-count-hint"></span></h2>
-        <span class="hint">同模型自动调度 · 失败自动切换</span>
+      <div class="sec-head" style="margin-top:22px">
+        <h2>📖 接入示例</h2>
+        <span class="hint">复制到对应客户端的配置里</span>
       </div>
-      <div id="channels" class="ch-grid"><div class="empty-state" style="grid-column:1/-1"><div class="big">▤</div>加载渠道中…<br><span style="font-size:11px">若长时间空白，请确认网关进程正在运行</span></div></div>
-
-      <!-- 聚合模型 -->
-      <div class="sec-head" id="sec-models">
-        <h2>✦ 聚合模型</h2>
-        <span class="hint">对外统一暴露的模型名</span>
-      </div>
-      <div id="models"><div class="empty-state"><div class="big">✦</div>加载聚合模型中…</div></div>
+      <div id="access-examples"></div>
     </div>
   </div>
 </div>
@@ -451,7 +510,7 @@ function renderChannels(data) {
         </div>
         <div class="acts">
           <span class="prio">优先级 <input type="text" value="${ch.priority}" data-edit="priority"></span>
-          <button data-act="save-prio" class="ghost" title="保存优先级">存</button>
+          <button data-act="save-prio" class="ghost" title="保存优先级">保存</button>
           <button data-act="probe" class="ghost">探测</button>
           <button data-act="test" class="ghost">🧪 测试</button>
           <button data-act="edit" class="ghost">编辑</button>
@@ -494,10 +553,19 @@ function renderModels(data) {
   const root = $('#models');
   const sections = [];
   let total = 0;
+  // 模型健康：有启用且 ok 的渠道 → 可用；否则降饱和
+  const healthy = new Set();
+  for (const ch of data.channels) {
+    if (!ch.enabled || ch.status === 'down') continue;
+    for (const a of ch.aliases) healthy.add(a.alias);
+  }
   for (const [proto, list] of Object.entries(data.aggregated)) {
     if (!list.length) continue;
     total += list.length;
-    sections.push(`<div class="model-wall" style="margin-bottom:10px">${list.map(m => `<span class="m p-${proto}">${escapeHtml(m)}</span>`).join('')}</div>`);
+    sections.push(`<div class="model-wall" style="margin-bottom:10px">${list.map(m => {
+      const dead = healthy.size && !healthy.has(m);
+      return `<span class="m p-${proto}${dead ? ' dead' : ''}" title="${dead ? '所有渠道当前不可用' : '可用'}">${escapeHtml(m)}</span>`;
+    }).join('')}</div>`);
   }
   root.innerHTML = sections.join('') || '<div class="empty-state"><div class="big">✦</div>暂无聚合模型 — 在渠道里添加别名后自动出现</div>';
   const mCnt = $('#nav-m-cnt'); if (mCnt) mCnt.textContent = total;
@@ -514,7 +582,6 @@ function renderStats(data) {
   $('#st-degraded').innerHTML = '<span class="num">' + deg + '</span><small>个</small>';
   $('#st-down').innerHTML = '<span class="num">' + down + '</span><small>个</small>';
   $('#nav-ch-cnt').textContent = chs.length;
-  $('#ch-count-hint').textContent = chs.length + ' 个';
   const foot = $('#foot-status');
   if (down === chs.length && chs.length > 0) { foot.textContent = '● 全部渠道不可用'; foot.style.color = 'var(--red)'; }
   else if (down > 0) { foot.textContent = '● ' + ok + ' 正常 · ' + down + ' 不可用'; foot.style.color = 'var(--amber)'; }
@@ -536,6 +603,92 @@ function renderAccess(cfg) {
   const w = $('#access-warning');
   if (warns.length) { w.innerHTML = warns.join(' · '); w.style.display = 'block'; }
   else w.style.display = 'none';
+  renderExamples(cfg);
+}
+
+/* 总览页：渠道健康摘要 */
+function renderOverview(data) {
+  const root = $('#overview-channels');
+  if (!root) return;
+  if (!data.channels.length) {
+    root.innerHTML = '<div class="empty-state"><div class="big">▤</div>还没有渠道 · 去「渠道管理」页添加</div>';
+    return;
+  }
+  root.innerHTML = data.channels.map(ch => {
+    const lat = ch.latencyMs < 0 ? '' : ' · ' + ch.latencyMs + 'ms';
+    const dis = ch.enabled ? '' : ' dis';
+    return `<div class="ov-ch${dis}" data-go="channels" data-id="${escapeHtml(ch.id)}">
+      <span class="dot ${ch.status}"></span>
+      <span class="nm">${escapeHtml(ch.name || ch.id)}</span>
+      <span class="st ${ch.status}">${STATUS_TXT[ch.status] || ch.status}</span>
+      <span class="lat">${ch.aliases.length} 模型${lat}${ch.enabled ? '' : ' · 已停用'}</span>
+      <span class="arw">›</span>
+    </div>`;
+  }).join('');
+  root.querySelectorAll('[data-go=channels]').forEach(el => el.onclick = () => goPage('channels'));
+}
+
+/* 模型页：来源表 */
+function renderModelSource(data) {
+  const root = $('#model-source');
+  if (!root) return;
+  // alias → 提供渠道列表
+  const byModel = new Map();
+  for (const ch of data.channels) {
+    for (const a of ch.aliases) {
+      if (!byModel.has(a.alias)) byModel.set(a.alias, []);
+      byModel.get(a.alias).push({ ch, upstream: a.upstream });
+    }
+  }
+  const rows = [];
+  for (const [model, providers] of byModel) {
+    const chips = providers
+      .sort((x, y) => {
+        // 启用在前；同启用按优先级降序
+        const ea = x.ch.enabled ? 0 : 1, eb = y.ch.enabled ? 0 : 1;
+        if (ea !== eb) return ea - eb;
+        return (y.ch.priority || 0) - (x.ch.priority || 0);
+      })
+      .map(p => `<span class="c ${p.ch.status}${p.ch.enabled ? '' : ' dis'}">${escapeHtml(p.ch.id)}${p.upstream !== model ? ' → ' + escapeHtml(p.upstream) : ''}</span>`).join('');
+    rows.push(`<div class="src"><div class="m">${escapeHtml(model)}</div><div class="chs">${chips}</div></div>`);
+  }
+  root.innerHTML = rows.length
+    ? '<div class="src-list">' + rows.sort().join('') + '</div>'
+    : '<div class="empty-state">暂无 — 添加渠道别名后自动生成</div>';
+}
+
+/* 接入页：示例 */
+function renderExamples(cfg) {
+  const root = $('#access-examples');
+  if (!root || !cfg) return;
+  const gw = cfg.gatewayKey || '';
+  const oai = cfg.urls.openai, ant = cfg.urls.anthropic;
+  const antHost = ant.replace(/\/anthropic$/, '');
+  const esc = (s) => escapeHtml(s);
+  root.innerHTML = `<div class="ex-grid">
+    <div class="ex"><div class="hd"><span class="t">DSH / 通用 OpenAI 客户端</span><button class="cbtn" data-copy-ex="1">复制</button></div>
+<pre><span class="cm"># 模型路由里填 baseURL + key；模型名用「聚合模型」页里的名字</span>
+<span class="k">baseURL</span>: <span class="s">${esc(oai)}</span>
+<span class="k">apiKey</span>:  <span class="s">${esc(gw || '（未设 key 则留空）')}</span></pre></div>
+    <div class="ex"><div class="hd"><span class="t">Claude Code / Anthropic 客户端</span><button class="cbtn" data-copy-ex="2">复制</button></div>
+<pre><span class="cm"># 环境变量方式</span>
+<span class="k">export</span> ANTHROPIC_BASE_URL=<span class="s">${esc(antHost)}</span>
+<span class="k">export</span> ANTHROPIC_AUTH_TOKEN=<span class="s">${esc(gw || '（未设 key 则留空）')}</span>
+<span class="cm"># 路径前缀 /anthropic 由网关做协议转换</span></pre></div>
+    <div class="ex"><div class="hd"><span class="t">curl 直测</span><button class="cbtn" data-copy-ex="3">复制</button></div>
+<pre>curl <span class="s">${esc(oai)}/chat/completions</span> \\
+  -H <span class="s">"Authorization: Bearer ${esc(gw)}"</span> \\
+  -H <span class="s">"Content-Type: application/json"</span> \\
+  -d <span class="s">'{"model":"claude-opus-5","messages":[{"role":"user","content":"hi"}]}'</span></pre></div>
+  </div>`;
+  // 复制整块示例
+  root.querySelectorAll('[data-copy-ex]').forEach(b => b.onclick = () => {
+    const pre = b.closest('.ex').querySelector('pre');
+    navigator.clipboard.writeText(pre.innerText).then(() => {
+      b.classList.add('ok'); b.textContent = '✓';
+      setTimeout(() => { b.classList.remove('ok'); b.textContent = '复制'; }, 1200);
+    });
+  });
 }
 
 async function refresh() {
@@ -545,6 +698,8 @@ async function refresh() {
     renderChannels(data);
     renderModels(data);
     renderStats(data);
+    renderOverview(data);
+    renderModelSource(data);
     if (cfg) renderAccess(cfg);
     const foot = $('#foot-status'); foot.textContent = '● 运行中'; foot.style.color = 'var(--green)';
   } catch {
@@ -577,7 +732,7 @@ function showLog(id, title, rows) {
   if (!box) {
     box = document.createElement('div');
     box.id = id; box.className = 'log';
-    $('#sec-models').parentNode.appendChild(box);
+    $('#page-' + curPage).appendChild(box);
   }
   box.innerHTML = `<div class="lg-hd">${title}<button class="x" onclick="this.closest('.log').remove()">×</button></div>` +
     rows.map(r => `<div class="r ${r.ok ? 'ok' : 'fail'}"><span>${r.ok ? '✓' : '✗'} <b>${escapeHtml(r.name)}</b> · ${escapeHtml(r.info || '')}</span><span class="t">${r.t || ''}</span><span class="e">${escapeHtml((r.err || '').slice(0, 90))}</span></div>`).join('');
@@ -586,19 +741,17 @@ function showLog(id, title, rows) {
 $('#btn-add').onclick = () => openModal(null);
 $('#btn-test-model').onclick = () => openTestModal();
 
-/* ───────── 侧边导航 ───────── */
-$$('.nav a').forEach(a => a.onclick = (e) => {
-  e.preventDefault();
-  $$('.nav a').forEach(x => x.classList.remove('active'));
-  a.classList.add('active');
-  const t = a.dataset.nav;
-  const crumb = { overview: '总览', channels: '渠道管理', models: '聚合模型', access: '接入信息' }[t];
-  $('.top .crumb').textContent = crumb;
-  // 锚点滚动
-  const map = { overview: '#page-overview', channels: '#sec-channels', models: '#sec-models', access: '#sec-access' };
-  const el = $(map[t]);
-  if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 76, behavior: 'smooth' });
-});
+/* ───────── 侧边导航（真分页） ───────── */
+const CRUMBS = { overview: '总览', channels: '渠道管理', models: '聚合模型', access: '接入信息' };
+let curPage = 'overview';
+function goPage(t) {
+  curPage = t;
+  $$('.nav a').forEach(x => x.classList.toggle('active', x.dataset.nav === t));
+  $('[data-page]').parentNode.querySelectorAll('[data-page]').forEach(p => p.classList.toggle('hidden', p.id !== 'page-' + t));
+  $('.top .crumb').textContent = CRUMBS[t] || t;
+  window.scrollTo({ top: 0 });
+}
+$$('.nav a').forEach(a => a.onclick = (e) => { e.preventDefault(); goPage(a.dataset.nav); });
 
 /* ───────── 复制 ───────── */
 document.addEventListener('click', async (e) => {
@@ -630,7 +783,7 @@ async function runTest({ model, channelId, prompt: promptText }) {
     box = document.createElement('div');
     box.id = 'test-log'; box.className = 'log';
     box.innerHTML = '<div class="lg-hd">模型测试结果<button class="x" onclick="this.closest(\'.log\').remove()">×</button></div><div id="test-log-body"></div>';
-    $('#sec-models').parentNode.appendChild(box);
+    $('#page-' + curPage).appendChild(box);
   }
   const body = box.querySelector('#test-log-body');
   body.insertAdjacentHTML('afterbegin', `<div class="r" data-pending><span>⏳ 测试 ${escapeHtml(model)}${channelId ? ' @ ' + escapeHtml(channelId) : ''}…</span></div>`);
@@ -858,6 +1011,7 @@ if (url.searchParams.get('key')) {
   url.searchParams.delete('key');
   history.replaceState(null, '', url.toString());
 }
+goPage('overview');
 refresh();
 setInterval(refresh, 8000);
 </script>
