@@ -110,6 +110,7 @@
   .proto.openai { background: var(--green-soft); color: var(--green); }
   .proto.anthropic { background: var(--amber-soft); color: var(--amber); }
   .proto.gemini { background: var(--blue-soft); color: var(--blue); }
+  .proto.notion { background: rgba(139,92,246,.14); color: #a78bfa; }
   .ch .hd .off { margin-left: auto; font-size: 10px; color: var(--tx3); background: var(--bg2); padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); }
   .ch .body { padding: 0 15px 6px; flex: 1; }
   .ch .meta-row { display: flex; gap: 14px; flex-wrap: wrap; padding: 4px 0 8px; font-size: 11.5px; color: var(--tx2); }
@@ -132,6 +133,7 @@
   .model-wall .m.p-openai::before { background: var(--green); }
   .model-wall .m.p-anthropic::before { background: var(--amber); }
   .model-wall .m.p-gemini::before { background: var(--blue); }
+  .model-wall .m.p-notion::before { background: #a78bfa; }
   .model-wall .m.dead { opacity: .42; }
   .model-wall .m.dead::before { background: var(--tx3); }
 
@@ -388,6 +390,7 @@
           <option value="openai">openai</option>
           <option value="anthropic">anthropic</option>
           <option value="gemini">gemini</option>
+          <option value="notion">notion（Notion AI 逆向）</option>
         </select>
       </div>
       <div class="field">
@@ -403,12 +406,13 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">openai: https://host/v1 · anthropic: https://host · gemini: https://…googleapis.com</span></label>
+      <label>Base URL <span class="help">openai: https://host/v1 · anthropic: https://host · gemini: …googleapis.com · notion: https://www.notion.so</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
     </div>
     <div class="field">
       <label>API Key</label>
-      <input id="f-apiKey" type="password" placeholder="sk-...">
+      <input id="f-apiKey" type="password" placeholder="sk-... 或 notion 的 token_v2">
+      <span class="help" id="f-apikey-help" style="color:var(--tx3);font-size:10.5px">notion 协议：这里填浏览器 Cookie 里的 token_v2 值</span>
     </div>
 
     <div class="field">

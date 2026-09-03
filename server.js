@@ -12,6 +12,7 @@ const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
 const { URL } = require('url');
+const notion = require('./notion.js');
 
 // 检测响应是否 Cloudflare WAF 拦截（JA3/TLS 指纹被识别为机器人）
 function isCloudflareBlock(status, body) {
@@ -322,6 +323,26 @@ function aggregateModels(protocol) {
 
 // ─────────────────────────── 健康探测 ───────────────────────────
 async function probeChannel(ch) {
+  // Notion 渠道：getSpaces 验证（成功即 ok，刷新凭据缓存）
+  if ((ch.def.protocol || 'openai') === 'notion') {
+    const t0 = Date.now();
+    try {
+      const acct = await notion.notionDiscoverAccount(ch.def.baseUrl, ch.def.apiKey, fetch, HEALTH.timeoutMs || 15000);
+      const first = acct.spaces[0];
+      ch.notion = { userId: acct.userId, spaceId: first.spaceId, spaceViewId: first.spaceViewId || '', userName: acct.userName, userEmail: acct.userEmail, spaces: acct.spaces, at: Date.now() };
+      ch.models = notion.notionListModels();
+      ch.latencyMs = Date.now() - t0;
+      ch.lastCheck = Date.now();
+      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+      ch.status = 'ok';
+    } catch (err) {
+      ch.status = 'down';
+      ch.consecutiveFail++;
+      ch.lastError = 'notion: ' + (err.message || err);
+      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+    }
+    return;
+  }
   const t0 = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), HEALTH.timeoutMs || 8000);
@@ -376,18 +397,21 @@ async function probeChannel(ch) {
 
 function probeUrlForDef(def) {
   const proto = def.protocol || 'openai';
+  if (proto === 'notion')    return joinUrl(def.baseUrl, 'api/v3/getSpaces');
   if (proto === 'anthropic') return joinUrl(def.baseUrl, 'v1/models');
   if (proto === 'gemini')    return joinUrl(def.baseUrl, 'v1beta/models');
   return joinUrl(def.baseUrl, 'models');
 }
 function probeHeadersForDef(def) {
   const proto = def.protocol || 'openai';
+  if (proto === 'notion')    return { 'User-Agent': notion.NOTION_UA, 'Cookie': `token_v2=${def.apiKey}` };
   if (proto === 'anthropic') return { 'x-api-key': def.apiKey, 'anthropic-version': '2023-06-01' };
   if (proto === 'gemini')    return { 'x-goog-api-key': def.apiKey };
   return { 'Authorization': `Bearer ${def.apiKey}` };
 }
 function extractModelIds(j, proto) {
   if (!j) return [];
+  if (proto === 'notion')    return notion.notionListModels();
   if (proto === 'anthropic') return Array.isArray(j.data) ? j.data.map((m) => m.id).filter(Boolean) : [];
   if (proto === 'gemini')    return Array.isArray(j.models) ? j.models.map((m) => (m.name || '').replace(/^models\//, '')).filter(Boolean) : [];
   return Array.isArray(j.data) ? j.data.map((m) => m.id).filter(Boolean) : [];
@@ -395,6 +419,16 @@ function extractModelIds(j, proto) {
 
 // 探测一个 def（不要求它是已注册的渠道），返回 {ok, models, latencyMs, status, error}
 async function probeDef(def, timeoutMs) {
+  // Notion 协议：getSpaces（POST）验证 token_v2，模型列表用内置映射
+  if ((def.protocol || 'openai') === 'notion') {
+    const t0 = Date.now();
+    try {
+      const acct = await notion.notionDiscoverAccount(def.baseUrl, def.apiKey, fetch, timeoutMs || 15000);
+      return { ok: true, models: notion.notionListModels(), latencyMs: Date.now() - t0, status: 200, account: { userId: acct.userId, spaces: acct.spaces.map((s) => s.name || s.spaceId) } };
+    } catch (err) {
+      return { ok: false, status: err.status || 0, error: 'notion: ' + (err.message || err), latencyMs: Date.now() - t0 };
+    }
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs || HEALTH.timeoutMs || 8000);
   const t0 = Date.now();
@@ -844,7 +878,7 @@ function validateChannelDef(def) {
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   return null;
 }
@@ -964,7 +998,7 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion'].includes(body.protocol) ? body.protocol : 'openai',
     };
     const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
     return sendJson(res, 200, r);
@@ -988,7 +1022,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : channelsServing(model, 'openai'); // 简化：测试只走 openai 协议
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : channelsServing(model, 'notion')); // openai 优先，notion 兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -1001,6 +1035,40 @@ async function handleAdminApi(req, res, url) {
       let ttfb = 0;
       let resp;
       try {
+        if (ch.def.protocol === 'notion') {
+          // Notion 渠道：跑一次最小 runInferenceTranscript（真实模型调用）
+          const acct = await ensureNotionAccount(ch, 15000);
+          const built = notion.buildNotionTranscript([{ role: 'user', content: prompt }], c.upstream, acct);
+          const payload = notion.notionBuildPayload(built.transcript, built.threadType, acct, {});
+          const headers = notion.notionHeaders(acct, ch.def.apiKey, ch.def.baseUrl.replace(/\/+$/, ''));
+          const target = ch.def.baseUrl.replace(/\/+$/, '') + '/api/v3/runInferenceTranscript';
+          resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(payload), signal: ctrl.signal });
+          let text = await resp.text();
+          if (!resp.ok && isCloudflareBlock(resp.status, text)) {
+            const ps = await psHttpRequest('POST', target, headers, JSON.stringify(payload), Math.min(60000, Number(body.timeoutMs) || 30000));
+            if (ps.status > 0) { text = ps.body; resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status }; }
+          }
+          ttfb = Date.now() - t0;
+          // 解析 NDJSON 取全文
+          let contentText = '', finalText = '';
+          const parser = notion.createNotionStreamParser((evt) => {
+            if (evt.type === 'content') contentText += evt.text;
+            else if (evt.type === 'final') finalText = evt.text;
+          });
+          for (const ln of text.split('\n')) parser.line(ln);
+          const reply = contentText.trim() || finalText || '';
+          if (resp.ok) {
+            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            if (ch.status !== 'ok') ch.status = 'ok';
+            ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+          }
+          results.push({
+            channelId: c.channelId, ok: resp.ok && !!reply, status: resp.status, latencyMs: ttfb,
+            reply: reply.slice(0, 200) || undefined,
+            error: resp.ok ? (reply ? undefined : 'empty stream') : `HTTP ${resp.status}: ${text.slice(0, 150)}`,
+          });
+          continue;
+        }
         // 走 dispatchRequest 复用出站请求构造
         // 简化：自己拼一个最小 chat 请求
         const target = ch.def.protocol === 'anthropic'
@@ -1124,7 +1192,8 @@ async function handleOpenAIRequest(req, res, url) {
   sanitizeOpenAIToolIds(body); // 清洗工具 id（空/非法字符 → 合法，保持配对）
   const requested = body.model;
   if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
-  const candidates = channelsServing(requested, 'openai');
+  let candidates = channelsServing(requested, 'openai');
+  if (candidates.length === 0) candidates = channelsServing(requested, 'notion');
   if (candidates.length === 0) {
     return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"`));
   }
@@ -1134,6 +1203,7 @@ async function handleOpenAIRequest(req, res, url) {
     url,
     body,
     candidates,
+    requestedModel: requested,
     encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
     buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, url.pathname.replace(/^\/v1\//, '')),
     buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
@@ -1159,9 +1229,10 @@ async function handleAnthropicRequest(req, res, url) {
     catch { return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON' } }); }
     const requested = body.model;
     if (!requested) return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'missing model' } });
-    // 优先 anthropic 协议渠道；没有则回落 openai 协议（网关做 Anthropic↔OpenAI 转换）
+    // 优先 anthropic 协议渠道；没有则回落 openai 协议（网关做 Anthropic↔OpenAI 转换）；再回落 notion
     let candidates = channelsServing(requested, 'anthropic');
     if (candidates.length === 0) candidates = channelsServing(requested, 'openai');
+    if (candidates.length === 0) candidates = channelsServing(requested, 'notion');
     if (candidates.length === 0) {
       return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
@@ -1173,6 +1244,7 @@ async function handleAnthropicRequest(req, res, url) {
       url: { ...url, pathname: '/v1/chat/completions' }, // 复用 OpenAI 上游路径
       body: oaiBody,
       candidates,
+      requestedModel: requested,
       isStream,
       encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
       buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, 'chat/completions'),
@@ -1227,6 +1299,7 @@ async function handleGeminiRequest(req, res, url) {
 
   let candidates = channelsServing(model, 'gemini');
   if (candidates.length === 0) candidates = channelsServing(model, 'openai');
+  if (candidates.length === 0) candidates = channelsServing(model, 'notion');
   if (candidates.length === 0) {
     return sendJson(res, 404, { error: { code: 404, message: `no channel for model "${model}"`, status: 'NOT_FOUND' } });
   }
@@ -1238,6 +1311,7 @@ async function handleGeminiRequest(req, res, url) {
     url: { ...url, pathname: '/v1/chat/completions' },
     body: oaiBody,
     candidates,
+    requestedModel: model,
     isStream,
     encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
     buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, 'chat/completions'),
@@ -1291,6 +1365,10 @@ async function dispatchRequest(opts) {
 async function tryChannel(opts) {
   const { res, url, body, candidate, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk } = opts;
   const ch = channels.get(candidate.channelId);
+  // Notion 协议渠道：完全独立的请求/响应路径
+  if ((ch.def.protocol || 'openai') === 'notion') {
+    return tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+  }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
   const headers = buildOutgoingHeaders(ch);
@@ -1403,6 +1481,189 @@ async function tryChannel(opts) {
   } else {
     return onSuccessNonStream(resp, candidate);
   }
+}
+
+// ─────────────────────────── Notion 渠道执行 ───────────────────────────
+// 凭据缓存：ch.notion = {userId, spaceId, spaceViewId, userName, userEmail, at}
+async function ensureNotionAccount(ch, timeoutMs) {
+  if (ch.notion && Date.now() - ch.notion.at < 3600_000) return ch.notion;
+  const acct = await notion.notionDiscoverAccount(ch.def.baseUrl, ch.def.apiKey, fetch, timeoutMs || 15000);
+  const first = acct.spaces[0];
+  const info = {
+    userId: acct.userId,
+    spaceId: first.spaceId,
+    spaceViewId: first.spaceViewId || '',
+    userName: acct.userName,
+    userEmail: acct.userEmail,
+    spaces: acct.spaces,
+    at: Date.now(),
+  };
+  ch.notion = info;
+  return info;
+}
+
+function notionSSEChunk(id, model, delta) {
+  // OpenAI 流 chunk；delta 可含 content / reasoning_content
+  return `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
+}
+
+async function tryNotionChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel } = opts;
+  const t0 = Date.now();
+  const timeoutMs = ch.def.timeoutMs || 180_000;
+  const displayModel = requestedModel || candidate.upstream;
+
+  // 1) 凭据（token_v2 → space/user）
+  let acct;
+  try {
+    acct = await ensureNotionAccount(ch, 15000);
+  } catch (err) {
+    ch.notion = null; // 凭据缓存失效，下次重刷
+    recordFailure(ch, 'notion-auth: ' + (err.message || err));
+    if (String(err.status) === '401') return 'fatal_client';
+    return 'notion-auth: ' + (err.message || err);
+  }
+
+  // 2) transcript + payload
+  const built = notion.buildNotionTranscript(body.messages, candidate.upstream, acct);
+  if (built.error) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: built.error, type: 'invalid_request_error' } }));
+    return 'fatal_client';
+  }
+  const payload = notion.notionBuildPayload(built.transcript, built.threadType, acct, {});
+  const headers = notion.notionHeaders(acct, ch.def.apiKey, ch.def.baseUrl.replace(/\/+$/, ''));
+  const target = ch.def.baseUrl.replace(/\/+$/, '') + '/api/v3/runInferenceTranscript';
+  const bodyStr = JSON.stringify(payload);
+
+  // 3) 发请求（fetch 流式优先；CF 拦截 → PS/curl 缓冲）
+  let resp;
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+    } finally { clearTimeout(to); }
+  } catch (err) {
+    recordFailure(ch, 'notion network: ' + (err.message || err));
+    return 'network: ' + (err.message || err);
+  }
+
+  let cfBody = '';
+  let usedFallback = false;
+  if (resp.status === 403) {
+    try { cfBody = await resp.text(); } catch {}
+    if (isCloudflareBlock(403, cfBody)) {
+      const ps = await psHttpRequest('POST', target, headers, bodyStr, timeoutMs);
+      if (ps.status > 0) {
+        usedFallback = true;
+        resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status, text: async () => ps.body };
+      }
+    }
+  }
+
+  if (!resp.ok) {
+    const text = usedFallback ? await resp.text() : (await resp.text().catch(() => ''));
+    recordFailure(ch, `notion HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
+    if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
+      res.writeHead(resp.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
+      return 'fatal_client';
+    }
+    return `notion upstream ${resp.status}${usedFallback ? ' (via ps-fallback)' : ''}`;
+  }
+
+  // 成功
+  ch.consecutiveFail = 0;
+  ch.cooldownUntil = 0;
+  ch.lastError = null;
+  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  ch.latencyMs = Date.now() - t0;
+
+  // 4) 解析 NDJSON → OpenAI chunk
+  const respId = 'chatcmpl-notion-' + Date.now().toString(36);
+
+  if (isStream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-ZZCSAPI-Channel': candidate.channelId,
+    });
+    let fullText = '';
+    let finalText = '';
+    const handleEvent = (evt) => {
+      if (evt.type === 'content') {
+        if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
+        fullText += evt.text; res.write(notionSSEChunk(respId, displayModel, { content: evt.text }));
+      } else if (evt.type === 'thinking') {
+        if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
+        res.write(notionSSEChunk(respId, displayModel, { reasoning_content: evt.text }));
+      } else if (evt.type === 'final') { finalText = evt.text; }
+    };
+    let firstChunkSent = false;
+
+    if (usedFallback) {
+      // PS/curl 缓冲模式：一次性解析全部 NDJSON，按顺序回放
+      const text = await resp.text();
+      const parser = notion.createNotionStreamParser(handleEvent);
+      for (const ln of text.split('\n')) parser.line(ln);
+    } else {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      const parser = notion.createNotionStreamParser(handleEvent);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+            parser.line(line);
+          }
+        }
+        if (buf.trim()) parser.line(buf);
+      } catch { /* 上游断 */ }
+    }
+
+    // 权威全文兜底：流里没采到 content → 用 record-map 的 final 补齐
+    if (!fullText.trim() && finalText) {
+      if (!firstChunkSent) res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
+      res.write(notionSSEChunk(respId, displayModel, { content: finalText }));
+      fullText = finalText;
+    }
+    // 收尾 chunk
+    res.write(notionSSEChunk(respId, displayModel, {}));
+    res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return 'success';
+  }
+
+  // 非流式：聚合全文
+  const text = await resp.text();
+  let contentText = '';
+  let reasoningText = '';
+  let finalText = '';
+  const parser = notion.createNotionStreamParser((evt) => {
+    if (evt.type === 'content') contentText += evt.text;
+    else if (evt.type === 'thinking') reasoningText += evt.text;
+    else if (evt.type === 'final') finalText = evt.text;
+  });
+  for (const ln of text.split('\n')) parser.line(ln);
+  const reply = contentText.trim() ? contentText : (finalText || '');
+  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+  res.end(JSON.stringify({
+    id: respId,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: displayModel,
+    choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  }));
+  return 'success';
 }
 
 function recordFailure(ch, msg) {
