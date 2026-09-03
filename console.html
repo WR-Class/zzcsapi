@@ -3,153 +3,324 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ZZCSAPI 控制台</title>
+<title>ZZCSAPI · API 聚合网关</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root {
+    color-scheme: dark;
+    /* 色板 —— slate + blue */
+    --bg: #0b0e14;
+    --bg2: #0f131c;
+    --card: #141926;
+    --card2: #1a2130;
+    --line: #232c3f;
+    --tx: #e8edf5;
+    --tx2: #98a2b8;
+    --tx3: #667089;
+    --blue: #4f7cff;
+    --blue-soft: rgba(79,124,255,.12);
+    --green: #34d399;
+    --green-soft: rgba(52,211,153,.12);
+    --amber: #fbbf24;
+    --amber-soft: rgba(251,191,36,.12);
+    --red: #f87171;
+    --red-soft: rgba(248,113,113,.12);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 8px 32px rgba(0,0,0,.36);
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
   * { box-sizing: border-box; }
-  body { font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #0f1115; color: #d8dde6; }
-  header { padding: 14px 22px; background: #181c25; border-bottom: 1px solid #2a2f3d; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; }
-  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
-  header .meta { color: #8a93a6; font-size: 12px; }
-  .toolbar { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
-  button, select, input[type=text], input[type=number], input[type=password], textarea { background: #1f2430; color: #d8dde6; border: 1px solid #2c3140; border-radius: 6px; padding: 6px 12px; font: inherit; }
-  textarea { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; padding: 8px 10px; resize: vertical; }
-  button { cursor: pointer; }
-  button:hover { background: #2a3140; }
-  button.primary { background: #3a7afe; border-color: #3a7afe; color: white; }
-  button.primary:hover { background: #4d88ff; }
-  button.danger { background: #c13a3a; border-color: #c13a3a; color: white; }
-  button.danger:hover { background: #d04a4a; }
-  button.ghost { background: transparent; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  main { padding: 18px 22px; }
-  h2 { font-size: 15px; margin: 22px 0 10px; color: #aab1c2; display: flex; align-items: center; gap: 10px; }
-  h2 .hint { color: #6e7691; font-size: 11px; font-weight: normal; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; }
-  .card { background: #181c25; border: 1px solid #262b38; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
-  .card h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .card .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12.5px; gap: 8px; }
-  .card .row .k { color: #8a93a6; flex-shrink: 0; }
-  .card .row .v { text-align: right; word-break: break-all; max-width: 70%; }
-  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; }
-  .dot.ok { background: #3ddc97; }
-  .dot.degraded { background: #f5b94a; }
-  .dot.down { background: #e15759; }
-  .dot.unknown { background: #6e7691; }
-  .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: #2a3140; color: #cbd2e0; }
-  .badge.openai { background: #103a23; color: #79e6b3; }
-  .badge.anthropic { background: #4a2a18; color: #ffb68a; }
-  .badge.gemini { background: #1a2c4a; color: #8ab4ff; }
-  .alias-list { max-height: 110px; overflow: auto; background: #11141b; border-radius: 6px; padding: 6px 8px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11.5px; }
-  .alias-list .pair { display: flex; justify-content: space-between; gap: 8px; }
-  .alias-list .pair .up { color: #6e7691; }
-  .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
-  .actions button { padding: 3px 8px; font-size: 12px; }
-  .prio { display: flex; align-items: center; gap: 4px; }
-  .prio input { width: 60px; padding: 3px 6px; }
-  .err { color: #e15759; font-size: 11.5px; margin-top: 4px; }
-  .empty { color: #6e7691; font-size: 12px; padding: 20px; text-align: center; }
-  .toast { position: fixed; bottom: 18px; right: 18px; background: #2a3140; color: #d8dde6; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 1000; max-width: 50vw; }
-  .toast.show { opacity: 1; }
-  .refresh-hint { color: #6e7691; font-size: 11px; }
-  .mask { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  html, body { height: 100%; }
+  body { font: 13.5px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: var(--bg); color: var(--tx); }
+
+  /* ───────── 布局骨架 ───────── */
+  .app { display: grid; grid-template-columns: 216px 1fr; min-height: 100vh; }
+
+  /* 侧边栏 */
+  .side { background: var(--bg2); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 18px 12px; position: sticky; top: 0; height: 100vh; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 18px; }
+  .brand .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #4f7cff 0%, #7c5cff 100%); display: grid; place-items: center; font-weight: 800; color: #fff; font-size: 15px; letter-spacing: -.5px; box-shadow: 0 4px 14px rgba(79,124,255,.35); }
+  .brand .name { font-weight: 700; font-size: 15px; letter-spacing: .2px; }
+  .brand .sub { font-size: 10.5px; color: var(--tx3); margin-top: 1px; }
+  .nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav a { display: flex; align-items: center; gap: 9px; padding: 8.5px 12px; border-radius: 9px; color: var(--tx2); text-decoration: none; font-size: 13px; font-weight: 500; transition: all .15s; }
+  .nav a .ico { width: 17px; text-align: center; opacity: .75; }
+  .nav a:hover { color: var(--tx); background: var(--card); }
+  .nav a.active { color: var(--blue); background: var(--blue-soft); }
+  .nav a.active .ico { opacity: 1; }
+  .nav .cnt { margin-left: auto; background: var(--card2); border: 1px solid var(--line); padding: 0 7px; border-radius: 20px; font-size: 10.5px; color: var(--tx2); }
+  .side .foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--tx3); display: flex; flex-direction: column; gap: 3px; }
+  .side .foot b { color: var(--tx2); font-weight: 600; }
+
+  /* 主区 */
+  .main { min-width: 0; display: flex; flex-direction: column; }
+  .top { height: 58px; background: rgba(15,19,28,.86); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; padding: 0 26px; position: sticky; top: 0; z-index: 20; }
+  .top .crumb { font-size: 14.5px; font-weight: 600; }
+  .top .crumb .sep { color: var(--tx3); margin: 0 7px; font-weight: 400; }
+  .top .meta { color: var(--tx3); font-size: 11.5px; margin-left: 2px; }
+  .top .actions { margin-left: auto; display: flex; gap: 8px; }
+  .content { padding: 24px 26px 60px; max-width: 1280px; width: 100%; margin: 0 auto; }
+
+  /* ───────── 通用组件 ───────── */
+  button, select, input[type=text], input[type=password], input[type=number], textarea { font: inherit; }
+  button { background: var(--card2); color: var(--tx); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6.5px 14px; font-size: 12.5px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all .15s; }
+  button:hover { background: var(--line); border-color: #35415a; }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; box-shadow: 0 2px 10px rgba(79,124,255,.25); }
+  button.primary:hover { background: #5d86ff; }
+  button.danger { background: transparent; border-color: rgba(248,113,113,.4); color: var(--red); }
+  button.danger:hover { background: var(--red-soft); border-color: var(--red); }
+  button.ghost { background: transparent; border-color: transparent; color: var(--tx2); }
+  button.ghost:hover { background: var(--card); color: var(--tx); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=text], input[type=password], input[type=number], textarea, select { background: var(--bg2); border: 1px solid var(--line); color: var(--tx); border-radius: var(--radius-sm); padding: 7px 11px; width: 100%; outline: none; transition: border .15s, box-shadow .15s; }
+  input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+  textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+  select { cursor: pointer; }
+
+  /* 统计条 */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px 13px; position: relative; overflow: hidden; }
+  .stat .k { font-size: 11px; color: var(--tx3); font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
+  .stat .v { font-size: 24px; font-weight: 700; margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 12px; color: var(--tx2); font-weight: 500; margin-left: 4px; }
+  .stat.ok .v, .stat.ok .v .num { color: var(--green); }
+  .stat.bad .v, .stat.bad .v .num { color: var(--red); }
+  .stat.warn .v, .stat.warn .v .num { color: var(--amber); }
+
+  /* 区块标题 */
+  .sec-head { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 13px; }
+  .sec-head:first-child { margin-top: 0; }
+  .sec-head h2 { margin: 0; font-size: 15.5px; font-weight: 650; letter-spacing: .2px; display: flex; align-items: center; gap: 8px; }
+  .sec-head .hint { color: var(--tx3); font-size: 11.5px; }
+  .sec-head .right { margin-left: auto; }
+
+  /* 渠道卡片 */
+  .ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 14px; }
+  .ch { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0; overflow: hidden; display: flex; flex-direction: column; transition: border .15s, transform .15s; position: relative; }
+  .ch:hover { border-color: #33405c; }
+  .ch .hd { display: flex; align-items: center; gap: 9px; padding: 13px 15px 10px; }
+  .ch .hd .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px currentColor; }
+  .dot.ok { background: var(--green); color: var(--green); }
+  .dot.degraded { background: var(--amber); color: var(--amber); }
+  .dot.down { background: var(--red); color: var(--red); }
+  .dot.unknown { background: var(--tx3); color: var(--tx3); }
+  .ch .hd .nm { font-weight: 650; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch .hd .id { font-family: var(--mono); font-size: 10.5px; color: var(--tx3); background: var(--bg2); border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; }
+  .ch .hd .proto { font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 2px 7px; border-radius: 5px; text-transform: uppercase; }
+  .proto.openai { background: var(--green-soft); color: var(--green); }
+  .proto.anthropic { background: var(--amber-soft); color: var(--amber); }
+  .proto.gemini { background: var(--blue-soft); color: var(--blue); }
+  .ch .hd .off { margin-left: auto; font-size: 10px; color: var(--tx3); background: var(--bg2); padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); }
+  .ch .body { padding: 0 15px 6px; flex: 1; }
+  .ch .meta-row { display: flex; gap: 14px; flex-wrap: wrap; padding: 4px 0 8px; font-size: 11.5px; color: var(--tx2); }
+  .ch .meta-row .m { display: inline-flex; gap: 5px; align-items: center; }
+  .ch .meta-row .m b { color: var(--tx); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ch .url { font-family: var(--mono); font-size: 11px; color: var(--tx3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0 8px; }
+  .ch .models { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0 8px; max-height: 92px; overflow: auto; }
+  .ch .models .m { font-family: var(--mono); font-size: 10.5px; background: var(--bg2); border: 1px solid var(--line); color: var(--tx2); padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+  .ch .models .m.d { opacity: .45; text-decoration: line-through; }
+  .ch .err { margin: 4px 0 8px; font-size: 11px; color: var(--red); background: var(--red-soft); border: 1px solid rgba(248,113,113,.25); border-radius: var(--radius-sm); padding: 6px 10px; word-break: break-all; }
+  .ch .acts { display: flex; gap: 6px; padding: 10px 15px 13px; border-top: 1px solid var(--line); background: rgba(11,14,20,.5); align-items: center; flex-wrap: wrap; }
+  .ch .acts .prio { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; font-size: 11px; color: var(--tx3); }
+  .ch .acts .prio input { width: 52px; padding: 3.5px 8px; font-size: 11.5px; }
+  .ch .acts button { padding: 4px 10px; font-size: 11.5px; }
+
+  /* 模型标签墙 */
+  .model-wall { display: flex; flex-wrap: wrap; gap: 6px; }
+  .model-wall .m { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; background: var(--card); border: 1px solid var(--line); padding: 5px 11px; border-radius: 20px; color: var(--tx2); }
+  .model-wall .m::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--blue); opacity: .65; }
+  .model-wall .m.p-openai::before { background: var(--green); }
+  .model-wall .m.p-anthropic::before { background: var(--amber); }
+  .model-wall .m.p-gemini::before { background: var(--blue); }
+
+  /* 接入面板（新） */
+  .access { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px 15px; margin-bottom: 6px; }
+  .access .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  @media (max-width: 1100px) { .access .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 720px) { .access .grid { grid-template-columns: 1fr; } }
+  .access .it { display: flex; align-items: center; gap: 10px; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8.5px 12px; min-width: 0; }
+  .access .it .lab { font-size: 11px; color: var(--tx3); font-weight: 600; white-space: nowrap; }
+  .access .it .val { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; color: var(--tx2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .access .it .cbtn { flex-shrink: 0; background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2.5px 9px; font-size: 10.5px; color: var(--tx3); cursor: pointer; }
+  .access .it .cbtn:hover { color: var(--tx); background: var(--card2); }
+  .access .it .cbtn.ok { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+  .access .warn { margin-top: 9px; font-size: 11px; color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(251,191,36,.22); padding: 7px 11px; border-radius: var(--radius-sm); display: none; }
+
+  /* 日志浮层 */
+  .log { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; margin-top: 14px; font-size: 11.5px; max-height: 220px; overflow: auto; }
+  .log .lg-hd { color: var(--tx2); font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .log .lg-hd .x { margin-left: auto; cursor: pointer; color: var(--tx3); border: none; background: none; padding: 0; font-size: 14px; }
+  .log .r { display: flex; gap: 10px; padding: 3px 0; align-items: baseline; }
+  .log .r.ok { color: var(--green); }
+  .log .r.fail { color: var(--red); }
+  .log .r .t { font-variant-numeric: tabular-nums; color: var(--tx3); }
+  .log .r .e { color: var(--tx3); margin-left: auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 空态 */
+  .empty-state { border: 1px dashed var(--line); border-radius: var(--radius); padding: 34px 20px; text-align: center; color: var(--tx3); font-size: 12.5px; background: rgba(20,25,38,.4); }
+  .empty-state .big { font-size: 30px; margin-bottom: 8px; opacity: .5; }
+  .empty-state button { margin-top: 14px; }
+
+  /* ───────── 弹窗 ───────── */
+  .mask { position: fixed; inset: 0; background: rgba(4,6,10,.72); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 100; padding: 22px; }
   .mask.show { display: flex; }
-  .modal { background: #181c25; border: 1px solid #2c3140; border-radius: 10px; padding: 18px 20px; width: 100%; max-width: 620px; max-height: 90vh; overflow: auto; box-shadow: 0 18px 50px rgba(0,0,0,0.4); }
-  .modal h2 { margin: 0 0 12px; color: #d8dde6; }
-  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-  .field label { color: #8a93a6; font-size: 12px; display: flex; align-items: center; gap: 6px; }
-  .field input, .field select, .field textarea { width: 100%; }
+  .modal { background: var(--card); border: 1px solid #2b3550; border-radius: 14px; padding: 20px 22px 18px; width: 100%; max-width: 640px; max-height: 88vh; overflow: auto; box-shadow: var(--shadow); }
+  .modal .m-hd { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .modal .m-hd h2 { margin: 0; font-size: 16px; font-weight: 650; }
+  .modal .m-hd .x { margin-left: auto; background: none; border: none; color: var(--tx3); font-size: 17px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+  .modal .m-hd .x:hover { background: var(--card2); color: var(--tx); }
+  .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 13px; }
+  .field > label { color: var(--tx2); font-size: 11.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .field .help { color: var(--tx3); font-size: 10.5px; font-weight: 400; }
   .field-row { display: flex; gap: 10px; }
   .field-row .field { flex: 1; }
-  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
-  .help { color: #6e7691; font-size: 11px; }
-  .probe-box { background: #11141b; border: 1px solid #2c3140; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
-  .probe-box .probe-row { display: flex; gap: 8px; align-items: center; }
-  .probe-box .probe-row .grow { flex: 1; color: #8a93a6; font-size: 12px; }
-  .model-row { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 4px; padding: 4px 6px; align-items: center; border-bottom: 1px solid #1c2030; }
+  .modal-actions { display: flex; gap: 9px; justify-content: flex-end; margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+  /* 模型行编辑器 */
+  .probe-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .probe-bar .grow { flex: 1; color: var(--tx3); font-size: 11px; }
+  .models-box { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg2); max-height: 260px; overflow: auto; }
+  .model-row { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 5px; padding: 5px 7px; align-items: center; border-bottom: 1px solid var(--line); }
   .model-row:last-child { border-bottom: none; }
-  .model-row.head { color: #8a93a6; font-size: 11px; padding: 6px; background: #181c25; }
-  .model-row input { background: #0f1219; border: 1px solid #2c3140; border-radius: 4px; padding: 4px 8px; font: inherit; font-size: 12.5px; color: #d8dde6; }
-  .model-row input:focus { border-color: #3a7afe; outline: none; }
-  .model-row .arrow { color: #6e7691; text-align: center; font-size: 12px; }
-  .model-row .del { background: transparent; border: 1px solid #2c3140; color: #e15759; border-radius: 4px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
-  .model-row .del:hover { background: #2a1818; }
-  .model-row .test { background: transparent; border: 1px solid #2c3140; color: #8ab4ff; border-radius: 4px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
-  .model-row .test:hover { background: #1a2238; }
-  .model-empty { padding: 20px; text-align: center; color: #6e7691; font-size: 12px; }
-  .model-list { max-height: 220px; overflow: auto; border: 1px solid #2c3140; border-radius: 6px; padding: 4px; background: #11141b; margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px; }
-  .model-list label { display: flex; gap: 6px; align-items: center; padding: 4px 6px; font-size: 12px; cursor: pointer; border-radius: 4px; }
-  .model-list label:hover { background: #1a1f29; }
-  .model-list input { accent-color: #3a7afe; }
-  .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
-  .toggle input { accent-color: #3a7afe; }
-  .small { font-size: 11px; color: #6e7691; }
-  .hidden { display: none; }
-  .access-box { background: #181c25; border: 1px solid #262b38; border-radius: 10px; padding: 14px 16px; margin-bottom: 18px; }
-  .access-box h2 { margin: 0 0 10px; color: #d8dde6; font-size: 15px; }
-  .access-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
-  .access-item { background: #11141b; border: 1px solid #2c3140; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
-  .access-item .label { color: #8a93a6; font-size: 11.5px; }
-  .access-item .val { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 12.5px; word-break: break-all; }
-  .access-item .row { display: flex; gap: 6px; align-items: center; }
-  .access-item .row .val { flex: 1; }
-  .copy-btn { background: #2a3140; border: 1px solid #2c3140; border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; color: #cbd2e0; }
-  .copy-btn:hover { background: #353c4d; }
-  .copy-btn.ok { background: #2c5f3a; border-color: #2c5f3a; color: white; }
-  .recheck-log { margin-top: 8px; padding: 8px 10px; background: #11141b; border: 1px solid #2c3140; border-radius: 6px; font-size: 12px; max-height: 180px; overflow: auto; }
-  .recheck-log .ok { color: #79e6b3; }
-  .recheck-log .fail { color: #e15759; }
-  .recheck-log .row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  .model-row.head { color: var(--tx3); font-size: 10px; padding: 6.5px 7px; background: var(--card); position: sticky; top: 0; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+  .model-row input { background: var(--bg); border: 1px solid transparent; border-radius: 6px; padding: 4.5px 9px; font-family: var(--mono); font-size: 11.5px; color: var(--tx); width: 100%; }
+  .model-row input:hover { border-color: var(--line); }
+  .model-row input:focus { border-color: var(--blue); }
+  .model-row .del, .model-row .tst { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+  .model-row .del { color: var(--tx3); }
+  .model-row .del:hover { color: var(--red); background: var(--red-soft); }
+  .model-row .tst { color: var(--tx3); }
+  .model-row .tst:hover { color: var(--blue); background: var(--blue-soft); }
+  .model-empty { padding: 26px; text-align: center; color: var(--tx3); font-size: 12px; }
+  .probe-add { margin-top: 8px; padding: 9px 11px; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius-sm); display: none; }
+  .probe-add .h { color: var(--tx2); font-size: 11px; margin-bottom: 6px; }
+  .probe-add .cbtn2 { background: var(--card2); border: 1px solid var(--line); border-radius: 20px; padding: 3px 11px; font-size: 11px; font-family: var(--mono); color: var(--tx2); cursor: pointer; margin: 2.5px 3px 2.5px 0; display: inline-flex; gap: 5px; align-items: center; }
+  .probe-add .cbtn2::before { content: '+'; color: var(--green); font-weight: 700; }
+  .probe-add .cbtn2:hover { border-color: var(--green); color: var(--tx); }
+
+  .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; font-size: 12px; color: var(--tx2); }
+  .toggle input { accent-color: var(--blue); width: 14px; height: 14px; }
+
+  /* 测试弹窗列表 */
+  .test-list { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg2); padding: 5px; }
+  .test-list .g { padding: 7px 8px 4px; color: var(--tx2); font-size: 11.5px; font-weight: 650; display: flex; gap: 8px; align-items: baseline; }
+  .test-list .g .n { color: var(--tx3); font-weight: 400; font-size: 10.5px; }
+  .test-list label { display: flex; gap: 8px; align-items: center; padding: 4.5px 8px; font-size: 12px; cursor: pointer; border-radius: 6px; font-family: var(--mono); color: var(--tx2); }
+  .test-list label:hover { background: var(--card); }
+  .test-list input { accent-color: var(--blue); }
+
+  /* toast */
+  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--card2); color: var(--tx); padding: 10px 16px; border-radius: 10px; border: 1px solid var(--line); opacity: 0; transition: all .25s; pointer-events: none; z-index: 1000; font-size: 12.5px; box-shadow: var(--shadow); transform: translateY(6px); }
+  .toast.show { opacity: 1; transform: none; }
+
+  .hidden { display: none !important; }
+
+  /* 响应式 */
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; }
+    .side { display: none; }
+    .content { padding: 16px 14px 50px; }
+    .ch-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>ZZCSAPI 控制台</h1>
-  <span class="meta" id="meta">—</span>
-  <div class="toolbar">
-    <button id="btn-refresh">刷新</button>
-    <button id="btn-recheck" class="primary">立即探测全部</button>
-    <button id="btn-test-model" class="primary">🧪 测试模型</button>
-    <button id="btn-add" class="primary">+ 添加渠道</button>
-  </div>
-</header>
-<main>
-  <div class="access-box">
-    <h2>本地接入 <span class="hint" id="access-hint"></span></h2>
-    <div class="access-grid" id="access-grid">
-      <div class="access-item"><span class="label">OpenAI 兼容 baseURL</span>
-        <div class="row"><span class="val" id="acc-openai">—</span><button class="copy-btn" data-copy="acc-openai">复制</button></div></div>
-      <div class="access-item"><span class="label">Anthropic 兼容 baseURL</span>
-        <div class="row"><span class="val" id="acc-anthropic">—</span><button class="copy-btn" data-copy="acc-anthropic">复制</button></div></div>
-      <div class="access-item"><span class="label">Gemini 兼容 baseURL</span>
-        <div class="row"><span class="val" id="acc-gemini">—</span><button class="copy-btn" data-copy="acc-gemini">复制</button></div></div>
-      <div class="access-item"><span class="label">客户端 Key <span class="small" id="acc-gw-req"></span></span>
-        <div class="row"><span class="val" id="acc-gwkey">—</span><button class="copy-btn" data-copy="acc-gwkey">复制</button></div></div>
-      <div class="access-item"><span class="label">控制台 Key</span>
-        <div class="row"><span class="val" id="acc-adminkey">—</span><button class="copy-btn" data-copy="acc-adminkey">复制</button></div></div>
-      <div class="access-item"><span class="label">控制台地址</span>
-        <div class="row"><span class="val" id="acc-console">—</span><button class="copy-btn" data-copy="acc-console">复制</button></div></div>
+<div class="app">
+
+  <!-- ══════════ 侧边栏 ══════════ -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">Z</div>
+      <div>
+        <div class="name">ZZCSAPI</div>
+        <div class="sub">API 聚合网关</div>
+      </div>
     </div>
-    <div class="small" id="access-warning" style="margin-top:8px"></div>
+    <nav class="nav">
+      <a href="#" class="active" data-nav="overview"><span class="ico">◉</span>总览<span class="cnt" id="nav-ch-cnt">0</span></a>
+      <a href="#" data-nav="channels"><span class="ico">▤</span>渠道管理</a>
+      <a href="#" data-nav="models"><span class="ico">✦</span>聚合模型<span class="cnt" id="nav-m-cnt">0</span></a>
+      <a href="#" data-nav="access"><span class="ico">⇌</span>接入信息</a>
+    </nav>
+    <div class="foot">
+      <div>运行于 <b>127.0.0.1:8787</b></div>
+      <div id="foot-status">● 检查中…</div>
+    </div>
+  </aside>
+
+  <!-- ══════════ 主区 ══════════ -->
+  <div class="main">
+    <div class="top">
+      <div class="crumb">总览</div>
+      <span class="meta" id="meta" style="display:none">—</span>
+      <div class="actions">
+        <button id="btn-refresh" class="ghost" title="手动刷新">⟳ 刷新</button>
+        <button id="btn-recheck">⟳ 立即探测全部</button>
+        <button id="btn-test-model">🧪 测试模型</button>
+        <button id="btn-add" class="primary">＋ 添加渠道</button>
+      </div>
+    </div>
+
+    <div class="content" id="page-overview">
+      <!-- 统计条 -->
+      <div class="stats">
+        <div class="stat"><div class="k">渠道总数</div><div class="v" id="st-total">0</div></div>
+        <div class="stat ok"><div class="k">正常</div><div class="v" id="st-ok">0</div></div>
+        <div class="stat warn"><div class="k">降级</div><div class="v" id="st-degraded">0</div></div>
+        <div class="stat bad"><div class="k">不可用</div><div class="v" id="st-down">0</div></div>
+        <div class="stat"><div class="k">聚合模型</div><div class="v" id="st-models">0</div></div>
+      </div>
+
+      <!-- 接入信息 -->
+      <div class="sec-head" id="sec-access">
+        <h2>⇌ 接入信息</h2>
+        <span class="hint">在客户端（DSH / Cursor / Cline 等）填 baseURL + Key</span>
+      </div>
+      <div class="access">
+        <div class="grid">
+          <div class="it"><span class="lab">OpenAI</span><span class="val" id="acc-openai">—</span><button class="cbtn" data-copy="acc-openai">复制</button></div>
+          <div class="it"><span class="lab">Anthropic</span><span class="val" id="acc-anthropic">—</span><button class="cbtn" data-copy="acc-anthropic">复制</button></div>
+          <div class="it"><span class="lab">Gemini</span><span class="val" id="acc-gemini">—</span><button class="cbtn" data-copy="acc-gemini">复制</button></div>
+          <div class="it"><span class="lab">客户端 Key</span><span class="val" id="acc-gwkey">—</span><button class="cbtn" data-copy="acc-gwkey">复制</button></div>
+          <div class="it"><span class="lab">控制台 Key</span><span class="val" id="acc-adminkey">—</span><button class="cbtn" data-copy="acc-adminkey">复制</button></div>
+          <div class="it"><span class="lab">控制台</span><span class="val" id="acc-console">—</span><button class="cbtn" data-copy="acc-console">复制</button></div>
+        </div>
+        <div class="warn" id="access-warning"></div>
+      </div>
+
+      <!-- 渠道 -->
+      <div class="sec-head" id="sec-channels">
+        <h2>▤ 渠道 <span class="hint" id="ch-count-hint"></span></h2>
+        <span class="hint">同模型自动调度 · 失败自动切换</span>
+      </div>
+      <div id="channels" class="ch-grid"><div class="empty-state" style="grid-column:1/-1"><div class="big">▤</div>加载渠道中…<br><span style="font-size:11px">若长时间空白，请确认网关进程正在运行</span></div></div>
+
+      <!-- 聚合模型 -->
+      <div class="sec-head" id="sec-models">
+        <h2>✦ 聚合模型</h2>
+        <span class="hint">对外统一暴露的模型名</span>
+      </div>
+      <div id="models"><div class="empty-state"><div class="big">✦</div>加载聚合模型中…</div></div>
+    </div>
   </div>
-  <h2>渠道 <span class="hint" id="refresh-hint"></span></h2>
-  <div id="channels" class="grid"></div>
-  <h2>聚合模型</h2>
-  <div id="models"></div>
-</main>
+</div>
+
 <div class="toast" id="toast"></div>
 
+<!-- ══════════ 渠道编辑弹窗 ══════════ -->
 <div class="mask" id="mask">
   <div class="modal">
-    <h2 id="modal-title">添加渠道</h2>
+    <div class="m-hd"><h2 id="modal-title">添加渠道</h2><button class="x" id="btn-x">×</button></div>
 
-    <div class="field">
-      <label>渠道 ID <span class="help">（英文/数字/下划线/短横线）</span></label>
-      <input id="f-id" type="text" placeholder="vendor-x">
-    </div>
-    <div class="field">
-      <label>显示名称</label>
-      <input id="f-name" type="text" placeholder="中转 X">
+    <div class="field-row">
+      <div class="field" style="flex:1.6">
+        <label>渠道 ID <span class="help">英文/数字/_/-</span></label>
+        <input id="f-id" type="text" placeholder="vendor-x">
+      </div>
+      <div class="field">
+        <label>显示名称</label>
+        <input id="f-name" type="text" placeholder="中转 X">
+      </div>
     </div>
     <div class="field-row">
       <div class="field">
@@ -164,7 +335,7 @@
         <label>优先级</label>
         <input id="f-priority" type="number" value="0">
       </div>
-      <div class="field" style="flex:0 0 100px">
+      <div class="field" style="flex:.8">
         <label>启用</label>
         <select id="f-enabled">
           <option value="true">是</option>
@@ -173,7 +344,7 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">（不含尾斜杠。openai 通常 https://host/v1，anthropic https://host，gemini https://generativelanguage.googleapis.com）</span></label>
+      <label>Base URL <span class="help">openai: https://host/v1 · anthropic: https://host · gemini: https://…googleapis.com</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
     </div>
     <div class="field">
@@ -181,40 +352,39 @@
       <input id="f-apiKey" type="password" placeholder="sk-...">
     </div>
 
-    <!-- 模型列表（行式编辑器） -->
     <div class="field">
-      <label>模型 <span class="small" id="models-count">— 0 个</span> <span class="small" id="probe-status" style="margin-left:8px"></span></label>
-      <div class="probe-row" style="margin-bottom:6px">
-        <button id="btn-add-model" type="button" class="primary">+ 添加一行</button>
-        <button id="btn-probe" type="button" class="ghost" style="background:transparent;border:1px dashed #2c3140;color:#8a93a6;font-size:11px;padding:3px 10px">从上游探测更多</button>
+      <label>模型 <span class="help" id="models-count">0 个</span> <span class="help" id="probe-status" style="margin-left:6px;color:var(--green)"></span></label>
+      <div class="probe-bar">
+        <button id="btn-add-model" type="button" class="primary">＋ 添加一行</button>
+        <button id="btn-probe" type="button" class="ghost" style="border:1px dashed var(--line)">⟳ 从上游探测更多</button>
+        <span class="grow"></span>
       </div>
-      <div id="models-editor" style="border:1px solid #2c3140;border-radius:6px;background:#11141b;max-height:260px;overflow:auto"></div>
-      <div class="small" id="probe-add-list" style="display:none;margin-top:6px"></div>
+      <div id="models-editor" class="models-box"></div>
+      <div class="probe-add" id="probe-add-list"></div>
     </div>
 
     <div class="field">
-      <label class="toggle"><input type="checkbox" id="f-autoAlias"> 自动路由上游所有模型（不勾则只暴露上表里列的）</label>
+      <label class="toggle"><input type="checkbox" id="f-autoAlias"> 自动路由上游所有模型 <span class="help">（不勾则只暴露上表所列）</span></label>
     </div>
 
     <div class="modal-actions">
       <button id="btn-cancel" class="ghost">取消</button>
-      <button id="btn-save" class="primary">保存</button>
+      <button id="btn-save" class="primary">保存渠道</button>
     </div>
   </div>
 </div>
 
+<!-- ══════════ 测试模型弹窗 ══════════ -->
 <div class="mask" id="test-mask">
-  <div class="modal" style="max-width:560px">
-    <h2>测试模型 <span class="small" id="test-modal-subtitle"></span></h2>
-    <div class="field">
-      <div class="probe-row">
-        <span class="grow small" id="test-summary">—</span>
-        <label class="toggle"><input type="checkbox" id="test-select-all" checked> 全选</label>
-      </div>
+  <div class="modal" style="max-width:580px">
+    <div class="m-hd"><h2>🧪 测试模型</h2><span class="help" id="test-modal-subtitle"></span><button class="x" id="test-x">×</button></div>
+    <div class="probe-bar">
+      <span class="grow" id="test-summary">—</span>
+      <label class="toggle"><input type="checkbox" id="test-select-all" checked> 全选</label>
     </div>
-    <div id="test-model-list" style="max-height:50vh;overflow:auto;border:1px solid #2c3140;border-radius:6px;background:#11141b;padding:6px;margin-bottom:12px"></div>
-    <div class="field">
-      <label>提示词 <span class="small">（默认 "hi"，可改成你自己的简短测试）</span></label>
+    <div id="test-model-list" class="test-list"></div>
+    <div class="field" style="margin-top:12px">
+      <label>提示词 <span class="help">默认 hi</span></label>
       <input id="test-prompt" type="text" value="hi">
     </div>
     <div class="modal-actions">
@@ -227,8 +397,8 @@
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2400); }
-function err(msg) { toast('⚠️ ' + msg); }
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2600); }
+function err(msg) { toast('⚠ ' + msg); }
 function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 async function api(path, opts = {}) {
@@ -244,63 +414,68 @@ async function api(path, opts = {}) {
 
 const state = { channels: [], probedModels: [] };
 
-function statusBadge(s) {
-  const map = { ok: '正常', degraded: '降级', down: '不可用', unknown: '未知' };
-  return `<span class="dot ${s}"></span><span>${map[s] || s}</span>`;
-}
-function protocolBadge(p) { return `<span class="badge ${p}">${p}</span>`; }
+/* ───────── 渲染 ───────── */
+const STATUS_TXT = { ok: '正常', degraded: '降级', down: '不可用', unknown: '未知' };
 
 function renderChannels(data) {
   state.channels = data.channels;
   const root = $('#channels');
-  if (!data.channels.length) { root.innerHTML = '<div class="empty" style="grid-column:1/-1">尚未配置渠道。点右上角"+ 添加渠道"开始。</div>'; return; }
+  if (!data.channels.length) {
+    root.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="big">▤</div>还没有渠道<br>添加你的第一个中转站，网关会自动调度、失败切换<button class="primary" onclick="openModal(null)">＋ 添加渠道</button></div>';
+    return;
+  }
   root.innerHTML = data.channels.map((ch) => {
-    const aliases = ch.aliases.map(a => `<div class="pair"><span>${escapeHtml(a.alias)}</span><span class="up">→ ${escapeHtml(a.upstream)}</span></div>`).join('') || '<div class="empty">无别名</div>';
-    const err1 = ch.lastError ? `<div class="err">${escapeHtml(ch.lastError)}</div>` : '';
+    const ms = ch.aliases.map(a => `<span class="m${ch.enabled ? '' : ' d'}" title="→ ${escapeHtml(a.upstream)}">${escapeHtml(a.alias)}</span>`).join('');
+    const errBox = ch.lastError ? `<div class="err">${escapeHtml(ch.lastError)}</div>` : '';
     const checked = ch.lastCheck ? new Date(ch.lastCheck).toLocaleTimeString() : '—';
+    const lat = ch.latencyMs < 0 ? '—' : ch.latencyMs + 'ms';
     return `
-      <div class="card" data-id="${escapeHtml(ch.id)}">
-        <h3>${protocolBadge(ch.protocol)} ${escapeHtml(ch.name)} <span class="badge">${escapeHtml(ch.id)}</span></h3>
-        <div class="row"><span class="k">状态</span><span class="v">${statusBadge(ch.status)}</span></div>
-        <div class="row"><span class="k">端点</span><span class="v">${escapeHtml(ch.baseUrl)}</span></div>
-        <div class="row"><span class="k">延迟</span><span class="v">${ch.latencyMs < 0 ? '—' : ch.latencyMs + ' ms'}</span></div>
-        <div class="row"><span class="k">探测时间</span><span class="v">${checked}</span></div>
-        <div class="row"><span class="k">上游模型</span><span class="v">${ch.upstreamModels.length}</span></div>
-        <div class="row"><span class="k">别名</span><span class="v">${ch.aliases.length}</span></div>
-        <div class="alias-list">${aliases}</div>
-        ${err1}
-        <div class="actions">
-          <div class="prio">
-            <span class="k">优先级</span>
-            <input type="text" value="${ch.priority}" data-edit="priority">
+      <div class="ch" data-id="${escapeHtml(ch.id)}">
+        <div class="hd">
+          <span class="dot ${ch.status}"></span>
+          <span class="nm">${escapeHtml(ch.name || ch.id)}</span>
+          <span class="proto ${ch.protocol}">${escapeHtml(ch.protocol)}</span>
+          <span class="id">${escapeHtml(ch.id)}</span>
+          ${ch.enabled ? '' : '<span class="off">已停用</span>'}
+        </div>
+        <div class="body">
+          <div class="url" title="${escapeHtml(ch.baseUrl)}">${escapeHtml(ch.baseUrl)}</div>
+          <div class="meta-row">
+            <span class="m">状态 <b>${STATUS_TXT[ch.status] || ch.status}</b></span>
+            <span class="m">延迟 <b>${lat}</b></span>
+            <span class="m">模型 <b>${ch.aliases.length}</b></span>
+            <span class="m">探测 <b>${checked}</b></span>
           </div>
-          <button data-act="save-prio">保存</button>
-          <button data-act="probe">探测</button>
-          <button data-act="test">🧪 测试</button>
-          <button data-act="edit">编辑</button>
-          <button data-act="toggle" class="${ch.enabled ? '' : 'primary'}">${ch.enabled ? '停用' : '启用'}</button>
+          <div class="models">${ms || '<span class="help" style="color:var(--tx3);font-size:11px">无别名</span>'}</div>
+          ${errBox}
+        </div>
+        <div class="acts">
+          <span class="prio">优先级 <input type="text" value="${ch.priority}" data-edit="priority"></span>
+          <button data-act="save-prio" class="ghost" title="保存优先级">存</button>
+          <button data-act="probe" class="ghost">探测</button>
+          <button data-act="test" class="ghost">🧪 测试</button>
+          <button data-act="edit" class="ghost">编辑</button>
+          <button data-act="toggle" class="ghost">${ch.enabled ? '停用' : '启用'}</button>
           <button data-act="delete" class="danger">删除</button>
         </div>
       </div>
     `;
   }).join('');
 
-  $$('.card').forEach((card) => {
+  $$('.ch').forEach((card) => {
     const id = card.dataset.id;
     card.querySelector('[data-act=save-prio]').onclick = async () => {
       const priority = Number(card.querySelector('[data-edit=priority]').value);
       if (Number.isNaN(priority)) return err('优先级必须为数字');
       await api('/admin/api/channel', { method: 'POST', body: JSON.stringify({ id, priority }) });
-      toast('已保存优先级'); refresh();
+      toast('✓ 已保存优先级'); refresh();
     };
     card.querySelector('[data-act=probe]').onclick = async () => {
+      const b = card.querySelector('[data-act=probe]'); b.disabled = true; b.textContent = '探测中';
       await api('/admin/api/recheck', { method: 'POST', body: JSON.stringify({ id }) });
-      toast('已探测'); refresh();
+      toast('✓ 已探测'); refresh();
     };
-    card.querySelector('[data-act=test]').onclick = () => {
-      const ch = state.channels.find(c => c.id === id);
-      openTestModal({ restrictChannelId: id, ch });
-    };
+    card.querySelector('[data-act=test]').onclick = () => openTestModal({ restrictChannelId: id });
     card.querySelector('[data-act=edit]').onclick = () => openModal(state.channels.find(c => c.id === id));
     card.querySelector('[data-act=toggle]').onclick = async () => {
       const cur = state.channels.find(c => c.id === id);
@@ -308,9 +483,9 @@ function renderChannels(data) {
       toast(cur.enabled ? '已停用' : '已启用'); refresh();
     };
     card.querySelector('[data-act=delete]').onclick = async () => {
-      if (!confirm('确定要删除渠道 “' + id + '” 吗？')) return;
+      if (!confirm('确定要删除渠道「' + id + '」吗？')) return;
       await api('/admin/api/channels', { method: 'DELETE', body: JSON.stringify({ id }) });
-      toast('已删除'); refresh();
+      toast('✓ 已删除'); refresh();
     };
   });
 }
@@ -318,16 +493,32 @@ function renderChannels(data) {
 function renderModels(data) {
   const root = $('#models');
   const sections = [];
+  let total = 0;
   for (const [proto, list] of Object.entries(data.aggregated)) {
     if (!list.length) continue;
-    sections.push(`
-      <div class="card" style="margin-bottom:12px">
-        <h3>${protocolBadge(proto)} <span>${list.length} 个模型</span></h3>
-        <div class="alias-list" style="max-height:none">${list.map(m => `<div class="pair"><span>${escapeHtml(m)}</span></div>`).join('')}</div>
-      </div>
-    `);
+    total += list.length;
+    sections.push(`<div class="model-wall" style="margin-bottom:10px">${list.map(m => `<span class="m p-${proto}">${escapeHtml(m)}</span>`).join('')}</div>`);
   }
-  root.innerHTML = sections.join('') || '<div class="empty">无模型</div>';
+  root.innerHTML = sections.join('') || '<div class="empty-state"><div class="big">✦</div>暂无聚合模型 — 在渠道里添加别名后自动出现</div>';
+  const mCnt = $('#nav-m-cnt'); if (mCnt) mCnt.textContent = total;
+  $('#st-models').innerHTML = total + '<small>个</small>';
+}
+
+function renderStats(data) {
+  const chs = data.channels;
+  const ok = chs.filter(c => c.status === 'ok').length;
+  const deg = chs.filter(c => c.status === 'degraded').length;
+  const down = chs.filter(c => c.status === 'down').length;
+  $('#st-total').innerHTML = chs.length + '<small>个</small>';
+  $('#st-ok').innerHTML = '<span class="num">' + ok + '</span><small>个</small>';
+  $('#st-degraded').innerHTML = '<span class="num">' + deg + '</span><small>个</small>';
+  $('#st-down').innerHTML = '<span class="num">' + down + '</span><small>个</small>';
+  $('#nav-ch-cnt').textContent = chs.length;
+  $('#ch-count-hint').textContent = chs.length + ' 个';
+  const foot = $('#foot-status');
+  if (down === chs.length && chs.length > 0) { foot.textContent = '● 全部渠道不可用'; foot.style.color = 'var(--red)'; }
+  else if (down > 0) { foot.textContent = '● ' + ok + ' 正常 · ' + down + ' 不可用'; foot.style.color = 'var(--amber)'; }
+  else { foot.textContent = '● 运行正常'; foot.style.color = 'var(--green)'; }
 }
 
 let accessCfg = null;
@@ -336,182 +527,93 @@ function renderAccess(cfg) {
   $('#acc-openai').textContent = cfg.urls.openai;
   $('#acc-anthropic').textContent = cfg.urls.anthropic;
   $('#acc-gemini').textContent = cfg.urls.gemini;
-  $('#acc-gwkey').textContent = cfg.gatewayKey || '（未设置，留空也能用 — 仅本机访问）';
-  $('#acc-adminkey').textContent = cfg.adminKey || '（未设置，留空也能用 — 仅本机访问）';
-  $('#acc-console').textContent = cfg.urls.console + (cfg.adminKey ? '?key=' + cfg.adminKey : '');
-  $('#acc-gw-req').textContent = cfg.gatewayKeyRequired ? '（客户端必须带此 key）' : '（可选）';
+  $('#acc-gwkey').textContent = cfg.gatewayKey || '（未设置）';
+  $('#acc-adminkey').textContent = cfg.adminKey || '（未设置）';
+  $('#acc-console').textContent = cfg.urls.console;
   const warns = [];
-  if (!cfg.gatewayKey) warns.push('⚠ GATEWAY_KEY 未设置，任何人连得上 8787 都能用你的渠道。建议设一个。');
-  if (!cfg.adminKey) warns.push('⚠ ADMIN_KEY 未设置，本机外任何人能改你的渠道配置。建议设一个。');
-  $('#access-warning').innerHTML = warns.join('<br>');
-  $('#access-hint').textContent = '在客户端（DSH / Cursor / Cline 等）填上面的 baseURL 和 Key 即可';
+  if (!cfg.gatewayKey) warns.push('⚠ GATEWAY_KEY 未设置');
+  if (!cfg.adminKey) warns.push('⚠ ADMIN_KEY 未设置');
+  const w = $('#access-warning');
+  if (warns.length) { w.innerHTML = warns.join(' · '); w.style.display = 'block'; }
+  else w.style.display = 'none';
 }
 
 async function refresh() {
   try {
     const [data, cfg] = await Promise.all([api('/admin/api/status'), api('/admin/api/config').catch(() => null)]);
-    $('#meta').textContent = `${data.channels.length} 个渠道 · ${new Date().toLocaleTimeString()}`;
+    $('#meta').textContent = '· ' + new Date().toLocaleTimeString();
     renderChannels(data);
     renderModels(data);
+    renderStats(data);
     if (cfg) renderAccess(cfg);
-  } catch {}
+    const foot = $('#foot-status'); foot.textContent = '● 运行中'; foot.style.color = 'var(--green)';
+  } catch {
+    const foot = $('#foot-status'); foot.textContent = '● 网关不可达'; foot.style.color = 'var(--red)';
+  }
 }
 
+/* ───────── 工具栏 ───────── */
 $('#btn-refresh').onclick = refresh;
 
 $('#btn-recheck').onclick = async () => {
   const btn = $('#btn-recheck');
-  const old = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ 探测中…';
   try {
     const r = await api('/admin/api/recheck', { method: 'POST' });
     const s = r.summary || { ok: 1, fail: 0, total: 1 };
-    if (s.fail === 0) toast(`✓ 全部 ${s.total} 个渠道探测完成（${s.ok} 正常）`);
-    else toast(`⚠ ${s.ok} 正常 / ${s.fail} 失败，共 ${s.total}。详情见控制台。`);
-    // 显示详细日志（找或建一个日志区域；这里直接 alert 失败清单）
-    const fails = (r.results || []).filter((x) => x.status === 'down');
-    if (fails.length) {
-      console.warn('[zzcsapi] recheck failures:', fails);
-      // 在 meta 行下显示一个浮层
-      showRecheckLog(r.results);
-    }
+    if (s.fail === 0) toast(`✓ 全部 ${s.total} 个渠道正常`);
+    else toast(`⚠ ${s.ok} 正常 / ${s.fail} 失败`);
+    showLog('recheck-log', '上次探测结果', (r.results || []).map(x => ({
+      ok: x.status !== 'down', name: x.id, info: `${x.status} · ${x.modelCount ?? '—'} 模型 · ${x.latencyMs < 0 ? '—' : x.latencyMs + 'ms'}`, err: x.error,
+    })));
     refresh();
   } catch (e) {
     toast('探测失败：' + e.message);
-  } finally {
-    btn.disabled = false; btn.textContent = old;
-  }
+  } finally { btn.disabled = false; btn.textContent = '⟳ 立即探测全部'; }
 };
 
-function showRecheckLog(results) {
-  let box = $('#recheck-log');
+function showLog(id, title, rows) {
+  let box = $('#' + id);
   if (!box) {
     box = document.createElement('div');
-    box.id = 'recheck-log';
-    box.className = 'recheck-log';
-    $('#access-warning').parentNode.appendChild(box);
+    box.id = id; box.className = 'log';
+    $('#sec-models').parentNode.appendChild(box);
   }
-  box.innerHTML = '<div style="color:#aab1c2;margin-bottom:4px">上次探测结果：</div>' +
-    results.map((r) => {
-      const cls = (r.status === 'ok' || r.status === 'degraded') ? 'ok' : 'fail';
-      const tag = r.status === 'ok' ? '✓' : r.status === 'degraded' ? '~' : '✗';
-      return `<div class="row"><span class="${cls}">${tag} ${escapeHtml(r.id)} <span class="small">→ ${r.status} · ${r.modelCount} 模型 · ${r.latencyMs < 0 ? '—' : r.latencyMs + 'ms'}</span></span><span class="small" style="color:#6e7691">${r.error ? escapeHtml(r.error.slice(0, 80)) : ''}</span></div>`;
-    }).join('');
-  setTimeout(() => { if (box) box.remove(); }, 15000);
+  box.innerHTML = `<div class="lg-hd">${title}<button class="x" onclick="this.closest('.log').remove()">×</button></div>` +
+    rows.map(r => `<div class="r ${r.ok ? 'ok' : 'fail'}"><span>${r.ok ? '✓' : '✗'} <b>${escapeHtml(r.name)}</b> · ${escapeHtml(r.info || '')}</span><span class="t">${r.t || ''}</span><span class="e">${escapeHtml((r.err || '').slice(0, 90))}</span></div>`).join('');
 }
 
 $('#btn-add').onclick = () => openModal(null);
-
-async function runTest({ model, channelId, prompt: promptText }) {
-  let box = $('#test-log');
-  if (!box) {
-    box = document.createElement('div');
-    box.id = 'test-log';
-    box.className = 'recheck-log';
-    box.innerHTML = '<div style="color:#aab1c2;margin-bottom:4px">模型测试结果：</div><div id="test-log-body"></div>';
-    $('#access-warning').parentNode.appendChild(box);
-  }
-  const body = box.querySelector('#test-log-body');
-  const body0 = `<div data-pending><div class="row"><span class="small">⏳ 正在测试 "${escapeHtml(model)}"${channelId ? '（仅渠道 ' + escapeHtml(channelId) + '）' : '（走完整调度）'}…</span></div></div>`;
-  body.insertAdjacentHTML('afterbegin', body0);
-  const t0 = Date.now();
-  try {
-    const r = await api('/admin/api/test', { method: 'POST', body: JSON.stringify({ model, channelId, prompt: promptText || 'Reply with one short sentence.' }) });
-    const elapsed = Date.now() - t0;
-    // 替换最早一条 pending
-    const pending = box.querySelector('[data-pending]');
-    if (pending) pending.remove();
-    const lines = (r.results || []).map((res) => {
-      const cls = res.ok ? 'ok' : 'fail';
-      const tag = res.ok ? '✓' : '✗';
-      let info = `${res.latencyMs}ms`;
-      if (res.promptTokens || res.completionTokens) info += ` · ${res.promptTokens || 0}+${res.completionTokens || 0} tokens`;
-      if (res.status) info += ` · HTTP ${res.status}`;
-      const reply = res.reply ? ` <span class="small">"${escapeHtml(String(res.reply).slice(0, 80))}"</span>` : '';
-      const err = res.error ? ` <span class="small" style="color:#e15759">${escapeHtml(String(res.error).slice(0, 120))}</span>` : '';
-      return `<div class="row"><span class="${cls}">${tag} <b>${escapeHtml(res.channelId)}</b> · ${info}${reply}</span>${err ? '<span></span>' : ''}</div>${err ? `<div class="row" style="padding-left:14px"><span class="small" style="color:#e15759">${escapeHtml(String(res.error).slice(0, 200))}</span></div>` : ''}`;
-    }).join('');
-    body.insertAdjacentHTML('afterbegin', `<div data-pending><div class="row"><span class="small">${escapeHtml(model)}：用时 ${elapsed}ms</span></div>${lines}</div>`);
-    const okCount = r.results.filter(x => x.ok).length;
-    if (okCount === r.results.length) toast(`✓ ${model} 测试通过（${okCount}/${r.results.length}）`);
-    else if (okCount === 0) toast(`✗ ${model} 全部失败`);
-    else toast(`⚠ ${model} ${okCount}/${r.results.length} 通过`);
-  } catch (e) {
-    const pending = box.querySelector('[data-pending]');
-    if (pending) pending.remove();
-    body.insertAdjacentHTML('afterbegin', `<div class="row"><span class="fail">✗ ${escapeHtml(model)} 测试出错：${escapeHtml(e.message)}</span></div>`);
-  }
-}
-
 $('#btn-test-model').onclick = () => openTestModal();
 
-// 测试模型弹窗
-function openTestModal(opts) {
-  opts = opts || {};
-  $('#test-mask').classList.add('show');
-  const restrictedCh = opts.restrictChannelId ? state.channels.find(c => c.id === opts.restrictChannelId) : null;
-  $('#test-modal-subtitle').textContent = restrictedCh ? '（仅渠道 ' + restrictedCh.id + '）' : '（走完整调度）';
+/* ───────── 侧边导航 ───────── */
+$$('.nav a').forEach(a => a.onclick = (e) => {
+  e.preventDefault();
+  $$('.nav a').forEach(x => x.classList.remove('active'));
+  a.classList.add('active');
+  const t = a.dataset.nav;
+  const crumb = { overview: '总览', channels: '渠道管理', models: '聚合模型', access: '接入信息' }[t];
+  $('.top .crumb').textContent = crumb;
+  // 锚点滚动
+  const map = { overview: '#page-overview', channels: '#sec-channels', models: '#sec-models', access: '#sec-access' };
+  const el = $(map[t]);
+  if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 76, behavior: 'smooth' });
+});
 
-  // 收集模型：仅显示各渠道 aliases 里的（即用户配置的可路由模型），按渠道分组
-  const grouped = [];
-  for (const ch of state.channels) {
-    if (restrictedCh && ch.id !== restrictedCh.id) continue;
-    if (!ch.enabled) continue;
-    const items = [];
-    for (const a of ch.aliases) {
-      items.push({ model: a.alias, channelId: ch.id, label: a.alias + ' → ' + a.upstream, via: ch.name || ch.id });
-    }
-    if (items.length) grouped.push({ channel: ch, items });
-  }
-
-  let html = '';
-  if (!grouped.length) html = '<div class="empty">暂无可测试模型（先添加渠道并配置 alias，或"获取模型"勾选模型保存）</div>';
-  else {
-    for (const g of grouped) {
-      html += `<div style="padding:4px 6px;color:#aab1c2;font-size:12px;font-weight:600">${escapeHtml(g.channel.name || g.channel.id)} <span class="small">${g.items.length} 个</span></div>`;
-      for (const it of g.items) {
-        html += `<label style="display:flex;gap:6px;align-items:center;padding:4px 6px;font-size:12.5px;cursor:pointer;border-radius:4px"><input type="checkbox" data-test-model="${escapeHtml(it.model)}" data-test-channel="${escapeHtml(it.channelId)}" checked><span>${escapeHtml(it.label)}</span></label>`;
-      }
-    }
-  }
-  $('#test-model-list').innerHTML = html;
-  $('#test-summary').textContent = grouped.reduce((s, g) => s + g.items.length, 0) + ' 个模型可选';
-
-  // 全选切换
-  const sa = $('#test-select-all');
-  sa.checked = true;
-  sa.onchange = () => {
-    $$('#test-model-list input[type=checkbox]').forEach((c) => { c.checked = sa.checked; });
-  };
-
-  $('#test-cancel').onclick = () => $('#test-mask').classList.remove('show');
-  $('#test-mask').onclick = (e) => { if (e.target.id === 'test-mask') $('#test-mask').classList.remove('show'); };
-  $('#test-run').onclick = async () => {
-    const picks = $$('#test-model-list input[type=checkbox]:checked').map((c) => ({ model: c.dataset.testModel, channelId: c.dataset.testChannel }));
-    if (!picks.length) return err('至少勾选一个模型');
-    const promptText = $('#test-prompt').value.trim() || 'hi';
-    $('#test-mask').classList.remove('show');
-    for (const p of picks) {
-      await runTest({ model: p.model, channelId: restrictedCh ? restrictedCh.id : p.channelId, prompt: promptText });
-    }
-  };
-}
-
-// 复制按钮
+/* ───────── 复制 ───────── */
 document.addEventListener('click', async (e) => {
-  const b = e.target.closest('.copy-btn');
+  const b = e.target.closest('.cbtn');
   if (!b) return;
   const id = b.dataset.copy;
   const el = document.getElementById(id);
   if (!el) return;
   const text = el.textContent.trim();
+  if (!text || text === '—' || text.startsWith('（')) return err('无内容可复制');
   try {
     await navigator.clipboard.writeText(text);
-    const old = b.textContent;
-    b.classList.add('ok'); b.textContent = '✓ 已复制';
-    setTimeout(() => { b.classList.remove('ok'); b.textContent = old; }, 1200);
-  } catch (err) {
-    // 回退
+    b.classList.add('ok'); b.textContent = '✓';
+    setTimeout(() => { b.classList.remove('ok'); b.textContent = '复制'; }, 1200);
+  } catch {
     const ta = document.createElement('textarea');
     ta.value = text; document.body.appendChild(ta); ta.select();
     try { document.execCommand('copy'); toast('已复制'); } catch { toast('复制失败'); }
@@ -519,10 +621,88 @@ document.addEventListener('click', async (e) => {
   }
 });
 
-// 模态框
+/* ───────── 测试 ───────── */
+async function runTest({ model, channelId, prompt: promptText }) {
+  const t0 = Date.now();
+  // 收集或建日志区
+  let box = $('#test-log');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'test-log'; box.className = 'log';
+    box.innerHTML = '<div class="lg-hd">模型测试结果<button class="x" onclick="this.closest(\'.log\').remove()">×</button></div><div id="test-log-body"></div>';
+    $('#sec-models').parentNode.appendChild(box);
+  }
+  const body = box.querySelector('#test-log-body');
+  body.insertAdjacentHTML('afterbegin', `<div class="r" data-pending><span>⏳ 测试 ${escapeHtml(model)}${channelId ? ' @ ' + escapeHtml(channelId) : ''}…</span></div>`);
+  try {
+    const r = await api('/admin/api/test', { method: 'POST', body: JSON.stringify({ model, channelId, prompt: promptText || 'Reply with one short sentence.' }) });
+    const elapsed = Date.now() - t0;
+    const pending = body.querySelector('[data-pending]');
+    if (pending) pending.remove();
+    const rows = (r.results || []).map(res => {
+      const ok = res.ok;
+      let info = `${res.latencyMs}ms`;
+      if (res.promptTokens || res.completionTokens) info += ` · ${res.promptTokens || 0}+${res.completionTokens || 0} tok`;
+      if (res.status) info += ` · HTTP ${res.status}`;
+      return `<div class="r ${ok ? 'ok' : 'fail'}"><span>${ok ? '✓' : '✗'} <b>${escapeHtml(res.channelId)}</b> · ${info}${res.reply ? ' · "' + escapeHtml(String(res.reply).slice(0, 60)) + '"' : ''}</span>${res.error ? `<span class="e">${escapeHtml(String(res.error).slice(0, 110))}</span>` : ''}</div>`;
+    }).join('');
+    body.insertAdjacentHTML('afterbegin', `<div style="padding:2px 0 5px;color:var(--tx2);font-size:11px">${escapeHtml(model)} · ${elapsed}ms</div>${rows}`);
+    const okCount = r.results.filter(x => x.ok).length;
+    if (okCount === r.results.length) toast(`✓ ${model} 通过（${okCount}/${r.results.length}）`);
+    else if (okCount === 0) toast(`✗ ${model} 全部失败`);
+    else toast(`⚠ ${model} ${okCount}/${r.results.length} 通过`);
+  } catch (e) {
+    const pending = body.querySelector('[data-pending]');
+    if (pending) pending.remove();
+    body.insertAdjacentHTML('afterbegin', `<div class="r fail"><span>✗ ${escapeHtml(model)}：${escapeHtml(e.message)}</span></div>`);
+  }
+}
+
+function openTestModal(opts) {
+  opts = opts || {};
+  $('#test-mask').classList.add('show');
+  const restrictedCh = opts.restrictChannelId ? state.channels.find(c => c.id === opts.restrictChannelId) : null;
+  $('#test-modal-subtitle').textContent = restrictedCh ? '· 渠道 ' + restrictedCh.id : '· 完整调度';
+
+  const grouped = [];
+  for (const ch of state.channels) {
+    if (restrictedCh && ch.id !== restrictedCh.id) continue;
+    if (!ch.enabled) continue;
+    const items = ch.aliases.map(a => ({ model: a.alias, channelId: ch.id, label: a.alias }));
+    if (items.length) grouped.push({ channel: ch, items });
+  }
+
+  let html = '';
+  if (!grouped.length) html = '<div style="padding:20px;color:var(--tx3);text-align:center;font-size:12px">暂无可测试模型 — 先在渠道里配置别名</div>';
+  else {
+    for (const g of grouped) {
+      html += `<div class="g">${escapeHtml(g.channel.name || g.channel.id)}<span class="n">${g.items.length} 个</span></div>`;
+      for (const it of g.items) {
+        html += `<label><input type="checkbox" data-test-model="${escapeHtml(it.model)}" data-test-channel="${escapeHtml(it.channelId)}" checked><span>${escapeHtml(it.label)}</span></label>`;
+      }
+    }
+  }
+  $('#test-model-list').innerHTML = html;
+  $('#test-summary').textContent = grouped.reduce((s, g) => s + g.items.length, 0) + ' 个模型';
+
+  const sa = $('#test-select-all');
+  sa.checked = true;
+  sa.onchange = () => $$('#test-model-list input[type=checkbox]').forEach(c => c.checked = sa.checked);
+  $('#test-x').onclick = $('#test-cancel').onclick = () => $('#test-mask').classList.remove('show');
+  $('#test-mask').onclick = (e) => { if (e.target.id === 'test-mask') $('#test-mask').classList.remove('show'); };
+  $('#test-run').onclick = async () => {
+    const picks = $$('#test-model-list input[type=checkbox]:checked').map(c => ({ model: c.dataset.testModel, channelId: c.dataset.testChannel }));
+    if (!picks.length) return err('至少勾选一个');
+    const promptText = $('#test-prompt').value.trim() || 'hi';
+    $('#test-mask').classList.remove('show');
+    for (const p of picks) await runTest({ model: p.model, channelId: restrictedCh ? restrictedCh.id : p.channelId, prompt: promptText });
+  };
+}
+
+/* ───────── 渠道编辑弹窗 ───────── */
 function openModal(ch) {
   $('#mask').classList.add('show');
-  $('#modal-title').textContent = ch ? '编辑渠道：' + ch.id : '添加渠道';
+  $('#modal-title').textContent = ch ? '编辑渠道 · ' + (ch.name || ch.id) : '添加渠道';
   $('#f-id').value = ch ? ch.id : '';
   $('#f-id').disabled = !!ch;
   $('#f-name').value = ch ? ch.name : '';
@@ -535,53 +715,48 @@ function openModal(ch) {
   state.probedModels = [];
   state.modalChannel = ch;
   state.modalModels = ch && ch.aliases && ch.aliases.length
-    ? ch.aliases.map((a) => ({ alias: a.alias, upstream: a.upstream }))
+    ? ch.aliases.map(a => ({ alias: a.alias, upstream: a.upstream }))
     : (ch && ch.models ? Object.entries(ch.models).map(([alias, upstream]) => ({ alias, upstream })) : []);
   renderModelsEditor();
-  $('#probe-add-list').style.display = 'none';
-  $('#probe-add-list').innerHTML = '';
+  const pa = $('#probe-add-list'); pa.style.display = 'none'; pa.innerHTML = '';
   $('#probe-status').textContent = '';
   $('#btn-probe').disabled = false;
-  $('#btn-probe').textContent = '🔍 探测获取';
+  $('#btn-probe').textContent = '⟳ 从上游探测更多';
 }
 
-$('#btn-cancel').onclick = () => $('#mask').classList.remove('show');
+$('#btn-cancel').onclick = $('#btn-x').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
 
-// 行式编辑器
 function renderModelsEditor() {
   const root = $('#models-editor');
   const rows = state.modalModels || [];
   if (!rows.length) {
-    root.innerHTML = '<div class="model-empty">还没有模型。点「+ 添加一行」手动加，<br>或用「从上游探测更多」从上游拉取后再勾选。</div>';
+    root.innerHTML = '<div class="model-empty">还没有模型<br><span style="font-size:11px">点「＋ 添加一行」手动加，或「从上游探测更多」批量拉取</span></div>';
   } else {
-    let html = '<div class="model-row head"><div>对外名称（alias）</div><div>上游真实模型</div><div></div><div></div></div>';
+    let html = '<div class="model-row head"><div>对外名称 alias</div><div>上游真实模型</div><div></div><div></div></div>';
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       html += `<div class="model-row" data-i="${i}">
-        <input type="text" data-k="alias" value="${escapeHtml(r.alias)}" placeholder="对外名称">
-        <input type="text" data-k="upstream" value="${escapeHtml(r.upstream)}" placeholder="上游真实模型">
-        <button class="test" data-act="test">测</button>
-        <button class="del" data-act="del">✕</button>
+        <input type="text" data-k="alias" value="${escapeHtml(r.alias)}" placeholder="alias">
+        <input type="text" data-k="upstream" value="${escapeHtml(r.upstream)}" placeholder="upstream model">
+        <button class="tst" data-act="test" type="button" title="测试此模型">测</button>
+        <button class="del" data-act="del" type="button" title="删除">×</button>
       </div>`;
     }
     root.innerHTML = html;
   }
-  $('#models-count').textContent = `· ${rows.length} 个`;
+  $('#models-count').textContent = rows.length + ' 个';
 
-  // 绑定事件
   $$('#models-editor .model-row').forEach((row) => {
     if (row.classList.contains('head')) return;
     const i = Number(row.dataset.i);
-    row.querySelectorAll('input').forEach((inp) => {
-      inp.oninput = () => { state.modalModels[i][inp.dataset.k] = inp.value; };
-    });
+    row.querySelectorAll('input').forEach(inp => inp.oninput = () => { state.modalModels[i][inp.dataset.k] = inp.value; });
     const del = row.querySelector('[data-act=del]');
     if (del) del.onclick = () => { state.modalModels.splice(i, 1); renderModelsEditor(); };
     const test = row.querySelector('[data-act=test]');
     if (test) test.onclick = async () => {
       const ch = state.modalChannel;
-      if (!ch) return err('请先保存渠道再测试单个模型');
+      if (!ch) return err('请先保存渠道再测试');
       const m = state.modalModels[i];
       if (!m.upstream) return err('上游模型名为空');
       $('#mask').classList.remove('show');
@@ -593,16 +768,10 @@ function renderModelsEditor() {
 $('#btn-add-model').onclick = () => {
   state.modalModels.push({ alias: '', upstream: '' });
   renderModelsEditor();
-  // 焦点到刚加的那行 alias 输入
   const rows = $$('#models-editor .model-row:not(.head)');
-  if (rows.length) {
-    const last = rows[rows.length - 1];
-    const aliasIn = last.querySelector('input[data-k=alias]');
-    if (aliasIn) aliasIn.focus();
-  }
+  if (rows.length) { const a = rows[rows.length - 1].querySelector('input[data-k=alias]'); if (a) a.focus(); }
 };
 
-// 探测：把未在表里的新模型显示出来，让用户点击加进来（不覆盖现有）
 $('#btn-probe').onclick = async () => {
   const baseUrl = $('#f-baseUrl').value.trim();
   const apiKey = $('#f-apiKey').value;
@@ -611,50 +780,45 @@ $('#btn-probe').onclick = async () => {
   if (!apiKey) return err('先填 API Key');
   const btn = $('#btn-probe');
   btn.disabled = true; btn.textContent = '⏳ 探测中…';
-  $('#probe-status').textContent = '请求中…';
+  $('#probe-status').textContent = '';
   try {
     const r = await api('/admin/api/probe', { method: 'POST', body: JSON.stringify({ baseUrl, apiKey, protocol }) });
     if (!r.ok) {
-      $('#probe-status').textContent = '✗ 探测失败：' + (r.error || r.status || '未知');
-      btn.disabled = false; btn.textContent = '🔍 重新探测';
+      $('#probe-status').textContent = '✗ ' + (r.error || r.status || '未知');
+      $('#probe-status').style.color = 'var(--red)';
+      btn.disabled = false; btn.textContent = '⟳ 重新探测';
       return;
     }
     const models = r.models || [];
     state.probedModels = models;
-    $('#probe-status').textContent = `✓ ${models.length} 个模型，${r.latencyMs}ms`;
-    btn.textContent = '🔍 重新探测';
+    $('#probe-status').textContent = `✓ ${models.length} 个 · ${r.latencyMs}ms`;
+    $('#probe-status').style.color = 'var(--green)';
+    btn.textContent = '⟳ 重新探测';
 
-    // 已有 alias/upstream 名集合（用于过滤已存在）
     const existing = new Set();
-    for (const m of state.modalModels) {
-      if (m.upstream) existing.add(m.upstream);
-      if (m.alias) existing.add(m.alias);
-    }
-    const newOnes = models.filter((m) => !existing.has(m));
+    for (const m of state.modalModels) { if (m.upstream) existing.add(m.upstream); if (m.alias) existing.add(m.alias); }
+    const newOnes = models.filter(m => !existing.has(m));
     const box = $('#probe-add-list');
     if (!newOnes.length) {
-      box.innerHTML = '<span style="color:#6e7691">探测到的所有模型都已经在表里。</span>';
+      box.innerHTML = '<span style="color:var(--tx3);font-size:11px">探测到的模型都已在表里</span>';
     } else {
-      box.innerHTML = `<div style="color:#aab1c2;margin-bottom:4px">探测到 ${newOnes.length} 个新模型（点 + 加进表里）：</div>` +
-        newOnes.map((m) => `<button type="button" class="copy-btn" data-add-model="${escapeHtml(m)}" style="margin:2px">+ ${escapeHtml(m)}</button>`).join('');
-      box.querySelectorAll('[data-add-model]').forEach((b) => {
-        b.onclick = () => {
-          const mid = b.dataset.addModel;
-          if (!state.modalModels.find((x) => x.upstream === mid || x.alias === mid)) {
-            state.modalModels.push({ alias: mid, upstream: mid });
-            renderModelsEditor();
-            b.remove();
-            toast('已添加 ' + mid);
-          }
-        };
+      box.innerHTML = `<div class="h">探测到 ${newOnes.length} 个新模型 · 点击加入</div>` +
+        newOnes.map(m => `<button class="cbtn2" data-add-model="${escapeHtml(m)}" type="button">${escapeHtml(m)}</button>`).join('');
+      box.querySelectorAll('[data-add-model]').forEach(b => b.onclick = () => {
+        const mid = b.dataset.addModel;
+        if (!state.modalModels.find(x => x.upstream === mid || x.alias === mid)) {
+          state.modalModels.push({ alias: mid, upstream: mid });
+          renderModelsEditor();
+          b.remove();
+          toast('✓ 已加 ' + mid);
+        }
       });
     }
     box.style.display = 'block';
   } catch (e) {
-    $('#probe-status').textContent = '探测出错：' + e.message;
-  } finally {
-    btn.disabled = false;
-  }
+    $('#probe-status').textContent = '出错：' + e.message;
+    $('#probe-status').style.color = 'var(--red)';
+  } finally { btn.disabled = false; }
 };
 
 $('#btn-save').onclick = async () => {
@@ -664,39 +828,30 @@ $('#btn-save').onclick = async () => {
   const apiKey = $('#f-apiKey').value;
   if (!baseUrl) return err('Base URL 必填');
   if (!apiKey) return err('API Key 必填');
-
-  // 从行式编辑器收集
   const models = {};
   const seen = new Set();
   for (const r of state.modalModels) {
     const alias = (r.alias || '').trim();
     const upstream = (r.upstream || '').trim();
-    if (!alias && !upstream) continue;     // 空行
-    if (!upstream) return err('行：alias="' + alias + '" 缺上游模型名');
+    if (!alias && !upstream) continue;
+    if (!upstream) return err('alias="' + alias + '" 缺上游模型名');
     const a = alias || upstream;
-    if (seen.has(a)) return err('重复的 alias：' + a);
+    if (seen.has(a)) return err('重复 alias：' + a);
     seen.add(a);
     models[a] = upstream;
   }
-
   const body = {
-    id,
-    name: $('#f-name').value.trim() || id,
-    protocol: $('#f-protocol').value,
-    priority: Number($('#f-priority').value),
-    enabled: $('#f-enabled').value === 'true',
-    baseUrl,
-    apiKey,
-    autoAlias: $('#f-autoAlias').checked,
-    models,
+    id, name: $('#f-name').value.trim() || id, protocol: $('#f-protocol').value,
+    priority: Number($('#f-priority').value), enabled: $('#f-enabled').value === 'true',
+    baseUrl, apiKey, autoAlias: $('#f-autoAlias').checked, models,
   };
   try {
     await api('/admin/api/channels', { method: 'POST', body: JSON.stringify(body) });
-    toast('已保存到 config.json'); $('#mask').classList.remove('show'); refresh();
+    toast('✓ 已保存'); $('#mask').classList.remove('show'); refresh();
   } catch {}
 };
 
-// URL ?key=
+/* ───────── 启动 ───────── */
 const url = new URL(location.href);
 if (url.searchParams.get('key')) {
   sessionStorage.setItem('adminKey', url.searchParams.get('key'));
