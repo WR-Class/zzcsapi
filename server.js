@@ -1128,6 +1128,12 @@ async function handleAdminApi(req, res, url) {
             ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+            // 测试消耗了额度 → 异步刷新
+            try {
+              notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, fetch, 8000)
+                .then((u) => { if (ch.notion) ch.notion.usage = { type: u.type, eligible: u.isEligible, userUsage: u.userUsage, userLimit: u.userLimit, at: Date.now() }; })
+                .catch(() => {});
+            } catch {}
           }
           results.push({
             channelId: c.channelId, ok: testOk, status: status || 200, latencyMs: ttfb,
@@ -1663,6 +1669,15 @@ async function tryNotionChannel(opts) {
   ch.lastError = null;
   if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
   ch.latencyMs = Date.now() - t0;
+
+  // 真实对话消耗了额度 → 异步刷新用量（免费接口，不阻塞响应，失败静默）
+  try {
+    notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, fetch, 8000)
+      .then((u) => {
+        if (ch.notion) ch.notion.usage = { type: u.type, eligible: u.isEligible, userUsage: u.userUsage, userLimit: u.userLimit, at: Date.now() };
+      })
+      .catch(() => {});
+  } catch { /* 不影响主流程 */ }
 
   // 4) 解析 NDJSON → OpenAI chunk
   const respId = 'chatcmpl-notion-' + Date.now().toString(36);
