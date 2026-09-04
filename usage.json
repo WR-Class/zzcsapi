@@ -1,0 +1,88 @@
+{
+ "total": {
+  "requests": 3,
+  "errors": 0,
+  "inputTokens": 17,
+  "outputTokens": 16
+ },
+ "byModel": {
+  "glm-5.2": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 15,
+   "outputTokens": 0
+  },
+  "gpt-5.6-sol": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 1,
+   "outputTokens": 8
+  },
+  "deepseek-v4pro": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 1,
+   "outputTokens": 8
+  }
+ },
+ "byChannel": {
+  "lzhiyu": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 15,
+   "outputTokens": 0
+  },
+  "docode": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 1,
+   "outputTokens": 8
+  },
+  "notion": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 1,
+   "outputTokens": 8
+  }
+ },
+ "byDay": {
+  "2026-09-04": {
+   "requests": 3,
+   "errors": 0,
+   "inputTokens": 17,
+   "outputTokens": 16
+  }
+ },
+ "recent": [
+  {
+   "ts": 1788505664500,
+   "model": "glm-5.2",
+   "channelId": "lzhiyu",
+   "kind": "openai",
+   "in": 15,
+   "out": 0,
+   "ok": true,
+   "ms": 2156
+  },
+  {
+   "ts": 1788505668251,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 1,
+   "out": 8,
+   "ok": true,
+   "ms": 3737
+  },
+  {
+   "ts": 1788505671784,
+   "model": "deepseek-v4pro",
+   "channelId": "notion",
+   "kind": "test",
+   "in": 1,
+   "out": 8,
+   "ok": true,
+   "ms": 3526
+  }
+ ]
+}

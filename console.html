@@ -241,6 +241,18 @@
   .src .chs .c.down { border-color: rgba(248,113,113,.4); color: var(--red); }
   .src .chs .c.dis { opacity: .45; text-decoration: line-through; }
 
+  /* 用量统计表 */
+  .us-list { max-height: 320px; overflow: auto; }
+  .us-list table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .us-list th { position: sticky; top: 0; background: var(--card); text-align: right; padding: 7px 10px; color: var(--tx3); font-weight: 600; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .us-list th:first-child { text-align: left; }
+  .us-list td { padding: 6px 10px; text-align: right; font-variant-numeric: tabular-nums; color: var(--tx2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .us-list td:first-child { text-align: left; font-family: var(--mono); color: var(--tx); font-weight: 600; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+  .us-list td.err { color: var(--red); }
+  .us-list tr:hover td { background: var(--bg2); }
+  .us-list .empty { padding: 22px; text-align: center; color: var(--tx3); font-size: 12px; }
+  .us-bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--blue); opacity: .55; vertical-align: middle; margin-right: 6px; min-width: 2px; }
+
   /* 接入示例代码块 */
   .ex-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
   .ex { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
@@ -311,11 +323,35 @@
       </div>
 
       <!-- 总览：渠道摘要（只读） -->
-      <div class="sec-head">
+      <div class="sec-head" style="margin-top:26px">
         <h2>▤ 渠道健康</h2>
         <span class="hint">各渠道当前状态一览 · 点「渠道管理」页操作</span>
       </div>
       <div id="overview-channels" class="ov-grid"></div>
+
+      <!-- 用量统计 -->
+      <div class="sec-head" style="margin-top:26px">
+        <h2>∑ 用量统计</h2>
+        <span class="hint">总用量 · 按模型 · 按渠道 · 输入/输出 token（无 usage 返回时按文本估算）</span>
+        <button class="ghost" id="btn-usage-clear" style="margin-left:auto;font-size:11px;padding:4px 10px">清零统计</button>
+      </div>
+      <div class="stats" id="usage-stats">
+        <div class="stat"><div class="k">总请求</div><div class="v" id="us-req">0</div></div>
+        <div class="stat"><div class="k">输入 tokens</div><div class="v" id="us-in">0</div></div>
+        <div class="stat ok"><div class="k">输出 tokens</div><div class="v" id="us-out">0</div></div>
+        <div class="stat bad"><div class="k">错误请求</div><div class="v" id="us-err">0</div></div>
+        <div class="stat"><div class="k">今日请求</div><div class="v" id="us-today">0</div></div>
+      </div>
+      <div class="ex-grid" style="margin-top:12px">
+        <div class="ex">
+          <div class="hd"><span class="t">按模型</span><span class="t" id="us-model-count" style="color:var(--tx3);font-weight:400"></span></div>
+          <div id="usage-by-model"></div>
+        </div>
+        <div class="ex">
+          <div class="hd"><span class="t">按渠道（地址）</span><span class="t" id="us-ch-count" style="color:var(--tx3);font-weight:400"></span></div>
+          <div id="usage-by-channel"></div>
+        </div>
+      </div>
     </div>
 
     <div class="content hidden" id="page-channels" data-page>
@@ -634,9 +670,56 @@ function renderAccess(cfg) {
   renderExamples(cfg);
 }
 
+/* ───────── 用量统计 ───────── */
+function fmtTok(n) {
+  n = Number(n) || 0;
+  if (n >= 1e8) return (n / 1e8).toFixed(1) + '亿';
+  if (n >= 1e4) return (n / 1e4).toFixed(1) + '万';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
+function usTable(rows, label, emptyText) {
+  if (!rows.length) return `<div class="empty">${emptyText}</div>`;
+  const max = Math.max(...rows.map(r => r.total || 0), 1);
+  return `<table>
+    <thead><tr><th>${label}</th><th>请求</th><th>输入</th><th>输出</th><th>合计</th><th>错误</th></tr></thead>
+    <tbody>
+      ${rows.map(r => `<tr>
+        <td title="${escapeHtml(r.key)}"><span class="us-bar" style="width:${Math.max(2, Math.round((r.total || 0) / max * 46))}px"></span>${escapeHtml(r.key)}</td>
+        <td>${r.requests || 0}</td>
+        <td>${fmtTok(r.inputTokens)}</td>
+        <td>${fmtTok(r.outputTokens)}</td>
+        <td><b>${fmtTok(r.total)}</b></td>
+        <td class="${r.errors ? 'err' : ''}">${r.errors || 0}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function renderUsage() {
+  const t = $('#us-req'); if (!t) return;
+  try {
+    const u = await api('/admin/api/usage');
+    $('#us-req').textContent = fmtTok(u.total.requests);
+    $('#us-in').textContent = fmtTok(u.total.inputTokens);
+    $('#us-out').textContent = fmtTok(u.total.outputTokens);
+    $('#us-err').textContent = fmtTok(u.total.errors);
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const today = (u.byDay || []).find(d => d.day === todayKey);
+    $('#us-today').textContent = fmtTok(today ? today.requests : 0);
+    $('#us-model-count').textContent = `${(u.byModel || []).length} 个模型`;
+    $('#us-ch-count').textContent = `${(u.byChannel || []).length} 个渠道`;
+    $('#usage-by-model').innerHTML = `<div class="us-list">${usTable(u.byModel || [], '模型', '还没有用量记录<br>发起一次对话或渠道测试后这里就有数据')}</div>`;
+    $('#usage-by-channel').innerHTML = `<div class="us-list">${usTable(u.byChannel || [], '渠道', '还没有用量记录')}</div>`;
+  } catch {
+    $('#usage-by-model').innerHTML = '<div class="empty">用量数据加载失败</div>';
+    $('#usage-by-channel').innerHTML = '';
+  }
+}
+
 /* 总览页：渠道健康摘要 */
-function renderOverview(data) {
-  const root = $('#overview-channels');
+function renderOverview(data) {  const root = $('#overview-channels');
   if (!root) return;
   if (!data.channels.length) {
     root.innerHTML = '<div class="empty-state"><div class="big">▤</div>还没有渠道 · 去「渠道管理」页添加</div>';
@@ -728,6 +811,7 @@ async function refresh() {
     renderStats(data);
     renderOverview(data);
     renderModelSource(data);
+    renderUsage();
     if (cfg) renderAccess(cfg);
     const foot = $('#foot-status'); foot.textContent = '● 运行中'; foot.style.color = 'var(--green)';
   } catch {
@@ -737,6 +821,12 @@ async function refresh() {
 
 /* ───────── 工具栏 ───────── */
 $('#btn-refresh').onclick = refresh;
+const _usageClearBtn = $('#btn-usage-clear');
+if (_usageClearBtn) _usageClearBtn.onclick = async () => {
+  if (!confirm('确认清零全部用量统计？此操作不可恢复。')) return;
+  await api('/admin/api/usage/clear', { method: 'POST' });
+  toast('✓ 已清零'); renderUsage();
+};
 
 $('#btn-recheck').onclick = async () => {
   const btn = $('#btn-recheck');

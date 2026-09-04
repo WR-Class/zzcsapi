@@ -16,6 +16,7 @@ services:
       ZZCSAPI_CONFIG: /app/config.json
     volumes:
       - ./config.json:/app/config.json
+      - ./usage.json:/app/usage.json
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
       interval: 30s

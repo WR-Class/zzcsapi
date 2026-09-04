@@ -928,6 +928,125 @@ function persistConfig() {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(out, null, 2) + '\n', 'utf8');
 }
 
+// ─────────────────────────── 用量统计 ───────────────────────────
+// usage.json 持久化（容器内 /app/usage.json，compose 挂载到宿主机 ./usage.json）
+const USAGE_PATH = process.env.ZZCSAPI_USAGE || path.join(__dirname, 'usage.json');
+let usageData = null;
+let usageFlushTimer = null;
+
+function ensureUsage() {
+  if (usageData) return usageData;
+  try {
+    usageData = JSON.parse(fs.readFileSync(USAGE_PATH, 'utf8'));
+    if (!usageData || typeof usageData !== 'object' || Array.isArray(usageData)) throw new Error('bad');
+  } catch { usageData = null; }
+  if (!usageData) usageData = { total: { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0 }, byModel: {}, byChannel: {}, byDay: {}, recent: [] };
+  if (!usageData.total) usageData.total = { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0 };
+  if (!usageData.byModel) usageData.byModel = {};
+  if (!usageData.byChannel) usageData.byChannel = {};
+  if (!usageData.byDay) usageData.byDay = {};
+  if (!Array.isArray(usageData.recent)) usageData.recent = [];
+  return usageData;
+}
+
+function flushUsage() {
+  if (usageFlushTimer) { clearTimeout(usageFlushTimer); usageFlushTimer = null; }
+  try {
+    const u = ensureUsage();
+    fs.writeFileSync(USAGE_PATH, JSON.stringify(u, null, 1) + '\n', 'utf8');
+  } catch { /* 磁盘失败不影响服务 */ }
+}
+
+function scheduleUsageFlush() {
+  if (usageFlushTimer) return;
+  usageFlushTimer = setTimeout(() => { usageFlushTimer = null; flushUsage(); }, 4000);
+}
+
+// token 估算：CJK 1 字 ≈ 1 token，其他 ≈ 4 字符/token（上游不返回 usage 时兜底）
+function estimateTokens(text) {
+  if (!text) return 0;
+  const s = typeof text === 'string' ? text : String(text);
+  let cjk = 0, other = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3000 && c <= 0x303F) || (c >= 0xFF00 && c <= 0xFFEF) || (c >= 0xAC00 && c <= 0xD7AF) || (c >= 0x3040 && c <= 0x30FF)) cjk++;
+    else other++;
+  }
+  return Math.max(s.length ? 1 : 0, Math.ceil(cjk + other / 4));
+}
+
+// 提取 messages 的纯文本（兼容 OpenAI/Anthropic 数组 content）
+function messagesText(messages) {
+  if (!Array.isArray(messages)) return '';
+  let out = '';
+  for (const m of messages || []) {
+    if (!m || typeof m !== 'object') continue;
+    const c = m.content;
+    if (typeof c === 'string') out += c + '\n';
+    else if (Array.isArray(c)) {
+      for (const p of c) {
+        if (p && typeof p === 'object') {
+          if (typeof p.text === 'string') out += p.text;
+          else if (typeof p.content === 'string') out += p.content;
+        }
+      }
+      out += '\n';
+    }
+  }
+  return out;
+}
+
+function bumpUsageBucket(map, key, inTok, outTok, ok) {
+  if (!key) key = 'unknown';
+  let b = map[key];
+  if (!b) b = map[key] = { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0 };
+  b.requests++;
+  if (!ok) b.errors++;
+  b.inputTokens += inTok;
+  b.outputTokens += outTok;
+}
+
+// 记一次请求用量。realUsage 可传 {prompt_tokens, completion_tokens}（上游真实值优先）
+function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage }) {
+  try {
+    const u = ensureUsage();
+    let inTok = inputTokens || 0;
+    let outTok = outputTokens || 0;
+    // 真实 usage 优先，但上游计量缺失/为 0 时保留估算值
+    if (realUsage && Number.isFinite(realUsage.prompt_tokens) && realUsage.prompt_tokens > 0) inTok = realUsage.prompt_tokens;
+    if (realUsage && Number.isFinite(realUsage.completion_tokens) && realUsage.completion_tokens > 0) outTok = realUsage.completion_tokens;
+    const ts = Date.now();
+    u.total.requests++;
+    if (!ok) u.total.errors++;
+    u.total.inputTokens += inTok;
+    u.total.outputTokens += outTok;
+    bumpUsageBucket(u.byModel, model, inTok, outTok, ok);
+    bumpUsageBucket(u.byChannel, channelId, inTok, outTok, ok);
+    const day = new Date(ts).toISOString().slice(0, 10);
+    bumpUsageBucket(u.byDay, day, inTok, outTok, ok);
+    u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0 });
+    if (u.recent.length > 800) u.recent.splice(0, u.recent.length - 800);
+    scheduleUsageFlush();
+  } catch { /* 统计失败不影响请求 */ }
+}
+
+// 从 SSE 行提取 delta 内容（content + reasoning_content），累计输出文本
+function sseDeltaText(line) {
+  if (!line || line.indexOf('data:') !== 0) return '';
+  const data = line.slice(5).trim();
+  if (!data || data === '[DONE]') return '';
+  try {
+    const j = JSON.parse(data);
+    const d = j && j.choices && j.choices[0] && j.choices[0].delta;
+    if (!d) return '';
+    let t = '';
+    if (typeof d.content === 'string') t += d.content;
+    if (typeof d.reasoning_content === 'string') t += d.reasoning_content;
+    if (typeof d.reasoning === 'string') t += d.reasoning;
+    return t;
+  } catch { return ''; }
+}
+
 function validateChannelDef(def) {
   if (!def || typeof def !== 'object') return 'body must be an object';
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
@@ -947,6 +1066,25 @@ async function handleAdminApi(req, res, url) {
   // /admin/api/channels      GET   列表
   if (req.method === 'GET' && url.pathname === '/admin/api/status') {
     return sendJson(res, 200, channelStatusAll());
+  }
+  // 用量统计：总用量 / 按模型 / 按渠道 / 按天 / 最近请求。?clear=1 清零
+  if (req.method === 'GET' && url.pathname === '/admin/api/usage') {
+    const u = ensureUsage();
+    const sorted = (obj) => Object.entries(obj)
+      .map(([k, v]) => ({ key: k, ...v, total: (v.inputTokens || 0) + (v.outputTokens || 0) }))
+      .sort((a, b) => (b.total || 0) - (a.total || 0));
+    return sendJson(res, 200, {
+      total: u.total,
+      byModel: sorted(u.byModel),
+      byChannel: sorted(u.byChannel),
+      byDay: Object.entries(u.byDay).map(([k, v]) => ({ day: k, ...v })).sort((a, b) => a.day.localeCompare(b.day)),
+      recent: u.recent.slice(-30).reverse(),
+    });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/usage/clear') {
+    usageData = { total: { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0 }, byModel: {}, byChannel: {}, byDay: {}, recent: [] };
+    flushUsage();
+    return sendJson(res, 200, { ok: true });
   }
   // 暴露给控制台展示接入信息（含 key 与 URL）。仅本机 admin 可用。
   if (req.method === 'GET' && url.pathname === '/admin/api/config') {
@@ -1128,6 +1266,11 @@ async function handleAdminApi(req, res, url) {
             ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+            recordUsage({
+              model, channelId: c.channelId, kind: 'test',
+              inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply),
+              ok: true, latencyMs: ttfb,
+            });
             // 测试消耗了额度 → 异步刷新
             try {
               notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, fetch, 8000)
@@ -1184,6 +1327,13 @@ async function handleAdminApi(req, res, url) {
           if (ch.status !== 'ok') ch.status = 'ok';
           ch.latencyMs = ttfb;
           ch.lastCheck = Date.now();
+          recordUsage({
+            model, channelId: c.channelId, kind: 'test',
+            inputTokens: parsed?.usage?.prompt_tokens ?? estimateTokens(prompt),
+            outputTokens: parsed?.usage?.completion_tokens ?? estimateTokens(extractReply(parsed, ch.def.protocol || 'openai') || ''),
+            ok: true, latencyMs: ttfb,
+            realUsage: parsed?.usage,
+          });
         }
         results.push({
           channelId: c.channelId,
@@ -1412,7 +1562,7 @@ async function handleGeminiRequest(req, res, url) {
 
 // ─────────────────────────── 调度核心（统一） ───────────────────────────
 async function dispatchRequest(opts) {
-  const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel } = opts;
+  const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind } = opts;
   const errors = [];
   let attemptedAny = false;
   const stream = !!isStream;
@@ -1426,7 +1576,7 @@ async function dispatchRequest(opts) {
     attemptedAny = true;
     const result = await tryChannel({
       res, url, body, candidate: c, isStream: stream,
-      encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel,
+      encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
     });
     if (result === 'success') return;
     if (result === 'fatal_client') return;
@@ -1528,11 +1678,17 @@ async function tryChannel(opts) {
     if (usedFallback) {
       if (respBody) res.write(respBody);
       res.end();
+      recordUsage({
+        model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+        inputTokens: estimateTokens(messagesText(body && body.messages)),
+        outputTokens: estimateTokens(respBody), ok: true, latencyMs: Date.now() - t0,
+      });
       return 'success';
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
+    let streamOutText = ''; // 累计输出（用于 token 估算）
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -1541,6 +1697,7 @@ async function tryChannel(opts) {
         let idx;
         while ((idx = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+          streamOutText += sseDeltaText(line);
           if (onStreamChunk) {
             const out = onStreamChunk(line + '\n', candidate);
             if (out) res.write(out);
@@ -1551,14 +1708,36 @@ async function tryChannel(opts) {
       }
       // 收尾
       if (buf.length && onStreamChunk) {
+        streamOutText += sseDeltaText(buf);
         const out = onStreamChunk(buf + '\n', candidate);
         if (out) res.write(out);
       }
     } catch (err) { /* 上游已断 */ }
     res.end();
+    recordUsage({
+      model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+      inputTokens: estimateTokens(messagesText(body && body.messages)),
+      outputTokens: estimateTokens(streamOutText), ok: true, latencyMs: Date.now() - t0,
+    });
     return 'success';
   } else {
-    await onSuccessNonStream(resp, candidate);
+    // 非流式：先读全文（统计 + 转发），shim 给 handler 避免 double-read
+    const text = await resp.text();
+    let realUsage = null;
+    let replyText = '';
+    try {
+      const j = JSON.parse(text);
+      if (j && j.usage) realUsage = j.usage;
+      if (j && j.choices && j.choices[0] && j.choices[0].message && typeof j.choices[0].message.content === 'string') replyText = j.choices[0].message.content;
+    } catch { /* 非 JSON 上游 */ }
+    recordUsage({
+      model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+      inputTokens: estimateTokens(messagesText(body && body.messages)),
+      outputTokens: estimateTokens(replyText),
+      ok: true, latencyMs: Date.now() - t0, realUsage,
+    });
+    const shim = { ok: resp.ok, status: resp.status, headers: resp.headers, text: async () => text };
+    await onSuccessNonStream(shim, candidate);
     return 'success';
   }
 }
@@ -1714,6 +1893,8 @@ async function tryNotionChannel(opts) {
     res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
+    const inTok = estimateTokens(messagesText(body.messages));
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0 });
     return 'success';
   }
 
@@ -1728,6 +1909,9 @@ async function tryNotionChannel(opts) {
   });
   for (const ln of ndjsonText.split('\n')) parser.line(ln);
   const reply = contentText.trim() ? contentText : (finalText || '');
+  const inTok = estimateTokens(messagesText(body.messages));
+  const outTok = estimateTokens(reply + (reasoningText ? ' ' + reasoningText : ''));
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
   res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
   res.end(JSON.stringify({
     id: respId,
@@ -1735,7 +1919,7 @@ async function tryNotionChannel(opts) {
     created: Math.floor(Date.now() / 1000),
     model: displayModel,
     choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
   }));
   return 'success';
 }
@@ -1755,5 +1939,5 @@ server.listen(PORT, process.env.ZZCSAPI_BIND || '127.0.0.1', () => {
   console.log(`[zzcsapi] aggregated: openai=[${aggregateModels('openai').join(', ')}] anthropic=[${aggregateModels('anthropic').join(', ')}] gemini=[${aggregateModels('gemini').join(', ')}]`);
 });
 
-process.on('SIGINT', () => { console.log('\n[zzcsapi] bye'); process.exit(0); });
-process.on('SIGTERM', () => { process.exit(0); });
+process.on('SIGINT', () => { console.log('\n[zzcsapi] bye'); try { flushUsage(); } catch {} process.exit(0); });
+process.on('SIGTERM', () => { try { flushUsage(); } catch {} process.exit(0); });
