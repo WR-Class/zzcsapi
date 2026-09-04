@@ -64,6 +64,47 @@ function curlHttpRequest(method, url, headers, body, timeoutMs) {
   });
 }
 
+// Notion 专用 curl 请求（完整 headers 原样传递，body 走临时文件避免命令行长度/转义问题）
+// 背景：Notion 推理接口对 undici(OpenSSL) TLS 指纹返回 soft-error（temporarily-unavailable），
+//       Windows curl.exe(Schannel) / Linux curl 实测可过。
+// 返回 {status, body, error}；status>0 且 body 非空时为成功响应
+function notionCurlRequest(method, url, headers, bodyStr, timeoutMs) {
+  return new Promise((resolve) => {
+    const os = require('os');
+    const fsSync = require('fs');
+    const pathSync = require('path');
+    const bodyFile = pathSync.join(os.tmpdir(), `zznotion_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+    let written = false;
+    try { fsSync.writeFileSync(bodyFile, bodyStr || '', 'utf8'); written = true; } catch {}
+    const args = ['-sS', '-X', String(method).toUpperCase(), '--max-time', String(Math.max(1, Math.floor((timeoutMs || 120000) / 1000)))];
+    for (const [k, v] of Object.entries(headers || {})) args.push('-H', `${k}: ${v}`);
+    if (written) args.push('--data', '@' + bodyFile);
+    args.push(String(url));
+    const bin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+    const child = spawn(bin, args, { windowsHide: true });
+    let stdout = Buffer.alloc(0);
+    let stderr = '';
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
+      resolve({ status: 0, body: '', error: 'curl timeout' });
+    }, (timeoutMs || 120000) + 5000);
+    child.stdout.on('data', (c) => { stdout = Buffer.concat([stdout, c]); });
+    child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
+      if (code !== 0) { resolve({ status: 0, body: stdout.toString('utf8'), error: `curl exit ${code}: ${stderr.slice(0, 200)}` }); return; }
+      resolve({ status: 200, body: stdout.toString('utf8'), error: null });
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
+      resolve({ status: 0, body: '', error: 'curl spawn: ' + err.message });
+    });
+  });
+}
+
 // PowerShell 版（Windows）— 用 .NET Schannel/TLS
 function psHttpRequestWin(method, url, headers, body, timeoutMs) {
   return new Promise((resolve) => {
@@ -1036,19 +1077,30 @@ async function handleAdminApi(req, res, url) {
       let resp;
       try {
         if (ch.def.protocol === 'notion') {
-          // Notion 渠道：跑一次最小 runInferenceTranscript（真实模型调用）
+          // Notion 渠道：跑一次最小 runInferenceTranscript（真实模型调用，curl 优先）
           const acct = await ensureNotionAccount(ch, 15000);
           const built = notion.buildNotionTranscript([{ role: 'user', content: prompt }], c.upstream, acct);
           const payload = notion.notionBuildPayload(built.transcript, built.threadType, acct, {});
           const headers = notion.notionHeaders(acct, ch.def.apiKey, ch.def.baseUrl.replace(/\/+$/, ''));
           const target = ch.def.baseUrl.replace(/\/+$/, '') + '/api/v3/runInferenceTranscript';
-          resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(payload), signal: ctrl.signal });
-          let text = await resp.text();
-          if (!resp.ok && isCloudflareBlock(resp.status, text)) {
-            const ps = await psHttpRequest('POST', target, headers, JSON.stringify(payload), Math.min(60000, Number(body.timeoutMs) || 30000));
-            if (ps.status > 0) { text = ps.body; resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status }; }
+          const bodyStr = JSON.stringify(payload);
+          const tmo = Math.min(60000, Number(body.timeoutMs) || 30000);
+          let text = '';
+          let ok = false;
+          let status = 0;
+          const curlOut = await notionCurlRequest('POST', target, headers, bodyStr, tmo);
+          if (curlOut.status > 0 && curlOut.body && !curlOut.error) {
+            text = curlOut.body; status = 200; ok = true;
+          } else {
+            try {
+              resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+              text = await resp.text();
+              ok = resp.ok; status = resp.status;
+            } catch (e) { text = String(e.message || e); }
           }
           ttfb = Date.now() - t0;
+          // 流内错误检测（temporarily-unavailable 等 soft-block）
+          const streamErr = (text.match(/"subType":"([^"]+)"/) || [])[1];
           // 解析 NDJSON 取全文
           let contentText = '', finalText = '';
           const parser = notion.createNotionStreamParser((evt) => {
@@ -1057,15 +1109,16 @@ async function handleAdminApi(req, res, url) {
           });
           for (const ln of text.split('\n')) parser.line(ln);
           const reply = contentText.trim() || finalText || '';
-          if (resp.ok) {
+          const testOk = ok && !!reply && !streamErr;
+          if (testOk) {
             ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
           }
           results.push({
-            channelId: c.channelId, ok: resp.ok && !!reply, status: resp.status, latencyMs: ttfb,
+            channelId: c.channelId, ok: testOk, status: status || 200, latencyMs: ttfb,
             reply: reply.slice(0, 200) || undefined,
-            error: resp.ok ? (reply ? undefined : 'empty stream') : `HTTP ${resp.status}: ${text.slice(0, 150)}`,
+            error: testOk ? undefined : (streamErr ? 'notion: ' + streamErr : (ok ? 'empty stream' : `HTTP ${status}: ${text.slice(0, 150)}`)),
           });
           continue;
         }
@@ -1204,6 +1257,7 @@ async function handleOpenAIRequest(req, res, url) {
     body,
     candidates,
     requestedModel: requested,
+    isStream: !!body.stream,
     encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
     buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, url.pathname.replace(/^\/v1\//, '')),
     buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
@@ -1338,7 +1392,7 @@ async function handleGeminiRequest(req, res, url) {
 
 // ─────────────────────────── 调度核心（统一） ───────────────────────────
 async function dispatchRequest(opts) {
-  const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk } = opts;
+  const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel } = opts;
   const errors = [];
   let attemptedAny = false;
   const stream = !!isStream;
@@ -1352,10 +1406,15 @@ async function dispatchRequest(opts) {
     attemptedAny = true;
     const result = await tryChannel({
       res, url, body, candidate: c, isStream: stream,
-      encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk,
+      encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel,
     });
     if (result === 'success') return;
     if (result === 'fatal_client') return;
+    // 响应头已发出（某候选已开始写响应）→ 无法再切换渠道，直接结束
+    if (res.headersSent || res.writableEnded) {
+      if (!res.writableEnded) { try { res.end(); } catch {} }
+      return;
+    }
     errors.push({ ch: c.channelId, err: result });
   }
   if (!attemptedAny) return sendJson(res, 503, upstreamErrorPayload(503, 'all channels in cooldown'));
@@ -1479,7 +1538,8 @@ async function tryChannel(opts) {
     res.end();
     return 'success';
   } else {
-    return onSuccessNonStream(resp, candidate);
+    await onSuccessNonStream(resp, candidate);
+    return 'success';
   }
 }
 
@@ -1536,41 +1596,51 @@ async function tryNotionChannel(opts) {
   const target = ch.def.baseUrl.replace(/\/+$/, '') + '/api/v3/runInferenceTranscript';
   const bodyStr = JSON.stringify(payload);
 
-  // 3) 发请求（fetch 流式优先；CF 拦截 → PS/curl 缓冲）
-  let resp;
-  try {
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), timeoutMs);
+  // 3) 发请求 —— curl 子进程优先（undici TLS 指纹被 Notion 推理服务 soft-block，
+  //    实测 curl.exe(Schannel)/Linux curl 可过）；curl 不可用时降级 fetch
+  const curlOut = await notionCurlRequest('POST', target, headers, bodyStr, timeoutMs);
+  let ndjsonText = '';
+  let httpStatus = 200;
+  if (curlOut.status > 0 && curlOut.body && !curlOut.error) {
+    ndjsonText = curlOut.body;
+  } else {
+    // curl 失败 → fetch 降级（万一某环境 curl 也能过）
+    let resp;
     try {
-      resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
-    } finally { clearTimeout(to); }
-  } catch (err) {
-    recordFailure(ch, 'notion network: ' + (err.message || err));
-    return 'network: ' + (err.message || err);
-  }
-
-  let cfBody = '';
-  let usedFallback = false;
-  if (resp.status === 403) {
-    try { cfBody = await resp.text(); } catch {}
-    if (isCloudflareBlock(403, cfBody)) {
-      const ps = await psHttpRequest('POST', target, headers, bodyStr, timeoutMs);
-      if (ps.status > 0) {
-        usedFallback = true;
-        resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status, text: async () => ps.body };
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+      } finally { clearTimeout(to); }
+      httpStatus = resp.status;
+      if (resp.ok) ndjsonText = await resp.text();
+      else {
+        const errText = await resp.text().catch(() => '');
+        recordFailure(ch, `notion HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+        if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
+          res.writeHead(resp.status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
+          return 'fatal_client';
+        }
+        return `notion upstream ${resp.status}`;
       }
+    } catch (err) {
+      recordFailure(ch, 'notion network: ' + (err.message || err));
+      return 'network: ' + (err.message || err);
     }
   }
 
-  if (!resp.ok) {
-    const text = usedFallback ? await resp.text() : (await resp.text().catch(() => ''));
-    recordFailure(ch, `notion HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
-    if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
-      res.writeHead(resp.status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
-      return 'fatal_client';
-    }
-    return `notion upstream ${resp.status}${usedFallback ? ' (via ps-fallback)' : ''}`;
+  // 3.5) 流内错误检测：Notion 会返回 200 但在 NDJSON 里带 error 事件（temporarily-unavailable 等）
+  const streamError = (ndjsonText.match(/"type":"error","message":"([^"]{0,120})/) || [])[1]
+    || (ndjsonText.match(/"subType":"([^"]+)"/) || [])[1];
+  if (streamError) {
+    recordFailure(ch, 'notion stream: ' + streamError);
+    // soft-block（temporarily-unavailable）按上游失败处理，让调度器切别的渠道
+    return 'notion stream: ' + streamError;
+  }
+  if (!ndjsonText.trim()) {
+    recordFailure(ch, 'notion stream: empty');
+    return 'notion stream: empty';
   }
 
   // 成功
@@ -1592,7 +1662,8 @@ async function tryNotionChannel(opts) {
     });
     let fullText = '';
     let finalText = '';
-    const handleEvent = (evt) => {
+    let firstChunkSent = false;
+    const parser = notion.createNotionStreamParser((evt) => {
       if (evt.type === 'content') {
         if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
         fullText += evt.text; res.write(notionSSEChunk(respId, displayModel, { content: evt.text }));
@@ -1600,33 +1671,8 @@ async function tryNotionChannel(opts) {
         if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
         res.write(notionSSEChunk(respId, displayModel, { reasoning_content: evt.text }));
       } else if (evt.type === 'final') { finalText = evt.text; }
-    };
-    let firstChunkSent = false;
-
-    if (usedFallback) {
-      // PS/curl 缓冲模式：一次性解析全部 NDJSON，按顺序回放
-      const text = await resp.text();
-      const parser = notion.createNotionStreamParser(handleEvent);
-      for (const ln of text.split('\n')) parser.line(ln);
-    } else {
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      const parser = notion.createNotionStreamParser(handleEvent);
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
-            parser.line(line);
-          }
-        }
-        if (buf.trim()) parser.line(buf);
-      } catch { /* 上游断 */ }
-    }
+    });
+    for (const ln of ndjsonText.split('\n')) parser.line(ln);
 
     // 权威全文兜底：流里没采到 content → 用 record-map 的 final 补齐
     if (!fullText.trim() && finalText) {
@@ -1643,7 +1689,6 @@ async function tryNotionChannel(opts) {
   }
 
   // 非流式：聚合全文
-  const text = await resp.text();
   let contentText = '';
   let reasoningText = '';
   let finalText = '';
@@ -1652,7 +1697,7 @@ async function tryNotionChannel(opts) {
     else if (evt.type === 'thinking') reasoningText += evt.text;
     else if (evt.type === 'final') finalText = evt.text;
   });
-  for (const ln of text.split('\n')) parser.line(ln);
+  for (const ln of ndjsonText.split('\n')) parser.line(ln);
   const reply = contentText.trim() ? contentText : (finalText || '');
   res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
   res.end(JSON.stringify({
