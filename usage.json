@@ -1,22 +1,22 @@
 {
  "total": {
-  "requests": 16,
-  "errors": 0,
-  "inputTokens": 55029,
-  "outputTokens": 1784
+  "requests": 86,
+  "errors": 1,
+  "inputTokens": 2571409,
+  "outputTokens": 84170
  },
  "byModel": {
   "glm-5.2": {
-   "requests": 1,
+   "requests": 2,
    "errors": 0,
-   "inputTokens": 15,
-   "outputTokens": 0
+   "inputTokens": 17,
+   "outputTokens": 12
   },
   "gpt-5.6-sol": {
-   "requests": 11,
+   "requests": 15,
    "errors": 0,
-   "inputTokens": 26289,
-   "outputTokens": 67
+   "inputTokens": 38856,
+   "outputTokens": 263
   },
   "deepseek-v4pro": {
    "requests": 1,
@@ -25,44 +25,86 @@
    "outputTokens": 8
   },
   "deepseek-v4-pro": {
-   "requests": 3,
+   "requests": 20,
    "errors": 0,
-   "inputTokens": 28724,
-   "outputTokens": 1709
+   "inputTokens": 361424,
+   "outputTokens": 7172
+  },
+  "claude-opus-5": {
+   "requests": 44,
+   "errors": 0,
+   "inputTokens": 2171021,
+   "outputTokens": 76688
+  },
+  "kimi-k3": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 87,
+   "outputTokens": 5
+  },
+  "claude-opus5": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 2,
+   "outputTokens": 17
+  },
+  "—": {
+   "requests": 1,
+   "errors": 1,
+   "inputTokens": 0,
+   "outputTokens": 0
+  },
+  "gpt-5.6-terra": {
+   "requests": 1,
+   "errors": 0,
+   "inputTokens": 1,
+   "outputTokens": 5
   }
  },
  "byChannel": {
   "lzhiyu": {
-   "requests": 2,
-   "errors": 0,
-   "inputTokens": 12985,
-   "outputTokens": 1442
-  },
-  "docode": {
    "requests": 7,
    "errors": 0,
-   "inputTokens": 26284,
-   "outputTokens": 62
+   "inputTokens": 100757,
+   "outputTokens": 1590
+  },
+  "docode": {
+   "requests": 11,
+   "errors": 1,
+   "inputTokens": 37591,
+   "outputTokens": 92
   },
   "notion": {
-   "requests": 5,
+   "requests": 8,
    "errors": 0,
-   "inputTokens": 6,
-   "outputTokens": 13
+   "inputTokens": 1269,
+   "outputTokens": 201
   },
   "hcnsec": {
-   "requests": 2,
+   "requests": 16,
    "errors": 0,
-   "inputTokens": 15754,
-   "outputTokens": 267
+   "inputTokens": 260771,
+   "outputTokens": 5599
+  },
+  "tabitoken": {
+   "requests": 25,
+   "errors": 0,
+   "inputTokens": 1445438,
+   "outputTokens": 6542
+  },
+  "gorouter": {
+   "requests": 19,
+   "errors": 0,
+   "inputTokens": 725583,
+   "outputTokens": 70146
   }
  },
  "byDay": {
   "2026-09-04": {
-   "requests": 16,
-   "errors": 0,
-   "inputTokens": 55029,
-   "outputTokens": 1784
+   "requests": 86,
+   "errors": 1,
+   "inputTokens": 2571409,
+   "outputTokens": 84170
   }
  },
  "recent": [
@@ -225,6 +267,707 @@
    "out": 1,
    "ok": true,
    "ms": 4802
+  },
+  {
+   "ts": 1788526611070,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 14453,
+   "out": 0,
+   "ok": true,
+   "ms": 4007
+  },
+  {
+   "ts": 1788526700522,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 14454,
+   "out": 1439,
+   "ok": true,
+   "ms": 80682
+  },
+  {
+   "ts": 1788527234742,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 16037,
+   "out": 2900,
+   "ok": true,
+   "ms": 57649
+  },
+  {
+   "ts": 1788527383357,
+   "model": "deepseek-v4-pro",
+   "channelId": "lzhiyu",
+   "kind": "openai",
+   "in": 18968,
+   "out": 12,
+   "ok": true,
+   "ms": 82995
+  },
+  {
+   "ts": 1788527726484,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 18982,
+   "out": 863,
+   "ok": true,
+   "ms": 27741
+  },
+  {
+   "ts": 1788528389455,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 19900,
+   "out": 66,
+   "ok": true,
+   "ms": 15550
+  },
+  {
+   "ts": 1788528442642,
+   "model": "deepseek-v4-pro",
+   "channelId": "lzhiyu",
+   "kind": "openai",
+   "in": 20852,
+   "out": 100,
+   "ok": true,
+   "ms": 34871
+  },
+  {
+   "ts": 1788528460630,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 21817,
+   "out": 15,
+   "ok": true,
+   "ms": 17907
+  },
+  {
+   "ts": 1788528470941,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 21905,
+   "out": 13,
+   "ok": true,
+   "ms": 9288
+  },
+  {
+   "ts": 1788528498642,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 22745,
+   "out": 8,
+   "ok": true,
+   "ms": 27638
+  },
+  {
+   "ts": 1788528505105,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 22828,
+   "out": 5,
+   "ok": true,
+   "ms": 5407
+  },
+  {
+   "ts": 1788528509175,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 23518,
+   "out": 8,
+   "ok": true,
+   "ms": 3998
+  },
+  {
+   "ts": 1788528511994,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 23601,
+   "out": 0,
+   "ok": true,
+   "ms": 1822
+  },
+  {
+   "ts": 1788528696223,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 23603,
+   "out": 5,
+   "ok": true,
+   "ms": 26851
+  },
+  {
+   "ts": 1788528715323,
+   "model": "deepseek-v4-pro",
+   "channelId": "lzhiyu",
+   "kind": "openai",
+   "in": 23968,
+   "out": 12,
+   "ok": true,
+   "ms": 19038
+  },
+  {
+   "ts": 1788528746719,
+   "model": "deepseek-v4-pro",
+   "channelId": "lzhiyu",
+   "kind": "openai",
+   "in": 23982,
+   "out": 12,
+   "ok": true,
+   "ms": 19881
+  },
+  {
+   "ts": 1788528843619,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 23984,
+   "out": 205,
+   "ok": true,
+   "ms": 24635
+  },
+  {
+   "ts": 1788528882082,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 24966,
+   "out": 92,
+   "ok": true,
+   "ms": 23055
+  },
+  {
+   "ts": 1788528901770,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 37558,
+   "out": 16,
+   "ok": true,
+   "ms": 17654
+  },
+  {
+   "ts": 1788528926689,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 37662,
+   "out": 47,
+   "ok": true,
+   "ms": 19884
+  },
+  {
+   "ts": 1788528967790,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 37953,
+   "out": 390,
+   "ok": true,
+   "ms": 41020
+  },
+  {
+   "ts": 1788528983504,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38625,
+   "out": 78,
+   "ok": true,
+   "ms": 12645
+  },
+  {
+   "ts": 1788529011797,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 48046,
+   "out": 174,
+   "ok": true,
+   "ms": 26609
+  },
+  {
+   "ts": 1788529049808,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 48234,
+   "out": 25,
+   "ok": true,
+   "ms": 37965
+  },
+  {
+   "ts": 1788529095433,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 48234,
+   "out": 33,
+   "ok": true,
+   "ms": 45073
+  },
+  {
+   "ts": 1788529110318,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 7121,
+   "out": 10,
+   "ok": true,
+   "ms": 13851
+  },
+  {
+   "ts": 1788529110769,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 7106,
+   "out": 8,
+   "ok": true,
+   "ms": 14294
+  },
+  {
+   "ts": 1788529112847,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 48322,
+   "out": 46,
+   "ok": true,
+   "ms": 17313
+  },
+  {
+   "ts": 1788529115645,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 7119,
+   "out": 10,
+   "ok": true,
+   "ms": 19193
+  },
+  {
+   "ts": 1788529118568,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 7100,
+   "out": 10,
+   "ok": true,
+   "ms": 22107
+  },
+  {
+   "ts": 1788529142349,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 53306,
+   "out": 100,
+   "ok": true,
+   "ms": 26911
+  },
+  {
+   "ts": 1788529168150,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 54580,
+   "out": 59,
+   "ok": true,
+   "ms": 19111
+  },
+  {
+   "ts": 1788529179270,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 54651,
+   "out": 0,
+   "ok": true,
+   "ms": 10799
+  },
+  {
+   "ts": 1788529206790,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 61220,
+   "out": 82,
+   "ok": true,
+   "ms": 26033
+  },
+  {
+   "ts": 1788529247415,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 65159,
+   "out": 26,
+   "ok": true,
+   "ms": 36649
+  },
+  {
+   "ts": 1788529270666,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 65229,
+   "out": 0,
+   "ok": true,
+   "ms": 21564
+  },
+  {
+   "ts": 1788529292495,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 67511,
+   "out": 42,
+   "ok": true,
+   "ms": 21266
+  },
+  {
+   "ts": 1788529333215,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 67565,
+   "out": 0,
+   "ok": true,
+   "ms": 18484
+  },
+  {
+   "ts": 1788529358452,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 67569,
+   "out": 0,
+   "ok": true,
+   "ms": 21930
+  },
+  {
+   "ts": 1788529377255,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 72003,
+   "out": 34,
+   "ok": true,
+   "ms": 18731
+  },
+  {
+   "ts": 1788529380845,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 28591,
+   "out": 11757,
+   "ok": true,
+   "ms": 267891
+  },
+  {
+   "ts": 1788529403038,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 76901,
+   "out": 27,
+   "ok": true,
+   "ms": 25721
+  },
+  {
+   "ts": 1788529427436,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 30852,
+   "out": 12589,
+   "ok": true,
+   "ms": 313333
+  },
+  {
+   "ts": 1788529439046,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 29924,
+   "out": 13355,
+   "ok": true,
+   "ms": 317242
+  },
+  {
+   "ts": 1788529447056,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 86385,
+   "out": 27,
+   "ok": true,
+   "ms": 26552
+  },
+  {
+   "ts": 1788529469597,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 34359,
+   "out": 15974,
+   "ok": true,
+   "ms": 350841
+  },
+  {
+   "ts": 1788529470679,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 106774,
+   "out": 0,
+   "ok": true,
+   "ms": 23503
+  },
+  {
+   "ts": 1788529527809,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 85319,
+   "out": 926,
+   "ok": true,
+   "ms": 57043
+  },
+  {
+   "ts": 1788529589869,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 45876,
+   "out": 177,
+   "ok": true,
+   "ms": 31603
+  },
+  {
+   "ts": 1788529634505,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 47177,
+   "out": 243,
+   "ok": true,
+   "ms": 43287
+  },
+  {
+   "ts": 1788529647001,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 85319,
+   "out": 3363,
+   "ok": true,
+   "ms": 118646
+  },
+  {
+   "ts": 1788529677420,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 47533,
+   "out": 140,
+   "ok": true,
+   "ms": 30734
+  },
+  {
+   "ts": 1788529721125,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 62425,
+   "out": 237,
+   "ok": true,
+   "ms": 43579
+  },
+  {
+   "ts": 1788529753875,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 62885,
+   "out": 0,
+   "ok": true,
+   "ms": 30648
+  },
+  {
+   "ts": 1788529798745,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 63069,
+   "out": 225,
+   "ok": true,
+   "ms": 44214
+  },
+  {
+   "ts": 1788529828239,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 63500,
+   "out": 0,
+   "ok": true,
+   "ms": 29399
+  },
+  {
+   "ts": 1788529833551,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 7052,
+   "out": 29,
+   "ok": true,
+   "ms": 4836
+  },
+  {
+   "ts": 1788529865775,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 63828,
+   "out": 461,
+   "ok": true,
+   "ms": 32099
+  },
+  {
+   "ts": 1788530023984,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 85319,
+   "out": 15645,
+   "ok": true,
+   "ms": 375949
+  },
+  {
+   "ts": 1788530591976,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 4389,
+   "out": 5,
+   "ok": true,
+   "ms": 3750
+  },
+  {
+   "ts": 1788530598087,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 7110,
+   "out": 26,
+   "ok": true,
+   "ms": 5279
+  },
+  {
+   "ts": 1788530615660,
+   "model": "glm-5.2",
+   "channelId": "lzhiyu",
+   "kind": "openai",
+   "in": 2,
+   "out": 12,
+   "ok": true,
+   "ms": 16750
+  },
+  {
+   "ts": 1788530635780,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 1087,
+   "out": 5,
+   "ok": true,
+   "ms": 19295
+  },
+  {
+   "ts": 1788530753298,
+   "model": "kimi-k3",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 87,
+   "out": 5,
+   "ok": true,
+   "ms": 116692
+  },
+  {
+   "ts": 1788530759481,
+   "model": "claude-opus5",
+   "channelId": "notion",
+   "kind": "openai",
+   "in": 2,
+   "out": 17,
+   "ok": true,
+   "ms": 5354
+  },
+  {
+   "ts": 1788530878745,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 1251,
+   "out": 10,
+   "ok": true,
+   "ms": 8993
+  },
+  {
+   "ts": 1788530880730,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 5667,
+   "out": 15,
+   "ok": true,
+   "ms": 1979
+  },
+  {
+   "ts": 1788530888320,
+   "model": "gpt-5.6-sol",
+   "channelId": "notion",
+   "kind": "openai",
+   "in": 1260,
+   "out": 166,
+   "ok": true,
+   "ms": 7209
+  },
+  {
+   "ts": 1788531289553,
+   "model": "—",
+   "channelId": "docode",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"当前可用线路暂时繁忙，请稍后重试。 (request id: 20260904141444777240008268d9d6lN2r0iAv)\",\"type\":\"new_api_error\",\"param\":\"\",\"code\":\"upstream_temporarily_unavailable\"}}"
+  },
+  {
+   "ts": 1788531294098,
+   "model": "gpt-5.6-terra",
+   "channelId": "notion",
+   "kind": "openai",
+   "in": 1,
+   "out": 5,
+   "ok": true,
+   "ms": 4543
   }
  ]
 }

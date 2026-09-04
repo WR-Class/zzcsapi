@@ -1007,7 +1007,7 @@ function bumpUsageBucket(map, key, inTok, outTok, ok) {
 }
 
 // 记一次请求用量。realUsage 可传 {prompt_tokens, completion_tokens}（上游真实值优先）
-function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage }) {
+function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage, note }) {
   try {
     const u = ensureUsage();
     let inTok = inputTokens || 0;
@@ -1024,7 +1024,7 @@ function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, la
     bumpUsageBucket(u.byChannel, channelId, inTok, outTok, ok);
     const day = new Date(ts).toISOString().slice(0, 10);
     bumpUsageBucket(u.byDay, day, inTok, outTok, ok);
-    u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0 });
+    u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0, ...(note ? { note } : {}) });
     if (u.recent.length > 800) u.recent.splice(0, u.recent.length - 800);
     scheduleUsageFlush();
   } catch { /* 统计失败不影响请求 */ }
@@ -1931,6 +1931,10 @@ function recordFailure(ch, msg) {
   ch.lastError = msg;
   ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
   if (ch.consecutiveFail >= 3) ch.status = 'down';
+  // 失败也进用量统计（ok:false），便于排查"哪个渠道在挂"
+  try {
+    recordUsage({ model: '—', channelId: ch.def.id, kind: 'error', inputTokens: 0, outputTokens: 0, ok: false, latencyMs: 0, note: String(msg).slice(0, 200) });
+  } catch { /* ignore */ }
 }
 
 // ─────────────────────────── 启动 ───────────────────────────
