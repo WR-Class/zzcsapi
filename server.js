@@ -1416,7 +1416,9 @@ async function handleOpenAIRequest(req, res, url) {
   const requested = body.model;
   if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
   let candidates = channelsServing(requested, 'openai');
-  if (candidates.length === 0) candidates = channelsServing(requested, 'notion');
+  // notion 渠道兜底：openai 渠道全挂/限频时接住（作为候选链尾部，不抢优先级）
+  const notionCands = channelsServing(requested, 'notion');
+  for (const nc of notionCands) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
   if (candidates.length === 0) {
     return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"`));
   }
@@ -1453,10 +1455,10 @@ async function handleAnthropicRequest(req, res, url) {
     catch { return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON' } }); }
     const requested = body.model;
     if (!requested) return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'missing model' } });
-    // 优先 anthropic 协议渠道；没有则回落 openai 协议（网关做 Anthropic↔OpenAI 转换）；再回落 notion
+    // 优先 anthropic 协议渠道；没有则回落 openai 协议（网关做 Anthropic↔OpenAI 转换）；notion 始终作为兜底候选
     let candidates = channelsServing(requested, 'anthropic');
     if (candidates.length === 0) candidates = channelsServing(requested, 'openai');
-    if (candidates.length === 0) candidates = channelsServing(requested, 'notion');
+    for (const nc of channelsServing(requested, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
     if (candidates.length === 0) {
       return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
@@ -1523,7 +1525,7 @@ async function handleGeminiRequest(req, res, url) {
 
   let candidates = channelsServing(model, 'gemini');
   if (candidates.length === 0) candidates = channelsServing(model, 'openai');
-  if (candidates.length === 0) candidates = channelsServing(model, 'notion');
+  for (const nc of channelsServing(model, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
   if (candidates.length === 0) {
     return sendJson(res, 404, { error: { code: 404, message: `no channel for model "${model}"`, status: 'NOT_FOUND' } });
   }

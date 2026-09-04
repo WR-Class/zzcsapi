@@ -1,9 +1,9 @@
 {
  "total": {
-  "requests": 3,
+  "requests": 16,
   "errors": 0,
-  "inputTokens": 17,
-  "outputTokens": 16
+  "inputTokens": 55029,
+  "outputTokens": 1784
  },
  "byModel": {
   "glm-5.2": {
@@ -13,44 +13,56 @@
    "outputTokens": 0
   },
   "gpt-5.6-sol": {
-   "requests": 1,
+   "requests": 11,
    "errors": 0,
-   "inputTokens": 1,
-   "outputTokens": 8
+   "inputTokens": 26289,
+   "outputTokens": 67
   },
   "deepseek-v4pro": {
    "requests": 1,
    "errors": 0,
    "inputTokens": 1,
    "outputTokens": 8
+  },
+  "deepseek-v4-pro": {
+   "requests": 3,
+   "errors": 0,
+   "inputTokens": 28724,
+   "outputTokens": 1709
   }
  },
  "byChannel": {
   "lzhiyu": {
-   "requests": 1,
+   "requests": 2,
    "errors": 0,
-   "inputTokens": 15,
-   "outputTokens": 0
+   "inputTokens": 12985,
+   "outputTokens": 1442
   },
   "docode": {
-   "requests": 1,
+   "requests": 7,
    "errors": 0,
-   "inputTokens": 1,
-   "outputTokens": 8
+   "inputTokens": 26284,
+   "outputTokens": 62
   },
   "notion": {
-   "requests": 1,
+   "requests": 5,
    "errors": 0,
-   "inputTokens": 1,
-   "outputTokens": 8
+   "inputTokens": 6,
+   "outputTokens": 13
+  },
+  "hcnsec": {
+   "requests": 2,
+   "errors": 0,
+   "inputTokens": 15754,
+   "outputTokens": 267
   }
  },
  "byDay": {
   "2026-09-04": {
-   "requests": 3,
+   "requests": 16,
    "errors": 0,
-   "inputTokens": 17,
-   "outputTokens": 16
+   "inputTokens": 55029,
+   "outputTokens": 1784
   }
  },
  "recent": [
@@ -83,6 +95,136 @@
    "out": 8,
    "ok": true,
    "ms": 3526
+  },
+  {
+   "ts": 1788525747758,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 135,
+   "out": 9,
+   "ok": true,
+   "ms": 3226
+  },
+  {
+   "ts": 1788526190651,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 6492,
+   "out": 12,
+   "ok": true,
+   "ms": 3670
+  },
+  {
+   "ts": 1788526239093,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 4388,
+   "out": 6,
+   "ok": true,
+   "ms": 48427
+  },
+  {
+   "ts": 1788526243655,
+   "model": "gpt-5.6-sol",
+   "channelId": "notion",
+   "kind": "test",
+   "in": 1,
+   "out": 1,
+   "ok": true,
+   "ms": 4155
+  },
+  {
+   "ts": 1788526382936,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 6533,
+   "out": 197,
+   "ok": true,
+   "ms": 8202
+  },
+  {
+   "ts": 1788526435059,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 6492,
+   "out": 15,
+   "ok": true,
+   "ms": 2088
+  },
+  {
+   "ts": 1788526436208,
+   "model": "deepseek-v4-pro",
+   "channelId": "hcnsec",
+   "kind": "openai",
+   "in": 9221,
+   "out": 70,
+   "ok": true,
+   "ms": 7584
+  },
+  {
+   "ts": 1788526495519,
+   "model": "deepseek-v4-pro",
+   "channelId": "lzhiyu",
+   "kind": "openai",
+   "in": 12970,
+   "out": 1442,
+   "ok": true,
+   "ms": 59153
+  },
+  {
+   "ts": 1788526538395,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 4388,
+   "out": 6,
+   "ok": true,
+   "ms": 103321
+  },
+  {
+   "ts": 1788526541089,
+   "model": "gpt-5.6-sol",
+   "channelId": "docode",
+   "kind": "openai",
+   "in": 4388,
+   "out": 6,
+   "ok": true,
+   "ms": 2688
+  },
+  {
+   "ts": 1788526549761,
+   "model": "gpt-5.6-sol",
+   "channelId": "notion",
+   "kind": "openai",
+   "in": 2,
+   "out": 2,
+   "ok": true,
+   "ms": 8320
+  },
+  {
+   "ts": 1788526558733,
+   "model": "gpt-5.6-sol",
+   "channelId": "notion",
+   "kind": "openai",
+   "in": 1,
+   "out": 1,
+   "ok": true,
+   "ms": 6392
+  },
+  {
+   "ts": 1788526563542,
+   "model": "gpt-5.6-sol",
+   "channelId": "notion",
+   "kind": "test",
+   "in": 1,
+   "out": 1,
+   "ok": true,
+   "ms": 4802
   }
  ]
 }
