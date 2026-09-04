@@ -371,6 +371,10 @@ async function probeChannel(ch) {
       const acct = await notion.notionDiscoverAccount(ch.def.baseUrl, ch.def.apiKey, fetch, HEALTH.timeoutMs || 15000);
       const first = acct.spaces[0];
       ch.notion = { userId: acct.userId, spaceId: first.spaceId, spaceViewId: first.spaceViewId || '', userName: acct.userName, userEmail: acct.userEmail, spaces: acct.spaces, at: Date.now() };
+      try {
+        const u = await notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, fetch, 10000);
+        ch.notion.usage = { type: u.type, eligible: u.isEligible, userUsage: u.userUsage, userLimit: u.userLimit, at: Date.now() };
+      } catch { /* 额度查询失败不影响健康状态 */ }
       ch.models = notion.notionListModels();
       ch.latencyMs = Date.now() - t0;
       ch.lastCheck = Date.now();
@@ -460,12 +464,21 @@ function extractModelIds(j, proto) {
 
 // 探测一个 def（不要求它是已注册的渠道），返回 {ok, models, latencyMs, status, error}
 async function probeDef(def, timeoutMs) {
-  // Notion 协议：getSpaces（POST）验证 token_v2，模型列表用内置映射
+  // Notion 协议：getSpaces（POST）验证 token_v2，模型列表用内置映射；顺带查 AI 额度
   if ((def.protocol || 'openai') === 'notion') {
     const t0 = Date.now();
     try {
       const acct = await notion.notionDiscoverAccount(def.baseUrl, def.apiKey, fetch, timeoutMs || 15000);
-      return { ok: true, models: notion.notionListModels(), latencyMs: Date.now() - t0, status: 200, account: { userId: acct.userId, spaces: acct.spaces.map((s) => s.name || s.spaceId) } };
+      let usage = null;
+      try {
+        const u = await notion.notionUsageEligibility(def.baseUrl, def.apiKey, acct, fetch, 10000);
+        usage = {
+          type: u.type,
+          eligible: u.isEligible,
+          sixHourWindow: { used: u.userUsage, limit: u.userLimit },
+        };
+      } catch { /* 额度接口失败不影响探测 */ }
+      return { ok: true, models: notion.notionListModels(), latencyMs: Date.now() - t0, status: 200, account: { userId: acct.userId, spaces: acct.spaces.map((s) => s.name || s.spaceId) }, usage };
     } catch (err) {
       return { ok: false, status: err.status || 0, error: 'notion: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
@@ -880,6 +893,7 @@ function channelStatusAll() {
       lastError: ch.lastError,
       aliases: Array.from(ch.aliasMap.entries()).map(([a, u]) => ({ alias: a, upstream: u })),
       upstreamModels: ch.models,
+      notionUsage: ch.notion && ch.notion.usage ? ch.notion.usage : undefined,
     })),
     aggregated: {
       openai: aggregateModels('openai'),

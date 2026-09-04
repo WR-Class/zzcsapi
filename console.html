@@ -490,6 +490,15 @@ function renderChannels(data) {
   root.innerHTML = data.channels.map((ch) => {
     const ms = ch.aliases.map(a => `<span class="m${ch.enabled ? '' : ' d'}" title="→ ${escapeHtml(a.upstream)}">${escapeHtml(a.alias)}</span>`).join('');
     const errBox = ch.lastError ? `<div class="err">${escapeHtml(ch.lastError)}</div>` : '';
+    const usageBox = ch.protocol === 'notion' && ch.notionUsage ? (() => {
+      const u = ch.notionUsage;
+      const pct = u.userLimit > 0 ? Math.min(100, Math.round(u.userUsage / u.userLimit * 100)) : 0;
+      const label = u.type === 'unlimited' ? '不限量计划' : '限量计划';
+      return `<div class="meta-row" style="margin-top:4px">
+        <span class="m">AI额度 <b>${u.userUsage}/${u.userLimit === 0 ? '∞' : u.userLimit}</b>（6h窗口·${label}）</span>
+        <span class="m">${u.userLimit > 0 ? `<b>${pct}%</b>` : ''} ${u.eligible ? '✓ 可用' : '✗ 暂停'}</span>
+      </div>`;
+    })() : '';
     const checked = ch.lastCheck ? new Date(ch.lastCheck).toLocaleTimeString() : '—';
     const lat = ch.latencyMs < 0 ? '—' : ch.latencyMs + 'ms';
     return `
@@ -510,6 +519,7 @@ function renderChannels(data) {
             <span class="m">探测 <b>${checked}</b></span>
           </div>
           <div class="models">${ms || '<span class="help" style="color:var(--tx3);font-size:11px">无别名</span>'}</div>
+          ${usageBox}
           ${errBox}
         </div>
         <div class="acts">

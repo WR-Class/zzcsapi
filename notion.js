@@ -100,6 +100,38 @@ function reframeSystemPrompt(raw) {
 const NOTION_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
 const NOTION_CLIENT_VERSION = '23.13.20260228.0625';
 
+// 查询 AI 额度（6 小时窗口用量/上限，unlimited 计划仍返回基准值）
+// 返回 { isEligible, type, spaceUsage, spaceLimit, userUsage, userLimit, ... } 或抛错
+async function notionUsageEligibility(baseUrl, tokenV2, acct, fetchFn, timeoutMs) {
+  const url = baseUrl.replace(/\/+$/, '') + '/api/v3/getAIUsageEligibility';
+  const headers = {
+    'Content-Type': 'application/json',
+    'User-Agent': NOTION_UA,
+    'Cookie': `token_v2=${tokenV2}; notion_user_id=${acct.userId}`,
+    'x-notion-space-id': acct.spaces[0].spaceId,
+    'x-notion-active-user-header': acct.userId,
+    'notion-audit-log-platform': 'web',
+    'notion-client-version': '23.13.20260228.0625',
+    'origin': baseUrl.replace(/\/+$/, ''),
+    'referer': baseUrl.replace(/\/+$/, '') + '/',
+  };
+  let resp;
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), timeoutMs || 15000);
+    try {
+      resp = await fetchFn(url, { method: 'POST', headers, body: JSON.stringify({ spaceId: acct.spaces[0].spaceId }), signal: ctrl.signal });
+    } finally { clearTimeout(to); }
+  } catch (err) {
+    throw new Error('getAIUsageEligibility network error: ' + (err.message || err));
+  }
+  if (resp.status !== 200) {
+    const text = await resp.text();
+    throw new Error(`getAIUsageEligibility HTTP ${resp.status}: ${text.slice(0, 120)}`);
+  }
+  return await resp.json();
+}
+
 async function notionDiscoverAccount(baseUrl, tokenV2, fetchFn, timeoutMs) {
   const url = baseUrl.replace(/\/+$/, '') + '/api/v3/getSpaces';
   const headers = {
@@ -578,6 +610,7 @@ module.exports = {
   notionThreadType,
   notionListModels,
   notionDiscoverAccount,
+  notionUsageEligibility,
   buildNotionTranscript,
   notionBuildPayload,
   notionHeaders,
