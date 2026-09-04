@@ -1067,18 +1067,33 @@ async function handleAdminApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/admin/api/status') {
     return sendJson(res, 200, channelStatusAll());
   }
-  // 用量统计：总用量 / 按模型 / 按渠道 / 按天 / 最近请求。?clear=1 清零
+  // 用量统计：总用量 / 按模型 / 按渠道 / 按天 / 最近请求 / 24小时分布 / 各渠道平均延迟
   if (req.method === 'GET' && url.pathname === '/admin/api/usage') {
     const u = ensureUsage();
     const sorted = (obj) => Object.entries(obj)
       .map(([k, v]) => ({ key: k, ...v, total: (v.inputTokens || 0) + (v.outputTokens || 0) }))
       .sort((a, b) => (b.total || 0) - (a.total || 0));
+    // 24 小时分布（按最近 800 条请求的本地小时）
+    const hourly = Array.from({ length: 24 }, (_, h) => ({ h, requests: 0, errors: 0 }));
+    for (const r of u.recent) {
+      const h = new Date(r.ts).getHours();
+      if (hourly[h]) { hourly[h].requests++; if (r.ok === false) hourly[h].errors++; }
+    }
+    // 各渠道平均延迟（按最近成功请求）
+    const latSum = {}, latCnt = {};
+    for (const r of u.recent) {
+      if (r.ok !== false && r.ms > 0 && r.channelId) { latSum[r.channelId] = (latSum[r.channelId] || 0) + r.ms; latCnt[r.channelId] = (latCnt[r.channelId] || 0) + 1; }
+    }
+    const latency = {};
+    for (const k of Object.keys(latSum)) latency[k] = Math.round(latSum[k] / latCnt[k]);
     return sendJson(res, 200, {
       total: u.total,
       byModel: sorted(u.byModel),
       byChannel: sorted(u.byChannel),
-      byDay: Object.entries(u.byDay).map(([k, v]) => ({ day: k, ...v })).sort((a, b) => a.day.localeCompare(b.day)),
-      recent: u.recent.slice(-30).reverse(),
+      byDay: Object.entries(u.byDay).map(([k, v]) => ({ day: k, requests: v.requests || 0, errors: v.errors || 0, inputTokens: v.inputTokens || 0, outputTokens: v.outputTokens || 0 })).sort((a, b) => a.day.localeCompare(b.day)),
+      hourly,
+      latency,
+      recent: u.recent.slice(-200).reverse(),
     });
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/usage/clear') {

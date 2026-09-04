@@ -1,9 +1,9 @@
 {
  "total": {
-  "requests": 86,
-  "errors": 1,
-  "inputTokens": 2571409,
-  "outputTokens": 84170
+  "requests": 460,
+  "errors": 43,
+  "inputTokens": 25330314,
+  "outputTokens": 148063
  },
  "byModel": {
   "glm-5.2": {
@@ -31,10 +31,10 @@
    "outputTokens": 7172
   },
   "claude-opus-5": {
-   "requests": 44,
+   "requests": 214,
    "errors": 0,
-   "inputTokens": 2171021,
-   "outputTokens": 76688
+   "inputTokens": 13486617,
+   "outputTokens": 130847
   },
   "kimi-k3": {
    "requests": 1,
@@ -49,8 +49,8 @@
    "outputTokens": 17
   },
   "—": {
-   "requests": 1,
-   "errors": 1,
+   "requests": 43,
+   "errors": 43,
    "inputTokens": 0,
    "outputTokens": 0
   },
@@ -59,6 +59,12 @@
    "errors": 0,
    "inputTokens": 1,
    "outputTokens": 5
+  },
+  "[free]claude-opus-5": {
+   "requests": 162,
+   "errors": 0,
+   "inputTokens": 11443309,
+   "outputTokens": 9734
   }
  },
  "byChannel": {
@@ -87,24 +93,30 @@
    "outputTokens": 5599
   },
   "tabitoken": {
-   "requests": 25,
-   "errors": 0,
-   "inputTokens": 1445438,
-   "outputTokens": 6542
+   "requests": 138,
+   "errors": 19,
+   "inputTokens": 7856957,
+   "outputTokens": 33906
   },
   "gorouter": {
-   "requests": 19,
-   "errors": 0,
-   "inputTokens": 725583,
-   "outputTokens": 70146
+   "requests": 117,
+   "errors": 22,
+   "inputTokens": 5629660,
+   "outputTokens": 96941
+  },
+  "huchan": {
+   "requests": 163,
+   "errors": 1,
+   "inputTokens": 11443309,
+   "outputTokens": 9734
   }
  },
  "byDay": {
   "2026-09-04": {
-   "requests": 86,
-   "errors": 1,
-   "inputTokens": 2571409,
-   "outputTokens": 84170
+   "requests": 460,
+   "errors": 43,
+   "inputTokens": 25330314,
+   "outputTokens": 148063
   }
  },
  "recent": [
@@ -968,6 +980,3788 @@
    "out": 5,
    "ok": true,
    "ms": 4543
+  },
+  {
+   "ts": 1788531511359,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 31853,
+   "out": 2969,
+   "ok": true,
+   "ms": 87376
+  },
+  {
+   "ts": 1788531553207,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 79039,
+   "out": 351,
+   "ok": true,
+   "ms": 41608
+  },
+  {
+   "ts": 1788531603883,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 82850,
+   "out": 128,
+   "ok": true,
+   "ms": 42638
+  },
+  {
+   "ts": 1788531635851,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 84083,
+   "out": 31,
+   "ok": true,
+   "ms": 19492
+  },
+  {
+   "ts": 1788531666569,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 84138,
+   "out": 0,
+   "ok": true,
+   "ms": 20012
+  },
+  {
+   "ts": 1788531699223,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 84166,
+   "out": 0,
+   "ok": true,
+   "ms": 27666
+  },
+  {
+   "ts": 1788531725692,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 85605,
+   "out": 82,
+   "ok": true,
+   "ms": 26056
+  },
+  {
+   "ts": 1788531761454,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 85735,
+   "out": 0,
+   "ok": true,
+   "ms": 31682
+  },
+  {
+   "ts": 1788531838287,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 86806,
+   "out": 869,
+   "ok": true,
+   "ms": 56864
+  },
+  {
+   "ts": 1788531874039,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 89015,
+   "out": 52,
+   "ok": true,
+   "ms": 22856
+  },
+  {
+   "ts": 1788531883572,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788531906613,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 89117,
+   "out": 0,
+   "ok": true,
+   "ms": 23038
+  },
+  {
+   "ts": 1788531987562,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 96716,
+   "out": 1703,
+   "ok": true,
+   "ms": 80869
+  },
+  {
+   "ts": 1788532025397,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 98675,
+   "out": 590,
+   "ok": true,
+   "ms": 37395
+  },
+  {
+   "ts": 1788532055032,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 98675,
+   "out": 55,
+   "ok": true,
+   "ms": 29078
+  },
+  {
+   "ts": 1788532104708,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 98747,
+   "out": 0,
+   "ok": true,
+   "ms": 37602
+  },
+  {
+   "ts": 1788532134709,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 100235,
+   "out": 88,
+   "ok": true,
+   "ms": 29916
+  },
+  {
+   "ts": 1788532160661,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 100344,
+   "out": 0,
+   "ok": true,
+   "ms": 24809
+  },
+  {
+   "ts": 1788532188737,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 100350,
+   "out": 136,
+   "ok": true,
+   "ms": 26899
+  },
+  {
+   "ts": 1788532232821,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 101920,
+   "out": 547,
+   "ok": true,
+   "ms": 43469
+  },
+  {
+   "ts": 1788532278161,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 102519,
+   "out": 738,
+   "ok": true,
+   "ms": 42025
+  },
+  {
+   "ts": 1788532295848,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 104349,
+   "out": 108,
+   "ok": true,
+   "ms": 16958
+  },
+  {
+   "ts": 1788532418320,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 105694,
+   "out": 4186,
+   "ok": true,
+   "ms": 120514
+  },
+  {
+   "ts": 1788533326873,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 49985,
+   "out": 6316,
+   "ok": true,
+   "ms": 135971
+  },
+  {
+   "ts": 1788533392405,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 68205,
+   "out": 1046,
+   "ok": true,
+   "ms": 65297
+  },
+  {
+   "ts": 1788533441040,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 69797,
+   "out": 530,
+   "ok": true,
+   "ms": 45176
+  },
+  {
+   "ts": 1788533451306,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "fetch failed"
+  },
+  {
+   "ts": 1788533508062,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 70470,
+   "out": 286,
+   "ok": true,
+   "ms": 56754
+  },
+  {
+   "ts": 1788533531742,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 70843,
+   "out": 260,
+   "ok": true,
+   "ms": 23154
+  },
+  {
+   "ts": 1788533558105,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 71528,
+   "out": 330,
+   "ok": true,
+   "ms": 25657
+  },
+  {
+   "ts": 1788533585913,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 72108,
+   "out": 69,
+   "ok": true,
+   "ms": 25303
+  },
+  {
+   "ts": 1788533673489,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 72383,
+   "out": 1760,
+   "ok": true,
+   "ms": 87154
+  },
+  {
+   "ts": 1788533689718,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 74299,
+   "out": 101,
+   "ok": true,
+   "ms": 15709
+  },
+  {
+   "ts": 1788533757875,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 74635,
+   "out": 1208,
+   "ok": true,
+   "ms": 67707
+  },
+  {
+   "ts": 1788533796163,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 75858,
+   "out": 669,
+   "ok": true,
+   "ms": 38219
+  },
+  {
+   "ts": 1788533837162,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 76823,
+   "out": 571,
+   "ok": true,
+   "ms": 40921
+  },
+  {
+   "ts": 1788533949708,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 79826,
+   "out": 2112,
+   "ok": true,
+   "ms": 107456
+  },
+  {
+   "ts": 1788533962356,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 82175,
+   "out": 160,
+   "ok": true,
+   "ms": 12199
+  },
+  {
+   "ts": 1788533972537,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 82360,
+   "out": 0,
+   "ok": true,
+   "ms": 10107
+  },
+  {
+   "ts": 1788533984788,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 82368,
+   "out": 0,
+   "ok": true,
+   "ms": 11671
+  },
+  {
+   "ts": 1788533995836,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 82394,
+   "out": 0,
+   "ok": true,
+   "ms": 10841
+  },
+  {
+   "ts": 1788534207439,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 82407,
+   "out": 15,
+   "ok": true,
+   "ms": 31527
+  },
+  {
+   "ts": 1788534229626,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 82448,
+   "out": 0,
+   "ok": true,
+   "ms": 22089
+  },
+  {
+   "ts": 1788534234392,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 82474,
+   "out": 0,
+   "ok": true,
+   "ms": 4673
+  },
+  {
+   "ts": 1788534506709,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 82483,
+   "out": 0,
+   "ok": true,
+   "ms": 32248
+  },
+  {
+   "ts": 1788534525748,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 82510,
+   "out": 0,
+   "ok": true,
+   "ms": 18952
+  },
+  {
+   "ts": 1788534591148,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 82875,
+   "out": 201,
+   "ok": true,
+   "ms": 22202
+  },
+  {
+   "ts": 1788534609925,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 83272,
+   "out": 95,
+   "ok": true,
+   "ms": 17745
+  },
+  {
+   "ts": 1788534621583,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 84256,
+   "out": 134,
+   "ok": true,
+   "ms": 11223
+  },
+  {
+   "ts": 1788534635931,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 84594,
+   "out": 114,
+   "ok": true,
+   "ms": 14270
+  },
+  {
+   "ts": 1788534659040,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 85150,
+   "out": 83,
+   "ok": true,
+   "ms": 21217
+  },
+  {
+   "ts": 1788534676097,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 85505,
+   "out": 236,
+   "ok": true,
+   "ms": 16164
+  },
+  {
+   "ts": 1788534686386,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 85875,
+   "out": 54,
+   "ok": true,
+   "ms": 9053
+  },
+  {
+   "ts": 1788534722655,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 86288,
+   "out": 112,
+   "ok": true,
+   "ms": 35779
+  },
+  {
+   "ts": 1788534730506,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 86426,
+   "out": 0,
+   "ok": true,
+   "ms": 7736
+  },
+  {
+   "ts": 1788534949709,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 86440,
+   "out": 0,
+   "ok": true,
+   "ms": 15783
+  },
+  {
+   "ts": 1788534974584,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 86635,
+   "out": 298,
+   "ok": true,
+   "ms": 22859
+  },
+  {
+   "ts": 1788534990371,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 87017,
+   "out": 156,
+   "ok": true,
+   "ms": 15306
+  },
+  {
+   "ts": 1788534997552,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 87320,
+   "out": 70,
+   "ok": true,
+   "ms": 6623
+  },
+  {
+   "ts": 1788535020093,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 87800,
+   "out": 136,
+   "ok": true,
+   "ms": 18286
+  },
+  {
+   "ts": 1788535068537,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 88095,
+   "out": 650,
+   "ok": true,
+   "ms": 47923
+  },
+  {
+   "ts": 1788535094205,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 88823,
+   "out": 104,
+   "ok": true,
+   "ms": 18395
+  },
+  {
+   "ts": 1788535328106,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 89018,
+   "out": 199,
+   "ok": true,
+   "ms": 30469
+  },
+  {
+   "ts": 1788535378276,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 89342,
+   "out": 773,
+   "ok": true,
+   "ms": 47251
+  },
+  {
+   "ts": 1788535388693,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 90135,
+   "out": 0,
+   "ok": true,
+   "ms": 10329
+  },
+  {
+   "ts": 1788535396669,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 90155,
+   "out": 0,
+   "ok": true,
+   "ms": 7868
+  },
+  {
+   "ts": 1788535553804,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 90293,
+   "out": 222,
+   "ok": true,
+   "ms": 33717
+  },
+  {
+   "ts": 1788535576368,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "fetch failed"
+  },
+  {
+   "ts": 1788535596380,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "fetch failed"
+  },
+  {
+   "ts": 1788535637609,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 90524,
+   "out": 295,
+   "ok": true,
+   "ms": 40665
+  },
+  {
+   "ts": 1788535673026,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 90844,
+   "out": 0,
+   "ok": true,
+   "ms": 35317
+  },
+  {
+   "ts": 1788535694245,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 90870,
+   "out": 0,
+   "ok": true,
+   "ms": 21106
+  },
+  {
+   "ts": 1788535718779,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 90981,
+   "out": 136,
+   "ok": true,
+   "ms": 18903
+  },
+  {
+   "ts": 1788535739569,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 91174,
+   "out": 69,
+   "ok": true,
+   "ms": 18606
+  },
+  {
+   "ts": 1788535806451,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 91305,
+   "out": 272,
+   "ok": true,
+   "ms": 50705
+  },
+  {
+   "ts": 1788535819814,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 91597,
+   "out": 0,
+   "ok": true,
+   "ms": 13258
+  },
+  {
+   "ts": 1788535842169,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 91617,
+   "out": 0,
+   "ok": true,
+   "ms": 22218
+  },
+  {
+   "ts": 1788535865826,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 91745,
+   "out": 42,
+   "ok": true,
+   "ms": 16708
+  },
+  {
+   "ts": 1788535917245,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 91921,
+   "out": 55,
+   "ok": true,
+   "ms": 28474
+  },
+  {
+   "ts": 1788535945692,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 92062,
+   "out": 0,
+   "ok": true,
+   "ms": 25258
+  },
+  {
+   "ts": 1788535983515,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 92076,
+   "out": 0,
+   "ok": true,
+   "ms": 37720
+  },
+  {
+   "ts": 1788535995682,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 92099,
+   "out": 0,
+   "ok": true,
+   "ms": 12024
+  },
+  {
+   "ts": 1788536017704,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 92547,
+   "out": 0,
+   "ok": true,
+   "ms": 18542
+  },
+  {
+   "ts": 1788536101749,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 92561,
+   "out": 1188,
+   "ok": true,
+   "ms": 83926
+  },
+  {
+   "ts": 1788536179732,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 94051,
+   "out": 1021,
+   "ok": true,
+   "ms": 77842
+  },
+  {
+   "ts": 1788536207245,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 95197,
+   "out": 69,
+   "ok": true,
+   "ms": 24889
+  },
+  {
+   "ts": 1788536279572,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 95351,
+   "out": 1309,
+   "ok": true,
+   "ms": 71305
+  },
+  {
+   "ts": 1788536349938,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 96766,
+   "out": 973,
+   "ok": true,
+   "ms": 67910
+  },
+  {
+   "ts": 1788536422260,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 97767,
+   "out": 451,
+   "ok": true,
+   "ms": 72215
+  },
+  {
+   "ts": 1788536466756,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 98247,
+   "out": 0,
+   "ok": true,
+   "ms": 44356
+  },
+  {
+   "ts": 1788536563546,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 72834,
+   "out": 4127,
+   "ok": true,
+   "ms": 96684
+  },
+  {
+   "ts": 1788536615815,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 36480,
+   "out": 0,
+   "ok": true,
+   "ms": 52193
+  },
+  {
+   "ts": 1788536678449,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 36606,
+   "out": 0,
+   "ok": true,
+   "ms": 62544
+  },
+  {
+   "ts": 1788536728070,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 36634,
+   "out": 0,
+   "ok": true,
+   "ms": 49538
+  },
+  {
+   "ts": 1788536785152,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 36662,
+   "out": 75,
+   "ok": true,
+   "ms": 56975
+  },
+  {
+   "ts": 1788536855119,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 36758,
+   "out": 0,
+   "ok": true,
+   "ms": 69872
+  },
+  {
+   "ts": 1788536904338,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 36787,
+   "out": 26,
+   "ok": true,
+   "ms": 49058
+  },
+  {
+   "ts": 1788536966091,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 36843,
+   "out": 0,
+   "ok": true,
+   "ms": 61675
+  },
+  {
+   "ts": 1788536997897,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 37054,
+   "out": 69,
+   "ok": true,
+   "ms": 31079
+  },
+  {
+   "ts": 1788537008940,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 37151,
+   "out": 0,
+   "ok": true,
+   "ms": 10916
+  },
+  {
+   "ts": 1788537041782,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 37559,
+   "out": 0,
+   "ok": true,
+   "ms": 32126
+  },
+  {
+   "ts": 1788537051632,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 37588,
+   "out": 0,
+   "ok": true,
+   "ms": 9634
+  },
+  {
+   "ts": 1788537088917,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 37973,
+   "out": 0,
+   "ok": true,
+   "ms": 36483
+  },
+  {
+   "ts": 1788537112000,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38003,
+   "out": 0,
+   "ok": true,
+   "ms": 22973
+  },
+  {
+   "ts": 1788537150051,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38358,
+   "out": 0,
+   "ok": true,
+   "ms": 37362
+  },
+  {
+   "ts": 1788537168483,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38387,
+   "out": 0,
+   "ok": true,
+   "ms": 18160
+  },
+  {
+   "ts": 1788537177314,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38707,
+   "out": 71,
+   "ok": true,
+   "ms": 8132
+  },
+  {
+   "ts": 1788537227349,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38801,
+   "out": 0,
+   "ok": true,
+   "ms": 49944
+  },
+  {
+   "ts": 1788537246927,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38831,
+   "out": 0,
+   "ok": true,
+   "ms": 19502
+  },
+  {
+   "ts": 1788537307887,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 39277,
+   "out": 188,
+   "ok": true,
+   "ms": 60040
+  },
+  {
+   "ts": 1788537355288,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 39492,
+   "out": 0,
+   "ok": true,
+   "ms": 47271
+  },
+  {
+   "ts": 1788537363990,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 39522,
+   "out": 0,
+   "ok": true,
+   "ms": 8569
+  },
+  {
+   "ts": 1788537378502,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 39997,
+   "out": 170,
+   "ok": true,
+   "ms": 13829
+  },
+  {
+   "ts": 1788537451423,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 43770,
+   "out": 338,
+   "ok": true,
+   "ms": 72837
+  },
+  {
+   "ts": 1788537506742,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 44136,
+   "out": 0,
+   "ok": true,
+   "ms": 55198
+  },
+  {
+   "ts": 1788537512941,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 44166,
+   "out": 0,
+   "ok": true,
+   "ms": 6063
+  },
+  {
+   "ts": 1788537524775,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 44527,
+   "out": 0,
+   "ok": true,
+   "ms": 11000
+  },
+  {
+   "ts": 1788537554667,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 44753,
+   "out": 201,
+   "ok": true,
+   "ms": 28701
+  },
+  {
+   "ts": 1788537563212,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 45163,
+   "out": 0,
+   "ok": true,
+   "ms": 8055
+  },
+  {
+   "ts": 1788537571757,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 45675,
+   "out": 0,
+   "ok": true,
+   "ms": 8445
+  },
+  {
+   "ts": 1788537581564,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 46638,
+   "out": 0,
+   "ok": true,
+   "ms": 9343
+  },
+  {
+   "ts": 1788537605326,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 46999,
+   "out": 236,
+   "ok": true,
+   "ms": 23349
+  },
+  {
+   "ts": 1788537631280,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 47405,
+   "out": 0,
+   "ok": true,
+   "ms": 25336
+  },
+  {
+   "ts": 1788537663142,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 47782,
+   "out": 108,
+   "ok": true,
+   "ms": 31771
+  },
+  {
+   "ts": 1788537674153,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 48036,
+   "out": 0,
+   "ok": true,
+   "ms": 10474
+  },
+  {
+   "ts": 1788537685070,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 48076,
+   "out": 0,
+   "ok": true,
+   "ms": 10741
+  },
+  {
+   "ts": 1788537691668,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 50193,
+   "out": 0,
+   "ok": true,
+   "ms": 6510
+  },
+  {
+   "ts": 1788537718820,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 50322,
+   "out": 0,
+   "ok": true,
+   "ms": 27019
+  },
+  {
+   "ts": 1788537730246,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 50401,
+   "out": 0,
+   "ok": true,
+   "ms": 11315
+  },
+  {
+   "ts": 1788537757828,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 51378,
+   "out": 30,
+   "ok": true,
+   "ms": 27500
+  },
+  {
+   "ts": 1788537764905,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 52557,
+   "out": 0,
+   "ok": true,
+   "ms": 6996
+  },
+  {
+   "ts": 1788537777118,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 52597,
+   "out": 0,
+   "ok": true,
+   "ms": 12098
+  },
+  {
+   "ts": 1788537804678,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 53124,
+   "out": 177,
+   "ok": true,
+   "ms": 27457
+  },
+  {
+   "ts": 1788537848964,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 53880,
+   "out": 329,
+   "ok": true,
+   "ms": 43086
+  },
+  {
+   "ts": 1788537902347,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 54501,
+   "out": 391,
+   "ok": true,
+   "ms": 52727
+  },
+  {
+   "ts": 1788537921833,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 54924,
+   "out": 90,
+   "ok": true,
+   "ms": 18900
+  },
+  {
+   "ts": 1788537967684,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 61403,
+   "out": 366,
+   "ok": true,
+   "ms": 45183
+  },
+  {
+   "ts": 1788538013385,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 61779,
+   "out": 475,
+   "ok": true,
+   "ms": 45108
+  },
+  {
+   "ts": 1788538046413,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 429: {\"error\":{\"message\":\"Too many requests for this user; please slow down and retry shortly\",\"type\":\"rate_limit_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788538090235,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 63379,
+   "out": 844,
+   "ok": true,
+   "ms": 43818
+  },
+  {
+   "ts": 1788538135434,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 64958,
+   "out": 0,
+   "ok": true,
+   "ms": 45099
+  },
+  {
+   "ts": 1788538144504,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 429: {\"error\":{\"message\":\"Too many requests for this user; please slow down and retry shortly\",\"type\":\"rate_limit_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788538174952,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 65052,
+   "out": 0,
+   "ok": true,
+   "ms": 30444
+  },
+  {
+   "ts": 1788538241755,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 65532,
+   "out": 502,
+   "ok": true,
+   "ms": 66707
+  },
+  {
+   "ts": 1788538259460,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 57914,
+   "out": 0,
+   "ok": true,
+   "ms": 17165
+  },
+  {
+   "ts": 1788538350780,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 429: {\"error\":{\"message\":\"Too many requests for this user; please slow down and retry shortly\",\"type\":\"rate_limit_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788538356019,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 429: {\"error\":{\"message\":\"Too many requests for this user; please slow down and retry shortly\",\"type\":\"rate_limit_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788538380016,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 57972,
+   "out": 0,
+   "ok": true,
+   "ms": 23425
+  },
+  {
+   "ts": 1788538427848,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 58001,
+   "out": 0,
+   "ok": true,
+   "ms": 47720
+  },
+  {
+   "ts": 1788538515904,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 58030,
+   "out": 203,
+   "ok": true,
+   "ms": 87962
+  },
+  {
+   "ts": 1788538573884,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 58266,
+   "out": 0,
+   "ok": true,
+   "ms": 17031
+  },
+  {
+   "ts": 1788538631636,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 58295,
+   "out": 0,
+   "ok": true,
+   "ms": 57665
+  },
+  {
+   "ts": 1788538663400,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 58375,
+   "out": 0,
+   "ok": true,
+   "ms": 24057
+  },
+  {
+   "ts": 1788538746610,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 58525,
+   "out": 71,
+   "ok": true,
+   "ms": 83136
+  },
+  {
+   "ts": 1788538802703,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 58890,
+   "out": 217,
+   "ok": true,
+   "ms": 54834
+  },
+  {
+   "ts": 1788538831423,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 59131,
+   "out": 0,
+   "ok": true,
+   "ms": 28631
+  },
+  {
+   "ts": 1788538866522,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 429: {\"error\":{\"message\":\"Too many requests for this user; please slow down and retry shortly\",\"type\":\"rate_limit_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788538903932,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 59265,
+   "out": 83,
+   "ok": true,
+   "ms": 37406
+  },
+  {
+   "ts": 1788538939760,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 59413,
+   "out": 0,
+   "ok": true,
+   "ms": 35306
+  },
+  {
+   "ts": 1788538958467,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 59439,
+   "out": 0,
+   "ok": true,
+   "ms": 17119
+  },
+  {
+   "ts": 1788538976380,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 59470,
+   "out": 0,
+   "ok": true,
+   "ms": 17817
+  },
+  {
+   "ts": 1788539007439,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 59623,
+   "out": 0,
+   "ok": true,
+   "ms": 30976
+  },
+  {
+   "ts": 1788539020148,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 59647,
+   "out": 0,
+   "ok": true,
+   "ms": 12618
+  },
+  {
+   "ts": 1788539197955,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 59753,
+   "out": 26,
+   "ok": true,
+   "ms": 175584
+  },
+  {
+   "ts": 1788539304393,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 40447,
+   "out": 4957,
+   "ok": true,
+   "ms": 106196
+  },
+  {
+   "ts": 1788539353165,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 31230,
+   "out": 649,
+   "ok": true,
+   "ms": 48689
+  },
+  {
+   "ts": 1788539372079,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 32010,
+   "out": 0,
+   "ok": true,
+   "ms": 18812
+  },
+  {
+   "ts": 1788539427986,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 32529,
+   "out": 444,
+   "ok": true,
+   "ms": 55833
+  },
+  {
+   "ts": 1788539450197,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 32529,
+   "out": 324,
+   "ok": true,
+   "ms": 21614
+  },
+  {
+   "ts": 1788539454930,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 33131,
+   "out": 0,
+   "ok": true,
+   "ms": 4614
+  },
+  {
+   "ts": 1788539481808,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 33617,
+   "out": 0,
+   "ok": true,
+   "ms": 26771
+  },
+  {
+   "ts": 1788539508895,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 33672,
+   "out": 134,
+   "ok": true,
+   "ms": 26950
+  },
+  {
+   "ts": 1788539531319,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 34230,
+   "out": 32,
+   "ok": true,
+   "ms": 21746
+  },
+  {
+   "ts": 1788539549253,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 37823,
+   "out": 0,
+   "ok": true,
+   "ms": 17265
+  },
+  {
+   "ts": 1788539565480,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 38018,
+   "out": 137,
+   "ok": true,
+   "ms": 16121
+  },
+  {
+   "ts": 1788539636004,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788539733824,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788539768288,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "openai",
+   "in": 38299,
+   "out": 232,
+   "ok": true,
+   "ms": 33898
+  },
+  {
+   "ts": 1788539888835,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "This operation was aborted"
+  },
+  {
+   "ts": 1788540008833,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "This operation was aborted"
+  },
+  {
+   "ts": 1788540053608,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540080923,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540160612,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540164000,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540179368,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "openai",
+   "in": 38606,
+   "out": 0,
+   "ok": true,
+   "ms": 13298
+  },
+  {
+   "ts": 1788540297927,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540417925,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "This operation was aborted"
+  },
+  {
+   "ts": 1788540422748,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540489004,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540494410,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788540534106,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788540574171,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788540629092,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788540701923,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788540769817,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788540851587,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788540889448,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788541492052,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788541568119,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788541621908,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788541692351,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788541765455,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788541837013,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788541912892,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788542032884,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "This operation was aborted"
+  },
+  {
+   "ts": 1788542056604,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 502: <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html "
+  },
+  {
+   "ts": 1788542132499,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788542204725,
+   "model": "—",
+   "channelId": "tabitoken",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788542260190,
+   "model": "—",
+   "channelId": "gorouter",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "HTTP 503: {\"error\":{\"message\":\"all nodes exhausted; retry later\",\"type\":\"overloaded_error\",\"param\":\"\",\"code\":null}}"
+  },
+  {
+   "ts": 1788543470949,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 38631,
+   "out": 73,
+   "ok": true,
+   "ms": 59823
+  },
+  {
+   "ts": 1788543483797,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 38893,
+   "out": 0,
+   "ok": true,
+   "ms": 12670
+  },
+  {
+   "ts": 1788543496325,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 39996,
+   "out": 0,
+   "ok": true,
+   "ms": 12453
+  },
+  {
+   "ts": 1788543515852,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 40877,
+   "out": 0,
+   "ok": true,
+   "ms": 19453
+  },
+  {
+   "ts": 1788543545786,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 41038,
+   "out": 0,
+   "ok": true,
+   "ms": 29787
+  },
+  {
+   "ts": 1788543619582,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 41804,
+   "out": 0,
+   "ok": true,
+   "ms": 73721
+  },
+  {
+   "ts": 1788543636607,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 42569,
+   "out": 0,
+   "ok": true,
+   "ms": 16895
+  },
+  {
+   "ts": 1788543722592,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 44031,
+   "out": 116,
+   "ok": true,
+   "ms": 85896
+  },
+  {
+   "ts": 1788543749920,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 44152,
+   "out": 0,
+   "ok": true,
+   "ms": 27195
+  },
+  {
+   "ts": 1788543801974,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 44677,
+   "out": 0,
+   "ok": true,
+   "ms": 51834
+  },
+  {
+   "ts": 1788543810485,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 44699,
+   "out": 0,
+   "ok": true,
+   "ms": 8446
+  },
+  {
+   "ts": 1788543828506,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 44754,
+   "out": 0,
+   "ok": true,
+   "ms": 17552
+  },
+  {
+   "ts": 1788543856277,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 46119,
+   "out": 78,
+   "ok": true,
+   "ms": 27697
+  },
+  {
+   "ts": 1788543867807,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 46337,
+   "out": 0,
+   "ok": true,
+   "ms": 11402
+  },
+  {
+   "ts": 1788543878944,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 46493,
+   "out": 0,
+   "ok": true,
+   "ms": 11039
+  },
+  {
+   "ts": 1788543905402,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 46527,
+   "out": 0,
+   "ok": true,
+   "ms": 26315
+  },
+  {
+   "ts": 1788543968698,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 46946,
+   "out": 0,
+   "ok": true,
+   "ms": 63218
+  },
+  {
+   "ts": 1788544005006,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 47380,
+   "out": 0,
+   "ok": true,
+   "ms": 36215
+  },
+  {
+   "ts": 1788544022238,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 47420,
+   "out": 0,
+   "ok": true,
+   "ms": 17118
+  },
+  {
+   "ts": 1788544043348,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 47569,
+   "out": 0,
+   "ok": true,
+   "ms": 21001
+  },
+  {
+   "ts": 1788544143049,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 47690,
+   "out": 86,
+   "ok": true,
+   "ms": 99592
+  },
+  {
+   "ts": 1788544195210,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 48027,
+   "out": 55,
+   "ok": true,
+   "ms": 52070
+  },
+  {
+   "ts": 1788544282675,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 48175,
+   "out": 269,
+   "ok": true,
+   "ms": 87374
+  },
+  {
+   "ts": 1788544355155,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 48471,
+   "out": 53,
+   "ok": true,
+   "ms": 67753
+  },
+  {
+   "ts": 1788544423650,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 48597,
+   "out": 0,
+   "ok": true,
+   "ms": 67779
+  },
+  {
+   "ts": 1788544437903,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 48611,
+   "out": 0,
+   "ok": true,
+   "ms": 14186
+  },
+  {
+   "ts": 1788544461841,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 48655,
+   "out": 0,
+   "ok": true,
+   "ms": 23520
+  },
+  {
+   "ts": 1788544487159,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 48689,
+   "out": 0,
+   "ok": true,
+   "ms": 25229
+  },
+  {
+   "ts": 1788544520386,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 49004,
+   "out": 0,
+   "ok": true,
+   "ms": 33158
+  },
+  {
+   "ts": 1788544541942,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 49033,
+   "out": 0,
+   "ok": true,
+   "ms": 21459
+  },
+  {
+   "ts": 1788544615295,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 49057,
+   "out": 0,
+   "ok": true,
+   "ms": 73275
+  },
+  {
+   "ts": 1788544636078,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 49338,
+   "out": 35,
+   "ok": true,
+   "ms": 19554
+  },
+  {
+   "ts": 1788544657488,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 49391,
+   "out": 0,
+   "ok": true,
+   "ms": 21322
+  },
+  {
+   "ts": 1788544673580,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 49639,
+   "out": 32,
+   "ok": true,
+   "ms": 14766
+  },
+  {
+   "ts": 1788544687305,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 49690,
+   "out": 0,
+   "ok": true,
+   "ms": 13646
+  },
+  {
+   "ts": 1788544714589,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50055,
+   "out": 54,
+   "ok": true,
+   "ms": 24667
+  },
+  {
+   "ts": 1788544743467,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50147,
+   "out": 36,
+   "ok": true,
+   "ms": 28446
+  },
+  {
+   "ts": 1788544756547,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50209,
+   "out": 0,
+   "ok": true,
+   "ms": 12964
+  },
+  {
+   "ts": 1788544785798,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50577,
+   "out": 10,
+   "ok": true,
+   "ms": 28677
+  },
+  {
+   "ts": 1788544841339,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50606,
+   "out": 0,
+   "ok": true,
+   "ms": 55458
+  },
+  {
+   "ts": 1788544864380,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50680,
+   "out": 35,
+   "ok": true,
+   "ms": 22422
+  },
+  {
+   "ts": 1788544876837,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50736,
+   "out": 33,
+   "ok": true,
+   "ms": 12373
+  },
+  {
+   "ts": 1788544946537,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 50832,
+   "out": 64,
+   "ok": true,
+   "ms": 67479
+  },
+  {
+   "ts": 1788544991666,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 51550,
+   "out": 0,
+   "ok": true,
+   "ms": 45056
+  },
+  {
+   "ts": 1788545009466,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 51777,
+   "out": 0,
+   "ok": true,
+   "ms": 17689
+  },
+  {
+   "ts": 1788545044565,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 52250,
+   "out": 0,
+   "ok": true,
+   "ms": 35026
+  },
+  {
+   "ts": 1788545065493,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 52648,
+   "out": 156,
+   "ok": true,
+   "ms": 20839
+  },
+  {
+   "ts": 1788545090307,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 53471,
+   "out": 0,
+   "ok": true,
+   "ms": 24722
+  },
+  {
+   "ts": 1788545167090,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 53564,
+   "out": 94,
+   "ok": true,
+   "ms": 76683
+  },
+  {
+   "ts": 1788545194123,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 53786,
+   "out": 25,
+   "ok": true,
+   "ms": 26877
+  },
+  {
+   "ts": 1788545226068,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 54084,
+   "out": 0,
+   "ok": true,
+   "ms": 31867
+  },
+  {
+   "ts": 1788545239125,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 54094,
+   "out": 0,
+   "ok": true,
+   "ms": 12660
+  },
+  {
+   "ts": 1788545289069,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 54405,
+   "out": 25,
+   "ok": true,
+   "ms": 49485
+  },
+  {
+   "ts": 1788545296187,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 54729,
+   "out": 26,
+   "ok": true,
+   "ms": 6529
+  },
+  {
+   "ts": 1788545312327,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 55097,
+   "out": 0,
+   "ok": true,
+   "ms": 16063
+  },
+  {
+   "ts": 1788545421327,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 55099,
+   "out": 63,
+   "ok": true,
+   "ms": 95167
+  },
+  {
+   "ts": 1788545469999,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 55169,
+   "out": 0,
+   "ok": true,
+   "ms": 48285
+  },
+  {
+   "ts": 1788545520714,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 55242,
+   "out": 72,
+   "ok": true,
+   "ms": 50172
+  },
+  {
+   "ts": 1788545538787,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 55339,
+   "out": 0,
+   "ok": true,
+   "ms": 17963
+  },
+  {
+   "ts": 1788545567260,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 55455,
+   "out": 0,
+   "ok": true,
+   "ms": 27868
+  },
+  {
+   "ts": 1788545579124,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 55490,
+   "out": 0,
+   "ok": true,
+   "ms": 11752
+  },
+  {
+   "ts": 1788545616145,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 56509,
+   "out": 68,
+   "ok": true,
+   "ms": 36948
+  },
+  {
+   "ts": 1788545654582,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 56895,
+   "out": 40,
+   "ok": true,
+   "ms": 38339
+  },
+  {
+   "ts": 1788545670458,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 56961,
+   "out": 0,
+   "ok": true,
+   "ms": 15755
+  },
+  {
+   "ts": 1788545679717,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 57033,
+   "out": 0,
+   "ok": true,
+   "ms": 8696
+  },
+  {
+   "ts": 1788545708615,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 57048,
+   "out": 0,
+   "ok": true,
+   "ms": 28826
+  },
+  {
+   "ts": 1788545733938,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 57089,
+   "out": 27,
+   "ok": true,
+   "ms": 23844
+  },
+  {
+   "ts": 1788545755493,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 57146,
+   "out": 0,
+   "ok": true,
+   "ms": 15881
+  },
+  {
+   "ts": 1788545790399,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 57277,
+   "out": 0,
+   "ok": true,
+   "ms": 30198
+  },
+  {
+   "ts": 1788545811420,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 57287,
+   "out": 0,
+   "ok": true,
+   "ms": 16628
+  },
+  {
+   "ts": 1788545841956,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 57334,
+   "out": 54,
+   "ok": true,
+   "ms": 30157
+  },
+  {
+   "ts": 1788545870245,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 58280,
+   "out": 0,
+   "ok": true,
+   "ms": 27784
+  },
+  {
+   "ts": 1788545912447,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 58956,
+   "out": 99,
+   "ok": true,
+   "ms": 41561
+  },
+  {
+   "ts": 1788546685215,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59068,
+   "out": 26,
+   "ok": true,
+   "ms": 76848
+  },
+  {
+   "ts": 1788546700529,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59419,
+   "out": 0,
+   "ok": true,
+   "ms": 15240
+  },
+  {
+   "ts": 1788546721023,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59441,
+   "out": 0,
+   "ok": true,
+   "ms": 20400
+  },
+  {
+   "ts": 1788546730890,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59598,
+   "out": 0,
+   "ok": true,
+   "ms": 9143
+  },
+  {
+   "ts": 1788546750137,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59696,
+   "out": 0,
+   "ok": true,
+   "ms": 10632
+  },
+  {
+   "ts": 1788546807760,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59737,
+   "out": 45,
+   "ok": true,
+   "ms": 52257
+  },
+  {
+   "ts": 1788546824616,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59804,
+   "out": 0,
+   "ok": true,
+   "ms": 16782
+  },
+  {
+   "ts": 1788546873645,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59955,
+   "out": 0,
+   "ok": true,
+   "ms": 34658
+  },
+  {
+   "ts": 1788546892135,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 59969,
+   "out": 0,
+   "ok": true,
+   "ms": 18421
+  },
+  {
+   "ts": 1788546928698,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 60035,
+   "out": 113,
+   "ok": true,
+   "ms": 33673
+  },
+  {
+   "ts": 1788546945139,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 60251,
+   "out": 19,
+   "ok": true,
+   "ms": 11819
+  },
+  {
+   "ts": 1788546988314,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 61561,
+   "out": 0,
+   "ok": true,
+   "ms": 43101
+  },
+  {
+   "ts": 1788547011125,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 61578,
+   "out": 0,
+   "ok": true,
+   "ms": 22724
+  },
+  {
+   "ts": 1788547033090,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 61594,
+   "out": 40,
+   "ok": true,
+   "ms": 21866
+  },
+  {
+   "ts": 1788547068155,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 61702,
+   "out": 0,
+   "ok": true,
+   "ms": 33603
+  },
+  {
+   "ts": 1788547097937,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 61716,
+   "out": 819,
+   "ok": true,
+   "ms": 29701
+  },
+  {
+   "ts": 1788547295863,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 62582,
+   "out": 1157,
+   "ok": true,
+   "ms": 65891
+  },
+  {
+   "ts": 1788547690104,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 63780,
+   "out": 1299,
+   "ok": true,
+   "ms": 55006
+  },
+  {
+   "ts": 1788548277558,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 65292,
+   "out": 1884,
+   "ok": true,
+   "ms": 58094
+  },
+  {
+   "ts": 1788548676565,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 67345,
+   "out": 1741,
+   "ok": true,
+   "ms": 47462
+  },
+  {
+   "ts": 1788548933715,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 69098,
+   "out": 25,
+   "ok": true,
+   "ms": 46520
+  },
+  {
+   "ts": 1788548949237,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 71331,
+   "out": 0,
+   "ok": true,
+   "ms": 15431
+  },
+  {
+   "ts": 1788548956891,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 73955,
+   "out": 0,
+   "ok": true,
+   "ms": 7570
+  },
+  {
+   "ts": 1788548980554,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 77119,
+   "out": 0,
+   "ok": true,
+   "ms": 23574
+  },
+  {
+   "ts": 1788548995801,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 77119,
+   "out": 0,
+   "ok": true,
+   "ms": 14673
+  },
+  {
+   "ts": 1788549096772,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 80427,
+   "out": 62,
+   "ok": true,
+   "ms": 100887
+  },
+  {
+   "ts": 1788549115796,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 80604,
+   "out": 0,
+   "ok": true,
+   "ms": 18901
+  },
+  {
+   "ts": 1788549129008,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 82105,
+   "out": 0,
+   "ok": true,
+   "ms": 13123
+  },
+  {
+   "ts": 1788549135833,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 82377,
+   "out": 0,
+   "ok": true,
+   "ms": 6702
+  },
+  {
+   "ts": 1788549146417,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 83092,
+   "out": 0,
+   "ok": true,
+   "ms": 10502
+  },
+  {
+   "ts": 1788549159126,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 83096,
+   "out": 0,
+   "ok": true,
+   "ms": 12575
+  },
+  {
+   "ts": 1788549172026,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 83134,
+   "out": 0,
+   "ok": true,
+   "ms": 12783
+  },
+  {
+   "ts": 1788549234707,
+   "model": "claude-opus-5",
+   "channelId": "gorouter",
+   "kind": "test",
+   "in": 7312,
+   "out": 155,
+   "ok": true,
+   "ms": 6802
+  },
+  {
+   "ts": 1788549242308,
+   "model": "claude-opus-5",
+   "channelId": "tabitoken",
+   "kind": "test",
+   "in": 7098,
+   "out": 99,
+   "ok": true,
+   "ms": 5384
+  },
+  {
+   "ts": 1788549244559,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 89049,
+   "out": 0,
+   "ok": true,
+   "ms": 72441
+  },
+  {
+   "ts": 1788549267493,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 89116,
+   "out": 0,
+   "ok": true,
+   "ms": 22830
+  },
+  {
+   "ts": 1788549295984,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 90422,
+   "out": 54,
+   "ok": true,
+   "ms": 28413
+  },
+  {
+   "ts": 1788549309527,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92496,
+   "out": 0,
+   "ok": true,
+   "ms": 13463
+  },
+  {
+   "ts": 1788549329641,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92632,
+   "out": 70,
+   "ok": true,
+   "ms": 20019
+  },
+  {
+   "ts": 1788549449717,
+   "model": "—",
+   "channelId": "huchan",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "This operation was aborted"
+  },
+  {
+   "ts": 1788549480314,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92729,
+   "out": 0,
+   "ok": true,
+   "ms": 26999
+  },
+  {
+   "ts": 1788549495061,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92751,
+   "out": 0,
+   "ok": true,
+   "ms": 14628
+  },
+  {
+   "ts": 1788549511810,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92773,
+   "out": 29,
+   "ok": true,
+   "ms": 16667
+  },
+  {
+   "ts": 1788549533984,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92824,
+   "out": 0,
+   "ok": true,
+   "ms": 22088
+  },
+  {
+   "ts": 1788549550491,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92846,
+   "out": 0,
+   "ok": true,
+   "ms": 16420
+  },
+  {
+   "ts": 1788549574296,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92846,
+   "out": 0,
+   "ok": true,
+   "ms": 23221
+  },
+  {
+   "ts": 1788549589695,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92869,
+   "out": 15,
+   "ok": true,
+   "ms": 15295
+  },
+  {
+   "ts": 1788549598312,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92905,
+   "out": 0,
+   "ok": true,
+   "ms": 8504
+  },
+  {
+   "ts": 1788549630343,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92928,
+   "out": 38,
+   "ok": true,
+   "ms": 31945
+  },
+  {
+   "ts": 1788549653894,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 92988,
+   "out": 41,
+   "ok": true,
+   "ms": 23446
+  },
+  {
+   "ts": 1788549675526,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 93052,
+   "out": 28,
+   "ok": true,
+   "ms": 21522
+  },
+  {
+   "ts": 1788549783865,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 93103,
+   "out": 22,
+   "ok": true,
+   "ms": 108185
+  },
+  {
+   "ts": 1788549791594,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 93160,
+   "out": 0,
+   "ok": true,
+   "ms": 7599
+  },
+  {
+   "ts": 1788549855556,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 93717,
+   "out": 46,
+   "ok": true,
+   "ms": 10560
+  },
+  {
+   "ts": 1788549876077,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 94995,
+   "out": 0,
+   "ok": true,
+   "ms": 20426
+  },
+  {
+   "ts": 1788549884276,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 95017,
+   "out": 0,
+   "ok": true,
+   "ms": 8083
+  },
+  {
+   "ts": 1788549893316,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 95602,
+   "out": 27,
+   "ok": true,
+   "ms": 8958
+  },
+  {
+   "ts": 1788550005270,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 95651,
+   "out": 0,
+   "ok": true,
+   "ms": 111857
+  },
+  {
+   "ts": 1788550018535,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 95673,
+   "out": 40,
+   "ok": true,
+   "ms": 13161
+  },
+  {
+   "ts": 1788550034018,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96358,
+   "out": 0,
+   "ok": true,
+   "ms": 15397
+  },
+  {
+   "ts": 1788550062995,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96380,
+   "out": 40,
+   "ok": true,
+   "ms": 28888
+  },
+  {
+   "ts": 1788550073824,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96442,
+   "out": 33,
+   "ok": true,
+   "ms": 10714
+  },
+  {
+   "ts": 1788550085328,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 97954,
+   "out": 0,
+   "ok": true,
+   "ms": 11395
+  },
+  {
+   "ts": 1788550096233,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 97976,
+   "out": 0,
+   "ok": true,
+   "ms": 10810
+  },
+  {
+   "ts": 1788550104081,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 97998,
+   "out": 0,
+   "ok": true,
+   "ms": 7745
+  },
+  {
+   "ts": 1788550117926,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 99422,
+   "out": 0,
+   "ok": true,
+   "ms": 13750
+  },
+  {
+   "ts": 1788550148769,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 100165,
+   "out": 21,
+   "ok": true,
+   "ms": 30761
+  },
+  {
+   "ts": 1788550165600,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 100208,
+   "out": 0,
+   "ok": true,
+   "ms": 13322
+  },
+  {
+   "ts": 1788550180127,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 100230,
+   "out": 0,
+   "ok": true,
+   "ms": 14437
+  },
+  {
+   "ts": 1788550198394,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 100252,
+   "out": 25,
+   "ok": true,
+   "ms": 18176
+  },
+  {
+   "ts": 1788550213057,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 100300,
+   "out": 0,
+   "ok": true,
+   "ms": 14568
+  },
+  {
+   "ts": 1788550224420,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 101763,
+   "out": 0,
+   "ok": true,
+   "ms": 11278
+  },
+  {
+   "ts": 1788550243814,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 101785,
+   "out": 0,
+   "ok": true,
+   "ms": 19302
+  },
+  {
+   "ts": 1788550294775,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 101807,
+   "out": 57,
+   "ok": true,
+   "ms": 50877
+  },
+  {
+   "ts": 1788550311617,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103585,
+   "out": 0,
+   "ok": true,
+   "ms": 16744
+  },
+  {
+   "ts": 1788550338504,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103607,
+   "out": 0,
+   "ok": true,
+   "ms": 26791
+  },
+  {
+   "ts": 1788550345539,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103629,
+   "out": 0,
+   "ok": true,
+   "ms": 6937
+  },
+  {
+   "ts": 1788550377376,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103676,
+   "out": 42,
+   "ok": true,
+   "ms": 31734
+  },
+  {
+   "ts": 1788550385859,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103739,
+   "out": 0,
+   "ok": true,
+   "ms": 8383
+  },
+  {
+   "ts": 1788550403054,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103823,
+   "out": 21,
+   "ok": true,
+   "ms": 17094
+  },
+  {
+   "ts": 1788550426704,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103851,
+   "out": 0,
+   "ok": true,
+   "ms": 23281
+  },
+  {
+   "ts": 1788550448794,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103884,
+   "out": 0,
+   "ok": true,
+   "ms": 21998
+  },
+  {
+   "ts": 1788550455487,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 103913,
+   "out": 0,
+   "ok": true,
+   "ms": 6571
+  },
+  {
+   "ts": 1788550470114,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 104146,
+   "out": 0,
+   "ok": true,
+   "ms": 14524
+  },
+  {
+   "ts": 1788550486461,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 104168,
+   "out": 39,
+   "ok": true,
+   "ms": 16236
+  },
+  {
+   "ts": 1788550498785,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 104426,
+   "out": 0,
+   "ok": true,
+   "ms": 12202
+  },
+  {
+   "ts": 1788550517372,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 104448,
+   "out": 0,
+   "ok": true,
+   "ms": 18503
+  },
+  {
+   "ts": 1788550535442,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 104470,
+   "out": 0,
+   "ok": true,
+   "ms": 17986
+  },
+  {
+   "ts": 1788550549654,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 104712,
+   "out": 18,
+   "ok": true,
+   "ms": 13843
+  },
+  {
+   "ts": 1788550565309,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 104754,
+   "out": 0,
+   "ok": true,
+   "ms": 15268
+  },
+  {
+   "ts": 1788550577714,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 105480,
+   "out": 20,
+   "ok": true,
+   "ms": 10535
+  },
+  {
+   "ts": 1788550604819,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 106349,
+   "out": 0,
+   "ok": true,
+   "ms": 27013
   }
  ]
 }
