@@ -1,9 +1,9 @@
 {
  "total": {
-  "requests": 460,
+  "requests": 491,
   "errors": 43,
-  "inputTokens": 25330314,
-  "outputTokens": 148063
+  "inputTokens": 28517785,
+  "outputTokens": 149304
  },
  "byModel": {
   "glm-5.2": {
@@ -61,10 +61,10 @@
    "outputTokens": 5
   },
   "[free]claude-opus-5": {
-   "requests": 162,
+   "requests": 193,
    "errors": 0,
-   "inputTokens": 11443309,
-   "outputTokens": 9734
+   "inputTokens": 14630780,
+   "outputTokens": 10975
   }
  },
  "byChannel": {
@@ -105,18 +105,18 @@
    "outputTokens": 96941
   },
   "huchan": {
-   "requests": 163,
+   "requests": 194,
    "errors": 1,
-   "inputTokens": 11443309,
-   "outputTokens": 9734
+   "inputTokens": 14630780,
+   "outputTokens": 10975
   }
  },
  "byDay": {
   "2026-09-04": {
-   "requests": 460,
+   "requests": 491,
    "errors": 43,
-   "inputTokens": 25330314,
-   "outputTokens": 148063
+   "inputTokens": 28517785,
+   "outputTokens": 149304
   }
  },
  "recent": [
@@ -4762,6 +4762,316 @@
    "out": 0,
    "ok": true,
    "ms": 27013
+  },
+  {
+   "ts": 1788550618248,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 106373,
+   "out": 0,
+   "ok": true,
+   "ms": 13334
+  },
+  {
+   "ts": 1788550626721,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 106396,
+   "out": 0,
+   "ok": true,
+   "ms": 8377
+  },
+  {
+   "ts": 1788550639642,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 106560,
+   "out": 0,
+   "ok": true,
+   "ms": 10797
+  },
+  {
+   "ts": 1788550653089,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 106611,
+   "out": 35,
+   "ok": true,
+   "ms": 11225
+  },
+  {
+   "ts": 1788550660685,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 107119,
+   "out": 0,
+   "ok": true,
+   "ms": 7508
+  },
+  {
+   "ts": 1788550677672,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 107433,
+   "out": 0,
+   "ok": true,
+   "ms": 16899
+  },
+  {
+   "ts": 1788550701422,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 107433,
+   "out": 0,
+   "ok": true,
+   "ms": 23159
+  },
+  {
+   "ts": 1788550717268,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 107457,
+   "out": 0,
+   "ok": true,
+   "ms": 15715
+  },
+  {
+   "ts": 1788550727506,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 107777,
+   "out": 0,
+   "ok": true,
+   "ms": 10144
+  },
+  {
+   "ts": 1788550751133,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 107988,
+   "out": 0,
+   "ok": true,
+   "ms": 23536
+  },
+  {
+   "ts": 1788550762674,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 108012,
+   "out": 0,
+   "ok": true,
+   "ms": 11452
+  },
+  {
+   "ts": 1788550782004,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 108105,
+   "out": 27,
+   "ok": true,
+   "ms": 17077
+  },
+  {
+   "ts": 1788550799819,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 108322,
+   "out": 28,
+   "ok": true,
+   "ms": 17035
+  },
+  {
+   "ts": 1788550844506,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 108495,
+   "out": 46,
+   "ok": true,
+   "ms": 30038
+  },
+  {
+   "ts": 1788550854483,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 108616,
+   "out": 46,
+   "ok": true,
+   "ms": 9532
+  },
+  {
+   "ts": 1788550865567,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 108684,
+   "out": 0,
+   "ok": true,
+   "ms": 10986
+  },
+  {
+   "ts": 1788550874527,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 108741,
+   "out": 32,
+   "ok": true,
+   "ms": 8548
+  },
+  {
+   "ts": 1788550893346,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 95789,
+   "out": 54,
+   "ok": true,
+   "ms": 18349
+  },
+  {
+   "ts": 1788550916854,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 95972,
+   "out": 0,
+   "ok": true,
+   "ms": 21219
+  },
+  {
+   "ts": 1788550966360,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96090,
+   "out": 26,
+   "ok": true,
+   "ms": 35488
+  },
+  {
+   "ts": 1788550984003,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96132,
+   "out": 0,
+   "ok": true,
+   "ms": 17555
+  },
+  {
+   "ts": 1788551005436,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96155,
+   "out": 0,
+   "ok": true,
+   "ms": 21327
+  },
+  {
+   "ts": 1788551024539,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96430,
+   "out": 16,
+   "ok": true,
+   "ms": 18602
+  },
+  {
+   "ts": 1788551033622,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96901,
+   "out": 18,
+   "ok": true,
+   "ms": 8992
+  },
+  {
+   "ts": 1788551055817,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 96942,
+   "out": 0,
+   "ok": true,
+   "ms": 22085
+  },
+  {
+   "ts": 1788551071226,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 97034,
+   "out": 22,
+   "ok": true,
+   "ms": 14921
+  },
+  {
+   "ts": 1788551101194,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 97231,
+   "out": 799,
+   "ok": true,
+   "ms": 13575
+  },
+  {
+   "ts": 1788551369619,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 98032,
+   "out": 92,
+   "ok": true,
+   "ms": 167727
+  },
+  {
+   "ts": 1788551385558,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 98138,
+   "out": 0,
+   "ok": true,
+   "ms": 15870
+  },
+  {
+   "ts": 1788551401647,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 98198,
+   "out": 0,
+   "ok": true,
+   "ms": 15666
+  },
+  {
+   "ts": 1788551409674,
+   "model": "[free]claude-opus-5",
+   "channelId": "huchan",
+   "kind": "openai",
+   "in": 98305,
+   "out": 0,
+   "ok": true,
+   "ms": 7936
   }
  ]
 }
