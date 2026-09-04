@@ -495,19 +495,20 @@ function renderChannels(data) {
       const unlimited = u.type === 'unlimited';
       const usedPct = u.userLimit > 0 ? Math.round(u.userUsage / u.userLimit * 100) : 0;
       const remain = Math.max(0, u.userLimit - u.userUsage);
-      const barW = Math.min(100, usedPct);
       const when = u.at ? new Date(u.at).toLocaleTimeString() : '—';
-      // 语义：显示"已用/基准"与"剩余"，而不是一个含糊的百分比
+      // unlimited：75 基准对它无约束力（实测超 240% 仍放行），只展示已用量
+      // limited：展示剩余与百分比
       const usageText = unlimited
-        ? `AI已用 <b>${u.userUsage}</b> ／ 基准 ${u.userLimit}（6h窗口 · 不限量计划${usedPct > 100 ? '，已超基准仍放行' : ''}）`
+        ? `AI已用 <b>${u.userUsage}</b>（6h窗口 · 不限量计划，公平使用原则，无硬性上限）`
         : `6h剩余 <b>${remain}</b> ／ ${u.userLimit}（已用 ${u.userUsage}，${usedPct}%）`;
+      const barW = unlimited ? Math.min(100, 20 + usedPct / 4) : Math.min(100, usedPct);
       const barColor = u.eligible ? 'var(--green)' : '#e5484d';
       return `<div style="margin-top:4px">
         <div class="meta-row" style="margin:0">
           <span class="m">${usageText}</span>
           <span class="m">${u.eligible ? '✓ 可用' : '✗ 暂停'} · 更新 ${when}</span>
         </div>
-        <div style="height:4px;border-radius:2px;background:var(--bg2);margin:5px 0 2px;overflow:hidden" title="6小时滚动窗口已用量（相对基准）">
+        <div style="height:4px;border-radius:2px;background:var(--bg2);margin:5px 0 2px;overflow:hidden" title="6小时滚动窗口已用量${unlimited ? '（不限量计划，进度仅示意消耗趋势）' : '（相对上限）'}">
           <div style="height:100%;width:${barW}%;background:${barColor};border-radius:2px;transition:width .4s"></div>
         </div>
       </div>`;
