@@ -1666,7 +1666,9 @@ async function tryChannel(opts) {
   if (!resp.ok) {
     const text = usedFallback ? (respBody || '') : (await resp.text().catch(() => ''));
     recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
-    if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
+    // 401/402/403 是我们渠道侧的鉴权/余额问题（不是客户端的错）→ 切下一候选兜底；
+    // 其余 4xx（400 参数 / 404 模型不存在等）是客户端错误 → 原样透传给调用方
+    if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 408, 429].includes(resp.status)) {
       // 客户端错误：直接把上游响应转发
       const ct = (resp.headers && resp.headers.get('content-type')) || '';
       res.writeHead(resp.status, { 'Content-Type': ct || 'application/json' });
@@ -1684,15 +1686,15 @@ async function tryChannel(opts) {
   ch.latencyMs = Date.now() - t0;
 
   if (isStream) {
-    res.writeHead(200, {
-      'Content-Type': resp.headers.get('content-type') || 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
     // PS 回退模式下没有流：直接把完整 body 写一次（仍满足"非空"语义）
     if (usedFallback) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        'X-ZZCSAPI-Channel': candidate.channelId,
+      });
       if (respBody) res.write(respBody);
       res.end();
       recordUsage({
@@ -1703,8 +1705,33 @@ async function tryChannel(opts) {
       return 'success';
     }
     const reader = resp.body.getReader();
+    // ── 首字节守门：上游 90s 不出任何数据（免费线路排队/挂起）→ 判失败切下一候选。
+    //    在 writeHead 之前等首块，此时响应未提交，兜底仍可行。DSH 端自身 300s idle 超时前网关先自救。
+    const FIRST_CHUNK_MS = ch.def.firstChunkTimeoutMs || 90_000;
+    let firstVal = null;
+    let firstTimer = null;
+    try {
+      const first = await Promise.race([
+        reader.read(),
+        new Promise((_, rej) => { firstTimer = setTimeout(() => rej(new Error('zz-first-chunk-timeout')), FIRST_CHUNK_MS); }),
+      ]);
+      clearTimeout(firstTimer);
+      if (first && !first.done) firstVal = first.value;
+    } catch (err) {
+      clearTimeout(firstTimer);
+      try { reader.cancel(); } catch {}
+      recordFailure(ch, `stream idle: 上游 ${FIRST_CHUNK_MS / 1000 | 0}s 未出首字节（挂起/排队）`);
+      return `stream idle ${FIRST_CHUNK_MS}ms`;
+    }
+    res.writeHead(200, {
+      'Content-Type': resp.headers.get('content-type') || 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-ZZCSAPI-Channel': candidate.channelId,
+    });
     const decoder = new TextDecoder();
-    let buf = '';
+    let buf = firstVal ? decoder.decode(firstVal, { stream: true }) : '';
     let streamOutText = ''; // 累计输出（用于 token 估算）
     try {
       while (true) {
@@ -1833,7 +1860,7 @@ async function tryNotionChannel(opts) {
       else {
         const errText = await resp.text().catch(() => '');
         recordFailure(ch, `notion HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-        if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
+        if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 408, 429].includes(resp.status)) {
           res.writeHead(resp.status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
           return 'fatal_client';
