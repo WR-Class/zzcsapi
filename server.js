@@ -1591,9 +1591,13 @@ async function dispatchRequest(opts) {
       continue;
     }
     attemptedAny = true;
+    // 还有后续候选 → 守门可以掐得早（快速切兜底）；已是最后候选 → 守门放宽到 300s（对齐
+    // 客户端 idle 超时：上游"慢但能成"的请求留给客户端自身的重试机制，而不是被网关提前掐死）
+    const hasMoreCandidates = i < Math.min(candidates.length, RETRIES.maxModelFallbacks || 99) - 1;
     const result = await tryChannel({
       res, url, body, candidate: c, isStream: stream,
       encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
+      hasMoreCandidates,
     });
     if (result === 'success') return;
     if (result === 'fatal_client') return;
@@ -1705,9 +1709,12 @@ async function tryChannel(opts) {
       return 'success';
     }
     const reader = resp.body.getReader();
-    // ── 首字节守门：上游 90s 不出任何数据（免费线路排队/挂起）→ 判失败切下一候选。
-    //    在 writeHead 之前等首块，此时响应未提交，兜底仍可行。DSH 端自身 300s idle 超时前网关先自救。
-    const FIRST_CHUNK_MS = ch.def.firstChunkTimeoutMs || 90_000;
+    // ── 首字节守门（自适应）：上游迟迟不出首字节（免费线路排队/挂起）时——
+    //    · 后面还有候选 → 90s 掐掉切下一候选（兜底是纯赚：避免干等）
+    //    · 已是最后候选 → 等 300s（与 DSH 的 idle 超时一致）。上游"慢但能在客户端超时前出数据"
+    //      的请求仍能成功，失败也由客户端自身的重试机制接管（保持旧行为）。
+    //    在 writeHead 之前等首块，此时响应未提交，切候选仍可行。
+    const FIRST_CHUNK_MS = ch.def.firstChunkTimeoutMs || (opts.hasMoreCandidates ? 90_000 : 300_000);
     let firstVal = null;
     let firstTimer = null;
     try {
