@@ -18,6 +18,8 @@ function Test-AgentAlive {
 }
 
 while ($true) {
+  # 心跳日志（每轮覆盖写一行，证明 watchdog 存活 + 诊断用）
+  try { Set-Content "$root\arena-data\watchdog.heartbeat" -Value ("loop " + (Get-Date -Format 'HH:mm:ss') + " alive=" + (Test-AgentAlive)) -ErrorAction SilentlyContinue } catch {}
   if (-not (Test-AgentAlive)) {
     # 杀掉可能残留的旧 sidecar 浏览器（实际 profile 在 %TEMP%\zzcsapi-arena-profile；
     # arena-data\chrome-profile 是旧架构遗留，一并清理）
