@@ -1,52 +1,77 @@
-# Arena.ai 反代协议研究（2026-09-06）
+# Arena.ai 渠道协议（2026-09-06 定稿）
 
-## 端点与请求（已验证）
+## 架构（已上线）
 
 ```
-POST https://arena.ai/nextjs-api/stream/create-evaluation
-headers: content-type: application/json; cookie: arena-auth-prod-v1=<auth>; (origin/referer: https://arena.ai/?mode=direct)
+客户端 → 网关容器(:8787, protocol:"arena") → HTTP → 宿主机 arena-agent(:9225)
+                                            → CDP → 宿主机真 Chrome(headful) → arena.ai
+```
+
+- **arena-agent.js**（宿主机 Node，watchdog 开机自启）：spawn 真 Chrome（`--app` 窗口，
+  `--remote-debugging-port=0`，profile 独立）→ CDP attach → cookie 注入 → 导航 arena.ai
+  → /ensure（模型注册表）、/chat（NDJSON 流式）、/refresh（会话续期）
+- **容器内不跑浏览器**：Alpine Chromium（含 headless=new + UA 覆盖）被 arena.ai 的
+  Cloudflare **硬拦**（"Sorry, you have been blocked"，UA/UA-CH 全改也无效——二进制层指纹）。
+  宿主机真 Chrome 同款二进制（用户日常浏览器）正常通过。
+- **Chrome DevTools 拒绝非 localhost Host**：容器无法直连宿主机 CDP → 必须经 arena-agent 的
+  HTTP API 中转（Docker Desktop 的 host.docker.internal 中继可达宿主机 127.0.0.1 端口）。
+- cookie 轮换：sidecar 每 20 分钟 `POST /nextjs-api/refresh` → 新 cookie 经
+  onPersist 写 agent-cookie.txt + 回传网关 → persistConfig 回写 config.json（用户无感）。
+
+## 请求协议（OmniRoute PR #6280 对齐 + 实测验证）
+
+```
+POST https://arena.ai/nextjs-api/stream/create-evaluation   (页面内同源 fetch, credentials:include)
 body: {
-  id, userMessageId, modelAMessageId, modelBMessageId,   // 全部 UUIDv7（zod 严格校验）
-  mode: "direct" | "battle",
-  modelAId, modelBId,                                    // arena 模型 UUID（battle 双方；direct 只有 A）
-  userMessage: { content: <string 或结构化>, experimental_attachments: [], metadata: {} },
-  modality: "chat" | "image",
-  recaptchaV3Token: <reCAPTCHA Enterprise token>,       // action="chat_submit"
-  secrets: (webdev 模式用)
+  id, userMessageId, modelAMessageId,          // UUIDv7（无 modelB* 字段！）
+  mode: "direct-battle",                       // ⚠️ "direct" 报 400 "'direct' mode is not allowed
+                                               //    when starting a new conversation"
+  modelAId: <arena 模型 UUID>,
+  userMessage: { content, experimental_attachments: [], metadata: {} },
+  modality: "chat",
+  recaptchaV3Token: <token | null>,
 }
 ```
 
-- 响应 SSE 前缀：`a0:` 文本增量（JSON string 转义）、`ag:` 推理、`ad:` 完成、`a2:` 心跳/图片、`a3:` 错误、`af:` 元数据
-- 匿名注册：`POST /nextjs-api/sign-up {recaptchaToken(action="sign_up"), provisionalUserId}` → set-cookie arena-auth-prod-v1
-- 会话刷新：`POST /nextjs-api/refresh`（返回 58KB RSC 数据 + 轮换 cookie）
-- reCAPTCHA Enterprise sitekey: `6LeTGMcsAAAAALuIlkVwIxaAuZA8VledA6d3Nnb0`
-- 模型清单：页面 RSC 数据 `initialModels`（1052 条，含 id/organization/displayName/capabilities/rank）
-  - 例：claude-sonnet-4-6 → id 019c6d29-a30c-7e20-9bd0-6650af926623（org anthropic, provider googleVertexAnthropic）
-  - 阵容：claude-opus-4-5~4-8/5 系、gpt-5.4 系、gemini-3.1-pro、grok-4.6、deepseek-v4、qwen 系等
+- content 格式（OmniRoute formatArenaPrompt）：单条用户消息→纯文本；多轮→
+  `System:/User:/Assistant: ` 标签行，双换行分隔
+- 响应行流 `[participant]code:value`（participant ∈ {a,b}）：
+  `0` 文本增量、`g` 思考、`2` 心跳、`3` 错误、`d` 完成(finishReason=error 则错)、
+  `ae:` 旧错误格式、`f` 元数据
+- reCAPTCHA Enterprise sitekey `6LeTGMcsAAAAALuIlkVwIxaAuZA8VledA6d3Nnb0`，
+  action **`chat_submit`**（前端 chunk 1cx59sa85p90e.js：`R = getRecaptchaV3Token("chat_submit")`）
+- token mint：页面内 grecaptcha.enterprise.execute（enterprise.js 未加载时动态注入）
 
-## 风控结论（实测）
+## 模型（注册表 1052 条 / 798 唯一名，key=displayName）
 
-- Direct 模式匿名 → **401 LOGIN_GATE**（需登录）
-- Battle 模式匿名 → **403 recaptcha validation failed**（token 有效/action 正确仍被拒）
-- 根因：dshb 共享浏览器为 **Headless Chrome + navigator.webdriver=true** → reCAPTCHA Enterprise 判 bot 低分
-- sign-up action 阈值松（能过），chat_submit 阈值高（headless 环境全灭）
-- **推断**：真人正常浏览器匿名 battle 可用（LMArena 核心产品）；Direct 需要账号
-- 页面 UI 的 uuidv7 生成有 46-hex bug（首次发送 400，自动重试正常）
+- 路由：config `models` = { alias: displayName }，运行时 displayName → id（大小写不敏感）
+- **实弹验证可用**：claude-sonnet-4-6、claude-sonnet-5(→claude-sonnet-5-high)、
+  claude-haiku-4-5(→claude-haiku-4-5-20251001)、gemini-3.1-pro
+- **404 Model not found**（注册表有 id 但实际不可用，soft-exclude）：gpt-5.4、gpt-5.4-mini-high
+- 部分模型带分层名：grok-4.6 实为 grok-4.6-medium/low/high；claude-sonnet-5 只有 -high/-search
+- arena.ai 无 opus 系模型（注册表搜 "opus" 仅 "flying-octopus" 模型名）
 
-## 三个参考项目（全是浏览器扩展架构）
+## 风控实测
 
-- deanxv/lmarena2api（老，canary.lmarena.ai 已死）
-- flay-o/arena2api → ranbeerrathore56-art/arena2api（15d）→ kekurttel/Arena2api-fixed（2mo）
-- 架构：用户浏览器装扩展 → 保持 arena.ai 页面开启 → 扩展每 80s grecaptcha execute 刷 token 池 → 推给服务器 → 服务器带 cookie+token 从 Python 发请求
-- 均未解决凭据/token 自动化；cookie 可能分片（arena-auth-prod-v1.0 + v1.1）
+- **reCAPTCHA v3 行为评分**：headless（Edge/Chrome，含 UA 覆盖+CDP 行为预热）mint 的
+  token 被 arena 服务端拒（403 recaptcha validation failed）→ GPT 系等强校验模型全拦。
+  headful（--app 真窗口）+ 行为预热可通过（claude 系 200 实测）。
+- **频率风控**：短时间批量请求（21 模型连发）后，arena 对该账户收紧 recaptcha 校验，
+  连 claude 系也 403。正常低频使用不受影响；批量探测需要间隔/冷却。
+- CF 对容器内 Chromium 的拦截与 UA 无关（二进制 TLS 指纹层）——见上文架构结论。
 
-## 候选方案
+## 运维
 
-- **A. 内置有头浏览器伴生服务**：gateway 侧跑 Playwright headed（stealth 反 webdriver 检测）开 arena.ai → 页面内刷 token + 页面内发请求（同源真实 Chrome TLS）→ 转发。全自动但复杂。
-- **B. 账号 cookie 直连**：用户登录一次 → 导出 arena-auth-prod-v1 → 网关 Node/curl 直连。待验证：登录态 chat 是否免 token（chunk 代码显示 token 可为 null 继续发送）+ Node TLS 指纹是否被 CF 拦（gorouter 教训：需 curl.exe Schannel 通道）。
-- **C. 用户真人浏览器验证匿名可用性后，再选 A 或 B。**
+- agent：`arena-chrome\watchdog.ps1`（开机自启：启动文件夹 ZZCSAPI-Arena-Chrome.bat；
+  30s 心跳自愈），headful 模式 env `ZZCSAPI_ARENA_HEADFUL=1`
+- cookie 上传：arena.ai 页面 F12 控制台
+  `fetch('http://localhost:8787/admin/api/arena-cookie',{method:'POST',headers:{'content-type':'text/plain'},body:document.cookie})`
+  （零转录：cookie 字节从浏览器直达网关；手动复制 3000+ 字符两次引入坏字节 → Vercel 500）
+- 网关容器 env `ZZCSAPI_ARENA_AGENT=http://host.docker.internal:9225`；
+  无此 env 时降级容器内 spawn（Windows 开发可用，Alpine 被 CF 拦）
+- profile：`%TEMP%\zzcsapi-arena-profile`（浏览器本地数据；删除=重置设备身份）
 
-## Notion token 自动化（用户提出）
+## 参考
 
-- Notion 支持邮箱+密码登录 API：`POST /api/v3/loginWithEmail {email, password, ...}` → set-cookie token_v2
-- 可在网关加 notionEmail/notionPassword 配置，token 失效时自动登录换 token_v2（而非用户手动复制）
+- OmniRoute PR #6280（lmarena executor 现代化，direct-battle 负载/流解析/content 格式的来源）
+- deanxv/lmarena2api、flay-o/arena2api（cookie 分片处理、sitekey/action）

@@ -13,6 +13,7 @@ const https = require('https');
 const { spawn } = require('child_process');
 const { URL } = require('url');
 const notion = require('./notion.js');
+const arena = require('./arena.js');
 
 // 检测响应是否 Cloudflare WAF 拦截（JA3/TLS 指纹被识别为机器人）
 function isCloudflareBlock(status, body) {
@@ -351,7 +352,10 @@ function aggregateModels(protocol) {
   const all = new Set();
   for (const ch of channels.values()) {
     const chProto = ch.def.protocol || 'openai';
-    if (protocol && chProto !== protocol) continue;
+    // 别名跨协议聚合：openai/anthropic/gemini 三个入口都有跨协议候选链兜底，
+    // notion/arena 渠道的显式别名同样可路由，全部计入
+    const aliasedProto = protocol === 'anthropic' || protocol === 'gemini' ? ['openai', 'anthropic', 'gemini', 'notion', 'arena'] : [protocol];
+    if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
     // 探测到的真模型仅在 autoAlias 时算可路由
@@ -364,6 +368,36 @@ function aggregateModels(protocol) {
 
 // ─────────────────────────── 健康探测 ───────────────────────────
 async function probeChannel(ch) {
+  // Arena.ai 渠道：agent 模式（宿主机 Chrome）或容器内 Chromium sidecar
+  if ((ch.def.protocol || 'openai') === 'arena') {
+    const t0 = Date.now();
+    try {
+      if (ARENA_AGENT_URL) {
+        await arenaAgentEnsure(ch);
+        ch.models = [];
+        ch.latencyMs = Date.now() - t0;
+        ch.lastCheck = Date.now();
+        ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+        ch.status = 'ok';
+        ch.arenaModels = ch.arena ? ch.arena.reg.byName.size : 0;
+      } else {
+        arena.sidecar.onPersist = (cookieStr) => { ch.def.apiKey = cookieStr; persistConfig(); };
+        const reg = await arena.sidecar.ensure(ch.def.apiKey, {});
+        ch.models = [];
+        ch.latencyMs = Date.now() - t0;
+        ch.lastCheck = Date.now();
+        ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+        ch.status = reg && reg.byName && reg.byName.size > 0 ? 'ok' : 'degraded';
+        ch.arenaModels = reg ? reg.byName.size : 0;
+      }
+    } catch (err) {
+      ch.status = 'down';
+      ch.consecutiveFail++;
+      ch.lastError = 'arena: ' + (err.message || err);
+      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+    }
+    return;
+  }
   // Notion 渠道：getSpaces 验证（成功即 ok，刷新凭据缓存）
   if ((ch.def.protocol || 'openai') === 'notion') {
     const t0 = Date.now();
@@ -1052,7 +1086,7 @@ function validateChannelDef(def) {
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   return null;
 }
@@ -1100,6 +1134,74 @@ async function handleAdminApi(req, res, url) {
     usageData = { total: { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0 }, byModel: {}, byChannel: {}, byDay: {}, recent: [] };
     flushUsage();
     return sendJson(res, 200, { ok: true });
+  }
+  // arena.ai 登录 cookie 上传：用户在 arena.ai 页面 F12 控制台执行
+  //   fetch('http://localhost:8787/admin/api/arena-cookie', {method:'POST', mode:'cors', headers:{'content-type':'text/plain'}, body: document.cookie})
+  // 零转录：cookie 字节原样从用户浏览器直达网关（手动复制 3000+ 字符已被证明会引入坏字节）
+  if (req.method === 'OPTIONS' && url.pathname === '/admin/api/arena-cookie') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'content-type',
+    });
+    return res.end();
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/arena-cookie') {
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+    const raw = await new Promise((resolve) => {
+      let buf = '';
+      req.setEncoding('utf8');
+      req.on('data', (c) => { if (buf.length < 1_000_000) buf += c; });
+      req.on('end', () => resolve(buf));
+      req.on('error', () => resolve(buf));
+    });
+    const keep = [];
+    for (const kv of String(raw).split('; ')) {
+      const i = kv.indexOf('=');
+      if (i < 0) continue;
+      const name = kv.slice(0, i), val = kv.slice(i + 1);
+      if (name === 'arena-auth-prod-v1.0' || name === 'arena-auth-prod-v1.1') { if (val) keep.push(name + '=' + val); }
+    }
+    const s0 = keep.find((x) => x.startsWith('arena-auth-prod-v1.0='));
+    const s1 = keep.find((x) => x.startsWith('arena-auth-prod-v1.1='));
+    if (!s0 || !s1) {
+      res.writeHead(400, cors);
+      return res.end(JSON.stringify({ ok: false, error: 'missing arena-auth-prod-v1.0/.1 shards', received: keep.map((x) => x.split('=')[0]) }));
+    }
+    const cookieStr = keep.join('; ');
+    // seed 别名经 2026-09-06 注册表校准 + 实弹验证（gpt-5.4/-mini 已确认 404 下架，不列）
+    const seedModels = {
+      'claude-sonnet-4-6': 'claude-sonnet-4-6',
+      'claude-sonnet-5': 'claude-sonnet-5-high',
+      'claude-sonnet-5-high': 'claude-sonnet-5-high',
+      'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
+      'gpt-5.2': 'gpt-5.2',
+      'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
+      'gemini-3.1-pro': 'gemini-3.1-pro',
+      'gemini-3-pro': 'gemini-3-pro',
+      'gemini-3.6-flash': 'gemini-3.6-flash',
+      'grok-4.6': 'grok-4.6-medium',
+      'grok-4.6-high': 'grok-4.6-high',
+      'grok-4.3': 'grok-4.3',
+      'deepseek-v4-flash': 'deepseek-v4-flash',
+      'deepseek-v4-pro': 'deepseek-v4-pro',
+    };
+    const def = {
+      id: 'arena', name: 'Arena.ai', baseUrl: 'https://arena.ai',
+      apiKey: cookieStr, protocol: 'arena', priority: 0, enabled: true,
+      models: seedModels,
+    };
+    const ch = upsertChannel(def);
+    persistConfig();
+    // 立即探测（会拉起 Chromium sidecar 验证登录态 + 模型注册表）
+    probeChannel(ch).catch(() => {});
+    res.writeHead(200, cors);
+    return res.end(JSON.stringify({
+      ok: true, saved: true,
+      shard0Len: s0.length, shard1Len: s1.length,
+      models: Object.keys(seedModels).length,
+      note: 'arena channel saved; probing in background',
+    }));
   }
   // 暴露给控制台展示接入信息（含 key 与 URL）。仅本机 admin 可用。
   if (req.method === 'GET' && url.pathname === '/admin/api/config') {
@@ -1230,7 +1332,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : channelsServing(model, 'notion')); // openai 优先，notion 兜底
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : channelsServing(model, 'arena'))); // openai 优先，notion 兜底，arena 再兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -1434,6 +1536,9 @@ async function handleOpenAIRequest(req, res, url) {
   // notion 渠道兜底：openai 渠道全挂/限频时接住（作为候选链尾部，不抢优先级）
   const notionCands = channelsServing(requested, 'notion');
   for (const nc of notionCands) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
+  // arena.ai 渠道兜底：同理追加到链尾
+  const arenaCands = channelsServing(requested, 'arena');
+  for (const ac of arenaCands) if (!candidates.some((c) => c.channelId === ac.channelId)) candidates.push(ac);
   if (candidates.length === 0) {
     return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"`));
   }
@@ -1474,6 +1579,7 @@ async function handleAnthropicRequest(req, res, url) {
     let candidates = channelsServing(requested, 'anthropic');
     if (candidates.length === 0) candidates = channelsServing(requested, 'openai');
     for (const nc of channelsServing(requested, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
+    for (const ac of channelsServing(requested, 'arena')) if (!candidates.some((c) => c.channelId === ac.channelId)) candidates.push(ac);
     if (candidates.length === 0) {
       return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
@@ -1541,6 +1647,7 @@ async function handleGeminiRequest(req, res, url) {
   let candidates = channelsServing(model, 'gemini');
   if (candidates.length === 0) candidates = channelsServing(model, 'openai');
   for (const nc of channelsServing(model, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
+  for (const ac of channelsServing(model, 'arena')) if (!candidates.some((c) => c.channelId === ac.channelId)) candidates.push(ac);
   if (candidates.length === 0) {
     return sendJson(res, 404, { error: { code: 404, message: `no channel for model "${model}"`, status: 'NOT_FOUND' } });
   }
@@ -1618,6 +1725,10 @@ async function tryChannel(opts) {
   // Notion 协议渠道：完全独立的请求/响应路径
   if ((ch.def.protocol || 'openai') === 'notion') {
     return tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+  }
+  // Arena.ai 协议渠道：Chromium sidecar 页面内请求
+  if ((ch.def.protocol || 'openai') === 'arena') {
+    return tryArenaChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
   }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
@@ -1791,6 +1902,336 @@ async function tryChannel(opts) {
     await onSuccessNonStream(shim, candidate);
     return 'success';
   }
+}
+
+// ─────────────────────────── Arena.ai 渠道执行 ───────────────────────────
+// 架构 A（默认，env ZZCSAPI_ARENA_AGENT）：容器网关 → 宿主机 arena-agent（真 Chrome sidecar）。
+//   arena.ai 的 CF 拦截一切非真浏览器指纹（容器内 Chromium 也被拦），宿主机真 Chrome 可过。
+// 架构 B（无 env）：容器内 spawn Chromium sidecar（Windows 开发环境可用；Alpine 容器内会被 CF 拦）。
+const ARENA_AGENT_URL = process.env.ZZCSAPI_ARENA_AGENT || '';
+
+async function agentJson(pathname, body, timeoutMs) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs || 30000);
+  try {
+    const r = await fetch(ARENA_AGENT_URL + pathname, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}), signal: ctrl.signal,
+    });
+    const t = await r.text();
+    let j = null; try { j = JSON.parse(t); } catch {}
+    return { status: r.status, ok: r.ok, json: j, text: t };
+  } finally { clearTimeout(to); }
+}
+
+// agent 模式：ensure（模型注册表 + cookie 轮换回写）
+async function arenaAgentEnsure(ch) {
+  const now = Date.now();
+  if (ch.arena && ch.arena.reg && now - ch.arena.at < 1800_000 && ch.arena.cookie === ch.def.apiKey) return ch.arena;
+  const r = await agentJson('/ensure', { cookie: ch.def.apiKey }, 90000);
+  if (!r.ok || !r.json || !r.json.ok) throw new Error('agent ensure failed: ' + (r.text || '').slice(0, 200));
+  const byName = new Map();
+  for (const m of r.json.models || []) byName.set(String(m.displayName || '').toLowerCase(), m.id);
+  // agent 返回轮换后的最新 cookie → 回写 config
+  if (r.json.cookie && r.json.cookie !== ch.def.apiKey) {
+    ch.def.apiKey = r.json.cookie;
+    persistConfig();
+  }
+  ch.arena = { reg: { byName }, cookie: ch.def.apiKey, at: now };
+  return ch.arena;
+}
+
+async function tryArenaChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel, hasMoreCandidates, kind } = opts;
+  const t0 = Date.now();
+  const displayModel = requestedModel || candidate.upstream;
+  const timeoutMs = ch.def.timeoutMs || 180_000;
+
+  // ── 架构 A：宿主机 agent ──
+  if (ARENA_AGENT_URL) {
+    let reg;
+    try {
+      const a = await arenaAgentEnsure(ch);
+      reg = { byName: a.reg.byName };
+    } catch (err) {
+      recordFailure(ch, 'arena-agent: ' + (err.message || err));
+      return 'arena-agent: ' + (err.message || err);
+    }
+    const modelId = reg.byName.get(String(candidate.upstream || '').toLowerCase());
+    if (!modelId) {
+      recordFailure(ch, 'arena: unknown model "' + candidate.upstream + '"');
+      return 'arena: unknown model ' + candidate.upstream;
+    }
+    const content = arena.buildArenaContent(body.messages);
+    if (!content.trim()) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'empty messages', type: 'invalid_request_error' } }));
+      return 'fatal_client';
+    }
+    const payload = arena.buildArenaPayload(modelId, content);
+
+    // chunked NDJSON 流：{t:'c'|'g'|'e'|'done'}
+    const ctrl = new AbortController();
+    let resp;
+    try {
+      resp = await fetch(ARENA_AGENT_URL + '/chat', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ payload, firstChunkTimeoutMs: hasMoreCandidates ? 90_000 : 300_000 }),
+        signal: ctrl.signal,
+      });
+    } catch (err) {
+      recordFailure(ch, 'arena-agent chat: ' + (err.message || err));
+      return 'arena-agent chat: ' + (err.message || err);
+    }
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => '');
+      recordFailure(ch, `arena-agent HTTP ${resp.status}: ${t.slice(0, 200)}`);
+      if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 408, 429].includes(resp.status)) {
+        res.writeHead(resp.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `Arena agent HTTP ${resp.status}`, type: 'upstream_error' } }));
+        return 'fatal_client';
+      }
+      return `arena-agent upstream ${resp.status}`;
+    }
+
+    const reader = resp.body.getReader();
+    // 首块守门（与其他渠道语义一致：多候选 90s / 最后候选 300s）
+    const FIRST_CHUNK_MS = hasMoreCandidates ? 90_000 : 300_000;
+    let firstVal;
+    try {
+      const first = await Promise.race([
+        reader.read(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('zz-first-chunk-timeout')), FIRST_CHUNK_MS)),
+      ]);
+      if (first && !first.done) firstVal = first.value;
+    } catch (err) {
+      try { ctrl.abort(); } catch {}
+      try { reader.cancel(); } catch {}
+      recordFailure(ch, 'arena-agent: ' + (err.message || err));
+      return 'arena-agent first-chunk-timeout';
+    }
+
+    const inTok = estimateTokens(messagesText(body.messages));
+    const dec = new TextDecoder();
+    const respId = 'chatcmpl-arena-' + Date.now().toString(36);
+    let headerSent = false;
+    let fullText = '';
+    let thinkText = '';
+    let doneEvt = null;
+    let buf = (firstVal ? dec.decode(firstVal, { stream: true }) : '');
+    let abortTimer = setTimeout(() => { try { ctrl.abort(); } catch {} }, 600_000);
+    const handleLine = (ln) => {
+      if (!ln) return;
+      let j = null; try { j = JSON.parse(ln); } catch {}
+      if (!j) return;
+      if (j.t === 'c' || j.t === 'g') {
+        if (!headerSent) {
+          headerSent = true;
+          if (isStream) {
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive', 'X-ZZCSAPI-Channel': candidate.channelId,
+            });
+          }
+        }
+        if (j.t === 'c') { fullText += j.d; if (isStream) res.write(notionSSEChunk(respId, displayModel, { content: j.d })); }
+        else { thinkText += j.d; if (isStream) res.write(notionSSEChunk(respId, displayModel, { reasoning_content: j.d })); }
+      } else if (j.t === 'e') {
+        if (!fullText.trim() && !thinkText.trim()) doneEvt = { err: j.d };
+      } else if (j.t === 'done') {
+        doneEvt = doneEvt || { ok: j.ok, status: j.status, err: j.err };
+      }
+    };
+    // 处理已有块
+    {
+      let n;
+      while ((n = buf.indexOf('\n')) >= 0) { handleLine(buf.slice(0, n)); buf = buf.slice(n + 1); }
+    }
+    if (!isStream && !headerSent) { headerSent = true; } // 非流式最后一次性写
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let n;
+        while ((n = buf.indexOf('\n')) >= 0) { handleLine(buf.slice(0, n)); buf = buf.slice(n + 1); }
+      }
+    } catch (e) { /* abort/中断 */ }
+    clearTimeout(abortTimer);
+    handleLine(buf);
+
+    // done 事件裁决
+    if (doneEvt && doneEvt.ok === false && !fullText.trim() && !thinkText.trim()) {
+      // 400/404：请求级错误（模型不可用等），不是渠道故障 → 不冷却、不切候选，直接透传客户端
+      if (doneEvt.status === 400 || doneEvt.status === 404) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `arena upstream ${doneEvt.status}: ${(doneEvt.err || '').slice(0, 200)}`, type: 'upstream_error', code: doneEvt.status } }));
+        return 'fatal_client';
+      }
+      // 完全无内容的失败 → 按上游失败处理（可切候选）；此时响应头未发过（headerSent false）
+      recordFailure(ch, `arena chat: ${doneEvt.status || ''} ${(doneEvt.err || '').slice(0, 150)}`);
+      if (!res.headersSent) return `arena chat failed: ${doneEvt.status || ''} ${(doneEvt.err || '').slice(0, 100)}`;
+    }
+    if (!fullText.trim() && !thinkText.trim() && !(doneEvt && doneEvt.ok)) {
+      if (!res.headersSent) { recordFailure(ch, 'arena chat: empty'); return 'arena chat: empty'; }
+    }
+
+    ch.consecutiveFail = 0;
+    ch.cooldownUntil = 0;
+    ch.lastError = null;
+    if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+    ch.latencyMs = Date.now() - t0;
+
+    if (isStream) {
+      if (!headerSent) {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive', 'X-ZZCSAPI-Channel': candidate.channelId,
+        });
+      }
+      res.write(notionSSEChunk(respId, displayModel, {}));
+      res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+      recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: estimateTokens(fullText + thinkText), ok: true, latencyMs: Date.now() - t0 });
+      return 'success';
+    }
+    const reply = fullText.trim() ? fullText : (thinkText || '');
+    const outTok = estimateTokens(reply + (thinkText ? ' ' + thinkText : ''));
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+    res.end(JSON.stringify({
+      id: respId,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: displayModel,
+      choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(thinkText ? { reasoning_content: thinkText } : {}) }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
+    }));
+    return 'success';
+  }
+
+  // ── 架构 B：容器内 spawn（Windows 开发/降级）──
+  arena.sidecar.onPersist = (cookieStr) => { ch.def.apiKey = cookieStr; persistConfig(); };
+  let reg;
+  try {
+    reg = await arena.sidecar.ensure(ch.def.apiKey, {});
+  } catch (err) {
+    recordFailure(ch, 'arena-init: ' + (err.message || err));
+    return 'arena-init: ' + (err.message || err);
+  }
+
+  const resolved = arena.resolveModelId(reg, candidate.upstream);
+  if (!resolved) {
+    recordFailure(ch, 'arena: unknown model "' + candidate.upstream + '"');
+    return 'arena: unknown model ' + candidate.upstream;
+  }
+
+  const content = arena.buildArenaContent(body.messages);
+  if (!content.trim()) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'empty messages', type: 'invalid_request_error' } }));
+    return 'fatal_client';
+  }
+  const payload = arena.buildArenaPayload(resolved.id, content);
+
+  let firstChunkAt = 0;
+  let result = null;
+  let rawBuf = '';
+  const onChunk = (text) => { rawBuf += text; };
+  result = await arena.sidecar.chat({
+    payload,
+    onChunk,
+    firstChunkTimeoutMs: hasMoreCandidates ? 90_000 : 300_000,
+    onFirstChunk: () => { firstChunkAt = Date.now(); },
+  });
+
+  if (!result.ok) {
+    if (result.status === 401) {
+      try {
+        await arena.sidecar._tick();
+        reg = await arena.sidecar.ensure(ch.def.apiKey, {});
+        result = await arena.sidecar.chat({ payload, onChunk, firstChunkTimeoutMs: 90_000 });
+      } catch (e) { /* fallthrough */ }
+    }
+    if (!result.ok) {
+      const errText = (result.errText || '').slice(0, 200);
+      recordFailure(ch, `arena HTTP ${result.status}: ${errText}`);
+      if (result.status >= 400 && result.status < 500 && ![401, 402, 403, 408, 429].includes(result.status)) {
+        res.writeHead(result.status || 502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `Arena upstream HTTP ${result.status}: ${errText}`, type: 'upstream_error' } }));
+        return 'fatal_client';
+      }
+      return `arena upstream ${result.status || 'err'}: ${errText}`;
+    }
+  }
+
+  ch.consecutiveFail = 0;
+  ch.cooldownUntil = 0;
+  ch.lastError = null;
+  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  ch.latencyMs = firstChunkAt ? firstChunkAt - t0 : Date.now() - t0;
+
+  const respId = 'chatcmpl-arena-' + Date.now().toString(36);
+  const inTok = estimateTokens(messagesText(body.messages));
+
+  if (isStream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-ZZCSAPI-Channel': candidate.channelId,
+    });
+    let fullText = '';
+    let thinkText = '';
+    let streamError = null;
+    const parser = arena.createArenaStreamParser((evt) => {
+      if (evt.type === 'content') { fullText += evt.text; res.write(notionSSEChunk(respId, displayModel, { content: evt.text })); }
+      else if (evt.type === 'thinking') { thinkText += evt.text; res.write(notionSSEChunk(respId, displayModel, { reasoning_content: evt.text })); }
+      else if (evt.type === 'error') { streamError = streamError || evt.text; }
+    });
+    parser.push(rawBuf);
+    parser.end();
+    if (streamError && !fullText.trim() && !thinkText.trim()) {
+      try { res.end(); } catch {}
+      recordFailure(ch, 'arena stream: ' + streamError);
+      return 'arena stream: ' + streamError;
+    }
+    res.write(notionSSEChunk(respId, displayModel, {}));
+    res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: estimateTokens(fullText + thinkText), ok: true, latencyMs: Date.now() - t0 });
+    return 'success';
+  }
+
+  let contentText = '';
+  let reasoningText = '';
+  let streamError = null;
+  const parser = arena.createArenaStreamParser((evt) => {
+    if (evt.type === 'content') contentText += evt.text;
+    else if (evt.type === 'thinking') reasoningText += evt.text;
+    else if (evt.type === 'error') streamError = streamError || evt.text;
+  });
+  parser.push(rawBuf);
+  parser.end();
+  if (!contentText.trim() && !reasoningText.trim() && streamError) {
+    recordFailure(ch, 'arena stream: ' + streamError);
+    return 'arena stream: ' + streamError;
+  }
+  const reply = contentText.trim() ? contentText : (reasoningText || '');
+  const outTok = estimateTokens(reply + (reasoningText ? ' ' + reasoningText : ''));
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
+  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+  res.end(JSON.stringify({
+    id: respId,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: displayModel,
+    choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
+  }));
+  return 'success';
 }
 
 // ─────────────────────────── Notion 渠道执行 ───────────────────────────
