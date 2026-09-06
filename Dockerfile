@@ -8,6 +8,7 @@ WORKDIR /app
 COPY server.js ./
 COPY notion.js ./
 COPY arena.js ./
+COPY tool-emu.js ./
 COPY console.html ./
 COPY config.example.json ./config.json
 ENV PORT=8787

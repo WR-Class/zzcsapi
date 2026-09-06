@@ -14,6 +14,7 @@ const { spawn } = require('child_process');
 const { URL } = require('url');
 const notion = require('./notion.js');
 const arena = require('./arena.js');
+const toolEmu = require('./tool-emu.js');
 
 // 检测响应是否 Cloudflare WAF 拦截（JA3/TLS 指纹被识别为机器人）
 function isCloudflareBlock(status, body) {
@@ -771,10 +772,31 @@ function geminiToOpenAI(body, model) {
   if (sysText) messages.push({ role: 'system', content: sysText });
   for (const c of contents) {
     const role = c.role === 'model' ? 'assistant' : 'user';
-    const text = (c.parts || []).map((p) => p.text || '').join('');
+    // functionCall / functionResponse 部件 → 工具仿真可读的文本（回退渠道时才生效）
+    const parts = [];
+    for (const p of (c.parts || [])) {
+      if (p.text) parts.push(p.text);
+      else if (p.functionCall) parts.push('```json\n{"tool_calls": [{"name": ' + JSON.stringify(p.functionCall.name || '') + ', "arguments": ' + JSON.stringify(p.functionCall.args || {}) + '}]}\n```');
+      else if (p.functionResponse) parts.push('[工具 ' + (p.functionResponse.name || '') + ' 的执行结果如下]\n' + JSON.stringify(p.functionResponse.response || {}) + '\n[请根据以上工具结果继续]');
+    }
+    const text = parts.join('\n');
     if (text) messages.push({ role, content: text });
   }
   const gen = body.generationConfig || {};
+  // Gemini functionDeclarations → OpenAI tools（回退 notion/arena 时启用工具仿真）
+  const tools = [];
+  const decls = (body.tools && body.tools[0] && body.tools[0].functionDeclarations)
+    || (body.tools && body.tools[0] && body.tools[0].function_declarations) || [];
+  for (const d of decls) {
+    tools.push({
+      type: 'function',
+      function: {
+        name: d.name,
+        description: d.description || '',
+        parameters: d.parameters || {},
+      },
+    });
+  }
   return {
     model,
     messages,
@@ -782,6 +804,7 @@ function geminiToOpenAI(body, model) {
     temperature: gen.temperature,
     top_p: gen.topP,
     stream: !!body.stream,
+    ...(tools.length ? { tools, tool_choice: body.tool_choice || 'auto' } : {}),
   };
 }
 
@@ -1722,13 +1745,14 @@ async function dispatchRequest(opts) {
 async function tryChannel(opts) {
   const { res, url, body, candidate, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk } = opts;
   const ch = channels.get(candidate.channelId);
-  // Notion 协议渠道：完全独立的请求/响应路径
-  if ((ch.def.protocol || 'openai') === 'notion') {
-    return tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
-  }
-  // Arena.ai 协议渠道：Chromium sidecar 页面内请求
-  if ((ch.def.protocol || 'openai') === 'arena') {
-    return tryArenaChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+  try {
+    // Notion 协议渠道：完全独立的请求/响应路径
+    if ((ch.def.protocol || 'openai') === 'notion') {
+      return await tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+    }
+    // Arena.ai 协议渠道：宿主机 agent / 容器 spawn
+    if ((ch.def.protocol || 'openai') === 'arena') {
+      return await tryArenaChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
   }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
@@ -1902,6 +1926,13 @@ async function tryChannel(opts) {
     await onSuccessNonStream(shim, candidate);
     return 'success';
   }
+  } catch (err) {
+    // 渠道处理器内部异常兜底：不再让单个渠道的 bug 打崩整个网关进程
+    console.error('[tryChannel] internal error:', err);
+    try { recordFailure(ch, 'internal: ' + String(err && err.message || err).slice(0, 200)); } catch {}
+    if (res.headersSent || res.writableEnded) { try { res.end(); } catch {} return 'fatal_client'; }
+    return 'internal: ' + (err && err.message || err);
+  }
 }
 
 // ─────────────────────────── Arena.ai 渠道执行 ───────────────────────────
@@ -1946,6 +1977,9 @@ async function tryArenaChannel(opts) {
   const t0 = Date.now();
   const displayModel = requestedModel || candidate.upstream;
   const timeoutMs = ch.def.timeoutMs || 180_000;
+  // 工具仿真：arena 无原生 function calling → tools 注入 system，响应解析围栏
+  const toolEmuReq = toolEmu.emulateRequest(body);
+  const effMessages = toolEmuReq ? toolEmuReq.messages : body.messages;
 
   // ── 架构 A：宿主机 agent ──
   if (ARENA_AGENT_URL) {
@@ -1962,7 +1996,7 @@ async function tryArenaChannel(opts) {
       recordFailure(ch, 'arena: unknown model "' + candidate.upstream + '"');
       return 'arena: unknown model ' + candidate.upstream;
     }
-    const content = arena.buildArenaContent(body.messages);
+    const content = arena.buildArenaContent(effMessages);
     if (!content.trim()) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'empty messages', type: 'invalid_request_error' } }));
@@ -2018,6 +2052,41 @@ async function tryArenaChannel(opts) {
     let fullText = '';
     let thinkText = '';
     let doneEvt = null;
+    let toolsEmitted = false;
+    // 工具仿真发送器（isStream 语义之外，非流式也会走 scanner 采集，最后统一构造）
+    const emuSendHeader = () => {
+      if (!headerSent) {
+        headerSent = true;
+        if (isStream) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive', 'X-ZZCSAPI-Channel': candidate.channelId,
+          });
+        }
+      }
+    };
+    const emuDelta = (text) => {
+      if (!text) return;
+      emuSendHeader();
+      fullText += text;
+      if (isStream) res.write(notionSSEChunk(respId, displayModel, { content: text }));
+    };
+    const emuToolCalls = (calls) => {
+      toolsEmitted = true;
+      emuSendHeader();
+      if (isStream) {
+        res.write(notionSSEChunk(respId, displayModel, {
+          tool_calls: calls.map((c, i) => ({
+            index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
+            function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+          })),
+        }));
+      } else {
+        pendingToolCalls = calls; // 非流式：流末统一构造 tool_calls 响应
+      }
+    };
+    let pendingToolCalls = null;
+    const scanner = toolEmu.createToolStreamScanner(emuDelta, emuToolCalls);
     let buf = (firstVal ? dec.decode(firstVal, { stream: true }) : '');
     let abortTimer = setTimeout(() => { try { ctrl.abort(); } catch {} }, 600_000);
     const handleLine = (ln) => {
@@ -2025,16 +2094,11 @@ async function tryArenaChannel(opts) {
       let j = null; try { j = JSON.parse(ln); } catch {}
       if (!j) return;
       if (j.t === 'c' || j.t === 'g') {
-        if (!headerSent) {
-          headerSent = true;
-          if (isStream) {
-            res.writeHead(200, {
-              'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache',
-              'Connection': 'keep-alive', 'X-ZZCSAPI-Channel': candidate.channelId,
-            });
-          }
+        if (!toolEmuReq) emuSendHeader();
+        if (j.t === 'c') {
+          if (toolEmuReq) scanner.push(j.d);
+          else emuDelta(j.d);
         }
-        if (j.t === 'c') { fullText += j.d; if (isStream) res.write(notionSSEChunk(respId, displayModel, { content: j.d })); }
         else { thinkText += j.d; if (isStream) res.write(notionSSEChunk(respId, displayModel, { reasoning_content: j.d })); }
       } else if (j.t === 'e') {
         if (!fullText.trim() && !thinkText.trim()) doneEvt = { err: j.d };
@@ -2059,9 +2123,13 @@ async function tryArenaChannel(opts) {
     } catch (e) { /* abort/中断 */ }
     clearTimeout(abortTimer);
     handleLine(buf);
+    if (toolEmuReq) {
+      const r = scanner.end();
+      if (r && r.sawTools) toolsEmitted = true;
+    }
 
-    // done 事件裁决
-    if (doneEvt && doneEvt.ok === false && !fullText.trim() && !thinkText.trim()) {
+    // done 事件裁决（工具已产出 → 视为成功，跳过错误分支）
+    if (doneEvt && doneEvt.ok === false && !fullText.trim() && !thinkText.trim() && !toolsEmitted) {
       // 400/404：请求级错误（模型不可用等），不是渠道故障 → 不冷却、不切候选，直接透传客户端
       if (doneEvt.status === 400 || doneEvt.status === 404) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -2072,7 +2140,7 @@ async function tryArenaChannel(opts) {
       recordFailure(ch, `arena chat: ${doneEvt.status || ''} ${(doneEvt.err || '').slice(0, 150)}`);
       if (!res.headersSent) return `arena chat failed: ${doneEvt.status || ''} ${(doneEvt.err || '').slice(0, 100)}`;
     }
-    if (!fullText.trim() && !thinkText.trim() && !(doneEvt && doneEvt.ok)) {
+    if (!fullText.trim() && !thinkText.trim() && !toolsEmitted && !(doneEvt && doneEvt.ok)) {
       if (!res.headersSent) { recordFailure(ch, 'arena chat: empty'); return 'arena chat: empty'; }
     }
 
@@ -2082,6 +2150,15 @@ async function tryArenaChannel(opts) {
     if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
     ch.latencyMs = Date.now() - t0;
 
+    // 工具仿真：非流式 tool_calls 响应（流式已在 emuToolCalls 里发过 delta）
+    if (toolsEmitted && !isStream) {
+      const calls = pendingToolCalls || [];
+      recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: estimateTokens(JSON.stringify(calls)), ok: true, latencyMs: Date.now() - t0 });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+      res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, calls, fullText.trim() || null)));
+      return 'success';
+    }
+
     if (isStream) {
       if (!headerSent) {
         res.writeHead(200, {
@@ -2090,14 +2167,33 @@ async function tryArenaChannel(opts) {
         });
       }
       res.write(notionSSEChunk(respId, displayModel, {}));
-      res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: toolsEmitted ? 'tool_calls' : 'stop' }] })}\n\n`);
       res.write('data: [DONE]\n\n');
       res.end();
       recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: estimateTokens(fullText + thinkText), ok: true, latencyMs: Date.now() - t0 });
       return 'success';
     }
-    const reply = fullText.trim() ? fullText : (thinkText || '');
-    const outTok = estimateTokens(reply + (thinkText ? ' ' + thinkText : ''));
+    let reply = fullText.trim() ? fullText : (thinkText || '');
+    // 工具仿真：非流式解析（围栏可能在正文或思考段，两处都试）
+    if (toolEmuReq && !pendingToolCalls) {
+      const tryTexts = [fullText, thinkText].filter((t) => t && t.includes('```'));
+      for (const t of tryTexts) {
+        const parsed = toolEmu.parseEmulatedToolCalls(t);
+        if (parsed && parsed.calls.length) {
+          recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: estimateTokens(t), ok: true, latencyMs: Date.now() - t0 });
+          res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+          res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, parsed.calls, parsed.text || null)));
+          return 'success';
+        }
+      }
+    }
+    // 内容分裂兜底：答案主体进 thinking 段 → content 过短而 thinking 充实时并入
+    let mergedReasoning = false;
+    if (thinkText.trim() && (!reply.trim() || reply.replace(/\s/g, '').length * 5 < thinkText.replace(/\s/g, '').length)) {
+      reply = (reply ? reply + '\n\n' : '') + thinkText;
+      mergedReasoning = true;
+    }
+    const outTok = estimateTokens(reply + (mergedReasoning ? '' : (thinkText ? ' ' + thinkText : '')));
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
     res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
     res.end(JSON.stringify({
@@ -2105,7 +2201,7 @@ async function tryArenaChannel(opts) {
       object: 'chat.completion',
       created: Math.floor(Date.now() / 1000),
       model: displayModel,
-      choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(thinkText ? { reasoning_content: thinkText } : {}) }, finish_reason: 'stop' }],
+      choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(!mergedReasoning && thinkText ? { reasoning_content: thinkText } : {}) }, finish_reason: 'stop' }],
       usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
     }));
     return 'success';
@@ -2127,7 +2223,7 @@ async function tryArenaChannel(opts) {
     return 'arena: unknown model ' + candidate.upstream;
   }
 
-  const content = arena.buildArenaContent(body.messages);
+  const content = arena.buildArenaContent(effMessages);
   if (!content.trim()) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: 'empty messages', type: 'invalid_request_error' } }));
@@ -2185,20 +2281,33 @@ async function tryArenaChannel(opts) {
     let fullText = '';
     let thinkText = '';
     let streamError = null;
+    let toolsEmitted = false;
+    const sendDelta = (text) => { if (!text) return; fullText += text; res.write(notionSSEChunk(respId, displayModel, { content: text })); };
+    const sendTools = (calls) => {
+      toolsEmitted = true;
+      res.write(notionSSEChunk(respId, displayModel, {
+        tool_calls: calls.map((c, i) => ({
+          index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
+          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+        })),
+      }));
+    };
+    const scanner = toolEmu.createToolStreamScanner(sendDelta, sendTools);
     const parser = arena.createArenaStreamParser((evt) => {
-      if (evt.type === 'content') { fullText += evt.text; res.write(notionSSEChunk(respId, displayModel, { content: evt.text })); }
+      if (evt.type === 'content') { if (toolEmuReq) scanner.push(evt.text); else sendDelta(evt.text); }
       else if (evt.type === 'thinking') { thinkText += evt.text; res.write(notionSSEChunk(respId, displayModel, { reasoning_content: evt.text })); }
       else if (evt.type === 'error') { streamError = streamError || evt.text; }
     });
     parser.push(rawBuf);
     parser.end();
-    if (streamError && !fullText.trim() && !thinkText.trim()) {
+    if (toolEmuReq) scanner.end();
+    if (streamError && !fullText.trim() && !thinkText.trim() && !toolsEmitted) {
       try { res.end(); } catch {}
       recordFailure(ch, 'arena stream: ' + streamError);
       return 'arena stream: ' + streamError;
     }
     res.write(notionSSEChunk(respId, displayModel, {}));
-    res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: toolsEmitted ? 'tool_calls' : 'stop' }] })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: estimateTokens(fullText + thinkText), ok: true, latencyMs: Date.now() - t0 });
@@ -2219,8 +2328,29 @@ async function tryArenaChannel(opts) {
     recordFailure(ch, 'arena stream: ' + streamError);
     return 'arena stream: ' + streamError;
   }
-  const reply = contentText.trim() ? contentText : (reasoningText || '');
-  const outTok = estimateTokens(reply + (reasoningText ? ' ' + reasoningText : ''));
+  let reply = contentText.trim() ? contentText : (reasoningText || '');
+  // 工具仿真：非流式解析（正文/思考两处都试围栏）
+  if (toolEmuReq) {
+    const tryTexts = [contentText, reasoningText].filter((t) => t && t.includes('```'));
+    let hit = null;
+    for (const t of tryTexts) {
+      const parsed = toolEmu.parseEmulatedToolCalls(t);
+      if (parsed && parsed.calls.length) { hit = parsed; break; }
+    }
+    if (hit) {
+      recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0 });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+      res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, hit.calls, hit.text || null)));
+      return 'success';
+    }
+  }
+  // 内容分裂兜底：content 过短而 thinking 充实 → 并入回复
+  let mergedReasoning = false;
+  if (reasoningText.trim() && (!reply.trim() || reply.replace(/\s/g, '').length * 5 < reasoningText.replace(/\s/g, '').length)) {
+    reply = (reply ? reply + '\n\n' : '') + reasoningText;
+    mergedReasoning = true;
+  }
+  const outTok = estimateTokens(reply + (mergedReasoning ? '' : (reasoningText ? ' ' + reasoningText : '')));
   recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
   res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
   res.end(JSON.stringify({
@@ -2228,7 +2358,7 @@ async function tryArenaChannel(opts) {
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: displayModel,
-    choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
+    choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(!mergedReasoning && reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
     usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
   }));
   return 'success';
@@ -2276,7 +2406,10 @@ async function tryNotionChannel(opts) {
   }
 
   // 2) transcript + payload
-  const built = notion.buildNotionTranscript(body.messages, candidate.upstream, acct);
+  // 工具仿真：notion 无原生 function calling → tools 注入 system，响应解析围栏
+  const toolEmuReq = toolEmu.emulateRequest(body);
+  const effMessages = toolEmuReq ? toolEmuReq.messages : body.messages;
+  const built = notion.buildNotionTranscript(effMessages, candidate.upstream, acct);
   if (built.error) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: built.error, type: 'invalid_request_error' } }));
@@ -2363,26 +2496,53 @@ async function tryNotionChannel(opts) {
     let fullText = '';
     let finalText = '';
     let firstChunkSent = false;
+    let toolsEmitted = false;
+    const sendDelta = (text) => {
+      if (!text) return;
+      if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
+      fullText += text; res.write(notionSSEChunk(respId, displayModel, { content: text }));
+    };
+    const sendToolCalls = (calls) => {
+      toolsEmitted = true;
+      firstChunkSent = true;
+      // tool_calls 增量：一次完整产出（合法的 OpenAI 流形态）
+      res.write(notionSSEChunk(respId, displayModel, {
+        tool_calls: calls.map((c, i) => ({
+          index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
+          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+        })),
+      }));
+    };
+    const scanner = toolEmu.createToolStreamScanner(sendDelta, sendToolCalls);
     const parser = notion.createNotionStreamParser((evt) => {
       if (evt.type === 'content') {
-        if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
-        fullText += evt.text; res.write(notionSSEChunk(respId, displayModel, { content: evt.text }));
+        if (toolEmuReq) scanner.push(evt.text);
+        else sendDelta(evt.text);
       } else if (evt.type === 'thinking') {
-        if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
-        res.write(notionSSEChunk(respId, displayModel, { reasoning_content: evt.text }));
+        // 工具场景：思考段也可能带工具围栏（模型爱先思考再给调用）→ 也进扫描器
+        if (toolEmuReq) scanner.push(evt.text);
+        else if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
+        if (!toolEmuReq) res.write(notionSSEChunk(respId, displayModel, { reasoning_content: evt.text }));
       } else if (evt.type === 'final') { finalText = evt.text; }
     });
     for (const ln of ndjsonText.split('\n')) parser.line(ln);
+    if (toolEmuReq) { scanner.end(); }
 
     // 权威全文兜底：流里没采到 content → 用 record-map 的 final 补齐
-    if (!fullText.trim() && finalText) {
-      if (!firstChunkSent) res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
-      res.write(notionSSEChunk(respId, displayModel, { content: finalText }));
-      fullText = finalText;
+    if (!fullText.trim() && finalText && !toolsEmitted) {
+      if (toolEmuReq) {
+        const parsed = toolEmu.parseEmulatedToolCalls(finalText);
+        if (parsed && parsed.calls.length) { sendToolCalls(parsed.calls); }
+        else sendDelta(finalText);
+      } else {
+        if (!firstChunkSent) res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
+        res.write(notionSSEChunk(respId, displayModel, { content: finalText }));
+        fullText = finalText;
+      }
     }
     // 收尾 chunk
     res.write(notionSSEChunk(respId, displayModel, {}));
-    res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: toolsEmitted ? 'tool_calls' : 'stop' }] })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
     const inTok = estimateTokens(messagesText(body.messages));
@@ -2400,9 +2560,30 @@ async function tryNotionChannel(opts) {
     else if (evt.type === 'final') finalText = evt.text;
   });
   for (const ln of ndjsonText.split('\n')) parser.line(ln);
-  const reply = contentText.trim() ? contentText : (finalText || '');
+  let reply = contentText.trim() ? contentText : (finalText || '');
+
+  // 内容分裂兜底：模型把答案主体吐进 thinking 段（gpt-6-astra 工具场景常见）→
+  // content 空/过短而 thinking 充实时，把 thinking 并入回复
+  let mergedReasoning = false;
+  if (reasoningText.trim() && (!reply.trim() || reply.replace(/\s/g, '').length * 5 < reasoningText.replace(/\s/g, '').length)) {
+    reply = (reply ? reply + '\n\n' : '') + reasoningText;
+    mergedReasoning = true;
+  }
+
+  // 工具仿真：非流式先试解析围栏
+  if (toolEmuReq) {
+    const parsed = toolEmu.parseEmulatedToolCalls(reply);
+    if (parsed && parsed.calls.length) {
+      const inTok = estimateTokens(messagesText(body.messages));
+      recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0 });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+      res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, parsed.calls, parsed.text || null)));
+      return 'success';
+    }
+  }
+  reply = reply.trim();
   const inTok = estimateTokens(messagesText(body.messages));
-  const outTok = estimateTokens(reply + (reasoningText ? ' ' + reasoningText : ''));
+  const outTok = estimateTokens(reply + (mergedReasoning ? '' : (reasoningText ? ' ' + reasoningText : '')));
   recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
   res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
   res.end(JSON.stringify({
@@ -2410,7 +2591,7 @@ async function tryNotionChannel(opts) {
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: displayModel,
-    choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
+    choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(!mergedReasoning && reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
     usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
   }));
   return 'success';
