@@ -105,6 +105,18 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, cookie: latestCookie }));
     }
+    if (req.method === 'GET' && url.pathname === '/state') {
+      // 诊断：页面可见性（屏幕外窗口应保持 visible；hidden=遮挡检测生效需换方案）
+      let page = null;
+      try {
+        page = await arena.sidecar._evaluate(
+          'JSON.stringify({ visibility: document.visibilityState, hidden: document.hidden, hasFocus: document.hasFocus(), token: window.__zzArenaToken || "unset" })',
+          false, 8000,
+        );
+      } catch (e) { page = 'eval fail: ' + String(e && e.message || e); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, page: typeof page === 'string' ? JSON.parse(page) : page }));
+    }
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'not found' }));
   } catch (e) {

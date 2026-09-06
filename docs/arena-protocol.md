@@ -64,6 +64,16 @@ body: {
 
 - agent：`arena-chrome\watchdog.ps1`（开机自启：启动文件夹 ZZCSAPI-Arena-Chrome.bat；
   30s 心跳自愈），headful 模式 env `ZZCSAPI_ARENA_HEADFUL=1`
+- **窗口隐藏**：headful 窗口移到屏幕外（--window-position=-32000,-32000），
+  桌面无可见窗口，仅任务栏一个图标。注意 Chrome 遮挡检测可能延迟把屏幕外
+  窗口判为 occluded（visibilityState=hidden）——已加
+  `--disable-features=CalculateNativeWinOcclusion` 缓解，但部分版本仍会回落
+  hidden；实证 claude/gemini 系模型不受影响（headless 下也 200 过），
+  仅 GPT 系（严格 recaptcha 校验）理论上受损（gpt-5.4/5.4-mini 已下架）。
+- 诊断端点：`GET http://127.0.0.1:9225/state`（页面 visibility/token 状态）、
+  `/healthz`；agent 日志：`arena-data\agent.log` / `agent-err.log`
+- 重启工具：`arena-chrome\restart-agent.ps1` / `restart-watchdog.ps1`
+  （watchdog 重启勿在命令行内联过滤 powershell 进程——命令文本会匹配到宿主自身）
 - cookie 上传：arena.ai 页面 F12 控制台
   `fetch('http://localhost:8787/admin/api/arena-cookie',{method:'POST',headers:{'content-type':'text/plain'},body:document.cookie})`
   （零转录：cookie 字节从浏览器直达网关；手动复制 3000+ 字符两次引入坏字节 → Vercel 500）

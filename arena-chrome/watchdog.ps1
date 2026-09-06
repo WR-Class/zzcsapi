@@ -19,12 +19,15 @@ function Test-AgentAlive {
 
 while ($true) {
   if (-not (Test-AgentAlive)) {
-    # 杀掉可能残留的旧 Chrome（arena profile）
+    # 杀掉可能残留的旧 sidecar 浏览器（实际 profile 在 %TEMP%\zzcsapi-arena-profile；
+    # arena-data\chrome-profile 是旧架构遗留，一并清理）
     Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'" |
-      Where-Object { $_.CommandLine -like "*$root\arena-data\chrome-profile*" } |
+      Where-Object { $_.CommandLine -like "*zzcsapi-arena-profile*" -or $_.CommandLine -like "*$root\arena-data\chrome-profile*" } |
       ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
-    Start-Process node -WindowStyle Hidden -ArgumentList @($marker)
+    Start-Process node -WindowStyle Hidden -ArgumentList @($marker) `
+      -RedirectStandardOutput "$root\arena-data\agent.log" `
+      -RedirectStandardError "$root\arena-data\agent-err.log"
   }
   Start-Sleep -Seconds 30
 }

@@ -427,19 +427,27 @@ class ArenaSidecar {
     fs.mkdirSync(this.profileDir, { recursive: true });
     // headful 模式：reCAPTCHA v3 对 headless 页面行为评分低 → arena GPT 系模型 403
     // （headful 真实窗口 + CDP 行为预热的 token 可通过服务端校验）
+    // 窗口移到屏幕外（-32000）：桌面完全看不见，但仍是真实有头窗口（非最小化/
+    // 非遮挡 → document.visibilityState 保持 visible，渲染与 reCAPTCHA 评分不受影响）
     const headful = process.env.ZZCSAPI_ARENA_HEADFUL === '1';
     const args = [
       ...(headful ? [] : ['--headless=new']),
       '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
-      '--no-first-run', '--no-default-browser-check', '--disable-features=Translate',
+      '--no-first-run', '--no-default-browser-check',
+      // Translate: 关弹窗；CalculateNativeWinOcclusion: 屏幕外窗口会被 Windows 遮挡
+      // 检测判为 occluded → document.visibilityState=hidden（渲染节流 + reCAPTCHA
+      // 评分受损）——禁用该计算，屏幕外窗口保持 visible
+      '--disable-features=Translate,CalculateNativeWinOcclusion',
       // 反无头检测：UA 覆盖（默认 HeadlessChrome UA 会被 Cloudflare 直接拦截）+ 去 webdriver 特征
       `--user-agent=${ARENA_UA}`,
       '--disable-blink-features=AutomationControlled',
       '--remote-debugging-port=0',
       `--user-data-dir=${this.profileDir}`,
-      ...(headful ? ['--window-size=1280,860', '--app=about:blank'] : ['about:blank']),
+      ...(headful
+        ? ['--window-size=1280,860', '--window-position=-32000,-32000', '--app=about:blank']
+        : ['about:blank']),
     ];
-    this.log('launch chromium:', exe, headful ? '(headful)' : '(headless)');
+    this.log('launch chromium:', exe, headful ? '(headful off-screen)' : '(headless)');
     this.proc = spawn(exe, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     const wsUrl = await new Promise((resolve, reject) => {
       let acc = '';
