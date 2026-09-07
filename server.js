@@ -2417,15 +2417,22 @@ function compactMessagesForNotion(messages, charLimit) {
   const head = dialog.slice(0, dialog.length - keepTail);
   let budget = LIMIT;
   for (const m of systems) budget -= String(m.content || '').length + 50;
+  // 第一条 user 消息通常携带任务目标：被裁掉会导致模型丢失任务方向、
+  // 重复执行已完成的写入 → 与 tail 同级优先保留（预算紧时从旧消息里省出）
+  const firstUser = dialog.find((m) => m && m.role === 'user');
+  const firstUserDropped = firstUser && !tail.includes(firstUser);
+  if (firstUserDropped) budget -= String(firstUser.content || '').length + 50;
   for (const m of tail) budget -= String(m.content || '').length + 50;
   const keptHead = [];
-  for (let i = head.length - 1; i >= 0; i--) {
-    const len = String(head[i].content || '').length + 50;
+  if (firstUserDropped) keptHead.push(firstUser);
+  const restHead = head.filter((m) => m !== firstUser);
+  for (let i = restHead.length - 1; i >= 0; i--) {
+    const len = String(restHead[i].content || '').length + 50;
     if (budget - len < 0) break;
     budget -= len;
-    keptHead.unshift(head[i]);
+    keptHead.unshift(restHead[i]);
   }
-  const dropped = head.length - keptHead.length;
+  const dropped = head.length - (firstUserDropped ? 1 : 0) - (keptHead.length - (firstUserDropped ? 1 : 0));
   if (dropped > 0) {
     keptHead.unshift({ role: 'user', content: `[较早的 ${dropped} 条对话历史已省略以适应上游长度限制]` });
     console.log(`[notion] 输入压缩: ${total} → ~${LIMIT - budget} 字符（丢弃 ${dropped} 条旧消息）`);

@@ -175,6 +175,23 @@ function findCaptureSpans(text) {
   return spans;
 }
 
+// 连续相同调用去重：模型常在 thinking 段和 content 段重复输出同一调用
+// （同 name + 同参数），会导致执行器重复执行（重复写入循环的成因之一）。
+// 仅去重"紧邻的前一个"，合法的隔次重复调用不受影响。
+function dedupeConsecutiveCalls(calls) {
+  const out = [];
+  let lastKey = null;
+  for (const c of calls) {
+    let argsStr;
+    try { argsStr = JSON.stringify(c.arguments || {}); } catch { argsStr = String(c.arguments); }
+    const key = (c.name || '') + '|' + argsStr;
+    if (key === lastKey) continue;
+    lastKey = key;
+    out.push(c);
+  }
+  return out;
+}
+
 // 从文本中提取 emulated tool_calls。返回 {calls:[{name,arguments}], text} 或 null。
 // text = 去掉工具调用区段后的剩余正文（作为 content 保留）。
 function parseEmulatedToolCalls(text) {
@@ -201,11 +218,13 @@ function parseEmulatedToolCalls(text) {
     }
   }
   if (!found) return null;
+  const deduped = dedupeConsecutiveCalls(found.calls);
+  if (!deduped.length) return null;
   let content = '';
   let pos = 0;
   for (const sp of spans) { content += text.slice(pos, sp.start); pos = sp.end; }
   content += text.slice(pos);
-  return { calls: found.calls, text: content.trim() };
+  return { calls: deduped, text: content.trim() };
 }
 
 // ─────────────────────────── 流式扫描器 ───────────────────────────
@@ -216,6 +235,7 @@ function parseEmulatedToolCalls(text) {
 function createToolStreamScanner(onDelta, onToolCalls) {
   let buf = '';
   let sawTools = false;
+  let lastCallKey = null; // 跨批次连续去重（thinking 段与 content 段重复输出同一调用）
   const MAX_HOLD = 65536;
 
   function emit(text) { if (text) onDelta(text); }
@@ -240,12 +260,22 @@ function createToolStreamScanner(onDelta, onToolCalls) {
     buf = buf.slice(closeEnd);
     let parsed = null;
     try { parsed = JSON.parse(inner); } catch {}
-    const calls = parsed ? extractCallsFromJson(parsed) : [];
-    if (calls.length) {
+    const calls = parsed ? dedupeConsecutiveCalls(extractCallsFromJson(parsed)) : [];
+    const fresh = calls.filter((c) => {
+      let argsStr;
+      try { argsStr = JSON.stringify(c.arguments || {}); } catch { argsStr = String(c.arguments); }
+      const key = (c.name || '') + '|' + argsStr;
+      if (key === lastCallKey) return false;
+      lastCallKey = key;
+      return true;
+    });
+    if (fresh.length) {
       sawTools = true;
-      onToolCalls(calls);
-    } else {
+      onToolCalls(fresh);
+    } else if (!calls.length) {
       emit(wrap);
+    } else {
+      sawTools = true; // 全是紧邻重复调用：静默吞掉（已发过）
     }
   }
 
