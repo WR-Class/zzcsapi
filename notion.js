@@ -212,9 +212,12 @@ function uuid4() {
   try { return require('crypto').randomUUID(); } catch { return 'xxxxxxxxyxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; const v = c === 'x' ? r : (r & 3 | 8); return v.toString(16); }).replace(/^(.{8})(.{4})/, '$1-$2-'); }
 }
 
-function buildNotionTranscript(messages, upstreamModel, acct) {
+function buildNotionTranscript(messages, upstreamModel, acct, opts) {
   const notionModelId = notionModel(upstreamModel);
   const threadType = notionThreadType(notionModelId);
+  // opts.useWebSearch === false：请求带外部工具仿真时关掉 notion 内置搜索
+  // （否则超长上下文下模型可能调用内置搜索工具、输出 notion 内部格式）
+  const useWebSearch = !(opts && opts.useWebSearch === false);
   const t = [];
   t.push({
     id: uuid4(),
@@ -223,7 +226,7 @@ function buildNotionTranscript(messages, upstreamModel, acct) {
       type: threadType,
       model: notionModelId,
       modelFromUser: true,
-      useWebSearch: true,
+      useWebSearch,
     },
   });
   t.push({

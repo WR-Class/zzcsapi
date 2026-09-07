@@ -1,9 +1,14 @@
 // tool-emu.js — 无原生 function calling 的渠道（notion / arena）的工具调用仿真
-// 原理：把 OpenAI tools 数组注入 system 提示（协议约定模型输出独立 ```json 围栏的
-//       tool_calls），上游回复文本里解析出工具调用 → 还原成 OpenAI tool_calls 格式。
+// 原理：把 OpenAI tools 数组注入 system 提示 + 尾部提醒（协议：[TOOL_CALL] 方括号
+//       标记，兼容 ```json 围栏与裸 JSON），上游回复文本里解析出工具调用 → 还原成
+//       OpenAI tool_calls 格式。
 // MCP 客户端（Claude Desktop / DSH 等）发来的就是标准 tools 数组——网关支持 tools
 // 字段后它们天然可用，无需任何 MCP 特殊处理。
 'use strict';
+
+const TAG_OPEN = '[TOOL_CALL]';
+const TAG_CLOSE = '[/TOOL_CALL]';
+const FENCE = '```';
 
 // ─────────────────────────── 请求侧 ───────────────────────────
 
@@ -17,7 +22,7 @@ function stringifyTool(t) {
   const lines = [
     `### ${f.name || t.type || 'tool'}`,
     String(f.description || '').trim(),
-    '参数 JSON Schema（严格遵守，output 必须是合法参数 JSON 对象）:',
+    '参数 JSON Schema（arguments 必须是满足该 schema 的合法 JSON 对象）:',
     JSON.stringify(params),
   ];
   return lines.filter(Boolean).join('\n');
@@ -31,44 +36,49 @@ function buildToolSystemPrompt(tools, toolChoice) {
     : (toolChoice === 'required' || toolChoice === 'any') ? 'required'
       : (toolChoice && typeof toolChoice === 'object' && toolChoice.name) ? ('required:' + toolChoice.name)
         : 'auto';
-  const force = mode === 'required' ? '本次回复你必须调用一个工具。'
-    : mode.startsWith('required:') ? `本次回复你必须调用工具 ${mode.slice('required:'.length)}。`
-      : '由你判断：需要外部信息或动作时调用工具；能直接回答时正常回答。';
+  const force = mode === 'required' ? '本次回复你必须调用一个工具（不允许直接回答）。'
+    : mode.startsWith('required:') ? `本次回复你必须调用工具 ${mode.slice('required:'.length)}（不允许直接回答）。`
+      : '由你判断：需要外部信息或动作时必须调用工具（不要凭记忆猜测可查证的事实）；能直接回答时正常回答。';
+  const ex = TAG_OPEN + '\n{"name": "工具名", "arguments": {"参数名": "值"}}\n' + TAG_CLOSE;
   return [
-    '# 工具调用协议（严格遵守）',
+    '# 工具调用（外部工具，由调用方系统提供并执行）',
     '',
-    '你可以调用以下外部工具。工具清单：',
+    '你可以调用以下外部工具：',
     '',
     tools.map(stringifyTool).join('\n\n'),
     '',
-    '## 调用格式',
-    '决定调用工具时，回复中必须包含一个独立的 json 代码围栏，且只包含这一个围栏：',
-    '```json',
-    '{"tool_calls": [{"name": "<工具名>", "arguments": {<参数对象>}}]}',
-    '```',
-    '多个工具可并列在 tool_calls 数组中。围栏之外可以有简短说明文字。',
+    '## 调用格式（严格遵守）',
+    '决定调用工具时，在回复中输出如下标记（每个调用一组，arguments 为参数对象）：',
     '',
-    '## 判定',
+    ex,
+    '',
+    '## 判定规则',
     force,
-    '除工具调用围栏外，不要输出任何其他 json 围栏。',
-    '调用工具后立即停止（等待工具结果）；工具结果会以用户消息形式回传，再继续。',
+    '输出工具调用标记后立即停止输出，等待工具结果（以用户消息形式回传）再继续。',
+    '不要输出其他任何方括号标记；不要编造不存在的工具；不要把工具调用写成 JSON 代码块，必须用上述标记。',
   ].join('\n');
+}
+
+// 尾部提醒（对抗超长上下文注意力稀释：最后一条 user 消息末尾追加）
+function buildTailReminder() {
+  return '\n\n[提醒：若需调用工具，使用 ' + TAG_OPEN + ' {"name":"...","arguments":{...}} ' + TAG_CLOSE + ' 标记输出]';
 }
 
 // messages 里的 assistant.tool_calls / tool 角色 → 上游能理解的纯文本
 function renderEmulatedMessages(messages, toolsPrompt) {
   const out = [];
   if (toolsPrompt) out.push({ role: 'system', content: toolsPrompt });
+  const plain = [];
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m) continue;
     const role = m.role;
     if (role === 'tool') {
-      // 工具结果 → user 视角文本（含结果引用）
+      // 工具结果 → user 视角文本
       const name = String(m.name || m.tool_call_id || 'tool');
       let content = '';
       if (typeof m.content === 'string') content = m.content;
       else if (Array.isArray(m.content)) content = m.content.map((p) => (p && (typeof p === 'string' ? p : p.text)) || '').filter(Boolean).join('\n');
-      out.push({ role: 'user', content: `[工具 ${name} 的执行结果如下]\n${content}\n[请根据以上工具结果继续]` });
+      plain.push({ role: 'user', content: `[工具 ${name} 的执行结果如下]\n${content}\n[请根据以上工具结果继续]` });
       continue;
     }
     if (role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
@@ -78,22 +88,30 @@ function renderEmulatedMessages(messages, toolsPrompt) {
       for (const tc of m.tool_calls) {
         let args = {};
         try { args = JSON.parse(tc.function && tc.function.arguments || '{}'); } catch {}
-        parts.push('```json\n{"tool_calls": [{"name": ' + JSON.stringify(tc.function && tc.function.name) + ', "arguments": ' + JSON.stringify(args) + '}]}\n```');
+        parts.push(TAG_OPEN + '\n' + JSON.stringify({ name: tc.function && tc.function.name, arguments: args }) + '\n' + TAG_CLOSE);
       }
-      out.push({ role: 'assistant', content: parts.join('\n\n') });
+      plain.push({ role: 'assistant', content: parts.join('\n\n') });
       continue;
     }
     // 普通消息：content 规约成 string（多模态部分取文本）
     let content = '';
     if (typeof m.content === 'string') content = m.content;
     else if (Array.isArray(m.content)) content = m.content.map((p) => (typeof p === 'string' ? p : (p && p.type === 'text' && p.text) || '') || '').filter(Boolean).join('\n');
-    out.push({ role, content });
+    plain.push({ role, content });
   }
-  return out;
+  // 有工具提示时：最后一条 user 消息末尾追加提醒（近因效应，超长上下文关键）
+  if (toolsPrompt) {
+    for (let i = plain.length - 1; i >= 0; i--) {
+      if (plain[i].role === 'user') {
+        plain[i] = { ...plain[i], content: String(plain[i].content || '') + buildTailReminder() };
+        break;
+      }
+    }
+  }
+  return [...out, ...plain];
 }
 
-// 入口：请求带 tools 且协议要仿真 → 返回 {messages, tools}（消息已注入协议提示）；
-// 无 tools 返回 null（原样走）。
+// 入口：请求带 tools 且协议要仿真 → 返回 {messages, tools}；无 tools 返回 null。
 function emulateRequest(body) {
   const tools = Array.isArray(body && body.tools) ? body.tools.filter((t) => t && (t.function || t.type)) : [];
   if (!tools.length) return null;
@@ -106,36 +124,6 @@ function emulateRequest(body) {
 
 // ─────────────────────────── 响应侧 ───────────────────────────
 
-const FENCE_RE = /```(?:json|JSON)?\s*\n([\s\S]*?)\n?```/g;
-
-// 从文本中提取 emulated tool_calls。返回 {calls:[{name,arguments}]},text} 或 null
-// text = 去掉工具围栏后的剩余正文（作为 content 保留）。
-function parseEmulatedToolCalls(text) {
-  if (!text) return null;
-  let m;
-  let found = null;
-  let rest = text;
-  const fenceSpans = [];
-  FENCE_RE.lastIndex = 0;
-  while ((m = FENCE_RE.exec(text)) !== null) {
-    const inner = (m[1] || '').trim();
-    let parsed = null;
-    try { parsed = JSON.parse(inner); } catch { continue; }
-    const calls = extractCallsFromJson(parsed);
-    if (!calls.length) continue;
-    if (found) { found.calls.push(...calls); }
-    else { found = { calls }; }
-    fenceSpans.push([m.index, m.index + m[0].length]);
-  }
-  if (!found) return null;
-  // 去掉命中的围栏，剩余做正文
-  let content = '';
-  let pos = 0;
-  for (const [s, e] of fenceSpans) { content += text.slice(pos, s); pos = e; }
-  content += text.slice(pos);
-  return { calls: found.calls, text: content.trim() };
-}
-
 function extractCallsFromJson(parsed) {
   const calls = [];
   const pushOne = (name, args) => {
@@ -145,113 +133,168 @@ function extractCallsFromJson(parsed) {
   if (Array.isArray(parsed && parsed.tool_calls)) {
     for (const c of parsed.tool_calls) {
       if (c && typeof c === 'object') {
-        // {name, arguments} 或 {function:{name, arguments}}
         if (c.function && typeof c.function === 'object') pushOne(c.function.name, c.function.arguments);
         else pushOne(c.name, c.arguments);
       }
     }
   } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    if (typeof parsed.name === 'string') pushOne(parsed.name, parsed.arguments || parsed.args || parsed.parameters || {});
+    // 裸 {name, arguments} 形状：必须同时有 name 和参数键（arguments/args/parameters），
+    // 否则 {"name":"config","port":8080} 这类普通 JSON 会被误判
+    if (typeof parsed.name === 'string' && (parsed.arguments !== undefined || parsed.args !== undefined || parsed.parameters !== undefined)) {
+      pushOne(parsed.name, parsed.arguments || parsed.args || parsed.parameters || {});
+    }
   }
   return calls;
 }
 
-// ─────────────────────────── 流式扫描器 ───────────────────────────
-// 边流边检测 ```json 围栏：围栏起始前的内容正常转发（content），
-// 围栏闭合且解析为工具调用 → 一次性产出 tool_calls。
-// 流式中"可能是围栏开头"的尾部字符会被 hold（暂缓转发）直到判定完成。
-//
-// onDelta(text)：正文增量（可安全直接转发给客户端）
-// onToolCalls(calls)：工具调用产出（每个 call 一次性完整产出）
-// done()：流结束；返回 {sawTools:bool}
-function createToolStreamScanner(onDelta, onToolCalls) {
-  let buf = ''; // 未判定的尾部缓冲（含可能的围栏开头）
-  let flushed = true; // buf 之外是否全部已转发
-  let sawTools = false;
-  const FENCE_OPEN = '```';
-  const FENCE_CLOSE_RE = /```/;
+// 找出 text 中所有捕获区段（[TOOL_CALL] 标记 或 ```json 围栏），返回排序后的 span 列表
+function findCaptureSpans(text) {
+  const spans = [];
+  let idx = -1;
+  // 标记
+  let from = 0;
+  for (;;) {
+    idx = text.indexOf(TAG_OPEN, from);
+    if (idx < 0) break;
+    const closeIdx = text.indexOf(TAG_CLOSE, idx + TAG_OPEN.length);
+    if (closeIdx < 0) { from = idx + TAG_OPEN.length; continue; }
+    spans.push({ start: idx, end: closeIdx + TAG_CLOSE.length, inner: text.slice(idx + TAG_OPEN.length, closeIdx).trim() });
+    from = closeIdx + TAG_CLOSE.length;
+  }
+  // 围栏（```json ... ```）
+  const fenceRe = /```(?:json|JSON)?[ \t]*\r?\n([\s\S]*?)\r?\n?```/g;
+  let m;
+  while ((m = fenceRe.exec(text)) !== null) spans.push({ start: m.index, end: m.index + m[0].length, inner: (m[1] || '').trim() });
+  spans.sort((a, b) => a.start - b.start);
+  return spans;
+}
 
-  // 尝试从 buf 里解析一个完整围栏；成功 → true（buf 被消费到围栏结束）
-  function tryParseFence() {
-    if (!buf.startsWith(FENCE_OPEN)) return false;
-    // 找闭合 ```
-    const closeIdx = buf.indexOf(FENCE_OPEN, 3);
-    if (closeIdx < 0) {
-      // 未闭合：围栏可能还在增长。防止无限 hold：超长（16KB）且无闭合 → 放弃当文本
-      if (buf.length > 16384) return false;
-      return true; // hold 住（等更多数据）
+// 从文本中提取 emulated tool_calls。返回 {calls:[{name,arguments}], text} 或 null。
+// text = 去掉工具调用区段后的剩余正文（作为 content 保留）。
+function parseEmulatedToolCalls(text) {
+  if (!text) return null;
+  const spans = findCaptureSpans(text);
+  let found = null;
+  for (const sp of spans) {
+    let parsed = null;
+    try { parsed = JSON.parse(sp.inner); } catch { continue; }
+    const calls = extractCallsFromJson(parsed);
+    if (!calls.length) continue;
+    if (found) found.calls.push(...calls);
+    else found = { calls };
+  }
+  // 裸 JSON 兜底：整个回复就是一个 {name,arguments} / {tool_calls:[...]} JSON 对象
+  if (!found) {
+    const stripped = String(text).trim();
+    if (stripped.startsWith('{') && stripped.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(stripped);
+        const calls = extractCallsFromJson(parsed);
+        if (calls.length) found = { calls };
+      } catch {}
     }
-    const inner = buf.slice(3, closeIdx).replace(/^(?:json|JSON)?\s*\n/, '').replace(/\n?$/, '').trim();
+  }
+  if (!found) return null;
+  let content = '';
+  let pos = 0;
+  for (const sp of spans) { content += text.slice(pos, sp.start); pos = sp.end; }
+  content += text.slice(pos);
+  return { calls: found.calls, text: content.trim() };
+}
+
+// ─────────────────────────── 流式扫描器 ───────────────────────────
+// 边流边检测捕获区段（[TOOL_CALL] 标记优先 / ``` 围栏兜底）：
+// 区段前的内容正常转发（content），区段闭合且解析为工具调用 → 一次性产出 tool_calls；
+// 非工具区段原样转发（普通代码块不误伤）。
+// 可能是区段开头的尾部字符会被 hold（暂缓转发）直到判定完成。
+function createToolStreamScanner(onDelta, onToolCalls) {
+  let buf = '';
+  let sawTools = false;
+  const MAX_HOLD = 65536;
+
+  function emit(text) { if (text) onDelta(text); }
+
+  // s（以 ` 或 [ 开头）是否是区段开头的未完成前缀 → 需等待更多数据
+  function isPartialOpen(s) {
+    if (!s) return false;
+    if (s[0] === '`') {
+      const run = s.match(/^`+/)[0].length;
+      if (run >= 3) return false; // 完整围栏开头
+      return s.length === run; // 1-2 个反引号且位于末尾 → 可能长成 ```
+    }
+    if (s[0] === '[') return TAG_OPEN.startsWith(s) && s.length < TAG_OPEN.length;
+    return false;
+  }
+
+  // 捕获区段闭合处理：是工具调用 → onToolCalls；否则原样转发（保留代码块格式）
+  // innerEnd/closeEnd 分别是内容终点/闭合标记终点（闭合标记本身不算内容）
+  function handleCapture(innerStart, innerEnd, closeEnd) {
+    const inner = buf.slice(innerStart, innerEnd).trim();
+    const wrap = buf.slice(0, closeEnd);
+    buf = buf.slice(closeEnd);
     let parsed = null;
     try { parsed = JSON.parse(inner); } catch {}
     const calls = parsed ? extractCallsFromJson(parsed) : [];
-    buf = buf.slice(closeIdx + 3);
     if (calls.length) {
       sawTools = true;
       onToolCalls(calls);
-      // 围栏后可能还有正文（模型继续唠叨）——继续走正文路径
-      flushSafe();
-      return true;
+    } else {
+      emit(wrap);
     }
-    // 不是工具调用的围栏 → 原样输出（含围栏本身）
-    onDelta('```' + buf.slice(3, closeIdx + 3));
-    buf = buf.slice(closeIdx + 3);
-    flushSafe();
-    return true;
   }
 
-  // 把 buf 里"确定安全"的部分转发：截止到最后一个可能的围栏前缀位置
-  function flushSafe() {
-    if (!buf) return;
-    // 找最后一个 '`' 序列起点（可能是 ``` 开头的开头）
-    // 检查所有 ` 连续段，长度<3 且之后字符不足以判定时 hold
-    let safeEnd = buf.length;
-    for (let i = buf.length - 2; i >= 0; i--) {
-      if (buf[i] === '`') {
-        // 从 i 开始的连续反引号
-        let j = i;
-        while (j < buf.length && buf[j] === '`') j++;
-        const run = buf.slice(i, j);
-        if (run.length >= 3) { safeEnd = i; break; } // 完整 ``` 出现在中间 → 截到这里（后续按围栏处理）
-        // 不完整反引号段且在末尾 → hold
-        if (j >= buf.length) { safeEnd = i; break; }
-        // 中间的短反引号（单个/双个）→ 正文，继续往前找
+  // buf 末尾"可能是未完成标记开头"的长度（需 hold 等更多数据）
+  function partialTailLen(s) {
+    // 末尾连续反引号（1-2 个，可能长成 ```）
+    const m = s.match(/`{1,2}$/);
+    if (m) return m[0].length;
+    // 末尾 [ 开头能匹配 TAG_OPEN 前缀的片段（如 "[TOOL"、"["）
+    const open = s.match(/\[[A-Z_]{0,10}$/);
+    if (open && TAG_OPEN.startsWith(open[0])) return open[0].length;
+    return 0;
+  }
+
+  function drain() {
+    for (;;) {
+      if (!buf) return;
+      // 捕获模式 1：[TOOL_CALL] 标记
+      if (buf.startsWith(TAG_OPEN)) {
+        const closeIdx = buf.indexOf(TAG_CLOSE, TAG_OPEN.length);
+        if (closeIdx >= 0) handleCapture(TAG_OPEN.length, closeIdx, closeIdx + TAG_CLOSE.length);
+        else if (buf.length > MAX_HOLD) { emit(buf); buf = ''; } else return;
+        continue;
       }
-    }
-    if (safeEnd > 0) {
-      onDelta(buf.slice(0, safeEnd));
-      buf = buf.slice(safeEnd);
+      // 捕获模式 2：``` 围栏
+      if (buf.startsWith(FENCE)) {
+        const closeIdx = buf.indexOf(FENCE, 3);
+        if (closeIdx >= 0) handleCapture(3, closeIdx, closeIdx + 3);
+        else if (buf.length > MAX_HOLD) { emit(buf); buf = ''; } else return;
+        continue;
+      }
+      // 非捕获：找最早的区段开头；末尾未完成前缀先 hold 住不输出
+      const tagIdx = buf.indexOf(TAG_OPEN);
+      const fenceIdx = buf.indexOf(FENCE);
+      const tailLen = partialTailLen(buf);
+      let cut = buf.length - tailLen;
+      if (tagIdx >= 0) cut = Math.min(cut, tagIdx);
+      if (fenceIdx >= 0) cut = Math.min(cut, fenceIdx);
+      if (cut > 0) { emit(buf.slice(0, cut)); buf = buf.slice(cut); continue; }
+      // buf 全是未完成前缀（或无进展）→ hold
+      if (buf && !tailLen) {
+        // buf[0] 确定不是标记开头（如单个 '[' 后跟小写）→ 至少放行 1 字符防死循环
+        if (!isPartialOpen(buf)) { emit(buf[0]); buf = buf.slice(1); continue; }
+      }
+      return;
     }
   }
 
   return {
-    push(chunk) {
-      buf += chunk;
-      if (buf.startsWith(FENCE_OPEN)) {
-        // 正在围栏内：等闭合或放弃
-        if (!tryParseFence()) {
-          // 超长无闭合 → 放弃，全当正文
-          onDelta(buf); buf = '';
-        }
-        return;
-      }
-      flushSafe();
-      // flush 后 buf 若以 ``` 开头 → 进围栏判定（下轮 push 或这里直接试）
-      if (buf.startsWith(FENCE_OPEN)) {
-        if (!tryParseFence()) { onDelta(buf); buf = ''; }
-      }
-    },
+    push(chunk) { buf += chunk; drain(); },
     end() {
-      // 流结束：残留 buf 当正文
       if (buf) {
-        if (!sawTools) {
-          // 尝试最后的围栏/裸 JSON 兜底
-          const parsed = parseEmulatedToolCalls(buf);
-          if (parsed && parsed.calls.length) {
-            sawTools = true;
-            onToolCalls(parsed.calls);
-          } else { onDelta(buf); }
-        } else { onDelta(buf); }
+        const parsed = parseEmulatedToolCalls(buf);
+        if (parsed && parsed.calls.length) { sawTools = true; onToolCalls(parsed.calls); }
+        else emit(buf);
         buf = '';
       }
       return { sawTools };

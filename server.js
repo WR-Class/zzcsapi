@@ -353,9 +353,9 @@ function aggregateModels(protocol) {
   const all = new Set();
   for (const ch of channels.values()) {
     const chProto = ch.def.protocol || 'openai';
-    // 别名跨协议聚合：openai/anthropic/gemini 三个入口都有跨协议候选链兜底，
-    // notion/arena 渠道的显式别名同样可路由，全部计入
-    const aliasedProto = protocol === 'anthropic' || protocol === 'gemini' ? ['openai', 'anthropic', 'gemini', 'notion', 'arena'] : [protocol];
+    // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
+    // notion/arena 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
@@ -2176,7 +2176,7 @@ async function tryArenaChannel(opts) {
     let reply = fullText.trim() ? fullText : (thinkText || '');
     // 工具仿真：非流式解析（围栏可能在正文或思考段，两处都试）
     if (toolEmuReq && !pendingToolCalls) {
-      const tryTexts = [fullText, thinkText].filter((t) => t && t.includes('```'));
+      const tryTexts = [fullText, thinkText].filter((t) => t && (t.includes('[TOOL_CALL]') || t.includes('```') || t.trim().startsWith('{')));
       for (const t of tryTexts) {
         const parsed = toolEmu.parseEmulatedToolCalls(t);
         if (parsed && parsed.calls.length) {
@@ -2331,7 +2331,7 @@ async function tryArenaChannel(opts) {
   let reply = contentText.trim() ? contentText : (reasoningText || '');
   // 工具仿真：非流式解析（正文/思考两处都试围栏）
   if (toolEmuReq) {
-    const tryTexts = [contentText, reasoningText].filter((t) => t && t.includes('```'));
+    const tryTexts = [contentText, reasoningText].filter((t) => t && (t.includes('[TOOL_CALL]') || t.includes('```') || t.trim().startsWith('{')));
     let hit = null;
     for (const t of tryTexts) {
       const parsed = toolEmu.parseEmulatedToolCalls(t);
@@ -2388,6 +2388,41 @@ function notionSSEChunk(id, model, delta) {
   return `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
 }
 
+// Notion 渠道输入压缩：超长上下文会导致上游破坏性截断（实测 10 万 token 级
+// 输入下模型的 system 工具协议丢失、回归 notion 内置工具行为）。
+// 策略：保全部 system + 最近对话轮，从最老的对话对开始丢弃中间历史。
+function compactMessagesForNotion(messages, charLimit) {
+  const LIMIT = charLimit || 160_000;
+  let total = 0;
+  for (const m of messages) total += String(m && m.content || '').length;
+  if (total <= LIMIT) return messages;
+  const systems = [];
+  const dialog = [];
+  for (const m of messages) {
+    if (m && m.role === 'system') systems.push(m); else dialog.push(m);
+  }
+  // 保最近 6 条完整（工具场景最近轮次最重要）
+  const keepTail = Math.min(6, dialog.length);
+  const tail = dialog.slice(-keepTail);
+  const head = dialog.slice(0, dialog.length - keepTail);
+  let budget = LIMIT;
+  for (const m of systems) budget -= String(m.content || '').length + 50;
+  for (const m of tail) budget -= String(m.content || '').length + 50;
+  const keptHead = [];
+  for (let i = head.length - 1; i >= 0; i--) {
+    const len = String(head[i].content || '').length + 50;
+    if (budget - len < 0) break;
+    budget -= len;
+    keptHead.unshift(head[i]);
+  }
+  const dropped = head.length - keptHead.length;
+  if (dropped > 0) {
+    keptHead.unshift({ role: 'user', content: `[较早的 ${dropped} 条对话历史已省略以适应上游长度限制]` });
+    console.log(`[notion] 输入压缩: ${total} → ~${LIMIT - budget} 字符（丢弃 ${dropped} 条旧消息）`);
+  }
+  return [...systems, ...keptHead, ...tail];
+}
+
 async function tryNotionChannel(opts) {
   const { res, body, candidate, ch, isStream, requestedModel } = opts;
   const t0 = Date.now();
@@ -2408,8 +2443,8 @@ async function tryNotionChannel(opts) {
   // 2) transcript + payload
   // 工具仿真：notion 无原生 function calling → tools 注入 system，响应解析围栏
   const toolEmuReq = toolEmu.emulateRequest(body);
-  const effMessages = toolEmuReq ? toolEmuReq.messages : body.messages;
-  const built = notion.buildNotionTranscript(effMessages, candidate.upstream, acct);
+  const effMessages = toolEmuReq ? compactMessagesForNotion(toolEmuReq.messages) : compactMessagesForNotion(body.messages);
+  const built = notion.buildNotionTranscript(effMessages, candidate.upstream, acct, { useWebSearch: !toolEmuReq });
   if (built.error) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: built.error, type: 'invalid_request_error' } }));
