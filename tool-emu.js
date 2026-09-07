@@ -368,4 +368,7 @@ module.exports = {
   createToolStreamScanner,
   openaiToolCallsPayload,
   toolCallId,
+  // 调试/诊断用：直接取注入的协议提示词原文
+  buildToolSystemPrompt,
+  buildTailReminder,
 };

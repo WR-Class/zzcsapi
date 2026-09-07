@@ -2556,7 +2556,9 @@ async function tryNotionChannel(opts) {
     let finalText = '';
     const parser = notion.createNotionStreamParser((evt) => {
       if (evt.type === 'content') {
-        if (toolEmuReq) scanner.push(evt.text);
+        // 工具模式内容同样累计进 fullText：否则"权威全文兜底"会误判流里
+        // 没采到内容，把 record-map 全文再发一遍（客户端收到双份文本）
+        if (toolEmuReq) { fullText += evt.text; scanner.push(evt.text); }
         else { fullText += evt.text; collectDelta(evt.text); }
       } else if (evt.type === 'thinking') {
         // 工具场景：思考段也可能带工具围栏（模型爱先思考再给调用）→ 也进扫描器
