@@ -352,6 +352,8 @@ function channelsServing(model, protocol) {
 function aggregateModels(protocol) {
   const all = new Set();
   for (const ch of channels.values()) {
+    // 停用渠道不出现在模型列表（与请求路由的 enabled 过滤保持一致）
+    if (ch.def.enabled === false) continue;
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion/arena 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
@@ -1295,6 +1297,8 @@ async function handleAdminApi(req, res, url) {
     if (!ch) return sendJson(res, 404, { error: 'channel not found' });
     if (body.priority !== undefined) ch.def.priority = Number(body.priority);
     if (body.enabled !== undefined) ch.def.enabled = !!body.enabled;
+    // 启停/优先级立即持久化：否则容器重启后状态丢失，"停用的渠道复活"
+    persistConfig();
     return sendJson(res, 200, { ok: true, id: body.id, priority: ch.def.priority, enabled: ch.def.enabled });
   }
 
