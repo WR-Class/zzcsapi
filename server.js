@@ -518,6 +518,16 @@ async function probeDef(def, timeoutMs) {
       return { ok: false, status: err.status || 0, error: 'notion: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
   }
+  // 常见配置错误提示：域名是 notion/arena 但协议没选对 → 直接给出可读指引
+  {
+    const host = String((def || {}).baseUrl || '').toLowerCase();
+    if (/notion\.(so|com)/.test(host)) {
+      return { ok: false, status: 0, error: '检测到 notion 域名但协议不是 notion——请把「协议」下拉框改成 notion（openai 协议的 /models 探测对 notion 无效）', latencyMs: 0 };
+    }
+    if (/arena\.ai/.test(host) && (def.protocol || 'openai') === 'openai') {
+      return { ok: false, status: 0, error: '检测到 arena.ai 域名但协议是 openai——arena 渠道请把「协议」下拉框改成 arena', latencyMs: 0 };
+    }
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs || HEALTH.timeoutMs || 8000);
   const t0 = Date.now();

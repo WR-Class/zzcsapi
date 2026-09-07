@@ -629,10 +629,11 @@
       <div class="field">
         <label>协议</label>
         <select id="f-protocol">
-          <option value="openai">openai</option>
+          <option value="openai">openai（中转/官方 v1）</option>
           <option value="anthropic">anthropic</option>
           <option value="gemini">gemini</option>
           <option value="notion">notion（Notion AI 逆向）</option>
+          <option value="arena">arena（Arena.ai 逆向）</option>
         </select>
       </div>
       <div class="field">
@@ -648,7 +649,7 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">openai: https://host/v1 · anthropic: https://host · gemini: …googleapis.com · notion: https://www.notion.so</span></label>
+      <label>Base URL <span class="help">openai: https://host/v1 · anthropic: https://host · gemini: …googleapis.com · notion: https://app.notion.com · arena: https://arena.ai</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
     </div>
     <div class="field">
@@ -1587,6 +1588,18 @@ function openModal(ch) {
 
 $('#btn-cancel').onclick = $('#btn-x').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
+
+/* 协议切换：notion/arena 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
+const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai' };
+$('#f-protocol').addEventListener('change', () => {
+  const proto = $('#f-protocol').value;
+  const cur = $('#f-baseUrl').value.trim();
+  const isDefault = (p) => Object.values(PROTO_DEFAULT_BASE).includes(cur) || cur === 'https://www.notion.so' || cur === '' ;
+  if (PROTO_DEFAULT_BASE[proto] && isDefault(cur)) $('#f-baseUrl').value = PROTO_DEFAULT_BASE[proto];
+  $('#f-apikey-help').textContent = proto === 'notion'
+    ? 'notion 协议：浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'
+    : (proto === 'arena' ? 'arena 协议：留空由宿主机 agent 管理（或粘贴浏览器 cookie）' : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值');
+});
 
 function renderModelsEditor() {
   const root = $('#models-editor');
