@@ -2532,58 +2532,73 @@ async function tryNotionChannel(opts) {
   const respId = 'chatcmpl-notion-' + Date.now().toString(36);
 
   if (isStream) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
+    // 先解析完（NDJSON 已整体缓冲，不影响首块延迟），判空失败可以让调度器
+    // 切其他渠道兜底——而不是给客户端一个 200+空轮次污染会话
+    const pendingDeltas = [];
+    let pendingToolCalls = null;
+    let firstReasoningSent = false;
+    const collectDelta = (text) => { if (text) pendingDeltas.push(text); };
+    const collectToolCalls = (calls) => { pendingToolCalls = (pendingToolCalls || []).concat(calls); };
+    const scanner = toolEmu.createToolStreamScanner(collectDelta, collectToolCalls);
     let fullText = '';
+    let reasoningOut = [];
     let finalText = '';
-    let firstChunkSent = false;
-    let toolsEmitted = false;
-    const sendDelta = (text) => {
-      if (!text) return;
-      if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
-      fullText += text; res.write(notionSSEChunk(respId, displayModel, { content: text }));
-    };
-    const sendToolCalls = (calls) => {
-      toolsEmitted = true;
-      firstChunkSent = true;
-      // tool_calls 增量：一次完整产出（合法的 OpenAI 流形态）
-      res.write(notionSSEChunk(respId, displayModel, {
-        tool_calls: calls.map((c, i) => ({
-          index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
-          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
-        })),
-      }));
-    };
-    const scanner = toolEmu.createToolStreamScanner(sendDelta, sendToolCalls);
     const parser = notion.createNotionStreamParser((evt) => {
       if (evt.type === 'content') {
         if (toolEmuReq) scanner.push(evt.text);
-        else sendDelta(evt.text);
+        else { fullText += evt.text; collectDelta(evt.text); }
       } else if (evt.type === 'thinking') {
         // 工具场景：思考段也可能带工具围栏（模型爱先思考再给调用）→ 也进扫描器
         if (toolEmuReq) scanner.push(evt.text);
-        else if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
-        if (!toolEmuReq) res.write(notionSSEChunk(respId, displayModel, { reasoning_content: evt.text }));
+        else reasoningOut.push(evt.text);
       } else if (evt.type === 'final') { finalText = evt.text; }
     });
     for (const ln of ndjsonText.split('\n')) parser.line(ln);
     if (toolEmuReq) { scanner.end(); }
 
     // 权威全文兜底：流里没采到 content → 用 record-map 的 final 补齐
-    if (!fullText.trim() && finalText && !toolsEmitted) {
+    if (!fullText.trim() && finalText && !pendingToolCalls) {
       if (toolEmuReq) {
         const parsed = toolEmu.parseEmulatedToolCalls(finalText);
-        if (parsed && parsed.calls.length) { sendToolCalls(parsed.calls); }
-        else sendDelta(finalText);
-      } else {
-        if (!firstChunkSent) res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
-        res.write(notionSSEChunk(respId, displayModel, { content: finalText }));
-        fullText = finalText;
-      }
+        if (parsed && parsed.calls.length) { collectToolCalls(parsed.calls); }
+        else { collectDelta(finalText); fullText = finalText; }
+      } else { collectDelta(finalText); fullText = finalText; }
+    }
+
+    // 空输出判定：上游 200 但无任何内容（额度窗口耗尽的典型表现）→ 渠道失败
+    const toolsEmitted = !!pendingToolCalls;
+    if (!fullText.trim() && !finalText.trim() && !reasoningOut.length && !toolsEmitted) {
+      recordFailure(ch, 'notion stream: 200 但无内容（可能是 AI 额度窗口耗尽或上游降级）');
+      return 'notion empty output (quota/degraded)';
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-ZZCSAPI-Channel': candidate.channelId,
+    });
+    // thinking 直通（无工具场景）
+    if (!toolEmuReq && reasoningOut.length) {
+      res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
+      for (const t of reasoningOut) res.write(notionSSEChunk(respId, displayModel, { reasoning_content: t }));
+      firstReasoningSent = true;
+    }
+    // 重放缓冲的增量
+    let firstChunkSent = firstReasoningSent;
+    for (const d of pendingDeltas) {
+      if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
+      res.write(notionSSEChunk(respId, displayModel, { content: d }));
+    }
+    if (toolsEmitted) {
+      firstChunkSent = true;
+      res.write(notionSSEChunk(respId, displayModel, {
+        role: 'assistant', content: null,
+        tool_calls: pendingToolCalls.map((c, i) => ({
+          index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
+          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+        })),
+      }));
     }
     // 收尾 chunk
     res.write(notionSSEChunk(respId, displayModel, {}));
@@ -2605,6 +2620,11 @@ async function tryNotionChannel(opts) {
     else if (evt.type === 'final') finalText = evt.text;
   });
   for (const ln of ndjsonText.split('\n')) parser.line(ln);
+  // 空输出判定：上游 200 但无任何内容（额度窗口耗尽/降级）→ 渠道失败切兜底
+  if (!contentText.trim() && !reasoningText.trim() && !finalText.trim()) {
+    recordFailure(ch, 'notion: 200 但无内容（可能是 AI 额度窗口耗尽或上游降级）');
+    return 'notion empty output (quota/degraded)';
+  }
   let reply = contentText.trim() ? contentText : (finalText || '');
 
   // 内容分裂兜底：模型把答案主体吐进 thinking 段（gpt-6-astra 工具场景常见）→
