@@ -7,6 +7,7 @@ ENV ZZCSAPI_CHROMIUM=/usr/bin/chromium-browser
 WORKDIR /app
 COPY server.js ./
 COPY notion.js ./
+COPY notion-agent.js ./
 COPY arena.js ./
 COPY tool-emu.js ./
 COPY console.html ./

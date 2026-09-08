@@ -634,6 +634,7 @@
           <option value="gemini">gemini</option>
           <option value="notion">notion（Notion AI 逆向）</option>
           <option value="arena">arena（Arena.ai 逆向）</option>
+          <option value="notion-agent">notion-agent（Notion 官方 Agent API）</option>
         </select>
       </div>
       <div class="field">
@@ -649,7 +650,7 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">openai: https://host/v1 · anthropic: https://host · gemini: …googleapis.com · notion: https://app.notion.com · arena: https://arena.ai</span></label>
+      <label>Base URL <span class="help">openai: https://host/v1 · notion: https://app.notion.com · notion-agent: https://api.notion.com · arena: https://arena.ai</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
     </div>
     <div class="field">
@@ -1589,8 +1590,8 @@ function openModal(ch) {
 $('#btn-cancel').onclick = $('#btn-x').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
 
-/* 协议切换：notion/arena 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
-const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai' };
+/* 协议切换：notion/arena/notion-agent 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
+const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com' };
 $('#f-protocol').addEventListener('change', () => {
   const proto = $('#f-protocol').value;
   const cur = $('#f-baseUrl').value.trim();
@@ -1598,16 +1599,21 @@ $('#f-protocol').addEventListener('change', () => {
   if (PROTO_DEFAULT_BASE[proto] && isDefault(cur)) $('#f-baseUrl').value = PROTO_DEFAULT_BASE[proto];
   $('#f-apikey-help').textContent = proto === 'notion'
     ? 'notion 协议：浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'
-    : (proto === 'arena' ? 'arena 协议：留空由宿主机 agent 管理（或粘贴浏览器 cookie）' : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值');
+    : (proto === 'arena' ? 'arena 协议：留空由宿主机 agent 管理（或粘贴浏览器 cookie）'
+      : (proto === 'notion-agent' ? 'notion-agent 协议：填开发者门户连接的集成令牌（ntn_ 开头；连接需勾选「查看会话并与代理交互」能力）'
+        : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值'));
+  renderModelsEditor();
 });
 
 function renderModelsEditor() {
   const root = $('#models-editor');
   const rows = state.modalModels || [];
+  const isAgentProto = $('#f-protocol').value === 'notion-agent';
+  const upstreamLabel = isAgentProto ? '上游智能体名称' : '上游真实模型';
   if (!rows.length) {
     root.innerHTML = '<div class="model-empty">还没有模型<br><span style="font-size:11px">点「＋ 添加一行」手动加，或「从上游探测更多」批量拉取</span></div>';
   } else {
-    let html = '<div class="model-row head"><div>对外名称 alias</div><div>上游真实模型</div><div></div><div></div></div>';
+    let html = `<div class="model-row head"><div>对外名称 alias</div><div>${upstreamLabel}</div><div></div><div></div></div>`;
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       html += `<div class="model-row" data-i="${i}">
