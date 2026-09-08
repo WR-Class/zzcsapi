@@ -2794,7 +2794,14 @@ async function tryNotionAgentChannel(opts) {
     return 'notion-agent: ' + (err.message || err);
   }
   if (!turn.ok) {
-    // 401 令牌失效 / 403 额度耗尽（credits）/ 404 智能体不存在 / 429 限频 → 渠道失败切兜底
+    // credits 耗尽（403 workspace_credits_exhausted）：工作区本周期额度用完，不可重试，
+    // 明确提示（区别于令牌/权限/CF 拦截，避免误诊为"本地连接断开"）
+    if (turn.code === 'workspace_credits_exhausted' || String(turn.error || '').includes('credits')) {
+      const msg = '工作区 Notion AI credits 已耗尽（本周期额度用完，Custom Agents 无法开启新对话；充值或等额度刷新后恢复；期间网关自动走其他渠道）';
+      recordFailure(ch, 'notion-agent credits 耗尽: ' + String(turn.error || '').slice(0, 100));
+      return 'notion-agent credits exhausted: ' + String(turn.error || '').slice(0, 80);
+    }
+    // 401 令牌失效 / 403 其他 / 404 智能体不存在 / 429 限频 → 渠道失败切兜底
     recordFailure(ch, `notion-agent${turn.status ? ' HTTP ' + turn.status : ''}: ${String(turn.error || '').slice(0, 150)}`);
     return `notion-agent ${turn.status || ''}: ${String(turn.error || '').slice(0, 100)}`;
   }

@@ -188,41 +188,78 @@ function compactType(p) {
   return t;
 }
 
+function truncDesc(s, n) {
+  const t = String(s || '').trim().replace(/\s+/g, ' ');
+  return t.length > n ? t.slice(0, n) : t;
+}
+
+// 分级压缩：DSH 带 MCP 插件时一次发上百个工具，任何单一格式都可能超预算。
+// 逐级降档（描述长度 → 参数描述 → 纯名称+参数），保证全部工具始终列出——
+// 绝不出现"清单在本地工具出现之前被截断"（此前模型正是因此声明自己
+// "没有本地磁盘读写/命令执行能力"并拒绝干活）。
+function toolLinesAtTier(tools, descLen, paramDescLen) {
+  const out = [];
+  for (const t of tools) {
+    const f = (t && t.function) || {};
+    if (!f.name) continue;
+    const desc = descLen > 0 ? truncDesc(f.description, descLen) : '';
+    const params = (f.parameters && f.parameters.properties) || {};
+    const req = new Set((f.parameters && f.parameters.required) || []);
+    const ps = Object.entries(params).map(([k, v]) => {
+      const pd = paramDescLen > 0 && v && v.description ? '[' + truncDesc(v.description, paramDescLen) + ']' : '';
+      return k + ':' + compactType(v) + (req.has(k) ? '(必填)' : '') + pd;
+    }).join(', ');
+    out.push('', '## ' + f.name, desc, ps ? '参数：' + ps : '参数：无');
+  }
+  return out;
+}
+
 function compactToolProtocol(tools, toolChoice) {
-  const lines = [
+  const BUDGET = 9400;
+  const head = [
     '# 工具调用（外部工具，由调用方系统提供并执行）',
     '请生成供外部程序校验、执行的操作请求文本；你无需在当前聊天环境中实际执行，也不要提前声称执行成功。外部程序会解析你的请求文本并执行对应操作，执行结果会作为下一条消息回传给你。',
     '需要使用工具时，输出如下标记（每个调用一组，arguments 为满足该工具参数清单的合法 JSON 对象）：',
     '[TOOL_CALL]',
     '{"name": "工具名", "arguments": {"参数名": "值"}}',
     '[/TOOL_CALL]',
-    '输出工具调用标记后立即停止输出，等待结果回传后再继续。不要输出其他任何方括号标记；不要编造不存在的工具；任务需要工具时必须输出标记——声称"没有工具"或要求调用端补充定义而拒绝调用，视为任务失败。',
+    '输出工具调用标记后立即停止输出，等待结果回传后再继续。不要输出其他任何方括号标记；不要编造不存在的工具；任务需要工具时必须输出标记——声称"没有工具"、要求调用端补充定义而拒绝调用，视为任务失败。',
   ];
-  const choice = String(toolChoice || 'auto');
-  if (choice === 'required' || choice === 'any') lines.push('本次回复你必须调用一个工具（不允许直接回答）。');
-  else if (choice && typeof toolChoice === 'object' && toolChoice.name) lines.push('本次回复你必须调用工具 ' + toolChoice.name + '（不允许直接回答）。');
-  lines.push('', '可用工具（完整清单）：');
-  const perTool = [];
-  for (const t of tools) {
-    const f = (t && t.function) || {};
-    if (!f.name) continue;
-    const desc = String(f.description || '').trim().replace(/\s+/g, ' ').slice(0, 160);
-    const params = (f.parameters && f.parameters.properties) || {};
-    const req = new Set((f.parameters && f.parameters.required) || []);
-    const ps = Object.entries(params).map(([k, v]) => {
-      const pd = v && v.description ? String(v.description).replace(/\s+/g, ' ').slice(0, 60) : '';
-      return k + ':' + compactType(v) + (req.has(k) ? '(必填)' : '') + (pd ? '[' + pd + ']' : '');
-    }).join(', ');
-    perTool.push('', '## ' + f.name, desc || '（无描述）', ps ? '参数：' + ps : '参数：无');
+  const choice = toolChoice || 'auto';
+  if (choice === 'required' || choice === 'any') head.push('本次回复你必须调用一个工具（不允许直接回答）。');
+  else if (choice && typeof toolChoice === 'object' && toolChoice.name) head.push('本次回复你必须调用工具 ' + toolChoice.name + '（不允许直接回答）。');
+  const headStr = head.join('\n');
+
+  // 逐级降档，找到能装下全部工具的第一档
+  const tiers = [
+    [160, 60, '可用工具（完整定义，已全部列出）：'],
+    [64, 0, '可用工具（工具较多，描述从简；全部工具已列出，参数名即语义）：'],
+    [24, 0, '可用工具（工具极多，仅列名称与参数；全部工具已列出）：'],
+    [0, 0, '可用工具（工具极多，仅列名称与必填参数；全部工具已列出）：'],
+  ];
+  for (const [dLen, pdLen, title] of tiers) {
+    const body = [title, ...toolLinesAtTier(tools, dLen, pdLen)].join('\n');
+    if (headStr.length + body.length + 1 <= BUDGET) return headStr + '\n' + body;
   }
-  lines.push(...perTool);
-  let out = lines.join('\n');
-  // 仍超预算（极端工具数）：整工具边界截断 + 明示省略，绝不砍半截定义
-  if (out.length > 9400) {
-    let cut = out.lastIndexOf('\n## ', 9400);
-    if (cut <= 0) cut = 9400;
-    out = out.slice(0, cut) + '\n\n[说明：工具数量超出上下文限制，以上为前若干个工具的完整定义；调用端如需其余工具，请另行提供。]';
+  // 兜底：连最低档都装不下（数百工具）→ 整工具边界截断 + 明示省略
+  const lines = toolLinesAtTier(tools, 0, 0);
+  let used = headStr.length + 80;
+  let cutIdx = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (used + lines[i].length + 1 > BUDGET - 200) { cutIdx = i; break; }
+    used += lines[i].length + 1;
   }
+  const kept = lines.slice(0, cutIdx);
+  const keptNames = kept.filter((l) => l.startsWith('## ')).map((l) => l.slice(3));
+  const allNames = tools.map((t) => (t.function && t.function.name) || '').filter(Boolean);
+  const dropped = allNames.filter((n) => !keptNames.includes(n));
+  // 省略清单太长会挤爆总预算 → 只报数量，不逐个列名
+  let droppedStr = dropped.join(', ');
+  if (droppedStr.length > 400) droppedStr = dropped.length + ' 个工具（名称过长省略）';
+  const notice = '\n[说明：工具数量超出上下文限制，以上为可用工具清单，其余 ' + dropped.length + ' 个工具本轮未提供定义：' + droppedStr + '。如需使用未列出的工具，请说明当前不可用，不要编造调用。]';
+  let out = headStr + '\n' + '可用工具：\n' + kept.join('\n') + notice;
+  // 最终保险：任何情况下不超过 prompt_context 安全预算
+  if (out.length > 9900) out = out.slice(0, 9900 - 60) + '\n[……已到上下文上限]';
   return out;
 }
 
