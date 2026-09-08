@@ -14,13 +14,18 @@ function agentHeaders(token) {
   };
 }
 
-async function apiPost(baseUrl, token, path, payload, fetchFn, timeoutMs) {
-  const url = baseUrl.replace(/\/+$/, '') + path;
+// 底层请求：Cloudflare 间歇性风控（403/503 HTML 拦截页）时自动重试一次。
+// 实测 api.notion.com 偶发 CF 拦截（网页端正常、稍后自动恢复），多为
+// 短时间密集建会话触发；立即重试大概率仍拦 → 退避 1.5~2.5s 后再试，
+// 仍被拦则抛错由调度器切兜底渠道（渠道进入指数冷却，不再砸上游）。
+async function rawRequest(method, url, headers, bodyStr, fetchFn, timeoutMs) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeoutMs || 30000);
   let resp;
   try {
-    resp = await fetchFn(url, { method: 'POST', headers: agentHeaders(token), body: JSON.stringify(payload || {}), signal: ctrl.signal });
+    const opts = { method, headers, signal: ctrl.signal };
+    if (bodyStr !== undefined) opts.body = bodyStr;
+    resp = await fetchFn(url, opts);
   } finally { clearTimeout(to); }
   const text = await resp.text();
   let json = null;
@@ -28,18 +33,41 @@ async function apiPost(baseUrl, token, path, payload, fetchFn, timeoutMs) {
   return { status: resp.status, ok: resp.ok, json, text, error: (json && json.object === 'error' && json.message) || null, code: (json && json.code) || null };
 }
 
+function isCloudflareBlock(r) {
+  return (r.status === 403 || r.status === 503) && /<!DOCTYPE|<html/i.test(String(r.text || '').slice(0, 300));
+}
+
+async function requestWithRetry(method, url, headers, bodyStr, fetchFn, timeoutMs) {
+  let r = await rawRequest(method, url, headers, bodyStr, fetchFn, timeoutMs);
+  const blocked = isCloudflareBlock(r) || r.status === 429;
+  if (blocked) {
+    const waitMs = 1500 + Math.floor(Math.random() * 1000);
+    await new Promise((res) => setTimeout(res, waitMs));
+    r = await rawRequest(method, url, headers, bodyStr, fetchFn, timeoutMs);
+    if (isCloudflareBlock(r)) {
+      const err = new Error('Cloudflare 间歇性拦截（HTTP ' + r.status + '，网页端不受影响，稍等片刻自动恢复；请避免短时间内密集测试）');
+      err.status = r.status;
+      throw err;
+    }
+    if (r.status === 429) {
+      const err = new Error('上游限频 429' + (r.error ? '：' + r.error : '') + '（重试后仍限频）');
+      err.status = 429;
+      throw err;
+    }
+  }
+  return r;
+}
+
+async function apiPost(baseUrl, token, path, payload, fetchFn, timeoutMs) {
+  const url = baseUrl.replace(/\/+$/, '') + path;
+  const r = await requestWithRetry('POST', url, agentHeaders(token), JSON.stringify(payload || {}), fetchFn, timeoutMs);
+  return r;
+}
+
 async function apiGet(baseUrl, token, path, fetchFn, timeoutMs) {
   const url = baseUrl.replace(/\/+$/, '') + path;
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), timeoutMs || 30000);
-  let resp;
-  try {
-    resp = await fetchFn(url, { method: 'GET', headers: agentHeaders(token), signal: ctrl.signal });
-  } finally { clearTimeout(to); }
-  const text = await resp.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch { /* keep null */ }
-  return { status: resp.status, ok: resp.ok, json, text, error: (json && json.object === 'error' && json.message) || null, code: (json && json.code) || null };
+  const r = await requestWithRetry('GET', url, agentHeaders(token), undefined, fetchFn, timeoutMs);
+  return r;
 }
 
 // 智能体名字 → agent_id（UUID/内置直通；否则 agents/query 按名精确匹配，其次模糊包含）

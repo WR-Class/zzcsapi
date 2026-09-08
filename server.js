@@ -2777,10 +2777,17 @@ async function tryNotionAgentChannel(opts) {
   }
 
   // 3) 一轮会话（创建→轮询→自动批准→事件读回复）
-  const turn = await notionAgent.runAgentTurn({
-    baseUrl: base, token, agentId, message: messageText, promptContext,
-    fetchFn: fetch, timeoutMs: timeoutMs - 20000,
-  });
+  let turn;
+  try {
+    turn = await notionAgent.runAgentTurn({
+      baseUrl: base, token, agentId, message: messageText, promptContext,
+      fetchFn: fetch, timeoutMs: timeoutMs - 20000,
+    });
+  } catch (err) {
+    // CF 间歇性拦截 / 网络异常等 → 渠道失败切兜底（渠道进入指数冷却）
+    recordFailure(ch, 'notion-agent: ' + (err.message || err));
+    return 'notion-agent: ' + (err.message || err);
+  }
   if (!turn.ok) {
     // 401 令牌失效 / 403 额度耗尽（credits）/ 404 智能体不存在 / 429 限频 → 渠道失败切兜底
     recordFailure(ch, `notion-agent${turn.status ? ' HTTP ' + turn.status : ''}: ${String(turn.error || '').slice(0, 150)}`);
