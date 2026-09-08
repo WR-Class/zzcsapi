@@ -104,6 +104,17 @@ async function runAgentTurn(opts) {
     if (['completed', 'failed', 'terminated', 'canceled'].includes(session.status)) break;
   }
   if (session.status !== 'completed') {
+    if (session.status === 'failed') {
+      const code = (session.error && session.error.code) || '';
+      // 执行前即失败、零 credit 消耗 → 几乎必然是令牌能力问题（个人 PAT 无法执行代理会话）
+      const patHint = (code === 'session_failed' && !(session.runs_completed > 0) && !(session.credits_used > 0))
+        ? '（会话执行前即被拒、未消耗 credits——通常是令牌缺少「查看会话并与代理交互」能力：个人 PAT 只能列代理/建会话，不能执行，请改用开发者门户「创建连接」生成的连接令牌）'
+        : '';
+      return {
+        ok: false, sessionId, code, terminal: 'failed',
+        error: '会话 failed' + (code ? '（' + code + '）' : '') + (session.error && session.error.message ? '：' + session.error.message : '') + patHint,
+      };
+    }
     return { ok: false, sessionId, error: '会话 ' + session.status + (session.error && session.error.message ? '：' + session.error.message : ''), terminal: session.status };
   }
 
