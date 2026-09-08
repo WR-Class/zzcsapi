@@ -16,6 +16,17 @@
 
 ## 快速开始
 
+### 方式一：Docker（推荐）
+
+```powershell
+docker compose up -d --build
+# 控制台 http://127.0.0.1:8787/console（默认管理密钥 zz-admin-change-me）
+```
+
+`docker-compose.yml` 挂载 `./config.json` 和 `./usage.json`，首次部署包里已带干净的初始文件。
+
+### 方式二：裸 Node（18+）
+
 ```bash
 # 1) 首次运行自动从 config.example.json 生成 config.json
 node server.js
@@ -117,13 +128,27 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 
 ### 协议说明
 
-| protocol     | 探活 URL                  | 鉴权头              | 网关对外路径                          |
-| ------------ | ------------------------- | ------------------- | ------------------------------------- |
-| `openai`     | `GET /models`             | `Authorization: Bearer ...` | `/v1/chat/completions` 之类     |
-| `anthropic`  | `GET /v1/models`          | `x-api-key: ...`    | `/anthropic/v1/messages`              |
-| `gemini`     | `GET /v1beta/models`      | `x-goog-api-key: ...` | `/gemini/v1beta/models/{m}:{action}` |
+| protocol       | 探活 URL                  | 鉴权头              | 网关对外路径                          |
+| -------------- | ------------------------- | ------------------- | ------------------------------------- |
+| `openai`       | `GET /models`             | `Authorization: Bearer ...` | `/v1/chat/completions` 之类     |
+| `anthropic`    | `GET /v1/models`          | `x-api-key: ...`    | `/anthropic/v1/messages`              |
+| `gemini`       | `GET /v1beta/models`      | `x-goog-api-key: ...` | `/gemini/v1beta/models/{m}:{action}` |
+| `notion`       | `POST getSpaces`          | `Cookie: token_v2=...` | 逆向 Notion AI（需 token_v2 Cookie） |
+| `notion-agent` | `POST /v1/agents/query`  | `Authorization: Bearer ntn_...` | Notion 官方 Agent API（公开 beta） |
+| `arena`        | agent 自检               | 宿主机 agent 管理    | Arena.ai 逆向                         |
 
 > 中转渠道如果用 OpenAI 兼容但 `protocol` 想挂到 Anthropic 端点用，把 `protocol` 设成 `anthropic` 即可——网关会把请求体自动转成 OpenAI 格式丢给它，再把响应转回 Anthropic 格式。同理 Gemini。
+
+#### notion-agent（Notion 官方 Agent API）
+
+调用 Notion 工作区的 Custom Agent（需要 Business/Enterprise 版工作区，在 Notion 网页聊天侧栏创建代理）。
+
+- **Base URL**：`https://api.notion.com`
+- **API Key**：**集成令牌**（开发者门户 → 我的集成 → 复制内部令牌 `ntn_...`），且集成的能力必须勾选「**查看会话并与代理交互**」（测试版）
+- ⚠️ **个人访问令牌（PAT）不行**：PAT 能列代理、能建会话，但执行时会被服务端直接拒绝（`session_failed`，零 credits 消耗）——这是令牌能力限制，不是配置错误
+- **模型行**：alias 填对外模型名（如 `gpt-6-astra`），上游填**智能体名称**（如 `Magnificent Pioneer`）；一个智能体锁定一个模型，多个模型就建多个代理
+- 会话中智能体的确认门（requires_action）自动批准（最多 5 次）
+- 每次对话消耗工作区 AI credits，因此 notion-agent 渠道排在调度兜底链**最后**，仅当 openai/notion/arena 渠道都失败时才启用
 
 ## 调度顺序
 
@@ -162,6 +187,5 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 ## 计划中
 
 - 加权轮询（不是单纯 priority 优先）
-- 用量统计 / 配额
 - Anthropic tool_use 完整转换
 - Gemini 多模态（图片）适配
