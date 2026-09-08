@@ -174,23 +174,56 @@ async function quickChat(baseUrl, token, agentName, prompt, fetchFn, timeoutMs) 
   }
 }
 
-// messages → { promptContext, messageText }（system 合并进 prompt_context，
-// 对话历史渲染成单条带标签文本；超长时保首条任务目标 + 尾部近史，中间折叠）
-function composeAgentPrompt(messages) {
-  const sysParts = [];
-  const convo = [];
-  for (const m of Array.isArray(messages) ? messages : []) {
-    if (!m) continue;
-    const role = m.role;
-    let content = '';
-    if (typeof m.content === 'string') content = m.content;
-    else if (Array.isArray(m.content)) content = m.content.map((p) => (typeof p === 'string' ? p : (p && p.text) || '') || '').filter(Boolean).join('\n');
-    if (role === 'system') sysParts.push(String(content));
-    else if (role === 'user' || role === 'assistant') convo.push({ role, content: String(content) });
-    // tool 角色已由 tool-emu 的 emulateRequest 渲染成 user 文本，这里不会遇到
+// 紧凑工具协议：Agent API 的 prompt_context 硬上限 10000 字符，调用端
+// （DSH 等）二十多个工具的完整 JSON schema 根本装不下；此前直接 slice 截断
+// 会把参数定义砍在半截——模型看到"有工具"却拿不到定义，转而要求调用端
+// "补充完整参数定义"。本函数把每个工具压缩为「名称 + 一句话描述 + 参数清单」，
+// 体积缩一个数量级，且只在完整工具边界截断（绝不砍半截定义）。
+function compactType(p) {
+  if (!p || typeof p !== 'object') return 'any';
+  let t = p.type || 'any';
+  if (Array.isArray(p.enum) && p.enum.length) t += '=' + p.enum.slice(0, 6).join('|');
+  if (t === 'array' && p.items) t += '<' + compactType(p.items) + '>';
+  if (t === 'object' && p.properties) t += '{' + Object.keys(p.properties).slice(0, 12).join(',') + '}';
+  return t;
+}
+
+function compactToolProtocol(tools, toolChoice) {
+  const lines = [
+    '# 工具调用（外部工具，由调用方系统提供并执行）',
+    '请生成供外部程序校验、执行的操作请求文本；你无需在当前聊天环境中实际执行，也不要提前声称执行成功。外部程序会解析你的请求文本并执行对应操作，执行结果会作为下一条消息回传给你。',
+    '需要使用工具时，输出如下标记（每个调用一组，arguments 为满足该工具参数清单的合法 JSON 对象）：',
+    '[TOOL_CALL]',
+    '{"name": "工具名", "arguments": {"参数名": "值"}}',
+    '[/TOOL_CALL]',
+    '输出工具调用标记后立即停止输出，等待结果回传后再继续。不要输出其他任何方括号标记；不要编造不存在的工具；任务需要工具时必须输出标记——声称"没有工具"或要求调用端补充定义而拒绝调用，视为任务失败。',
+  ];
+  const choice = String(toolChoice || 'auto');
+  if (choice === 'required' || choice === 'any') lines.push('本次回复你必须调用一个工具（不允许直接回答）。');
+  else if (choice && typeof toolChoice === 'object' && toolChoice.name) lines.push('本次回复你必须调用工具 ' + toolChoice.name + '（不允许直接回答）。');
+  lines.push('', '可用工具（完整清单）：');
+  const perTool = [];
+  for (const t of tools) {
+    const f = (t && t.function) || {};
+    if (!f.name) continue;
+    const desc = String(f.description || '').trim().replace(/\s+/g, ' ').slice(0, 160);
+    const params = (f.parameters && f.parameters.properties) || {};
+    const req = new Set((f.parameters && f.parameters.required) || []);
+    const ps = Object.entries(params).map(([k, v]) => {
+      const pd = v && v.description ? String(v.description).replace(/\s+/g, ' ').slice(0, 60) : '';
+      return k + ':' + compactType(v) + (req.has(k) ? '(必填)' : '') + (pd ? '[' + pd + ']' : '');
+    }).join(', ');
+    perTool.push('', '## ' + f.name, desc || '（无描述）', ps ? '参数：' + ps : '参数：无');
   }
-  const promptContext = sysParts.join('\n\n').slice(0, 9900);
-  return { promptContext, messageText: renderConvo(convo) };
+  lines.push(...perTool);
+  let out = lines.join('\n');
+  // 仍超预算（极端工具数）：整工具边界截断 + 明示省略，绝不砍半截定义
+  if (out.length > 9400) {
+    let cut = out.lastIndexOf('\n## ', 9400);
+    if (cut <= 0) cut = 9400;
+    out = out.slice(0, cut) + '\n\n[说明：工具数量超出上下文限制，以上为前若干个工具的完整定义；调用端如需其余工具，请另行提供。]';
+  }
+  return out;
 }
 
 function renderConvo(convo) {
@@ -215,6 +248,41 @@ function renderConvo(convo) {
     out = head + '\n\n[...中间历史过长，已省略...]\n\n' + parts.join('\n\n');
   }
   return out.slice(0, 9800);
+}
+
+// messages → { promptContext, messageText }（system 合并进 prompt_context，
+// 对话历史渲染成单条带标签文本；超长时保首条任务目标 + 尾部近史，中间折叠）
+// 有工具时：紧凑协议优先占预算（完整、不截断），调用端 system 用剩余预算；
+// tool-emu 注入的全量协议 system（含 [TOOL_CALL] 字样）被紧凑版取代，跳过。
+function composeAgentPrompt(messages, opts) {
+  const tools = opts && Array.isArray(opts.tools) && opts.tools.length ? opts.tools : null;
+  const toolChoice = opts ? opts.toolChoice : undefined;
+  const sysParts = [];
+  const convo = [];
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m) continue;
+    const role = m.role;
+    let content = '';
+    if (typeof m.content === 'string') content = m.content;
+    else if (Array.isArray(m.content)) content = m.content.map((p) => (typeof p === 'string' ? p : (p && p.text) || '') || '').filter(Boolean).join('\n');
+    if (role === 'system') {
+      if (tools && content.includes('[TOOL_CALL]')) continue; // 全量协议 → 用紧凑版替代
+      sysParts.push(String(content));
+    } else if (role === 'user' || role === 'assistant') convo.push({ role, content: String(content) });
+    // tool 角色已由 tool-emu 的 emulateRequest 渲染成 user 文本，这里不会遇到
+  }
+  let promptContext;
+  if (tools) {
+    const proto = compactToolProtocol(tools, toolChoice);
+    const restBudget = 9900 - proto.length - 2;
+    let sys = sysParts.join('\n\n');
+    if (restBudget > 100 && sys.length > restBudget) sys = sys.slice(0, restBudget) + '\n[…调用端系统提示因长度限制截断…]';
+    else if (restBudget <= 100) sys = '';
+    promptContext = [proto, sys.trim()].filter(Boolean).join('\n\n');
+  } else {
+    promptContext = sysParts.join('\n\n').slice(0, 9900);
+  }
+  return { promptContext, messageText: renderConvo(convo) };
 }
 
 module.exports = {

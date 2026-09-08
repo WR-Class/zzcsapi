@@ -2767,9 +2767,14 @@ async function tryNotionAgentChannel(opts) {
   }
 
   // 2) prompt 组装（工具协议注入 system；历史渲染单条消息文本，超长折叠中间）
+  //    官方 API prompt_context 上限 10k 字符：全量工具 JSON schema 装不下 →
+  //    composeAgentPrompt 内部改用紧凑协议（名称+描述+参数清单），绝不砍半截定义
   const toolEmuReq = toolEmu.emulateRequest(body);
   const srcMessages = toolEmuReq ? toolEmuReq.messages : (body.messages || []);
-  const { promptContext, messageText } = notionAgent.composeAgentPrompt(srcMessages);
+  const { promptContext, messageText } = notionAgent.composeAgentPrompt(srcMessages, {
+    tools: toolEmuReq ? toolEmuReq.tools : undefined,
+    toolChoice: body.tool_choice,
+  });
   if (!messageText.trim()) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: 'empty message for agent session', type: 'invalid_request_error' } }));
