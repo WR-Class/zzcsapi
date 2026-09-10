@@ -564,6 +564,10 @@
       <button id="btn-add" class="btn primary">＋ 添加渠道</button>
     </div>
   </div>
+  <div class="seg" id="ch-tabs" style="margin-bottom:14px">
+    <button class="active" data-tab="on">启用中 <b id="ch-tab-on">0</b></button>
+    <button data-tab="off">已停用 <b id="ch-tab-off">0</b></button>
+  </div>
   <div id="channels" class="ch-grid"><div class="empty-state" style="grid-column:1/-1"><div class="big">▤</div>加载渠道中…<br><span style="font-size:11px">若长时间空白，请确认网关进程正在运行</span></div></div>
 </div>
 
@@ -777,9 +781,23 @@ function renderChannels(data) {
   const root = $('#channels');
   if (!data.channels.length) {
     root.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="big">▤</div>还没有渠道<br>添加你的第一个中转站，网关会自动调度、失败切换<button class="btn primary" onclick="openModal(null)">＋ 添加渠道</button></div>';
+    $('#ch-tabs').style.display = 'none';
     return;
   }
-  root.innerHTML = data.channels.map((ch) => {
+  // 页签：启用 / 停用 分组（默认启用；上次选择存内存，停用渠道切页签后仍在）
+  state.chTab = state.chTab || 'on';
+  const onCnt = data.channels.filter((c) => c.enabled).length;
+  const offCnt = data.channels.length - onCnt;
+  $('#ch-tabs').style.display = '';
+  $('#ch-tab-on').textContent = onCnt;
+  $('#ch-tab-off').textContent = offCnt;
+  $$('#ch-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.chTab));
+  const shown = data.channels.filter((c) => (state.chTab === 'on' ? c.enabled : !c.enabled));
+  if (!shown.length) {
+    root.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="big">${state.chTab === 'on' ? '⚡' : '⏸'}</div>${state.chTab === 'on' ? '没有启用中的渠道' : '没有已停用的渠道'}<br><span style="font-size:11px">${state.chTab === 'on' ? '去「已停用」页签看看，或添加新渠道' : '在「启用中」页签点渠道卡片上的「停用」按钮'}</span></div>`;
+    return;
+  }
+  root.innerHTML = shown.map((ch) => {
     const ms = ch.aliases.map(a => `<span class="m${ch.enabled ? '' : ' d'}" title="→ ${escapeHtml(a.upstream)}">${escapeHtml(a.alias)}</span>`).join('');
     const errBox = ch.lastError ? `<div class="err">${escapeHtml(ch.lastError)}</div>` : '';
     const usageBox = ch.protocol === 'notion' && ch.notionUsage ? (() => {
@@ -866,6 +884,14 @@ function renderChannels(data) {
     };
   });
 }
+
+// 渠道页签：启用 / 停用 分组切换（切页签后若当前组为空自动落回另一组）
+$$('#ch-tabs button').forEach((b) => {
+  b.onclick = () => {
+    state.chTab = b.dataset.tab;
+    renderChannels({ channels: state.channels });
+  };
+});
 
 function renderModels(data) {
   const root = $('#models');
