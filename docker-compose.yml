@@ -14,8 +14,6 @@ services:
       ADMIN_KEY: ${ZZCSAPI_ADMIN_KEY:-zz-admin-change-me}
       GATEWAY_KEY: ${ZZCSAPI_GATEWAY_KEY:-zz-gw-change-me}
       ZZCSAPI_CONFIG: /app/config.json
-      # arena.ai 渠道走宿主机 arena-agent（真 Chrome sidecar，容器内 Chromium 的 TLS 指纹被 arena CF 拦截）
-      ZZCSAPI_ARENA_AGENT: http://host.docker.internal:9225
     volumes:
       - ./config.json:/app/config.json
       - ./usage.json:/app/usage.json
