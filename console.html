@@ -465,22 +465,31 @@
   /* 调用日志页 */
   .inp { flex: 1; min-width: 180px; border: 1px solid var(--line); background: var(--card); color: var(--tx); border-radius: 10px; padding: 7px 12px; font: inherit; font-size: 12.5px; outline: none; }
   .inp:focus { border-color: var(--indigo); box-shadow: 0 0 0 3px var(--indigo-soft); }
-  /* Playground */
-  .pg-grid { display: grid; grid-template-columns: 300px 1fr; gap: 14px; align-items: start; }
+  /* Playground：单卡片内分栏，左右顶部/底部对齐 */
+  .pg-card { padding: 16px; }
+  .pg-grid { display: grid; grid-template-columns: 280px 1fr; gap: 0; min-height: 520px; }
+  .pg-left { padding-right: 16px; }
   .pg-left .field { margin-bottom: 12px; }
   .pg-left label { display: block; font-size: 11.5px; font-weight: 600; color: var(--tx2); margin-bottom: 5px; }
   .pg-left select, .pg-left textarea, .pg-inputrow textarea { width: 100%; border: 1px solid var(--line); background: var(--card); color: var(--tx); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; resize: vertical; }
   .pg-left select:focus, .pg-left textarea:focus, .pg-inputrow textarea:focus { border-color: var(--indigo); box-shadow: 0 0 0 3px var(--indigo-soft); }
   .pg-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx2); margin: 10px 0; cursor: pointer; }
-  .pg-meta { font-size: 11px; color: var(--tx3); margin-top: 10px; line-height: 1.7; }
-  .pg-history { min-height: 320px; max-height: 56vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+  .pg-meta { font-size: 11px; color: var(--tx3); margin-top: 12px; line-height: 1.7; }
+  .pg-right { border-left: 1px solid var(--line); padding-left: 16px; display: flex; flex-direction: column; }
+  .pg-history { flex: 1; min-height: 380px; max-height: none; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
   .pg-bubble { max-width: 86%; padding: 9px 13px; border-radius: 14px; font-size: 13px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
   .pg-bubble.user { align-self: flex-end; background: var(--indigo); color: #fff; border-bottom-right-radius: 4px; }
   .pg-bubble.assistant { align-self: flex-start; background: var(--bg2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
   .pg-bubble.assistant .pg-err { color: var(--red); }
-  .pg-inputrow { display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; }
-  .pg-inputrow .btn { padding: 9px 16px; }
-  @media (max-width: 1100px) { .pg-grid { grid-template-columns: 1fr; } }
+  .pg-inputrow { display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+  .pg-inputrow textarea { flex: 1; }
+  .pg-inputrow .btn { padding: 9px 16px; flex-shrink: 0; }
+  @media (max-width: 1100px) {
+    .pg-grid { grid-template-columns: 1fr; min-height: 0; }
+    .pg-left { padding-right: 0; }
+    .pg-right { border-left: none; padding-left: 0; border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+    .pg-history { min-height: 280px; }
+  }
   @media (max-width: 860px) {
     .side { display: none; }
     .main { margin-left: 0; }
@@ -687,20 +696,22 @@
 <!-- ═══════════════ Playground ═══════════════ -->
 <div class="content hidden" id="page-playground" data-page>
   <div class="page-head"><div><h1>Playground 调试</h1><div class="p-hint">经网关真实调用 · 验证渠道路由、鉴权与流式输出</div></div></div>
-  <div class="pg-grid">
-    <div class="card pg-left">
-      <div class="field"><label>模型</label><select id="pg-model"></select></div>
-      <div class="field"><label>System 提示词</label><textarea id="pg-sys" rows="3" placeholder="（可选）系统提示词"></textarea></div>
-      <div class="field"><label>温度 <span id="pg-temp-v">0.7</span></label><input type="range" id="pg-temp" min="0" max="2" step="0.1" value="0.7" style="width:100%"></div>
-      <label class="pg-check"><input type="checkbox" id="pg-stream" checked> 流式输出</label>
-      <button class="btn primary" id="pg-send" style="width:100%">发送</button>
-      <div class="pg-meta" id="pg-meta">选择模型后发消息，请求走 <b>/v1/chat/completions</b> 与客户端完全同路径。</div>
-    </div>
-    <div class="card">
-      <div class="pg-history" id="pg-history"><div class="empty">开始一段对话调试网关</div></div>
-      <div class="pg-inputrow">
-        <textarea id="pg-msg" rows="2" placeholder="输入消息，Ctrl+Enter 发送…"></textarea>
-        <button class="btn primary" id="pg-send2">发送</button>
+  <div class="card pg-card">
+    <div class="pg-grid">
+      <div class="pg-left">
+        <div class="field"><label>模型</label><select id="pg-model"></select></div>
+        <div class="field"><label>System 提示词</label><textarea id="pg-sys" rows="3" placeholder="（可选）系统提示词"></textarea></div>
+        <div class="field"><label>温度 <span id="pg-temp-v">0.7</span></label><input type="range" id="pg-temp" min="0" max="2" step="0.1" value="0.7" style="width:100%"></div>
+        <label class="pg-check"><input type="checkbox" id="pg-stream" checked> 流式输出</label>
+        <button class="btn primary" id="pg-send" style="width:100%">发送</button>
+        <div class="pg-meta" id="pg-meta">请求走 <b>/v1/chat/completions</b>，与客户端完全同路径。</div>
+      </div>
+      <div class="pg-right">
+        <div class="pg-history" id="pg-history"><div class="empty">开始一段对话调试网关</div></div>
+        <div class="pg-inputrow">
+          <textarea id="pg-msg" rows="2" placeholder="输入消息，Ctrl+Enter 发送…"></textarea>
+          <button class="btn primary" id="pg-send2">发送</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1006,22 +1017,31 @@ $$('#ch-tabs button').forEach((b) => {
 
 function renderModels(data) {
   const root = $('#models');
-  const sections = [];
-  let total = 0;
+  // 三种协议端点暴露的是同一批别名 → 跨协议去重，只展示一次
+  const protoOf = {}; // alias → [protocols]
+  const all = [];
+  for (const [proto, list] of Object.entries(data.aggregated || {})) {
+    for (const m of list) {
+      if (!protoOf[m]) { protoOf[m] = []; all.push(m); }
+      protoOf[m].push(proto);
+    }
+  }
   const healthy = new Set();
   for (const ch of data.channels) {
     if (!ch.enabled || ch.status === 'down') continue;
     for (const a of ch.aliases) healthy.add(a.alias);
   }
-  for (const [proto, list] of Object.entries(data.aggregated)) {
-    if (!list.length) continue;
-    total += list.length;
-    sections.push(`<div class="model-wall" style="margin-bottom:10px">${list.map(m => {
-      const dead = healthy.size && !healthy.has(m);
-      return `<span class="m p-${proto}${dead ? ' dead' : ''}" title="${dead ? '所有渠道当前不可用' : '可用'}">${escapeHtml(m)}</span>`;
-    }).join('')}</div>`);
-  }
-  root.innerHTML = sections.join('') || '<div class="empty-state"><div class="big">✦</div>暂无聚合模型 — 在渠道里添加别名后自动出现</div>';
+  const total = all.length;
+  const meta = total
+    ? `<div style="font-size:11.5px;color:var(--tx3);margin:0 0 12px">共 ${total} 个模型 · 同名模型在 OpenAI / Anthropic / Gemini 三种端点均可调用（悬停查看可用协议）</div>`
+    : '';
+  root.innerHTML = meta + (total
+    ? `<div class="model-wall">${all.sort((a, b) => a.localeCompare(b, 'zh-CN')).map(m => {
+        const dead = healthy.size && !healthy.has(m);
+        const protos = [...new Set(protoOf[m])].join(' / ');
+        return `<span class="m p-${protoOf[m][0]}${dead ? ' dead' : ''}" title="${dead ? '所有渠道当前不可用' : '端点：' + protos}">${escapeHtml(m)}</span>`;
+      }).join('')}</div>`
+    : '<div class="empty-state"><div class="big">✦</div>暂无聚合模型 — 在渠道里添加别名后自动出现</div>');
   const mCnt = $('#nav-m-cnt'); if (mCnt) mCnt.textContent = total;
 }
 
