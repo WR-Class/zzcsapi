@@ -432,31 +432,103 @@
     .ch-grid { grid-template-columns: 1fr; }
     .field-row { flex-direction: column; }
   }
-</style>
+  /* ═══════════════ LocalHub 风格 · 侧边栏布局 ═══════════════ */
+  .side { position: fixed; top: 0; bottom: 0; left: 0; width: 232px; background: var(--card); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 18px 14px 14px; z-index: 40; }
+  .s-brand { display: flex; align-items: center; gap: 10px; padding: 2px 6px 14px; }
+  .s-brand .logo { width: 38px; height: 38px; border-radius: 13px; background: linear-gradient(135deg, #6366f1, #a855f7 55%, #ec4899); box-shadow: 0 8px 22px rgba(99,102,241,.38); }
+  .s-brand .nm { font-weight: 800; font-size: 14.5px; letter-spacing: -.01em; }
+  .s-brand .sub { font-size: 11px; color: var(--tx3); }
+  .s-pill { display: flex; align-items: center; gap: 8px; border: 1px solid var(--green-soft); background: var(--green-soft); border-radius: 12px; padding: 8px 11px; margin-bottom: 12px; }
+  .s-pill .pill-tx { font-size: 11px; font-weight: 600; color: var(--green); }
+  .s-nav { flex: 1; display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+  .s-nav .nav-btn { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 12px; border-radius: 11px; font-size: 13px; font-weight: 500; color: var(--tx2); }
+  .s-nav .nav-btn .ic { width: 16px; height: 16px; flex-shrink: 0; }
+  .s-nav .nav-btn:hover { background: var(--bg2); color: var(--tx); }
+  .s-nav .nav-btn.active { background: var(--indigo-soft); color: var(--tx); box-shadow: inset 0 0 0 1px rgba(99,102,241,.35); }
+  .s-nav .nav-btn.active .ic { color: var(--indigo); }
+  .s-nav .nav-btn .cnt { margin-left: auto; }
+  .s-ft { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 10px; }
+  .s-ft code { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--indigo); background: var(--bg2); border-radius: 8px; padding: 6px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .s-ft-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .s-ft-row .clock { font-size: 11px; color: var(--tx3); font-variant-numeric: tabular-nums; }
+  .main { margin-left: 232px; min-height: 100vh; display: flex; flex-direction: column; }
+  .topbar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 10px; padding: 12px 26px; background: var(--hdr-bg); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+  .topbar .clock { font-size: 12px; color: var(--tx3); font-variant-numeric: tabular-nums; }
+  .topbar .sp { flex: 1; }
+  .m-nav { display: none; }
+  /* 渐变强调：KPI 图标 / 主按钮 */
+  .kpi .k-ico { background: linear-gradient(135deg, var(--indigo), var(--violet)) !important; color: #fff !important; box-shadow: 0 6px 16px rgba(99,102,241,.3); }
+  .btn.primary { background: linear-gradient(135deg, #6366f1, #a855f7); border: none; box-shadow: 0 6px 18px rgba(99,102,241,.35); }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .card { transition: box-shadow .18s ease, transform .18s ease; }
+  .card:hover { box-shadow: var(--shadow-md); }
+  /* 调用日志页 */
+  .inp { flex: 1; min-width: 180px; border: 1px solid var(--line); background: var(--card); color: var(--tx); border-radius: 10px; padding: 7px 12px; font: inherit; font-size: 12.5px; outline: none; }
+  .inp:focus { border-color: var(--indigo); box-shadow: 0 0 0 3px var(--indigo-soft); }
+  /* Playground */
+  .pg-grid { display: grid; grid-template-columns: 300px 1fr; gap: 14px; align-items: start; }
+  .pg-left .field { margin-bottom: 12px; }
+  .pg-left label { display: block; font-size: 11.5px; font-weight: 600; color: var(--tx2); margin-bottom: 5px; }
+  .pg-left select, .pg-left textarea, .pg-inputrow textarea { width: 100%; border: 1px solid var(--line); background: var(--card); color: var(--tx); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; resize: vertical; }
+  .pg-left select:focus, .pg-left textarea:focus, .pg-inputrow textarea:focus { border-color: var(--indigo); box-shadow: 0 0 0 3px var(--indigo-soft); }
+  .pg-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx2); margin: 10px 0; cursor: pointer; }
+  .pg-meta { font-size: 11px; color: var(--tx3); margin-top: 10px; line-height: 1.7; }
+  .pg-history { min-height: 320px; max-height: 56vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+  .pg-bubble { max-width: 86%; padding: 9px 13px; border-radius: 14px; font-size: 13px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+  .pg-bubble.user { align-self: flex-end; background: var(--indigo); color: #fff; border-bottom-right-radius: 4px; }
+  .pg-bubble.assistant { align-self: flex-start; background: var(--bg2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .pg-bubble.assistant .pg-err { color: var(--red); }
+  .pg-inputrow { display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; }
+  .pg-inputrow .btn { padding: 9px 16px; }
+  @media (max-width: 1100px) { .pg-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 860px) {
+    .side { display: none; }
+    .main { margin-left: 0; }
+    .m-nav { display: flex; gap: 2px; overflow-x: auto; }
+    .m-nav .nav-btn { padding: 6px 11px; white-space: nowrap; }
+  }
 </style>
 </head>
 <body>
-<!-- ═══════════════ 顶栏 ═══════════════ -->
-<header class="hdr">
-  <div class="hdr-in">
-    <div class="brand">
-      <div class="logo"><span data-ico="zap"></span></div>
-      <div><div class="nm">ZZCSAPI</div><div class="sub">API 聚合网关</div></div>
-    </div>
-    <nav class="nav">
-      <button class="nav-btn active" data-nav="overview"><span data-ico="gauge"></span>总览</button>
-      <button class="nav-btn" data-nav="channels"><span data-ico="server"></span>渠道<span class="cnt" id="nav-ch-cnt">0</span></button>
-      <button class="nav-btn" data-nav="models"><span data-ico="sparkles"></span>模型<span class="cnt" id="nav-m-cnt">0</span></button>
-      <button class="nav-btn" data-nav="access"><span data-ico="plug"></span>接入</button>
-    </nav>
-    <div class="hdr-right">
-      <span class="pill" id="status-pill"><span class="pdot"></span><span class="pill-tx" id="status-pill-tx">检查中…</span></span>
-      <span class="clock" id="clock">--:--:--</span>
+<!-- ═══════════════ 侧边栏 ═══════════════ -->
+<aside class="side">
+  <div class="s-brand">
+    <div class="logo"><span data-ico="zap"></span></div>
+    <div><div class="nm">ZZCSAPI</div><div class="sub">本地 AI 聚合分发</div></div>
+  </div>
+  <div class="s-pill"><span class="pdot" id="side-dot"></span><span class="pill-tx" id="side-pill-tx">检查中…</span></div>
+  <nav class="s-nav">
+    <button class="nav-btn active" data-nav="overview"><span class="ic" data-ico="gauge"></span>总览仪表盘</button>
+    <button class="nav-btn" data-nav="channels"><span class="ic" data-ico="server"></span>渠道管理<span class="cnt" id="nav-ch-cnt">0</span></button>
+    <button class="nav-btn" data-nav="models"><span class="ic" data-ico="sparkles"></span>聚合模型<span class="cnt" id="nav-m-cnt">0</span></button>
+    <button class="nav-btn" data-nav="logs"><span class="ic" data-ico="list"></span>调用日志</button>
+    <button class="nav-btn" data-nav="playground"><span class="ic" data-ico="zap"></span>Playground</button>
+    <button class="nav-btn" data-nav="access"><span class="ic" data-ico="plug"></span>接入文档</button>
+  </nav>
+  <div class="s-ft">
+    <code>/v1/chat/completions</code>
+    <div class="s-ft-row">
       <button class="icon-btn" id="btn-refresh" title="刷新数据"><span data-ico="refresh"></span></button>
       <button class="icon-btn" id="theme-toggle" title="切换主题"><span data-ico="moon" id="theme-ico"></span></button>
+      <span class="clock" id="clock">--:--:--</span>
     </div>
   </div>
-</header>
+</aside>
+
+<div class="main">
+<div class="topbar">
+  <nav class="m-nav">
+    <button class="nav-btn active" data-nav="overview">总览</button>
+    <button class="nav-btn" data-nav="channels">渠道</button>
+    <button class="nav-btn" data-nav="models">模型</button>
+    <button class="nav-btn" data-nav="logs">日志</button>
+    <button class="nav-btn" data-nav="playground">调试</button>
+    <button class="nav-btn" data-nav="access">接入</button>
+  </nav>
+  <span class="sp"></span>
+  <span class="pill" id="status-pill"><span class="pdot"></span><span class="pill-tx" id="status-pill-tx">检查中…</span></span>
+  <button class="icon-btn" id="btn-personalize-top" title="个性化" style="display:none"><span data-ico="sliders"></span></button>
+</div>
 
 <!-- ═══════════════ 总览 · 仪表盘 ═══════════════ -->
 <div class="content" id="page-overview" data-page>
@@ -596,6 +668,44 @@
   <div class="sec-head" style="margin-top:22px"><h2>接入示例</h2><span class="hint">复制到对应客户端的配置里</span></div>
   <div id="access-examples"></div>
 </div>
+
+<!-- ═══════════════ 调用日志 ═══════════════ -->
+<div class="content hidden" id="page-logs" data-page>
+  <div class="page-head"><div><h1>调用日志</h1><div class="p-hint">最近请求明细 · 失败不产生 token 消耗</div></div></div>
+  <div class="filterbar" style="margin-bottom:14px">
+    <input class="inp" id="log-q" placeholder="搜索模型 / 渠道 / 错误信息…">
+    <div class="seg" id="log-status">
+      <button data-v="all" class="active">全部</button>
+      <button data-v="ok">成功</button>
+      <button data-v="fail">失败</button>
+    </div>
+    <span class="flt-hint" id="log-count"></span>
+  </div>
+  <div class="card"><div class="tbl-scroll" id="logs-tbl"></div></div>
+</div>
+
+<!-- ═══════════════ Playground ═══════════════ -->
+<div class="content hidden" id="page-playground" data-page>
+  <div class="page-head"><div><h1>Playground 调试</h1><div class="p-hint">经网关真实调用 · 验证渠道路由、鉴权与流式输出</div></div></div>
+  <div class="pg-grid">
+    <div class="card pg-left">
+      <div class="field"><label>模型</label><select id="pg-model"></select></div>
+      <div class="field"><label>System 提示词</label><textarea id="pg-sys" rows="3" placeholder="（可选）系统提示词"></textarea></div>
+      <div class="field"><label>温度 <span id="pg-temp-v">0.7</span></label><input type="range" id="pg-temp" min="0" max="2" step="0.1" value="0.7" style="width:100%"></div>
+      <label class="pg-check"><input type="checkbox" id="pg-stream" checked> 流式输出</label>
+      <button class="btn primary" id="pg-send" style="width:100%">发送</button>
+      <div class="pg-meta" id="pg-meta">选择模型后发消息，请求走 <b>/v1/chat/completions</b> 与客户端完全同路径。</div>
+    </div>
+    <div class="card">
+      <div class="pg-history" id="pg-history"><div class="empty">开始一段对话调试网关</div></div>
+      <div class="pg-inputrow">
+        <textarea id="pg-msg" rows="2" placeholder="输入消息，Ctrl+Enter 发送…"></textarea>
+        <button class="btn primary" id="pg-send2">发送</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div><!-- /main -->
 
 <!-- ═══════════════ 个性化抽屉 ═══════════════ -->
 <div class="dmask" id="dmask"></div>
@@ -740,6 +850,7 @@ const ICO = {
   shield: _svg('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>'),
   calendar: _svg('<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>'),
   rows: _svg('<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>'),
+  list: _svg('<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>'),
 };
 function ic(n) { return ICO[n] || ''; }
 $$('[data-ico]').forEach(el => { el.innerHTML = ICO[el.dataset.ico] || ''; el.classList.add('ic'); });
@@ -919,10 +1030,18 @@ function renderStats(data) {
   const down = chs.filter(c => c.status === 'down').length;
   $('#nav-ch-cnt').textContent = chs.length;
   const pill = $('#status-pill'), tx = $('#status-pill-tx');
-  if (!chs.length) { pill.className = 'pill'; tx.textContent = '无渠道'; }
-  else if (down === chs.length) { pill.className = 'pill bad'; tx.textContent = '全部渠道不可用'; }
-  else if (down > 0) { pill.className = 'pill warn'; tx.textContent = `${chs.length - down} 正常 · ${down} 不可用`; }
-  else { pill.className = 'pill ok'; tx.textContent = '运行正常'; }
+  let cls = 'pill', txt = '无渠道';
+  if (!chs.length) { cls = 'pill'; txt = '无渠道'; }
+  else if (down === chs.length) { cls = 'pill bad'; txt = '全部渠道不可用'; }
+  else if (down > 0) { cls = 'pill warn'; txt = `${chs.length - down} 正常 · ${down} 不可用`; }
+  else { cls = 'pill ok'; txt = '运行正常'; }
+  pill.className = cls; tx.textContent = txt;
+  // 侧边栏状态同步
+  const sp = $('#side-pill-tx'), sd = $('#side-dot');
+  if (sp) sp.textContent = txt;
+  if (sd) sd.className = 'pdot ' + (down === chs.length && chs.length ? 'down' : down > 0 ? 'warn' : chs.length ? 'ok' : '');
+  // Playground 模型表
+  state.aggregated = data.aggregated || {};
 }
 /* ───────── 仪表盘：筛选 / 偏好 ───────── */
 const dash = {
@@ -1317,6 +1436,7 @@ async function renderDashboard() {
   }
   buildFilterBar();
   renderKpis(); renderTrend(); renderDonut(); renderHourly(); renderHealth(); renderTables(); renderRecent();
+  if (curPage === 'logs') renderLogs();
   applyPrefs();
   if (state.animate) state.animate = false;
 }
@@ -1487,8 +1607,148 @@ function goPage(t) {
   $$('.nav-btn').forEach(x => x.classList.toggle('active', x.dataset.nav === t));
   $$('[data-page]').forEach(p => p.classList.toggle('hidden', p.id !== 'page-' + t));
   window.scrollTo({ top: 0 });
+  if (t === 'logs') renderLogs();
+  if (t === 'playground') pgFillModels();
 }
 $$('.nav-btn').forEach(a => a.onclick = () => goPage(a.dataset.nav));
+
+/* ───────── 调用日志页 ───────── */
+const logFlt = { q: '', status: 'all' };
+function logRows() {
+  const u = dash.usage;
+  let rows = (u ? u.recent : []).slice();
+  if (logFlt.status === 'ok') rows = rows.filter(r => r.ok !== false);
+  if (logFlt.status === 'fail') rows = rows.filter(r => r.ok === false);
+  const q = logFlt.q.trim().toLowerCase();
+  if (q) rows = rows.filter(r =>
+    String(r.model || '').toLowerCase().includes(q) ||
+    String(r.channelId || '').toLowerCase().includes(q) ||
+    String(r.note || '').toLowerCase().includes(q));
+  return rows;
+}
+function renderLogs() {
+  const root = $('#logs-tbl');
+  if (!root) return;
+  const rows = logRows();
+  $('#log-count').textContent = `${rows.length} 条记录（最新在前 · 来源：最近请求缓存）`;
+  if (!rows.length) { root.innerHTML = '<div class="empty">没有匹配的请求记录</div>'; return; }
+  root.innerHTML = `<table class="tbl"><thead><tr>
+    <th style="text-align:left">时间</th><th style="text-align:left">模型</th><th style="text-align:left">渠道</th><th>输入</th><th>输出</th><th>延迟</th><th>状态</th>
+  </tr></thead><tbody>${rows.map(r => `
+    <tr>
+      <td style="color:var(--tx3)">${new Date(r.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
+      <td>${escapeHtml(r.model || '—')}</td>
+      <td style="color:var(--tx2)">@${escapeHtml(r.channelId || '—')}</td>
+      <td>${fmtTok(r.in)}</td><td>${fmtTok(r.out)}</td><td>${r.ms ? fmtLat(r.ms) : '—'}</td>
+      <td class="${r.ok === false ? 'err' : ''}" title="${r.note ? escapeHtml(r.note) : ''}">${r.ok === false ? '✗ ' + escapeHtml(String(r.note || '失败').slice(0, 40)) : '✓'}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+$('#log-q').addEventListener('input', debounce(() => { logFlt.q = $('#log-q').value; renderLogs(); }, 250));
+$$('#log-status button').forEach(b => b.onclick = () => {
+  logFlt.status = b.dataset.v;
+  $$('#log-status button').forEach(x => x.classList.toggle('active', x === b));
+  renderLogs();
+});
+
+/* ───────── Playground ───────── */
+const pg = { history: [], busy: false };
+function pgModels() {
+  const agg = state.aggregated || {};
+  const out = [];
+  for (const list of Object.values(agg)) out.push(...list);
+  return [...new Set(out)];
+}
+function pgFillModels() {
+  const sel = $('#pg-model');
+  if (!sel) return;
+  const models = pgModels();
+  const cur = sel.value;
+  sel.innerHTML = models.length
+    ? models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('')
+    : '<option value="">（暂无聚合模型）</option>';
+  if (cur && models.includes(cur)) sel.value = cur;
+}
+function pgBubble(role, text, err) {
+  const box = $('#pg-history');
+  const empty = box.querySelector('.empty'); if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'pg-bubble ' + role;
+  div.innerHTML = err ? '<span class="pg-err"></span>' : '';
+  (err ? div.querySelector('.pg-err') : div).textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+async function pgSend() {
+  if (pg.busy) return;
+  const msg = $('#pg-msg').value.trim();
+  const model = $('#pg-model').value;
+  if (!msg || !model) { err(model ? '请输入消息' : '暂无可用模型，请先在渠道里配置别名'); return; }
+  $('#pg-msg').value = '';
+  pg.history.push({ role: 'user', content: msg });
+  pgBubble('user', msg);
+  pg.busy = true;
+  const t0 = Date.now();
+  const bubble = pgBubble('assistant', '…');
+  const meta = $('#pg-meta');
+  try {
+    const messages = [];
+    const sys = $('#pg-sys').value.trim();
+    if (sys) messages.push({ role: 'system', content: sys });
+    messages.push(...pg.history);
+    const stream = $('#pg-stream').checked;
+    const res = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(accessCfg && accessCfg.gatewayKey ? { Authorization: 'Bearer ' + accessCfg.gatewayKey } : {}) },
+      body: JSON.stringify({ model, messages, stream, temperature: Number($('#pg-temp').value) }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error && j.error.message ? j.error.message : 'HTTP ' + res.status);
+    }
+    let acc = '';
+    if (stream && res.headers.get('content-type')?.includes('text/event-stream')) {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop() || '';
+        for (const line of lines) {
+          const s = line.trim();
+          if (!s.startsWith('data:')) continue;
+          const d = s.slice(5).trim();
+          if (d === '[DONE]') continue;
+          try {
+            const j = JSON.parse(d);
+            const delta = j.choices?.[0]?.delta?.content || '';
+            if (delta) { acc += delta; bubble.textContent = acc; $('#pg-history').scrollTop = 1e9; }
+          } catch {}
+        }
+      }
+    } else {
+      const j = await res.json();
+      acc = j.choices?.[0]?.message?.content || '(空回复)';
+      bubble.textContent = acc;
+    }
+    pg.history.push({ role: 'assistant', content: acc });
+    const ms = Date.now() - t0;
+    meta.innerHTML = `${escapeHtml(model)} · ${ms}ms · ${acc.length} 字符 · ${stream ? '流式' : '非流式'}`;
+  } catch (e) {
+    bubble.className = 'pg-bubble assistant';
+    bubble.innerHTML = '<span class="pg-err"></span>';
+    bubble.querySelector('.pg-err').textContent = '调用失败：' + e.message;
+    meta.textContent = '失败 · ' + (Date.now() - t0) + 'ms';
+  } finally {
+    pg.busy = false;
+  }
+}
+$('#pg-send').onclick = pgSend;
+$('#pg-send2').onclick = pgSend;
+$('#pg-temp').oninput = () => $('#pg-temp-v').textContent = $('#pg-temp').value;
+$('#pg-msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); pgSend(); } });
 
 /* ───────── 复制 ───────── */
 document.addEventListener('click', async (e) => {
