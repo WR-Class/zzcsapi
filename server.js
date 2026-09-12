@@ -957,6 +957,11 @@ const server = http.createServer(async (req, res) => {
       if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
       return handleOpenAIRequest(req, res, url);
     }
+    // 图片生成：OpenAI 兼容 /v1/images/generations，走 openai 协议渠道直透（复用调度/兜底/记账）
+    if (req.method === 'POST' && url.pathname === '/v1/images/generations') {
+      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      return handleImageRequest(req, res, url);
+    }
 
     // Anthropic 兼容：/anthropic/v1/messages
     if (url.pathname.startsWith('/anthropic/')) {
@@ -1656,9 +1661,78 @@ async function handleOpenAIRequest(req, res, url) {
   });
 }
 
+// ─────────────────────────── 图片生成调度 ───────────────────────────
+// OpenAI 兼容 POST /v1/images/generations：只走 openai 协议渠道（中转站若支持 images 上游会透传成功），
+// 请求体原样转发（仅替换 model 为渠道 upstream），响应原样透传。
+// 图像候选独立查找：命中显式 alias，或命中该渠道探测到的上游模型名（不受 autoAlias 影响）。
+// 这样不影响 /v1/models 与聊天路由的别名语义，但让用户已上架的 gpt-image/dall-e 直接可用。
+function imageCandidates(model) {
+  const want = String(model || '').toLowerCase().trim();
+  if (!want) return [];
+  const out = [];
+  for (const ch of channels.values()) {
+    if (!ch.def.enabled) continue;
+    if ((ch.def.protocol || 'openai') !== 'openai') continue;
+    let upstream = null;
+    if (ch.aliasMap.has(want)) upstream = ch.aliasMap.get(want);
+    else {
+      const hit = (ch.models || []).find((m) => String(m).toLowerCase() === want);
+      if (hit) upstream = hit;
+    }
+    if (!upstream) continue;
+    out.push({
+      channelId: ch.def.id,
+      upstream,
+      priority: ch.def.priority ?? 0,
+      status: ch.status,
+      latencyMs: ch.latencyMs,
+      cooldownUntil: ch.cooldownUntil,
+      consecutiveFail: ch.consecutiveFail,
+      protocol: 'openai',
+      kind: 'explicit',
+    });
+  }
+  out.sort((a, b) => {
+    const healthy = (c) => (c.cooldownUntil > Date.now() ? 2 : c.status === 'down' ? 1 : 0);
+    const ha = healthy(a), hb = healthy(b);
+    if (ha !== hb) return ha - hb;
+    return b.priority - a.priority;
+  });
+  return out;
+}
+
+async function handleImageRequest(req, res, url) {
+  const raw = await readBody(req);
+  let body;
+  try { body = JSON.parse(raw.toString('utf8') || '{}'); }
+  catch { return sendJson(res, 400, upstreamErrorPayload(400, 'invalid JSON body')); }
+  const requested = body.model;
+  if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
+  const candidates = imageCandidates(requested);
+  if (candidates.length === 0) {
+    return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for image model "${requested}"（该渠道未上架此图像模型，或未探测到——到渠道管理里点探测刷新模型列表）`));
+  }
+  return dispatchRequest({
+    kind: 'images',
+    res,
+    url,
+    body,
+    candidates,
+    requestedModel: requested,
+    isStream: false,
+    encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
+    buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, 'images/generations'),
+    buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
+    onSuccessNonStream: async (oai, candidate) => {
+      const text = await oai.text();
+      res.writeHead(200, { 'Content-Type': oai.headers.get('content-type') || 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+      res.end(text);
+    },
+  });
+}
+
 // ─────────────────────────── Anthropic 调度 ───────────────────────────
 async function handleAnthropicRequest(req, res, url) {
-  // /anthropic/v1/messages  -> 去掉 /anthropic 前缀
   const inner = url.pathname.replace(/^\/anthropic/, '');
   if (req.method === 'GET' && inner === '/v1/models') {
     return sendJson(res, 200, { data: aggregateModels('anthropic').map((id) => ({ id, type: 'model' })) });

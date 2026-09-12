@@ -481,6 +481,17 @@
   .pg-bubble.user { align-self: flex-end; background: var(--indigo); color: #fff; border-bottom-right-radius: 4px; }
   .pg-bubble.assistant { align-self: flex-start; background: var(--bg2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
   .pg-bubble.assistant .pg-err { color: var(--red); }
+  .pg-bubble.rendered { white-space: normal; max-width: 96%; }
+  .pg-svg-wrap { min-width: 320px; }
+  .pg-svg-tools { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; }
+  .pg-svg-tools button, .pg-svg-tools a { border: 1px solid var(--line); background: var(--bg2); color: var(--tx2); font-size: 11px; border-radius: 7px; padding: 3px 10px; cursor: pointer; text-decoration: none; }
+  .pg-svg-tools button.on { background: var(--indigo); color: #fff; border-color: var(--indigo); }
+  .pg-svg-frame { width: 100%; height: 440px; border: 1px solid var(--line); border-radius: 12px; background: repeating-conic-gradient(var(--bg2) 0% 25%, var(--card) 0% 50%) 50% / 16px 16px; display: block; }
+  .pg-svg-src { max-height: 340px; overflow: auto; font-size: 11px; background: var(--bg2); border: 1px solid var(--line); padding: 10px; border-radius: 10px; white-space: pre-wrap; word-break: break-all; font-family: var(--mono); }
+  .pg-code { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; overflow: auto; font-family: var(--mono); font-size: 11.5px; line-height: 1.6; white-space: pre; margin: 6px 0; }
+  .pg-ic { background: var(--bg2); border-radius: 5px; padding: 1px 5px; font-family: var(--mono); font-size: 12px; }
+  .pg-gen-img { max-width: 100%; border-radius: 12px; border: 1px solid var(--line); display: block; margin-bottom: 6px; }
+  .pg-img-cap { font-size: 12px; color: var(--tx2); margin-top: 4px; }
   .pg-inputrow { display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
   .pg-inputrow textarea { flex: 1; }
   .pg-inputrow .btn { padding: 9px 16px; flex-shrink: 0; }
@@ -699,11 +710,22 @@
   <div class="card pg-card">
     <div class="pg-grid">
       <div class="pg-left">
-        <div class="field"><label>模型</label><select id="pg-model"></select></div>
-        <div class="field"><label>System 提示词</label><textarea id="pg-sys" rows="3" placeholder="（可选）系统提示词"></textarea></div>
-        <div class="field"><label>温度 <span id="pg-temp-v">0.7</span></label><input type="range" id="pg-temp" min="0" max="2" step="0.1" value="0.7" style="width:100%"></div>
-        <label class="pg-check"><input type="checkbox" id="pg-stream" checked> 流式输出</label>
-        <button class="btn primary" id="pg-send" style="width:100%">发送</button>
+        <div class="field"><label>模式</label>
+          <div class="seg" id="pg-mode"><button data-v="chat" class="active">对话</button><button data-v="image">生图</button></div>
+        </div>
+        <div id="pg-f-chat">
+          <div class="field"><label>模型</label><select id="pg-model"></select></div>
+          <div class="field"><label>System 提示词</label><textarea id="pg-sys" rows="3" placeholder="（可选）系统提示词"></textarea></div>
+          <div class="field"><label>温度 <span id="pg-temp-v">0.7</span></label><input type="range" id="pg-temp" min="0" max="2" step="0.1" value="0.7" style="width:100%"></div>
+          <label class="pg-check"><input type="checkbox" id="pg-stream" checked> 流式输出</label>
+        </div>
+        <div id="pg-f-img" class="hidden">
+          <div class="field"><label>图像模型</label><input type="text" id="pg-img-model" value="gpt-image-1" list="pg-img-datalist" placeholder="gpt-image-1 / dall-e-3"><datalist id="pg-img-datalist"><option value="gpt-image-1"><option value="gpt-image-2"><option value="dall-e-3"><option value="dall-e-2"></datalist></div>
+          <div class="field"><label>尺寸</label><select id="pg-img-size"><option>1024x1024</option><option>1536x1024</option><option>1024x1536</option><option>auto</option></select></div>
+          <div class="field"><label>数量 <span id="pg-img-n-v">1</span></label><input type="range" id="pg-img-n" min="1" max="4" step="1" value="1" style="width:100%"></div>
+          <div class="pg-meta" style="margin-top:4px">走 <b>/v1/images/generations</b>，需渠道上游支持图像接口（中转站有 gpt-image / dall-e 才行）。SVG 动画请继续用「对话」模式。</div>
+        </div>
+        <button class="btn primary" id="pg-send" style="width:100%;margin-top:6px">发送</button>
         <div class="pg-meta" id="pg-meta">请求走 <b>/v1/chat/completions</b>，与客户端完全同路径。</div>
       </div>
       <div class="pg-right">
@@ -1671,7 +1693,18 @@ $$('#log-status button').forEach(b => b.onclick = () => {
 });
 
 /* ───────── Playground ───────── */
-const pg = { history: [], busy: false };
+const pg = { history: [], busy: false, mode: 'chat' };
+$$('#pg-mode button').forEach(b => b.onclick = () => {
+  pg.mode = b.dataset.v;
+  $$('#pg-mode button').forEach(x => x.classList.toggle('active', x === b));
+  $('#pg-f-chat').classList.toggle('hidden', pg.mode !== 'chat');
+  $('#pg-f-img').classList.toggle('hidden', pg.mode !== 'image');
+  $('#pg-msg').placeholder = pg.mode === 'image' ? '描述你要生成的图片，Ctrl+Enter 发送…' : '输入消息，Ctrl+Enter 发送…';
+  $('#pg-meta').innerHTML = pg.mode === 'image'
+    ? '请求走 <b>/v1/images/generations</b>（图像模型直透 openai 渠道）。'
+    : '请求走 <b>/v1/chat/completions</b>，与客户端完全同路径。';
+});
+$('#pg-img-n').oninput = () => $('#pg-img-n-v').textContent = $('#pg-img-n').value;
 function pgModels() {
   const agg = state.aggregated || {};
   const out = [];
@@ -1699,8 +1732,45 @@ function pgBubble(role, text, err) {
   box.scrollTop = box.scrollHeight;
   return div;
 }
+function pgRenderContent(bubble, text) {
+  // ① SVG/HTML 代码块 → sandboxed iframe 渲染（SMIL 动画可跑、无脚本权限）
+  const m = text.match(/```(?:xml|svg|html)\s*\n?([\s\S]*?)```/i);
+  if (m && /<svg[\s>]/i.test(m[1])) {
+    const svg = m[1];
+    bubble.classList.add('rendered');
+    bubble.innerHTML = '<div class="pg-svg-wrap">' +
+      '<div class="pg-svg-tools"><button data-pg-t="preview" class="on">预览</button><button data-pg-t="source">源码</button><a data-pg-t="dl" download="artifact.svg">下载 SVG</a>' +
+      '<span style="font-size:10.5px;color:var(--tx3);margin-left:auto">沙箱渲染 · 原生 SVG 动画</span></div>' +
+      '<iframe class="pg-svg-frame" sandbox=""></iframe>' +
+      '<pre class="pg-svg-src hidden">' + escapeHtml(svg) + '</pre></div>';
+    const frame = bubble.querySelector('.pg-svg-frame');
+    frame.srcdoc = '<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:transparent}svg{max-width:100%;height:auto}</style>' + svg;
+    const src = bubble.querySelector('.pg-svg-src');
+    bubble.querySelector('[data-pg-t=preview]').onclick = function () { frame.classList.remove('hidden'); src.classList.add('hidden'); this.classList.add('on'); bubble.querySelector('[data-pg-t=source]').classList.remove('on'); };
+    bubble.querySelector('[data-pg-t=source]').onclick = function () { frame.classList.add('hidden'); src.classList.remove('hidden'); this.classList.add('on'); bubble.querySelector('[data-pg-t=preview]').classList.remove('on'); };
+    try { bubble.querySelector('[data-pg-t=dl]').href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })); } catch {}
+    return;
+  }
+  // ② 生图结果（b64/image_url）
+  if (bubble._images && bubble._images.length) {
+    bubble.classList.add('rendered');
+    const imgs = bubble._images.map((u) => '<img class="pg-gen-img" src="' + escapeHtml(u) + '" loading="lazy" alt="生成图片">').join('');
+    const cap = text && text !== '(空回复)' ? '<div class="pg-img-cap">' + escapeHtml(text) + '</div>' : '';
+    bubble.innerHTML = imgs + cap;
+    return;
+  }
+  // ③ 普通文本：Markdown 代码块 → <pre>
+  const hasCode = /```/.test(text);
+  if (!hasCode) { bubble.classList.remove('rendered'); bubble.textContent = text; return; }
+  bubble.classList.add('rendered');
+  bubble.innerHTML = escapeHtml(text)
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => '<pre class="pg-code"><code>' + code.replace(/\n$/, '') + '</code></pre>')
+    .replace(/`([^`\n]+)`/g, '<code class="pg-ic">$1</code>');
+}
+
 async function pgSend() {
   if (pg.busy) return;
+  if (pg.mode === 'image') return pgSendImage();
   const msg = $('#pg-msg').value.trim();
   const model = $('#pg-model').value;
   if (!msg || !model) { err(model ? '请输入消息' : '暂无可用模型，请先在渠道里配置别名'); return; }
@@ -1748,10 +1818,28 @@ async function pgSend() {
           } catch {}
         }
       }
+      pgRenderContent(bubble, acc);
     } else {
       const j = await res.json();
-      acc = j.choices?.[0]?.message?.content || '(空回复)';
-      bubble.textContent = acc;
+      const msg0 = j.choices?.[0]?.message || {};
+      // 内容可能是字符串或数组（含 image_url 部分）
+      let textPart = '';
+      const imgUrls = [];
+      if (Array.isArray(msg0.content)) {
+        for (const p of msg0.content) {
+          if (p.type === 'text') textPart += (p.text || '');
+          if (p.type === 'image_url' && p.image_url?.url) imgUrls.push(p.image_url.url);
+        }
+      } else textPart = msg0.content || '(空回复)';
+      if (Array.isArray(msg0.images)) {
+        for (const im of msg0.images) {
+          const u = im.image_url?.url || im.url || '';
+          if (u) imgUrls.push(u.startsWith('data:') || u.startsWith('http') ? u : 'data:image/png;base64,' + u);
+        }
+      }
+      acc = textPart;
+      if (imgUrls.length) { bubble._images = imgUrls; }
+      pgRenderContent(bubble, acc);
     }
     pg.history.push({ role: 'assistant', content: acc });
     const ms = Date.now() - t0;
@@ -1761,6 +1849,44 @@ async function pgSend() {
     bubble.innerHTML = '<span class="pg-err"></span>';
     bubble.querySelector('.pg-err').textContent = '调用失败：' + e.message;
     meta.textContent = '失败 · ' + (Date.now() - t0) + 'ms';
+  } finally {
+    pg.busy = false;
+  }
+}
+// 生图：POST /v1/images/generations（openai 渠道直透），响应 data[] 含 b64_json 或 url
+async function pgSendImage() {
+  const prompt = $('#pg-msg').value.trim();
+  const model = ($('#pg-img-model').value || 'gpt-image-1').trim();
+  if (!prompt) { err('请描述要生成的图片'); return; }
+  $('#pg-msg').value = '';
+  pg.busy = true;
+  const t0 = Date.now();
+  pgBubble('user', '[生图] ' + prompt);
+  const bubble = pgBubble('assistant', '生成中…');
+  const meta = $('#pg-meta');
+  try {
+    const res = await fetch('/v1/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(accessCfg && accessCfg.gatewayKey ? { Authorization: 'Bearer ' + accessCfg.gatewayKey } : {}) },
+      body: JSON.stringify({ model, prompt, n: Number($('#pg-img-n').value), size: $('#pg-img-size').value }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error((j.error && (j.error.message || j.error.type)) || 'HTTP ' + res.status);
+    }
+    const j = await res.json();
+    const items = Array.isArray(j.data) ? j.data : [];
+    const urls = items.map(d => d.url || (d.b64_json ? 'data:image/png;base64,' + d.b64_json : '')).filter(Boolean);
+    if (!urls.length) throw new Error('上游未返回图片（该渠道可能不支持图像接口）');
+    bubble.classList.add('rendered');
+    bubble.innerHTML = urls.map(u => '<img class="pg-gen-img" src="' + escapeHtml(u) + '" alt="生成图片" loading="lazy">').join('');
+    const ms = Date.now() - t0;
+    meta.innerHTML = `生图 ${escapeHtml(model)} · ${ms}ms · ${urls.length} 张`;
+  } catch (e) {
+    bubble.classList.add('rendered');
+    bubble.innerHTML = '<span class="pg-err"></span>';
+    bubble.querySelector('.pg-err').textContent = '生图失败：' + e.message;
+    meta.textContent = '生图失败 · ' + (Date.now() - t0) + 'ms';
   } finally {
     pg.busy = false;
   }
