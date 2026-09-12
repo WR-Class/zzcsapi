@@ -1734,9 +1734,16 @@ function pgBubble(role, text, err) {
 }
 function pgRenderContent(bubble, text) {
   // ① SVG/HTML 代码块 → sandboxed iframe 渲染（SMIL 动画可跑、无脚本权限）
-  const m = text.match(/```(?:xml|svg|html)\s*\n?([\s\S]*?)```/i);
-  if (m && /<svg[\s>]/i.test(m[1])) {
-    const svg = m[1];
+  //    先找带语言标注的围栏；再找任意围栏内含 <svg>；最后兜底裸 <svg>
+  let svg = null;
+  let m = text.match(/```(?:xml|svg|html)\s*\n?([\s\S]*?)```/i);
+  if (!m) m = text.match(/```\s*\n?([\s\S]*?)```/);
+  if (m && /<svg[\s>]/i.test(m[1])) svg = m[1];
+  else {
+    const bare = text.match(/<svg[\s\S]*<\/svg>/i);
+    if (bare && !/```/.test(text)) svg = bare[0];
+  }
+  if (svg) {
     bubble.classList.add('rendered');
     bubble.innerHTML = '<div class="pg-svg-wrap">' +
       '<div class="pg-svg-tools"><button data-pg-t="preview" class="on">预览</button><button data-pg-t="source">源码</button><a data-pg-t="dl" download="artifact.svg">下载 SVG</a>' +
