@@ -1732,32 +1732,73 @@ function pgBubble(role, text, err) {
   box.scrollTop = box.scrollHeight;
   return div;
 }
+// 从回复中提取可渲染工件：优先带语言标注的围栏（svg/xml/html），其次任意围栏，最后裸标签
+function pgDetectArtifact(text) {
+  const fenced = [...text.matchAll(/```(\w*)[^\S\n]*\n?([\s\S]*?)```/g)];
+  for (const f of fenced) {
+    const lang = (f[1] || '').toLowerCase();
+    const body = f[2] || '';
+    if (!body.trim()) continue;
+    const isHtmlLang = lang === 'html' || lang === 'htm';
+    const hasSvg = /<svg[\s>]/i.test(body);
+    const hasDoc = /<!doctype\s+html|<html[\s>]/i.test(body);
+    if (isHtmlLang && !hasDoc && hasSvg) return { kind: 'svg', body };
+    if (isHtmlLang) return { kind: 'html', body };
+    if (hasDoc && !hasSvg) return { kind: 'html', body };
+    if (hasSvg) return { kind: 'svg', body };
+  }
+  if (!/```/.test(text)) {
+    const bareHtml = text.match(/<!doctype\s+html[\s\S]*<\/html>/i) || text.match(/<html[\s\S]*<\/html>/i);
+    if (bareHtml) return { kind: 'html', body: bareHtml[0] };
+    const bareSvg = text.match(/<svg[\s\S]*<\/svg>/i);
+    if (bareSvg) return { kind: 'svg', body: bareSvg[0] };
+  }
+  return null;
+}
+function pgRenderArtifact(bubble, art, text) {
+  const isSvg = art.kind === 'svg';
+  const ext = isSvg ? 'svg' : 'html';
+  const mime = isSvg ? 'image/svg+xml' : 'text/html';
+  bubble.classList.add('rendered');
+  bubble.innerHTML = '<div class="pg-svg-wrap">'
+    + '<div class="pg-svg-tools">'
+    + '<button data-pg-t="preview" class="on">预览</button><button data-pg-t="source">源码</button>'
+    + `<button data-pg-t="copy">复制</button>`
+    + `<a data-pg-t="dl" download="artifact-${Date.now()}.${ext}">下载 ${ext.toUpperCase()}</a>`
+    + `<button data-pg-t="win">新窗口</button>`
+    + `<span style="font-size:10.5px;color:var(--tx3);margin-left:auto">${isSvg ? 'SVG 沙箱 · 原生动画' : 'HTML 沙箱 · 脚本在隔离环境运行'}</span>`
+    + '</div>'
+    + '<iframe class="pg-svg-frame"></iframe>'
+    + '<pre class="pg-svg-src hidden">' + escapeHtml(text) + '</pre></div>';
+  const frame = bubble.querySelector('.pg-svg-frame');
+  const src = bubble.querySelector('.pg-svg-src');
+  const doc = isSvg
+    ? '<!doctype html><meta charset="utf-8"><style>html,body{margin:0;min-height:100%;background:transparent}svg{max-width:100%;height:auto}</style>' + art.body
+    : (/<!doctype/i.test(art.body) ? art.body : '<!doctype html>\n' + art.body);
+  frame.setAttribute('sandbox', isSvg ? '' : 'allow-scripts allow-modals allow-popups');
+  frame.srcdoc = doc;
+  let url = null;
+  try { url = URL.createObjectURL(new Blob([doc], { type: mime })); } catch {}
+  const previewBtn = bubble.querySelector('[data-pg-t=preview]');
+  const sourceBtn = bubble.querySelector('[data-pg-t=source]');
+  previewBtn.onclick = function () { frame.classList.remove('hidden'); src.classList.add('hidden'); previewBtn.classList.add('on'); sourceBtn.classList.remove('on'); };
+  sourceBtn.onclick = function () { frame.classList.add('hidden'); src.classList.remove('hidden'); sourceBtn.classList.add('on'); previewBtn.classList.remove('on'); };
+  if (url) {
+    bubble.querySelector('[data-pg-t=dl]').href = url;
+    bubble.querySelector('[data-pg-t=win]').onclick = () => window.open(url, '_blank');
+  } else {
+    bubble.querySelector('[data-pg-t=win]').style.display = 'none';
+  }
+  bubble.querySelector('[data-pg-t=copy]').onclick = async function () {
+    try { await navigator.clipboard.writeText(art.body); this.textContent = '已复制'; setTimeout(() => { this.textContent = '复制'; }, 1200); }
+    catch { err('复制失败'); }
+  };
+}
+
 function pgRenderContent(bubble, text) {
-  // ① SVG/HTML 代码块 → sandboxed iframe 渲染（SMIL 动画可跑、无脚本权限）
-  //    先找带语言标注的围栏；再找任意围栏内含 <svg>；最后兜底裸 <svg>
-  let svg = null;
-  let m = text.match(/```(?:xml|svg|html)\s*\n?([\s\S]*?)```/i);
-  if (!m) m = text.match(/```\s*\n?([\s\S]*?)```/);
-  if (m && /<svg[\s>]/i.test(m[1])) svg = m[1];
-  else {
-    const bare = text.match(/<svg[\s\S]*<\/svg>/i);
-    if (bare && !/```/.test(text)) svg = bare[0];
-  }
-  if (svg) {
-    bubble.classList.add('rendered');
-    bubble.innerHTML = '<div class="pg-svg-wrap">' +
-      '<div class="pg-svg-tools"><button data-pg-t="preview" class="on">预览</button><button data-pg-t="source">源码</button><a data-pg-t="dl" download="artifact.svg">下载 SVG</a>' +
-      '<span style="font-size:10.5px;color:var(--tx3);margin-left:auto">沙箱渲染 · 原生 SVG 动画</span></div>' +
-      '<iframe class="pg-svg-frame" sandbox=""></iframe>' +
-      '<pre class="pg-svg-src hidden">' + escapeHtml(svg) + '</pre></div>';
-    const frame = bubble.querySelector('.pg-svg-frame');
-    frame.srcdoc = '<!doctype html><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:transparent}svg{max-width:100%;height:auto}</style>' + svg;
-    const src = bubble.querySelector('.pg-svg-src');
-    bubble.querySelector('[data-pg-t=preview]').onclick = function () { frame.classList.remove('hidden'); src.classList.add('hidden'); this.classList.add('on'); bubble.querySelector('[data-pg-t=source]').classList.remove('on'); };
-    bubble.querySelector('[data-pg-t=source]').onclick = function () { frame.classList.add('hidden'); src.classList.remove('hidden'); this.classList.add('on'); bubble.querySelector('[data-pg-t=preview]').classList.remove('on'); };
-    try { bubble.querySelector('[data-pg-t=dl]').href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })); } catch {}
-    return;
-  }
+  // ① 可渲染工件：SVG / HTML 单文件 → sandboxed iframe 预览 + 下载 + 新窗口
+  const art = pgDetectArtifact(text);
+  if (art) { pgRenderArtifact(bubble, art, text); return; }
   // ② 生图结果（b64/image_url）
   if (bubble._images && bubble._images.length) {
     bubble.classList.add('rendered');
