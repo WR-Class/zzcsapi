@@ -1535,6 +1535,43 @@ async function handleAdminApi(req, res, url) {
     probeChannel(ch).catch(() => {});
     return sendJson(res, 200, { ok: true, id: def.id, existed, channel: { id: def.id, name: def.name, baseUrl: def.baseUrl, protocol: def.protocol, priority: def.priority, enabled: def.enabled, autoAlias: def.autoAlias, models: def.models } });
   }
+  // codex 一键导入：只给 refresh_token，其余全自动（换令牌→拿账号→拉模型→建渠道）
+  // 与 sub2api「手动导入 rt」对齐。RT 轮转自动处理；id 已存在时等价于换新 RT
+  if (req.method === 'POST' && url.pathname === '/admin/api/codex-import') {
+    const body = await safeReadJson(req);
+    const rt = String((body && body.rt) || '').trim();
+    if (!rt) return sendJson(res, 400, { error: 'rt required' });
+    // 先用临时渠道验证 RT（codexEnsureToken 内部处理轮转；tmpCh 未注册，persistConfig 不会落它）
+    const tmpDef = { id: 'codex-import-tmp', apiKey: rt, proxy: body.proxy ? String(body.proxy) : CODEX_DEFAULT_PROXY, baseUrl: CODEX_DEFAULT_BASE };
+    const tmpCh = { def: tmpDef, codex: null };
+    let acct;
+    try {
+      acct = await codexEnsureToken(tmpCh);
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, error: String(err.message || err) });
+    }
+    const id = (body.id && /^[a-zA-Z0-9_\-]+$/.test(body.id)) ? body.id
+      : ('codex' + (Array.from(channels.keys()).filter((k) => /^codex\d*$/.test(k)).length + 1));
+    let models = [];
+    try { models = await codexFetchModels(tmpDef, acct, 15000); } catch {}
+    if (!models.length) models = ['gpt-5.1']; // 拉取失败兜底：订阅标配
+    const def = {
+      id,
+      name: body.name || ('ChatGPT订阅' + (acct.email ? '·' + acct.email : '')),
+      baseUrl: CODEX_DEFAULT_BASE,
+      apiKey: tmpDef.apiKey, // 注意：可能已是轮转后的新 RT
+      protocol: 'codex',
+      priority: body.priority !== undefined ? Number(body.priority) : 0,
+      enabled: true, autoAlias: false,
+      models: Object.fromEntries(models.map((m) => [m, m])),
+      proxy: tmpDef.proxy,
+    };
+    const existed = channels.has(id);
+    const ch = upsertChannel(def);
+    persistConfig();
+    probeChannel(ch).catch(() => {});
+    return sendJson(res, 200, { ok: true, id, existed, name: def.name, models, accountId: acct.accountId || undefined, rotated: tmpDef.apiKey !== rt });
+  }
   // 临时探测（不落库），用于「获取模型」按钮
   if (req.method === 'POST' && url.pathname === '/admin/api/probe') {
     const body = await safeReadJson(req);
@@ -2959,6 +2996,8 @@ async function tryWorkbuddyChannel(opts) {
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const CODEX_DEFAULT_BASE = 'https://chatgpt.com/backend-api/codex';
+// codex 默认代理：容器经宿主机 Clash 出网（可用 ZZCSAPI_CODEX_PROXY 覆盖）
+const CODEX_DEFAULT_PROXY = process.env.ZZCSAPI_CODEX_PROXY || 'http://host.docker.internal:7897';
 
 function codexJwtPayload(t) {
   try {
@@ -2997,9 +3036,28 @@ async function codexEnsureToken(ch) {
   ch.codex = {
     accessToken: j.access_token,
     accountId,
+    email: payload.email || '',
     expiresAt: now + (Number(j.expires_in) || 3600) * 1000,
   };
   return ch.codex;
+}
+
+// 拉取订阅可用模型列表（codex CLI 同款端点；形状防御性解析）
+async function codexFetchModels(def, acct, timeoutMs) {
+  const headers = {
+    'Authorization': `Bearer ${acct.accessToken}`,
+    'OpenAI-Beta': 'responses=experimental',
+    'originator': 'codex_cli_rs',
+    'User-Agent': 'codex_cli_rs/0.20.0 (Windows NT 10.0; x64)',
+  };
+  if (acct.accountId) headers['chatgpt-account-id'] = acct.accountId;
+  const url = (def.baseUrl || CODEX_DEFAULT_BASE) + '/models?client_version=0.20.0';
+  const out = await wbCurlRequest('GET', url, headers, null, timeoutMs || 15000, def.proxy);
+  if (!out.body) return [];
+  const j = safeJson(out.body);
+  if (!j) return [];
+  const arr = Array.isArray(j) ? j : (j.models || j.data || []);
+  return arr.map((m) => m && (m.slug || m.id || m.name)).filter(Boolean);
 }
 
 // chat.completions messages → Responses API { instructions, input }

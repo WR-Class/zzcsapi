@@ -653,6 +653,7 @@
     <div class="page-acts">
       <button id="btn-recheck" class="btn"><span data-ico="refresh"></span>立即探测全部</button>
       <button id="btn-test-model" class="btn">🧪 测试模型</button>
+      <button id="btn-codex-import" class="btn" title="粘贴 ChatGPT 订阅的 refresh token（rt.1. 开头），自动完成换令牌/拉模型/建渠道">⚡ 导入 codex RT</button>
       <button id="btn-add" class="btn primary">＋ 添加渠道</button>
     </div>
   </div>
@@ -2076,6 +2077,24 @@ function openModal(ch) {
 
 $('#btn-cancel').onclick = $('#btn-x').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
+
+/* codex 一键导入：粘贴 RT → 服务端自动换令牌/拉模型/建渠道（sub2api「手动导入 rt」同款） */
+$('#btn-codex-import').onclick = async () => {
+  const rt = prompt('粘贴 ChatGPT 订阅的 refresh token（rt.1. 开头）\n\n注意：RT 一次性轮转——粘贴后不要再把同一份导入别的工具，否则两边互相顶掉');
+  if (!rt || !rt.trim()) return;
+  const btn = $('#btn-codex-import');
+  btn.disabled = true; btn.textContent = '⏳ 导入中…';
+  try {
+    const r = await api('/admin/api/codex-import', { method: 'POST', body: JSON.stringify({ rt: rt.trim() }) });
+    if (r.ok) {
+      toast(`✓ 已导入 ${r.id}（${r.name}）· ${r.models.length} 个模型${r.rotated ? ' · RT 已轮转存新值' : ''}`);
+      refresh();
+    } else {
+      alert('导入失败：' + (r.error || '未知错误'));
+    }
+  } catch (e) { alert('导入失败：' + (e.message || e)); }
+  btn.disabled = false; btn.textContent = '⚡ 导入 codex RT';
+};
 
 /* 协议切换：notion/arena/notion-agent/workbuddy/codex 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
 const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com', workbuddy: 'https://www.workbuddy.ai/v2', codex: 'https://chatgpt.com/backend-api/codex' };
