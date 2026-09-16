@@ -1000,7 +1000,7 @@ function renderChannels(data) {
     const quotaBox = ch.protocol === 'codex' ? (() => {
       const q = ch.codexQuota;
       const winBar = (label, w) => {
-        if (!w) return '';
+        if (!w) return `<div class="meta-row" style="margin:2px 0 0"><span class="m" style="color:var(--tx3);font-size:11px">${label} <b>—</b>（该计划未提供此窗口）</span></div>`;
         const pct = Math.min(100, Math.round(w.usedPercent));
         const resetIn = w.resetAfterSec > 0 ? (w.resetAfterSec >= 86400 ? (w.resetAfterSec / 86400).toFixed(1) + '天' : w.resetAfterSec >= 3600 ? (w.resetAfterSec / 3600).toFixed(1) + '小时' : Math.round(w.resetAfterSec / 60) + '分钟') : '—';
         const color = pct >= 95 ? 'var(--red)' : pct >= 70 ? 'var(--amber,#e6a23c)' : 'var(--green)';
@@ -1014,7 +1014,6 @@ function renderChannels(data) {
       return `<div class="quota-zone" style="margin-top:4px">
         ${winBar('5小时窗口', q.primary5h)}
         ${winBar('每周窗口', q.secondary7d)}
-        ${!q.primary5h && !q.secondary7d ? '<div class="meta-row" style="margin:0"><span class="m">无窗口数据</span></div>' : ''}
         <div class="meta-row" style="margin:2px 0 0"><span class="m" style="font-size:10px">${escapeHtml(q.planType || '')}${q.limitReached ? ' · <b style="color:var(--red)">限额中</b>' : ''} · 更新 ${when}</span></div>
       </div>`;
     })() : '';
