@@ -358,7 +358,7 @@ function aggregateModels(protocol) {
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion/arena 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
-    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent'];
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
@@ -441,6 +441,26 @@ async function probeChannel(ch) {
       ch.status = 'down';
       ch.consecutiveFail++;
       ch.lastError = 'notion: ' + (err.message || err);
+      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+    }
+    return;
+  }
+  // WorkBuddy 国际版反代：无 /models 端点，探测走一次真实轻量聊天（免费 deepseek-v4.1-flash）
+  if ((ch.def.protocol || 'openai') === 'workbuddy') {
+    const t0 = Date.now();
+    try {
+      const probe = await workbuddyChatProbe(ch.def, HEALTH.timeoutMs || 15000);
+      if (!probe.ok) throw new Error(probe.error || 'probe failed');
+      // 无 /models 端点 → 模型列表直接用 def.models 的 upstream 值（用户配置的别名映射）
+      ch.models = Object.values(ch.def.models || {}).filter(Boolean);
+      ch.latencyMs = Date.now() - t0;
+      ch.lastCheck = Date.now();
+      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+      ch.status = 'ok';
+    } catch (err) {
+      ch.status = 'down';
+      ch.consecutiveFail++;
+      ch.lastError = 'workbuddy: ' + (err.message || err);
       ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
     }
     return;
@@ -554,9 +574,24 @@ async function probeDef(def, timeoutMs) {
       return { ok: false, status: err.status || 0, error: 'notion: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
   }
+  // WorkBuddy 国际版反代：无 /models 端点，探测走真实轻量聊天
+  if ((def.protocol || 'openai') === 'workbuddy') {
+    const t0 = Date.now();
+    try {
+      const r = await workbuddyChatProbe(def, timeoutMs || 15000);
+      if (!r.ok) throw new Error(r.error || 'probe failed');
+      const models = Object.values(def.models || {}).filter(Boolean);
+      return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { note: 'workbuddy 无 /models 端点，模型列表来自别名配置' } };
+    } catch (err) {
+      return { ok: false, status: err.status || 0, error: 'workbuddy: ' + (err.message || err), latencyMs: Date.now() - t0 };
+    }
+  }
   // 常见配置错误提示：域名是 notion/arena 但协议没选对 → 直接给出可读指引
   {
     const host = String((def || {}).baseUrl || '').toLowerCase();
+    if (/workbuddy\.ai/.test(host) && (def.protocol || 'openai') !== 'workbuddy') {
+      return { ok: false, status: 0, error: '检测到 workbuddy.ai 域名但协议不是 workbuddy——请把「协议」下拉框改成 workbuddy（openai 协议的 /models 探测对 workbuddy 无效，且该接口只支持流式）', latencyMs: 0 };
+    }
     if (/notion\.(so|com)/.test(host)) {
       return { ok: false, status: 0, error: '检测到 notion 域名但协议不是 notion——请把「协议」下拉框改成 notion（openai 协议的 /models 探测对 notion 无效）', latencyMs: 0 };
     }
@@ -620,6 +655,84 @@ function sendJson(res, code, obj) { const body = JSON.stringify(obj); res.writeH
 function unauthorized(res, kind) { sendJson(res, 401, { error: { message: `${kind} key required` } }); }
 function upstreamErrorPayload(status, msg) { return { error: { message: msg, type: 'upstream_error', code: status } }; }
 function safeJson(t) { try { return JSON.parse(t); } catch { return null; } }
+
+// WorkBuddy 专用 curl 请求：该上游对 Node/undici TLS 指纹 ECONNRESET，必须走 curl 子进程。
+// 与 notionCurlRequest 同构：body 写临时文件避免转义，stdout 全量缓冲（SSE 短文本够用）。
+// 返回 {status, body, error}；status>0 且 body 非空时为成功响应
+function wbCurlRequest(method, url, headers, bodyStr, timeoutMs) {
+  return new Promise((resolve) => {
+    const os = require('os');
+    const fsSync = require('fs');
+    const pathSync = require('path');
+    const bodyFile = pathSync.join(os.tmpdir(), `zzwb_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+    let written = false;
+    try { fsSync.writeFileSync(bodyFile, bodyStr || '', 'utf8'); written = true; } catch {}
+    const args = ['-sS', '-N', '-X', String(method).toUpperCase(), '--max-time', String(Math.max(1, Math.floor((timeoutMs || 120000) / 1000)))];
+    for (const [k, v] of Object.entries(headers || {})) args.push('-H', `${k}: ${v}`);
+    if (written) args.push('--data', '@' + bodyFile);
+    args.push('-w', '\n__ZZCODE__%{http_code}');
+    args.push(String(url));
+    const bin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+    const child = spawn(bin, args, { windowsHide: true });
+    let stdout = Buffer.alloc(0);
+    let stderr = '';
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
+      resolve({ status: 0, body: '', error: 'curl timeout' });
+    }, (timeoutMs || 120000) + 5000);
+    child.stdout.on('data', (c) => { stdout = Buffer.concat([stdout, c]); });
+    child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
+      const text = stdout.toString('utf8');
+      const m = text.match(/__ZZCODE__(\d+)\s*$/);
+      const body = m ? text.slice(0, text.lastIndexOf('__ZZCODE__')).replace(/\n$/, '') : text;
+      const status = m ? Number(m[1]) : (code === 0 ? 200 : 0);
+      if (code !== 0 && !body) { resolve({ status: 0, body: '', error: `curl exit ${code}: ${stderr.slice(0, 200)}` }); return; }
+      resolve({ status, body, error: null });
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
+      resolve({ status: 0, body: '', error: 'curl spawn: ' + err.message });
+    });
+  });
+}
+
+// WorkBuddy 探测：/v2 下没有 /models 端点（404），只能走一次真实轻量聊天。
+// 用 def.models 里第一个 upstream 模型（通常是 deepseek-v4.1-flash），
+// system+user、max_tokens=1、stream=true，读到首个 SSE chunk 即判活。
+// 注意：必须走 curl 子进程——该上游对 Node/undici 的 TLS 指纹直接 ECONNRESET。
+async function workbuddyChatProbe(def, timeoutMs) {
+  const t0 = Date.now();
+  const model = (Object.values(def.models || {})[0]) || 'deepseek-v4.1-flash';
+  const bodyStr = JSON.stringify({
+    model,
+    messages: [
+      { role: 'system', content: 'You are a helpful assistant.' },
+      { role: 'user', content: 'ping' },
+    ],
+    stream: true,
+    max_tokens: 1,
+  });
+  const out = await wbCurlRequest('POST', joinUrl(def.baseUrl, 'chat/completions'), {
+    'Content-Type': 'application/json', 'Authorization': `Bearer ${def.apiKey}`,
+  }, bodyStr, timeoutMs || 15000);
+  if (out.error || !out.body) {
+    return { ok: false, error: out.error || 'empty body', latencyMs: Date.now() - t0, status: out.status || 0 };
+  }
+  const text = out.body;
+  if (text.startsWith('{')) {
+    const j = safeJson(text);
+    return { ok: false, error: (j && (j.msg || (j.error && j.error.message))) || text.slice(0, 120) || 'json error', latencyMs: Date.now() - t0, status: out.status };
+  }
+  if (!/^data:/m.test(text)) {
+    return { ok: false, error: 'non-SSE response', latencyMs: Date.now() - t0, status: out.status };
+  }
+  return { ok: true, latencyMs: Date.now() - t0, status: 200 };
+}
 
 // ─────────────────────────── Anthropic ↔ OpenAI 转换 ───────────────────────────
 // 极简适配。功能：
@@ -1160,7 +1273,7 @@ function validateChannelDef(def) {
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent|workbuddy';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   return null;
 }
@@ -1499,6 +1612,43 @@ async function handleAdminApi(req, res, url) {
           });
           continue;
         }
+        // WorkBuddy 渠道：只支持流式 + 首条必须 system；走 curl 子进程（TLS 指纹绕过）并聚合全文
+        if (ch.def.protocol === 'workbuddy') {
+          const tmo = Math.min(60000, Number(body.timeoutMs) || 30000);
+          const wbBody = JSON.stringify({
+            model: c.upstream,
+            messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: prompt }],
+            stream: true,
+          });
+          const out = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'chat/completions'), { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }, wbBody, tmo);
+          ttfb = Date.now() - t0;
+          let reply = '', wbErr = '';
+          const wbStatus = out.status || 0;
+          if (out.error || !out.body) {
+            wbErr = out.error || 'empty body';
+          } else if (out.body.trim().startsWith('{')) {
+            const j = safeJson(out.body);
+            wbErr = (j && (j.msg || (j.error && j.error.message))) || out.body.slice(0, 150) || 'json error';
+          } else {
+            for (const ln of out.body.split('\n')) {
+              const s = ln.trim(); if (!s.startsWith('data:')) continue;
+              const d = s.slice(5).trim(); if (d === '[DONE]') continue;
+              try { const j = JSON.parse(d); const dl = j.choices?.[0]?.delta?.content || ''; if (dl) reply += dl; } catch {}
+            }
+          }
+          const wbOk = !wbErr && !!reply.trim();
+          if (wbOk) {
+            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            if (ch.status !== 'ok') ch.status = 'ok';
+            ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+            recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
+          } else {
+            ch.consecutiveFail++; ch.lastError = 'workbuddy: ' + String(wbErr || 'empty reply').slice(0, 150);
+            ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+          }
+          results.push({ channelId: c.channelId, ok: wbOk, status: wbStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: wbOk ? undefined : (wbErr || 'empty reply') });
+          continue;
+        }
         // 走 dispatchRequest 复用出站请求构造
         // 简化：自己拼一个最小 chat 请求
         const target = ch.def.protocol === 'anthropic'
@@ -1639,6 +1789,9 @@ async function handleOpenAIRequest(req, res, url) {
   // notion-agent（官方 Agent API）兜底：消耗 credits，放链尾仅当逆向全挂时接住
   const agentCands = channelsServing(requested, 'notion-agent');
   for (const gc of agentCands) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
+  // workbuddy（国际版反代）兜底：OpenAI 兼容流式，免费 deepseek-v4.1-flash
+  const wbCands = channelsServing(requested, 'workbuddy');
+  for (const wc of wbCands) if (!candidates.some((c) => c.channelId === wc.channelId)) candidates.push(wc);
   if (candidates.length === 0) {
     return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"`));
   }
@@ -1905,7 +2058,11 @@ async function tryChannel(opts) {
     // Arena.ai 协议渠道：宿主机 agent / 容器 spawn
     if ((ch.def.protocol || 'openai') === 'arena') {
       return await tryArenaChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
-  }
+    }
+    // WorkBuddy 国际版反代：只支持流式 + 首条必须 system，OpenAI 兼容 SSE
+    if ((ch.def.protocol || 'openai') === 'workbuddy') {
+      return await tryWorkbuddyChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+    }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
   const headers = buildOutgoingHeaders(ch);
@@ -2580,6 +2737,135 @@ function compactMessagesForNotion(messages, charLimit) {
     console.log(`[notion] 输入压缩: ${total} → ~${LIMIT - budget} 字符（丢弃 ${dropped} 条旧消息）`);
   }
   return [...systems, ...keptHead, ...tail];
+}
+
+// ─────────────────────────── WorkBuddy 国际版反代 ───────────────────────────
+// workbuddy.ai 的 /v2/chat/completions 与 OpenAI SSE 完全兼容，但有三条硬性规则：
+//   1) 仅支持 stream:true（非流请求返回 11101）
+//   2) messages[0] 必须是 system（否则 11128）
+//   3) 无 /models 端点（探测走真实轻量调用）
+// 处理策略：上游永远流式；客户端要非流则网关在内存里聚合后再一次性回包。
+async function tryWorkbuddyChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel, hasMoreCandidates } = opts;
+  const t0 = Date.now();
+  const timeoutMs = ch.def.timeoutMs || 120_000;
+  const displayModel = requestedModel || candidate.upstream;
+
+  // 规则 2：首条必须 system（不存在则在头部注入）
+  const inMsgs = Array.isArray(body.messages) ? body.messages : [];
+  const outMsgs = (inMsgs.length && inMsgs[0].role === 'system')
+    ? inMsgs
+    : [{ role: 'system', content: 'You are a helpful assistant.' }, ...inMsgs];
+  // 规则 1：上游强制流式
+  const upstreamBody = { ...body, model: candidate.upstream, messages: outMsgs, stream: true };
+  const bodyStr = JSON.stringify(upstreamBody);
+  const target = joinUrl(ch.def.baseUrl, 'chat/completions');
+  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` };
+
+  // 请求必须走 curl 子进程：该上游对 Node/undici 的 TLS 指纹直接 ECONNRESET（实测），
+  // curl（Win Schannel / Linux OpenSSL）可过。代价是 SSE 全量缓冲后再分发——
+  // workbuddy 的 deepseek-v4.1-flash 回复快（秒级），可接受。
+  const out = await wbCurlRequest('POST', target, headers, bodyStr, timeoutMs);
+  if (out.error || !out.body) {
+    recordFailure(ch, 'workbuddy curl: ' + (out.error || 'empty body'));
+    return 'workbuddy curl: ' + (out.error || 'empty body');
+  }
+  const sseText = out.body;
+
+  // JSON 错误体（{code,msg}）或 4xx：按原样回传 + 记录
+  if (sseText.trim().startsWith('{') || (out.status && out.status >= 400)) {
+    const j = safeJson(sseText);
+    const msg = (j && (j.msg || (j.error && j.error.message))) || sseText.slice(0, 160);
+    recordFailure(ch, `workbuddy ${out.status}: ` + msg);
+    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 408, 429].includes(out.status)) {
+      res.writeHead(out.status, { 'Content-Type': 'application/json' });
+      res.end(sseText);
+      return 'fatal_client';
+    }
+    return `workbuddy ${out.status}: ${msg}`;
+  }
+  if (!/^data:/m.test(sseText)) {
+    recordFailure(ch, 'workbuddy: non-SSE response');
+    return 'workbuddy: non-SSE response';
+  }
+
+  // 成功
+  ch.consecutiveFail = 0;
+  ch.cooldownUntil = 0;
+  ch.lastError = null;
+  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  ch.latencyMs = Date.now() - t0;
+
+  const respId = 'chatcmpl-wb-' + Date.now().toString(36);
+  let fullText = '';
+  let usageOut = null;
+  let lastFinish = 'stop';
+  // SSE 全量文本逐行解析（data 块可能同帧粘连，按 \n 切即可）
+  const sseLines = [];
+  for (const ln of sseText.split('\n')) {
+    const s = ln.trim();
+    if (!s.startsWith('data:')) continue;
+    sseLines.push(s);
+    const d = s.slice(5).trim();
+    if (d === '[DONE]') continue;
+    try {
+      const j = JSON.parse(d);
+      const delta = j.choices?.[0]?.delta?.content || '';
+      if (delta) fullText += delta;
+      if (j.usage) usageOut = j.usage;
+      const fr = j.choices?.[0]?.finish_reason;
+      if (fr) lastFinish = fr;
+    } catch {}
+  }
+  if (!sseLines.length) {
+    recordFailure(ch, 'workbuddy stream: empty');
+    return 'stream empty';
+  }
+
+  if (isStream) {
+    // workbuddy 就是 OpenAI SSE 格式：通用路径直接转发；anthropic 入口经 onStreamChunk 转换
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-ZZCSAPI-Channel': candidate.channelId,
+    });
+    for (const s of sseLines) {
+      if (opts.onStreamChunk) { const o = opts.onStreamChunk(s + '\n', candidate); if (o) res.write(o); }
+      else res.write(s + '\n\n');
+    }
+    res.end();
+    recordUsage({
+      model: displayModel, channelId: candidate.channelId, kind: opts.kind,
+      inputTokens: estimateTokens(messagesText(body && body.messages)),
+      outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+    });
+    return 'success';
+  }
+
+  // 非流式：拼成 OpenAI chat.completion 一次性回包
+  if (!fullText.trim()) {
+    recordFailure(ch, 'workbuddy stream: empty content');
+    return 'stream empty content';
+  }
+  const assembled = {
+    id: respId,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: displayModel,
+    choices: [{ index: 0, message: { role: 'assistant', content: fullText }, finish_reason: lastFinish || 'stop' }],
+    usage: usageOut || { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(fullText), total_tokens: 0 },
+  };
+  if (!usageOut) assembled.usage.total_tokens = assembled.usage.prompt_tokens + assembled.usage.completion_tokens;
+  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+  res.end(JSON.stringify(assembled));
+  recordUsage({
+    model: displayModel, channelId: candidate.channelId, kind: opts.kind,
+    inputTokens: assembled.usage.prompt_tokens,
+    outputTokens: assembled.usage.completion_tokens, ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+  });
+  return 'success';
 }
 
 async function tryNotionChannel(opts) {

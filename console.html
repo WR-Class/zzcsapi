@@ -782,6 +782,7 @@
           <option value="notion">notion（Notion AI 逆向）</option>
           <option value="arena">arena（Arena.ai 逆向）</option>
           <option value="notion-agent">notion-agent（Notion 官方 Agent API）</option>
+          <option value="workbuddy">workbuddy（WorkBuddy 国际版反代）</option>
         </select>
       </div>
       <div class="field">
@@ -797,7 +798,7 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">openai: https://host/v1 · notion: https://app.notion.com · notion-agent: https://api.notion.com · arena: https://arena.ai</span></label>
+      <label>Base URL <span class="help">openai: https://host/v1 · notion: https://app.notion.com · notion-agent: https://api.notion.com · arena: https://arena.ai · workbuddy: https://www.workbuddy.ai/v2</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
     </div>
     <div class="field">
@@ -2070,8 +2071,8 @@ function openModal(ch) {
 $('#btn-cancel').onclick = $('#btn-x').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
 
-/* 协议切换：notion/arena/notion-agent 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
-const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com' };
+/* 协议切换：notion/arena/notion-agent/workbuddy 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
+const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com', workbuddy: 'https://www.workbuddy.ai/v2' };
 $('#f-protocol').addEventListener('change', () => {
   const proto = $('#f-protocol').value;
   const cur = $('#f-baseUrl').value.trim();
@@ -2081,7 +2082,8 @@ $('#f-protocol').addEventListener('change', () => {
     ? 'notion 协议：浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'
     : (proto === 'arena' ? 'arena 协议：留空由宿主机 agent 管理（或粘贴浏览器 cookie）'
       : (proto === 'notion-agent' ? 'notion-agent 协议：填开发者门户连接的集成令牌（ntn_ 开头；连接需勾选「查看会话并与代理交互」能力）'
-        : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值'));
+        : (proto === 'workbuddy' ? 'workbuddy 协议：填 CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'
+          : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值')));
   renderModelsEditor();
 });
 
