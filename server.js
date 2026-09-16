@@ -286,6 +286,38 @@ function buildAliasMap(models) {
 for (const ch of config.channels) upsertChannel(ch);
 
 // ─────────────────────────── 模型索引 ───────────────────────────
+// 别名近似建议：调用方用了已改名/手误的模型名时，提示当前真实可用的别名
+function suggestAliases(model, limit) {
+  const want = String(model || '').toLowerCase().trim();
+  if (!want) return [];
+  const all = new Set();
+  for (const ch of channels.values()) {
+    if (!ch.def.enabled) continue;
+    for (const a of ch.aliasMap.keys()) all.add(a);
+    if (ch.def.autoAlias !== false) for (const m of ch.models || []) all.add(String(m).toLowerCase());
+  }
+  // 去掉纯分隔符差异后比较，命中 -wr/_wr 之类的改名/手误
+  const norm = (s) => s.replace(/[-_.\s]/g, '');
+  const nw = norm(want);
+  const scored = [];
+  for (const a of all) {
+    const na = norm(a);
+    let score = 0;
+    if (na === nw) score = 100;                                        // 仅分隔符不同
+    else if (na.includes(nw) || nw.includes(na)) score = 80;            // 包含关系
+    else {
+      // 最长公共前后缀（处理前缀/后缀增删）
+      let pre = 0; while (pre < na.length && pre < nw.length && na[pre] === nw[pre]) pre++;
+      let suf = 0; while (suf < na.length - pre && suf < nw.length - pre && na[na.length - 1 - suf] === nw[nw.length - 1 - suf]) suf++;
+      const overlap = pre + suf;
+      if (overlap >= Math.min(na.length, nw.length) * 0.6) score = 60 + overlap;
+    }
+    if (score > 0) scored.push({ a, score });
+  }
+  scored.sort((x, y) => y.score - x.score);
+  return scored.slice(0, limit || 3).map((x) => x.a);
+}
+
 function channelsServing(model, protocol) {
   const want = String(model || '').toLowerCase().trim();
   if (!want) return [];
@@ -2002,7 +2034,9 @@ async function handleOpenAIRequest(req, res, url) {
   const cxCands = channelsServing(requested, 'codex');
   for (const xc of cxCands) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
   if (candidates.length === 0) {
-    return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"`));
+    const sug = suggestAliases(requested);
+    const hint = sug.length ? `；你是不是想调：${sug.join(' / ')}` : '；调 GET /v1/models 可查看当前所有可用模型名';
+    return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"${hint}`));
   }
   return dispatchRequest({
     kind: 'openai',
