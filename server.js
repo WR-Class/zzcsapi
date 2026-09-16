@@ -1742,7 +1742,7 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena', 'workbuddy', 'codex'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena', 'workbuddy', 'codex', 'prism'].includes(body.protocol) ? body.protocol : 'openai',
     };
     const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
     return sendJson(res, 200, r);
@@ -1920,6 +1920,44 @@ async function handleAdminApi(req, res, url) {
             ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
           }
           results.push({ channelId: c.channelId, ok: cxOk, status: cxStatus, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: cxOk ? undefined : (cxErr || 'empty reply') });
+          continue;
+        }
+        if (ch.def.protocol === 'prism') {
+          // prism 没有 /v1/chat/completions，必须走 8 步 sandbox 握手 + response_with_tools。
+          // 首轮要起 sandbox（实测 20~200s），所以超时给足。
+          const tmo = Math.min(300000, Number(body.timeoutMs) || 240000);
+          let pzErr = '', reply = '', pzStatus = 200;
+          try {
+            const r = await prism.prismChatOnce({ wbCurlRequest }, ch, {
+              model: c.upstream,
+              prompt,
+              timeoutMs: tmo,
+              effort: ch.def.prismEffort || 'low',
+            });
+            if (!r.ok) {
+              pzErr = r.error || 'unknown';
+              pzStatus = 0;
+              prism.prismDropSession(ch.def.id);
+            } else {
+              reply = r.text;
+            }
+          } catch (e) {
+            pzErr = String(e.message || e);
+            pzStatus = 0;
+            prism.prismDropSession(ch.def.id);
+          }
+          ttfb = Date.now() - t0;
+          const pzOk = !pzErr && !!reply.trim();
+          if (pzOk) {
+            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            if (ch.status !== 'ok') ch.status = 'ok';
+            ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+            recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
+          } else {
+            // prism 上游很抖（5xx/断连常见），测试失败不重罚：只记 lastError，不进长冷却
+            ch.lastError = 'prism: ' + String(pzErr || 'empty reply').slice(0, 150);
+          }
+          results.push({ channelId: c.channelId, ok: pzOk, status: pzStatus, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: pzOk ? undefined : (pzErr || 'empty reply') });
           continue;
         }
         // 走 dispatchRequest 复用出站请求构造

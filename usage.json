@@ -1,9 +1,9 @@
 {
  "total": {
-  "requests": 8283,
-  "errors": 1291,
-  "inputTokens": 341135406,
-  "outputTokens": 5880561
+  "requests": 8315,
+  "errors": 1292,
+  "inputTokens": 344576593,
+  "outputTokens": 5893797
  },
  "byModel": {
   "glm-5.2": {
@@ -13,10 +13,10 @@
    "outputTokens": 12
   },
   "gpt-5.6-sol": {
-   "requests": 43,
+   "requests": 46,
    "errors": 0,
-   "inputTokens": 864967,
-   "outputTokens": 1330
+   "inputTokens": 864994,
+   "outputTokens": 1380
   },
   "deepseek-v4pro": {
    "requests": 1,
@@ -49,8 +49,8 @@
    "outputTokens": 19833
   },
   "—": {
-   "requests": 1291,
-   "errors": 1291,
+   "requests": 1292,
+   "errors": 1292,
    "inputTokens": 0,
    "outputTokens": 0
   },
@@ -313,10 +313,10 @@
    "outputTokens": 30
   },
   "wb-deepseek-v4.1-flash": {
-   "requests": 275,
+   "requests": 303,
    "errors": 0,
-   "inputTokens": 44137988,
-   "outputTokens": 141071
+   "inputTokens": 47579148,
+   "outputTokens": 154257
   },
   "deepseek-v4.1-flash-wr": {
    "requests": 2,
@@ -489,10 +489,10 @@
    "outputTokens": 825
   },
   "workbuddy": {
-   "requests": 291,
+   "requests": 319,
    "errors": 9,
-   "inputTokens": 44138069,
-   "outputTokens": 141112
+   "inputTokens": 47579229,
+   "outputTokens": 154298
   },
   "codex2": {
    "requests": 1,
@@ -507,10 +507,10 @@
    "outputTokens": 0
   },
   "prism1": {
-   "requests": 9,
-   "errors": 3,
-   "inputTokens": 116,
-   "outputTokens": 73
+   "requests": 13,
+   "errors": 4,
+   "inputTokens": 143,
+   "outputTokens": 123
   }
  },
  "byDay": {
@@ -587,343 +587,13 @@
    "outputTokens": 2112753
   },
   "2026-09-16": {
-   "requests": 622,
-   "errors": 76,
-   "inputTokens": 58483794,
-   "outputTokens": 238329
+   "requests": 654,
+   "errors": 77,
+   "inputTokens": 61924981,
+   "outputTokens": 251565
   }
  },
  "recent": [
-  {
-   "ts": 1789474074605,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 61943,
-   "out": 92,
-   "ok": true,
-   "ms": 25519
-  },
-  {
-   "ts": 1789474097863,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62061,
-   "out": 0,
-   "ok": true,
-   "ms": 22871
-  },
-  {
-   "ts": 1789474139371,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62061,
-   "out": 30,
-   "ok": true,
-   "ms": 41010
-  },
-  {
-   "ts": 1789474165905,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62707,
-   "out": 0,
-   "ok": true,
-   "ms": 26471
-  },
-  {
-   "ts": 1789474263949,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62707,
-   "out": 185,
-   "ok": true,
-   "ms": 97490
-  },
-  {
-   "ts": 1789474301796,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62780,
-   "out": 19,
-   "ok": true,
-   "ms": 37764
-  },
-  {
-   "ts": 1789474407198,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62811,
-   "out": 13,
-   "ok": true,
-   "ms": 105319
-  },
-  {
-   "ts": 1789474440125,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62841,
-   "out": 43,
-   "ok": true,
-   "ms": 32851
-  },
-  {
-   "ts": 1789475000442,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789475124051,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789475248161,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789475354393,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62860,
-   "out": 51,
-   "ok": true,
-   "ms": 97689
-  },
-  {
-   "ts": 1789475476119,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789475583270,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 62971,
-   "out": 70,
-   "ok": true,
-   "ms": 103745
-  },
-  {
-   "ts": 1789475677519,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 63043,
-   "out": 0,
-   "ok": true,
-   "ms": 94189
-  },
-  {
-   "ts": 1789475795084,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 63043,
-   "out": 146,
-   "ok": true,
-   "ms": 116995
-  },
-  {
-   "ts": 1789475917737,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 63115,
-   "out": 765,
-   "ok": true,
-   "ms": 122589
-  },
-  {
-   "ts": 1789476139196,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789476262952,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789476387048,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789476514438,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789477313987,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789477435845,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 63845,
-   "out": 0,
-   "ok": true,
-   "ms": 118286
-  },
-  {
-   "ts": 1789477539387,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 63845,
-   "out": 0,
-   "ok": true,
-   "ms": 99857
-  },
-  {
-   "ts": 1789477666970,
-   "model": "—",
-   "channelId": "hcnsec",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "This operation was aborted"
-  },
-  {
-   "ts": 1789478485730,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 63875,
-   "out": 1065,
-   "ok": true,
-   "ms": 136687
-  },
-  {
-   "ts": 1789478941040,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 64407,
-   "out": 644,
-   "ok": true,
-   "ms": 114385
-  },
-  {
-   "ts": 1789479103720,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 64514,
-   "out": 122,
-   "ok": true,
-   "ms": 125974
-  },
-  {
-   "ts": 1789479209210,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 65051,
-   "out": 117,
-   "ok": true,
-   "ms": 95570
-  },
-  {
-   "ts": 1789479299464,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 66028,
-   "out": 0,
-   "ok": true,
-   "ms": 81948
-  },
-  {
-   "ts": 1789479379277,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 66028,
-   "out": 29,
-   "ok": true,
-   "ms": 79278
-  },
-  {
-   "ts": 1789479481306,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 66073,
-   "out": 10,
-   "ok": true,
-   "ms": 101255
-  },
   {
    "ts": 1789479576614,
    "model": "deepseek-v4-pro",
@@ -8764,6 +8434,327 @@
    "out": 461,
    "ok": true,
    "ms": 5056
+  },
+  {
+   "ts": 1789568467169,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 208887,
+   "out": 879,
+   "ok": true,
+   "ms": 8022
+  },
+  {
+   "ts": 1789568494706,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 146501,
+   "out": 5068,
+   "ok": true,
+   "ms": 25237
+  },
+  {
+   "ts": 1789568502155,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 105107,
+   "out": 610,
+   "ok": true,
+   "ms": 7195
+  },
+  {
+   "ts": 1789568526126,
+   "model": "—",
+   "channelId": "prism1",
+   "kind": "error",
+   "in": 0,
+   "out": 0,
+   "ok": false,
+   "ms": 0,
+   "note": "prism start: HTTP 0 curl exit 56: curl: (56) OpenSSL SSL_read: OpenSSL/3.5.6: error:0A000126:SSL routines::unexpected eof while reading, errno 0\n"
+  },
+  {
+   "ts": 1789570030633,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 105834,
+   "out": 384,
+   "ok": true,
+   "ms": 4176
+  },
+  {
+   "ts": 1789570037319,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 106476,
+   "out": 465,
+   "ok": true,
+   "ms": 4730
+  },
+  {
+   "ts": 1789570067212,
+   "model": "gpt-5.6-sol",
+   "channelId": "prism1",
+   "kind": "openai",
+   "in": 6,
+   "out": 3,
+   "ok": true,
+   "ms": 28255
+  },
+  {
+   "ts": 1789570072286,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 107276,
+   "out": 327,
+   "ok": true,
+   "ms": 4772
+  },
+  {
+   "ts": 1789570168797,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 107639,
+   "out": 71,
+   "ok": true,
+   "ms": 4012
+  },
+  {
+   "ts": 1789570175485,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 111897,
+   "out": 109,
+   "ok": true,
+   "ms": 5122
+  },
+  {
+   "ts": 1789570195191,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 112071,
+   "out": 67,
+   "ok": true,
+   "ms": 4648
+  },
+  {
+   "ts": 1789570198643,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 116351,
+   "out": 104,
+   "ok": true,
+   "ms": 3349
+  },
+  {
+   "ts": 1789570206455,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 116480,
+   "out": 427,
+   "ok": true,
+   "ms": 7757
+  },
+  {
+   "ts": 1789570272421,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 117139,
+   "out": 223,
+   "ok": true,
+   "ms": 3940
+  },
+  {
+   "ts": 1789570277298,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 119380,
+   "out": 288,
+   "ok": true,
+   "ms": 4799
+  },
+  {
+   "ts": 1789570283925,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 119717,
+   "out": 81,
+   "ok": true,
+   "ms": 4774
+  },
+  {
+   "ts": 1789570289751,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 121078,
+   "out": 757,
+   "ok": true,
+   "ms": 5771
+  },
+  {
+   "ts": 1789570294184,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 121864,
+   "out": 196,
+   "ok": true,
+   "ms": 4197
+  },
+  {
+   "ts": 1789570300850,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 122089,
+   "out": 182,
+   "ok": true,
+   "ms": 6553
+  },
+  {
+   "ts": 1789570306975,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 122722,
+   "out": 183,
+   "ok": true,
+   "ms": 4407
+  },
+  {
+   "ts": 1789570312954,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 123478,
+   "out": 212,
+   "ok": true,
+   "ms": 4229
+  },
+  {
+   "ts": 1789570330473,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 123740,
+   "out": 296,
+   "ok": true,
+   "ms": 4028
+  },
+  {
+   "ts": 1789570357362,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 124117,
+   "out": 135,
+   "ok": true,
+   "ms": 4788
+  },
+  {
+   "ts": 1789570361262,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 124584,
+   "out": 197,
+   "ok": true,
+   "ms": 3847
+  },
+  {
+   "ts": 1789570365802,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 124811,
+   "out": 155,
+   "ok": true,
+   "ms": 4439
+  },
+  {
+   "ts": 1789570371735,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 125492,
+   "out": 307,
+   "ok": true,
+   "ms": 4223
+  },
+  {
+   "ts": 1789570416063,
+   "model": "gpt-5.6-sol",
+   "channelId": "prism1",
+   "kind": "test",
+   "in": 8,
+   "out": 12,
+   "ok": true,
+   "ms": 31350
+  },
+  {
+   "ts": 1789570420964,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 125903,
+   "out": 335,
+   "ok": true,
+   "ms": 4781
+  },
+  {
+   "ts": 1789570427325,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 126399,
+   "out": 322,
+   "ok": true,
+   "ms": 4303
+  },
+  {
+   "ts": 1789570435479,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 126843,
+   "out": 278,
+   "ok": true,
+   "ms": 4066
+  },
+  {
+   "ts": 1789570442314,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 127285,
+   "out": 528,
+   "ok": true,
+   "ms": 5020
+  },
+  {
+   "ts": 1789570455947,
+   "model": "gpt-5.6-sol",
+   "channelId": "prism1",
+   "kind": "openai",
+   "in": 13,
+   "out": 35,
+   "ok": true,
+   "ms": 11792
   }
  ]
 }

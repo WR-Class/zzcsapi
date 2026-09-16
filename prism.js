@@ -248,7 +248,9 @@ function prismBuildPrompt(messages) {
 /** 发起一轮，返回最终文本。内部含重试 + sandbox 失效重建 */
 async function prismChatOnce(io, ch, opts) {
   const { wbCurlRequest } = io;
-  const { model, prompt, timeoutMs, effort, log } = opts;
+  const { model, prompt, timeoutMs, effort } = opts;
+  // 调用方可能不传 log —— 给个空实现，避免 "log is not a function"
+  const log = typeof opts.log === 'function' ? opts.log : () => {};
   const cookie = prismCookie(ch.def);
   const proxy = ch.def.proxy;
   // bootstrap 本身可能耗 1~2 分钟（上游 sandbox 子系统慢），单独给预算
