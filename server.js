@@ -16,6 +16,7 @@ const notion = require('./notion.js');
 const notionAgent = require('./notion-agent.js');
 const arena = require('./arena.js');
 const toolEmu = require('./tool-emu.js');
+const prism = require('./prism.js');
 
 // 检测响应是否 Cloudflare WAF 拦截（JA3/TLS 指纹被识别为机器人）
 function isCloudflareBlock(status, body) {
@@ -401,8 +402,9 @@ function aggregateModels(protocol) {
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion/arena 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
-    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex'];
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex', 'prism'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
+
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
     // 探测到的真模型仅在 autoAlias 时算可路由
@@ -504,6 +506,26 @@ async function probeChannel(ch) {
       ch.status = 'down';
       ch.consecutiveFail++;
       ch.lastError = 'workbuddy: ' + (err.message || err);
+      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+    }
+    return;
+  }
+  // Prism（prism.openai.com）：探测 = 校验 cookie + 拉项目列表（不消耗模型额度）
+  if ((ch.def.protocol || 'openai') === 'prism') {
+    const t0 = Date.now();
+    try {
+      const pr = await prism.prismProbe({ wbCurlRequest }, ch.def, HEALTH.timeoutMs || 15000);
+      if (!pr.ok) throw new Error(pr.error || 'probe failed');
+      // 无 /models 端点 → 模型列表直接用 def.models 的 upstream 值（用户配置的别名映射）
+      ch.models = Object.values(ch.def.models || {}).filter(Boolean);
+      ch.latencyMs = Date.now() - t0;
+      ch.lastCheck = Date.now();
+      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+      ch.status = 'ok';
+    } catch (err) {
+      ch.status = 'down';
+      ch.consecutiveFail++;
+      ch.lastError = 'prism: ' + (err.message || err);
       ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
     }
     return;
@@ -649,6 +671,10 @@ async function probeDef(def, timeoutMs) {
       return { ok: false, status: err.status || 0, error: 'workbuddy: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
   }
+  // Prism（prism.openai.com）：探测 = 校验 cookie + 拉项目列表（不消耗模型额度）
+  if ((def.protocol || 'openai') === 'prism') {
+    return await prism.prismProbe({ wbCurlRequest }, def, timeoutMs || 15000);
+  }
   // Codex（ChatGPT 官方订阅）：探测 = 一次令牌刷新
   if ((def.protocol || 'openai') === 'codex') {
     const t0 = Date.now();
@@ -671,6 +697,9 @@ async function probeDef(def, timeoutMs) {
     const host = String((def || {}).baseUrl || '').toLowerCase();
     if (/chatgpt\.com/.test(host) && (def.protocol || 'openai') !== 'codex') {
       return { ok: false, status: 0, error: '检测到 chatgpt.com 域名但协议不是 codex——请把「协议」下拉框改成 codex（ChatGPT 订阅走 backend-api/codex，openai 协议的 /models 探测对它无效）', latencyMs: 0 };
+    }
+    if (/prism\.openai\.com/.test(host) && (def.protocol || 'openai') !== 'prism') {
+      return { ok: false, status: 0, error: '检测到 prism.openai.com 域名但协议不是 prism——请把「协议」下拉框改成 prism（prism 走 /api/llm/response_with_tools，且必须配代理，openai 协议的 /models 探测对它无效）', latencyMs: 0 };
     }
     if (/workbuddy\.ai/.test(host) && (def.protocol || 'openai') !== 'workbuddy') {
       return { ok: false, status: 0, error: '检测到 workbuddy.ai 域名但协议不是 workbuddy——请把「协议」下拉框改成 workbuddy（openai 协议的 /models 探测对 workbuddy 无效，且该接口只支持流式）', latencyMs: 0 };
@@ -1236,6 +1265,9 @@ function persistConfig() {
       accountId: ch.def.accountId || undefined,
       email: ch.def.email || undefined,
       expiresAt: ch.def.expiresAt || undefined,
+      // prism 专有：可选指定项目与推理档位
+      prismProjectId: ch.def.prismProjectId || undefined,
+      prismEffort: ch.def.prismEffort || undefined,
     })),
   };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(out, null, 2) + '\n', 'utf8');
@@ -1365,7 +1397,7 @@ function validateChannelDef(def) {
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent|workbuddy|codex';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex', 'prism'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent|workbuddy|codex|prism';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   return null;
 }
@@ -1580,6 +1612,9 @@ async function handleAdminApi(req, res, url) {
       autoAlias: body.autoAlias === true,
       models: body.models || {},
       proxy: body.proxy ? String(body.proxy) : undefined,
+      // prism 专有（可选）：指定项目 uuid 与推理档位 low|medium|high|xhigh
+      prismProjectId: body.prismProjectId ? String(body.prismProjectId) : undefined,
+      prismEffort: body.prismEffort ? String(body.prismEffort) : undefined,
     };
     const existed = channels.has(def.id);
     const ch = upsertChannel(def);
@@ -1732,7 +1767,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : channelsServing(model, 'codex')))))); // openai 优先，notion→arena→notion-agent→workbuddy→codex 逐级兜底
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : (channelsServing(model, 'codex').length ? channelsServing(model, 'codex') : channelsServing(model, 'prism'))))))); // openai 优先，notion→arena→notion-agent→workbuddy→codex→prism 逐级兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -2033,6 +2068,9 @@ async function handleOpenAIRequest(req, res, url) {
   // codex（ChatGPT 官方订阅反代）兜底
   const cxCands = channelsServing(requested, 'codex');
   for (const xc of cxCands) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
+  // prism（prism.openai.com 反代，gpt-5.6-sol）兜底：每轮要起 sandbox，放链尾
+  const pzCands = channelsServing(requested, 'prism');
+  for (const pc of pzCands) if (!candidates.some((c) => c.channelId === pc.channelId)) candidates.push(pc);
   if (candidates.length === 0) {
     const sug = suggestAliases(requested);
     const hint = sug.length ? `；你是不是想调：${sug.join(' / ')}` : '；调 GET /v1/models 可查看当前所有可用模型名';
@@ -2147,6 +2185,7 @@ async function handleAnthropicRequest(req, res, url) {
     for (const ac of channelsServing(requested, 'arena')) if (!candidates.some((c) => c.channelId === ac.channelId)) candidates.push(ac);
     for (const gc of channelsServing(requested, 'notion-agent')) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
     for (const xc of channelsServing(requested, 'codex')) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
+    for (const pc of channelsServing(requested, 'prism')) if (!candidates.some((c) => c.channelId === pc.channelId)) candidates.push(pc);
     if (candidates.length === 0) {
       return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
@@ -2216,6 +2255,8 @@ async function handleGeminiRequest(req, res, url) {
   for (const nc of channelsServing(model, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
   for (const ac of channelsServing(model, 'arena')) if (!candidates.some((c) => c.channelId === ac.channelId)) candidates.push(ac);
   for (const gc of channelsServing(model, 'notion-agent')) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
+  for (const xc of channelsServing(model, 'codex')) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
+  for (const pc of channelsServing(model, 'prism')) if (!candidates.some((c) => c.channelId === pc.channelId)) candidates.push(pc);
   if (candidates.length === 0) {
     return sendJson(res, 404, { error: { code: 404, message: `no channel for model "${model}"`, status: 'NOT_FOUND' } });
   }
@@ -2310,6 +2351,10 @@ async function tryChannel(opts) {
     // Codex（ChatGPT 官方订阅）：RT→AT 令牌管理 + Responses API，curl+代理传输
     if ((ch.def.protocol || 'openai') === 'codex') {
       return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+    }
+    // Prism（prism.openai.com）：cookie 鉴权 + sandbox agent harness，curl+代理传输
+    if ((ch.def.protocol || 'openai') === 'prism') {
+      return await tryPrismChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
     }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
@@ -3404,6 +3449,92 @@ async function tryCodexChannel(opts) {
     ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
   });
   return 'success';
+}
+
+// Prism 渠道：cookie 鉴权 + 8 步 sandbox 握手 + response_with_tools 起停轮询。
+// 注意：Prism 是「sandbox agent harness 包着通用 LLM」，首轮要 10~30s 起 sandbox。
+async function tryPrismChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel } = opts;
+  const t0 = Date.now();
+  // prism 首轮要起 sandbox（实测 5~90s 抖动）再跑 agent 回合，默认给 6 分钟
+  const timeoutMs = ch.def.timeoutMs || 360_000;
+  const displayModel = requestedModel || candidate.upstream;
+  // 单轮内重试：sandbox 失效/上游 5xx 时自动重建再试一次
+  let lastErr = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let r;
+    try {
+      r = await prism.prismChatOnce({ wbCurlRequest }, ch, {
+        model: candidate.upstream,
+        prompt: prism.prismBuildPrompt(body.messages),
+        timeoutMs,
+        effort: (body && (body.reasoning_effort || body.reasoningEffort)) || ch.def.prismEffort || 'low',
+        log: (m) => { if (process.env.ZZCSAPI_DEBUG) console.log('[' + ch.def.id + '] ' + m); },
+      });
+    } catch (err) {
+      lastErr = String(err.message || err);
+      prism.prismDropSession(ch.def.id);
+      continue;
+    }
+    if (r.ok) {
+      ch.consecutiveFail = 0;
+      ch.cooldownUntil = 0;
+      ch.lastError = null;
+      if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+      ch.latencyMs = Date.now() - t0;
+
+      const fullText = r.text;
+      const usageOut = {
+        prompt_tokens: estimateTokens(messagesText(body && body.messages)),
+        completion_tokens: estimateTokens(fullText),
+      };
+      usageOut.total_tokens = usageOut.prompt_tokens + usageOut.completion_tokens;
+      const respId = 'chatcmpl-prism-' + Date.now().toString(36);
+      const created = Math.floor(Date.now() / 1000);
+
+      if (isStream) {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+          'X-ZZCSAPI-Channel': candidate.channelId,
+        });
+        const mk = (delta, fr) => 'data: ' + JSON.stringify({ id: respId, object: 'chat.completion.chunk', created, model: displayModel, choices: [{ index: 0, delta, finish_reason: fr || null }] }) + '\n';
+        const emit = (line) => {
+          if (opts.onStreamChunk) { const o = opts.onStreamChunk(line, candidate); if (o) res.write(o); }
+          else res.write(line + '\n');
+        };
+        emit(mk({ role: 'assistant', content: '' }));
+        emit(mk({ content: fullText }));
+        emit(mk({}, 'stop'));
+        emit('data: [DONE]');
+        res.end();
+      } else {
+        const assembled = {
+          id: respId, object: 'chat.completion', created, model: displayModel,
+          choices: [{ index: 0, message: { role: 'assistant', content: fullText }, finish_reason: 'stop' }],
+          usage: usageOut,
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+        res.end(JSON.stringify(assembled));
+      }
+      recordUsage({
+        model: displayModel, channelId: candidate.channelId, kind: opts.kind,
+        inputTokens: usageOut.prompt_tokens, outputTokens: usageOut.completion_tokens,
+        ok: true, latencyMs: Date.now() - t0, realUsage: null,
+      });
+      if (process.env.ZZCSAPI_DEBUG && r.files && r.files.length) {
+        console.log('[' + ch.def.id + '] 本轮改动文件: ' + r.files.join(', '));
+      }
+      return 'success';
+    }
+    lastErr = r.error || 'prism 未知错误';
+    if (!r.retryable || attempt === 1) break;
+    prism.prismDropSession(ch.def.id); // 下一轮重建 sandbox
+  }
+  recordFailure(ch, lastErr);
+  return lastErr;
 }
 
 async function tryNotionChannel(opts) {

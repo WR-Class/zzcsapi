@@ -807,6 +807,7 @@
           <option value="notion-agent">notion-agent（Notion 官方 Agent API）</option>
           <option value="workbuddy">workbuddy（WorkBuddy 国际版反代）</option>
           <option value="codex">codex（ChatGPT 官方订阅反代，RT 导入）</option>
+          <option value="prism">prism（prism.openai.com 反代，cookie 鉴权 + sandbox）</option>
         </select>
       </div>
       <div class="field">
@@ -822,11 +823,11 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">openai: https://host/v1 · notion: https://app.notion.com · notion-agent: https://api.notion.com · arena: https://arena.ai · workbuddy: https://www.workbuddy.ai/v2 · codex: https://chatgpt.com/backend-api/codex</span></label>
+      <label>Base URL <span class="help">openai: https://host/v1 · notion: https://app.notion.com · notion-agent: https://api.notion.com · arena: https://arena.ai · workbuddy: https://www.workbuddy.ai/v2 · codex: https://chatgpt.com/backend-api/codex · prism: https://prism.openai.com</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
     </div>
     <div class="field">
-      <label>代理 <span class="help">可选。codex 必填，如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
+      <label>代理 <span class="help">可选。codex / prism 必填，如 http://host.docker.internal:7897（容器经宿主机代理出网；prism 有 Cloudflare 拦截，直连必失败）</span></label>
       <input id="f-proxy" type="text" placeholder="留空 = 直连">
     </div>
     <div class="field">
@@ -2197,7 +2198,7 @@ $('#codex-file-input').onchange = async (e) => {
 };
 
 /* 协议切换：notion/arena/notion-agent/workbuddy/codex 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
-const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com', workbuddy: 'https://www.workbuddy.ai/v2', codex: 'https://chatgpt.com/backend-api/codex' };
+const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com', workbuddy: 'https://www.workbuddy.ai/v2', codex: 'https://chatgpt.com/backend-api/codex', prism: 'https://prism.openai.com' };
 $('#f-protocol').addEventListener('change', () => {
   const proto = $('#f-protocol').value;
   const cur = $('#f-baseUrl').value.trim();
@@ -2209,7 +2210,8 @@ $('#f-protocol').addEventListener('change', () => {
       : (proto === 'notion-agent' ? 'notion-agent 协议：填开发者门户连接的集成令牌（ntn_ 开头；连接需勾选「查看会话并与代理交互」能力）'
         : (proto === 'workbuddy' ? 'workbuddy 协议：填 CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'
           : (proto === 'codex' ? 'codex 协议：填 ChatGPT 订阅的 refresh token（rt.1. 开头，sub2api「手动导入 rt」同款）。注意：RT 一次性轮转，每次刷新自动写回新值；别再用导出时的原值'
-            : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值'))));
+            : (proto === 'prism' ? 'prism 协议：填 prism.openai.com 的浏览器 Cookie（形如 "prism_session_token=…; prism_oai_access_token=…"，两个都要）。约 12 小时过期，过期需重新复制'
+              : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值')))));
   renderModelsEditor();
 });
 
