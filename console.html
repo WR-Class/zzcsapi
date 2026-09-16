@@ -757,6 +757,26 @@
   <div class="d-ft"><button class="btn ghost" id="d-reset">恢复默认布局</button></div>
 </aside>
 
+<!-- ═══════════════ codex RT 一键导入弹窗 ═══════════════ -->
+<div class="mask" id="codex-mask">
+  <div class="modal" style="max-width:520px">
+    <div class="m-hd"><h2>⚡ 导入 codex RT</h2><button class="x" id="codex-btn-x">×</button></div>
+    <div class="field">
+      <label>Refresh Token <span class="help">rt.1. 开头，sub2api「手动导入 rt」同款</span></label>
+      <textarea id="codex-rt" rows="3" placeholder="rt.1.…" style="width:100%;resize:vertical;font-family:ui-monospace,monospace;font-size:12px;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--tx)"></textarea>
+    </div>
+    <div class="field">
+      <span class="help" style="line-height:1.6">粘贴后自动完成：换令牌 → 拿账号 → 拉订阅模型列表 → 建渠道。<br>
+      ⚠️ RT 一次性轮转：导入后这份字符串即作废，<b>同一个号别同时挂 sub2api 和这里</b>（谁刷新谁活，另一边必挂）。</span>
+    </div>
+    <div class="field"><span class="help" id="codex-import-status"></span></div>
+    <div class="modal-actions">
+      <button id="codex-btn-cancel" class="btn ghost">取消</button>
+      <button id="codex-btn-go" class="btn primary">导入</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <!-- ═══════════════ 渠道编辑弹窗 ═══════════════ -->
@@ -2078,22 +2098,40 @@ function openModal(ch) {
 $('#btn-cancel').onclick = $('#btn-x').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
 
-/* codex 一键导入：粘贴 RT → 服务端自动换令牌/拉模型/建渠道（sub2api「手动导入 rt」同款） */
-$('#btn-codex-import').onclick = async () => {
-  const rt = prompt('粘贴 ChatGPT 订阅的 refresh token（rt.1. 开头）\n\n注意：RT 一次性轮转——粘贴后不要再把同一份导入别的工具，否则两边互相顶掉');
-  if (!rt || !rt.trim()) return;
-  const btn = $('#btn-codex-import');
+/* codex 一键导入：模态框粘贴 RT → 服务端自动换令牌/拉模型/建渠道（sub2api「手动导入 rt」同款） */
+$('#btn-codex-import').onclick = () => {
+  $('#codex-rt').value = '';
+  $('#codex-import-status').textContent = '';
+  $('#codex-btn-go').disabled = false;
+  $('#codex-mask').classList.add('show');
+  setTimeout(() => $('#codex-rt').focus(), 50);
+};
+$('#codex-btn-cancel').onclick = $('#codex-btn-x').onclick = () => $('#codex-mask').classList.remove('show');
+$('#codex-mask').onclick = (e) => { if (e.target.id === 'codex-mask') $('#codex-mask').classList.remove('show'); };
+$('#codex-btn-go').onclick = async () => {
+  const rt = $('#codex-rt').value.trim();
+  if (!rt) { $('#codex-import-status').textContent = '先粘贴 RT'; $('#codex-import-status').style.color = 'var(--red)'; return; }
+  const btn = $('#codex-btn-go');
+  const st = $('#codex-import-status');
   btn.disabled = true; btn.textContent = '⏳ 导入中…';
+  st.textContent = '换令牌 + 拉模型中（走代理，约 3-10 秒）…'; st.style.color = 'var(--tx3)';
   try {
-    const r = await api('/admin/api/codex-import', { method: 'POST', body: JSON.stringify({ rt: rt.trim() }) });
+    const r = await api('/admin/api/codex-import', { method: 'POST', body: JSON.stringify({ rt }) });
     if (r.ok) {
+      st.textContent = '';
+      $('#codex-mask').classList.remove('show');
       toast(`✓ 已导入 ${r.id}（${r.name}）· ${r.models.length} 个模型${r.rotated ? ' · RT 已轮转存新值' : ''}`);
       refresh();
     } else {
-      alert('导入失败：' + (r.error || '未知错误'));
+      st.textContent = '✗ ' + (r.error || '未知错误');
+      st.style.color = 'var(--red)';
+      btn.disabled = false; btn.textContent = '重试导入';
     }
-  } catch (e) { alert('导入失败：' + (e.message || e)); }
-  btn.disabled = false; btn.textContent = '⚡ 导入 codex RT';
+  } catch (e) {
+    st.textContent = '✗ ' + (e.message || e);
+    st.style.color = 'var(--red)';
+    btn.disabled = false; btn.textContent = '重试导入';
+  }
 };
 
 /* 协议切换：notion/arena/notion-agent/workbuddy/codex 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
