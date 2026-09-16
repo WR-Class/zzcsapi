@@ -31,7 +31,7 @@ const UA =
 const COOKIE_FILE = path.join(__dirname, '_prism_cookies.json');
 
 // ── curl 子进程：Node/undici 的 TLS 指纹会被 Cloudflare 拦，必须借 curl ──
-function curl(method, url, { headers = {}, body, timeoutMs = 60000 } = {}) {
+function curlOnce(method, url, { headers = {}, body, timeoutMs = 60000 } = {}) {
   const args = ['-sS', '-m', String(Math.round(timeoutMs / 1000)), '-x', PROXY, '-X', method, url];
   for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
   const tmp = path.join(__dirname, '_prism_req.tmp');
@@ -41,15 +41,38 @@ function curl(method, url, { headers = {}, body, timeoutMs = 60000 } = {}) {
   }
   args.push('-o', path.join(__dirname, '_prism_out.tmp'), '-w', '%{http_code}');
   let status = '';
+  let err;
   try {
     status = execFileSync('curl.exe', args, { encoding: 'utf8' }).trim();
+  } catch (e) {
+    // 错误信息里含 cookie，必须剥掉
+    err = String(e.message || e).split('-H cookie:')[0].split('\n')[0].slice(0, 160);
   } finally {
     if (body !== undefined) fs.rmSync(tmp, { force: true });
   }
   const outFile = path.join(__dirname, '_prism_out.tmp');
   const text = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
   fs.rmSync(outFile, { force: true });
-  return { status: Number(status), text };
+  return { status: Number(status) || 0, text, err };
+}
+
+/** 带重试：TLS 抖动（status 0）与 5xx 都是暂时的，Prism 经常需要重试 */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function curl(method, url, opts = {}) {
+  const tries = opts.retries ?? 4;
+  let last;
+  for (let i = 0; i < tries; i++) {
+    last = curlOnce(method, url, opts);
+    if (last.status && last.status < 500) return last;
+    if (i < tries - 1) {
+      const why = last.status === 0 ? `传输失败(${last.err || 'unknown'})` : `HTTP ${last.status}`;
+      if (opts.verbose) console.log(`   ↻ ${why}，重试 ${i + 1}/${tries - 1}`);
+      sleepSync(1200 * (i + 1));
+    }
+  }
+  return last;
 }
 
 function loadCookie() {
@@ -171,10 +194,40 @@ async function bootstrap(cookie, { projectId, model, effort } = {}) {
   throw new Error('sandbox 同步超时');
 }
 
-/** 发起一次对话，返回 { text, usage, conversationId } */
-async function chat(prompt, { model = 'gpt-5.6-sol', effort = 'low', projectId, timeoutMs = 180000 } = {}) {
+/** 发起一次对话，返回 { text, usage, conversationId, files, elapsedMs }
+ *  opts.conversationId 传入可复用已有会话（省掉 bootstrap，快很多）
+ *  opts.reuseSandbox  复用 _prism_state.json 里缓存的 sandbox（更快）
+ */
+async function chat(prompt, { model = 'gpt-5.6-sol', effort = 'low', projectId, conversationId, reuseSandbox = true, timeoutMs = 180000 } = {}) {
   const cookie = loadCookie();
-  const ctx = await bootstrap(cookie, { projectId, model, effort });
+  const t0 = Date.now();
+  const stateFile = path.join(__dirname, '_prism_state.json');
+  // 复用缓存：sandbox + 会话
+  let cached = {};
+  if (reuseSandbox && fs.existsSync(stateFile)) {
+    try { cached = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+  }
+  let ctx;
+  if (reuseSandbox && cached.sandboxUrl && cached.sandboxToken && Date.now() < (cached.sandboxExpiresAt || 0)) {
+    ctx = { sandboxUrl: cached.sandboxUrl, sandboxToken: cached.sandboxToken, projectId: cached.projectId, userId: cached.userId };
+    // 校验 sandbox 还活着
+    const chk = curl('GET', `${ctx.sandboxUrl}/wait-for-sync?wait_ms=1000`, {
+      headers: { cookie, 'User-Agent': UA, 'X-Crixet-Sandbox-Token': ctx.sandboxToken },
+      timeoutMs: 15000,
+    });
+    if (chk.status !== 200) ctx = null;
+    else console.log('[bootstrap] 复用已就绪的 sandbox（跳过 6 步握手）');
+  }
+  if (!ctx) {
+    ctx = await bootstrap(cookie, { projectId, model, effort });
+    // sandbox 一般可存活一段时间，缓存 20 分钟
+    fs.writeFileSync(stateFile, JSON.stringify({ ...ctx, sandboxExpiresAt: Date.now() + 8 * 60 * 1000 }));
+  }
+  const conv = conversationId || cached.conversationId || null;
+  // 多轮记忆靠 previousResponseId = 上一轮 response.payload.id（形如 msg_xxx）
+  // 只传 conversationId 不带 previousResponseId，模型不会记得上文
+  const prevResponseId = conversationId ? null : cached.previousResponseId || null;
+  if (conv) console.log(`[chat] 复用会话 ${conv}${prevResponseId ? `（previousResponseId=${prevResponseId}）` : ''}`);
   const H = {
     cookie,
     'User-Agent': UA,
@@ -194,24 +247,53 @@ async function chat(prompt, { model = 'gpt-5.6-sol', effort = 'low', projectId, 
     sandbox_url: ctx.sandboxUrl,
     sandbox_token: ctx.sandboxToken,
   };
+  // 多轮记忆：⚠️ 实测结论
+  //   - 服务端会话记忆走的是 Next.js Server Actions（createProjectConversation 等），
+  //     那是框架内部协议，从外部 REST 调不动；只传 conversationId/previousResponseId
+  //     并不会让模型记得上文（实测第 2 轮必答 "Unknown"）。
+  //   - 所以这里用「压平历史进单条 user 文本」的稳妥做法，实测有效。
+  const history = conversationId ? [] : Array.isArray(cached.history) ? cached.history : [];
+  let promptText = prompt;
+  if (history.length) {
+    const lines = ['对话历史：'];
+    for (const m of history) {
+      const txt = (m.content || []).map((c) => c.text).join('');
+      lines.push(`${m.role === 'user' ? '用户' : '助手'}：${txt}`);
+    }
+    lines.push('', `现在回答：${prompt}`);
+    promptText = lines.join('\n');
+    console.log(`[chat] 压平 ${history.length} 条历史进 prompt`);
+  }
+  const input = [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: promptText }] }];
   let r = curl('POST', `${ORIGIN}/api/llm/response_with_tools_start`, {
     headers: H,
     body: {
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
-      previousResponseId: null,
+      input,
+      previousResponseId: prevResponseId,
       metadata,
-      conversationId: null,
+      conversationId: conv,
     },
     timeoutMs: 120000,
+    verbose: true,
   });
   let j = JSON.parse(r.text);
-  if (j.status === 'completed') return finish(j, ctx);
+  // sandbox 可能已被回收 → 清缓存重新 bootstrap 一次
+  if (j.status !== 'started' && j.status !== 'completed' && reuseSandbox && fs.existsSync(stateFile) && cached.sandboxUrl) {
+    const why = String(j.response?.payload?.rootCause || j.response?.payload?.message || '');
+    if (/healthz|sandbox|reconnect|lookup failed/i.test(why)) {
+      console.log(`[chat] sandbox 已失效（${why.slice(0, 60)}），重新 bootstrap`);
+      fs.rmSync(stateFile, { force: true });
+      return chat(prompt, { model, effort, projectId, conversationId, reuseSandbox: false, timeoutMs });
+    }
+  }
+  if (j.status === 'completed') return finish(j, ctx, t0);
   if (j.status !== 'started') throw new Error(`start 失败: ${r.text.slice(0, 400)}`);
-  console.log(`[6/6] 回合已开始 request_id=${j.request_id}`);
+  console.log(`[6/6] 回合已开始 request_id=${j.request_id} conv=${j.conversation_id}`);
 
   // 8. 轮询
   let turnState = j.turn_state;
   const reqId = j.request_id;
+  const newConv = j.conversation_id;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     r = curl('POST', `${ORIGIN}/api/llm/response_with_tools_status`, {
@@ -228,14 +310,26 @@ async function chat(prompt, { model = 'gpt-5.6-sol', effort = 'low', projectId, 
     }
     if (s.status === 'completed') {
       process.stdout.write('\r' + ' '.repeat(80) + '\r');
-      return finish(s, ctx);
+      const out = finish(s, ctx, t0);
+      out.conversationId = newConv || out.conversationId;
+      // 记住会话 + 历史 + 上一轮 response id + 刷新 sandbox 缓存，供下一轮复用
+      try {
+        const prev = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
+        const hist = [
+          ...(Array.isArray(prev.history) ? prev.history : []),
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: out.text }] },
+        ];
+        fs.writeFileSync(stateFile, JSON.stringify({ ...prev, ...ctx, conversationId: out.conversationId, previousResponseId: out.responseId, history: hist.slice(-12), sandboxExpiresAt: Date.now() + 8 * 60 * 1000 }));
+      } catch {}
+      return out;
     }
     await new Promise((res) => setTimeout(res, 3000));
   }
   throw new Error('轮询超时');
 }
 
-function finish(envelope, ctx) {
+function finish(envelope, ctx, t0) {
   const resp = envelope.response;
   if (resp.status !== 'success') {
     const p = resp.payload || {};
@@ -246,10 +340,14 @@ function finish(envelope, ctx) {
     .filter((c) => c.type === 'output_text' || typeof c.text === 'string')
     .map((c) => c.text)
     .join('\n');
+  const df = resp.payload.codexDeltaFiles;
   return {
     text,
     usage: resp.payload.usage || null,
     conversationId: envelope.conversation_id || ctx?.projectId,
+    responseId: resp.payload.id || null, // 传给下一轮的 previousResponseId
+    files: Array.isArray(df) ? df.map((f) => f.file_path) : df ? [df.file_path] : [],
+    elapsedMs: t0 ? Date.now() - t0 : undefined,
   };
 }
 
