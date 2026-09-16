@@ -235,6 +235,17 @@ const PORT = config.port || 8787;
 const HEALTH = config.health || { intervalSec: 300, timeoutMs: 8000 };
 const RETRIES = config.retries || { perChannel: 1, maxModelFallbacks: 99 };
 
+// ─── Codex 常量（必须在任何探测/请求路径之前初始化，否则 TDZ 报错）───
+const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
+const CODEX_DEFAULT_BASE = 'https://chatgpt.com/backend-api/codex';
+// codex 默认代理：容器经宿主机 Clash 出网（可用 ZZCSAPI_CODEX_PROXY 覆盖）
+const CODEX_DEFAULT_PROXY = process.env.ZZCSAPI_CODEX_PROXY || 'http://host.docker.internal:7897';
+// 与 sub2api 对齐的客户端身份：/backend-api/codex 推理面有 version 门槛，
+// 陈旧版本拿不到模型列表（{"models":[]}）甚至被优先降载；UA 形态缺少 OS/终端后缀易被指纹识别
+const CODEX_VERSION = '0.146.0';
+const CODEX_UA = `codex_cli_rs/${CODEX_VERSION} (Ubuntu 22.4.0; x86_64) xterm-256color`;
+
 // ─────────────────────────── 渠道运行时状态 ───────────────────────────
 const channels = new Map();
 
@@ -1187,6 +1198,11 @@ function persistConfig() {
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
       models: ch.def.models || {},
+      // codex 专有：持久化 AT 及其元信息（10 天有效，重启免刷 RT）
+      accessToken: ch.def.accessToken || undefined,
+      accountId: ch.def.accountId || undefined,
+      email: ch.def.email || undefined,
+      expiresAt: ch.def.expiresAt || undefined,
     })),
   };
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(out, null, 2) + '\n', 'utf8');
@@ -1510,6 +1526,10 @@ async function handleAdminApi(req, res, url) {
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
       models: ch.def.models || {},
+      accessToken: ch.def.accessToken || undefined,
+      accountId: ch.def.accountId || undefined,
+      email: ch.def.email || undefined,
+      expiresAt: ch.def.expiresAt || undefined,
     })) });
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/channels') {
@@ -1535,14 +1555,74 @@ async function handleAdminApi(req, res, url) {
     probeChannel(ch).catch(() => {});
     return sendJson(res, 200, { ok: true, id: def.id, existed, channel: { id: def.id, name: def.name, baseUrl: def.baseUrl, protocol: def.protocol, priority: def.priority, enabled: def.enabled, autoAlias: def.autoAlias, models: def.models } });
   }
-  // codex 一键导入：只给 refresh_token，其余全自动（换令牌→拿账号→拉模型→建渠道）
-  // 与 sub2api「手动导入 rt」对齐。RT 轮转自动处理；id 已存在时等价于换新 RT
+  // codex 一键导入：支持两种输入（自动识别）——
+  //   A) sub2api 导出的完整 JSON（含 access_token/refresh_token/account_id，AT 10 天有效直接可用，不消耗 RT）
+  //   B) 裸 refresh_token（rt.1. 开头，立即换一次令牌）
+  // id 已存在时等价于换凭据
   if (req.method === 'POST' && url.pathname === '/admin/api/codex-import') {
     const body = await safeReadJson(req);
-    const rt = String((body && body.rt) || '').trim();
-    if (!rt) return sendJson(res, 400, { error: 'rt required' });
+    const raw = String((body && body.rt) || '').trim();
+    if (!raw) return sendJson(res, 400, { error: 'rt required' });
+    const proxy = body.proxy ? String(body.proxy) : CODEX_DEFAULT_PROXY;
+
+    // A) 完整 JSON 导入：直接用 AT，避免碰 RT（拼车场景下 RT 多半已被别人消费）
+    const maybeJson = raw.startsWith('{') ? safeJson(raw) : null;
+    if (maybeJson && (maybeJson.access_token || maybeJson.refresh_token)) {
+      const at = String(maybeJson.access_token || '');
+      const rtTok = String(maybeJson.refresh_token || '');
+      const atPayload = at ? (codexJwtPayload(at) || {}) : {};
+      const atExpMs = atPayload.exp ? atPayload.exp * 1000 : 0;
+      if (!rtTok) return sendJson(res, 200, { ok: false, error: 'JSON 里缺少 refresh_token' });
+      const id = (body.id && /^[a-zA-Z0-9_\-]+$/.test(body.id)) ? body.id
+        : ('codex' + (Array.from(channels.keys()).filter((k) => /^codex\d*$/.test(k)).length + 1));
+      const email = String(maybeJson.email || atPayload.email || '');
+      const accountId = String(maybeJson.account_id || (atPayload['https://api.openai.com/auth'] || {}).chatgpt_account_id || '');
+      const tmpDef = { id: 'codex-import-tmp', baseUrl: CODEX_DEFAULT_BASE, proxy };
+      const tmpAcct = { accessToken: at, accountId, expiresAt: atExpMs };
+      // AT 活就直接拉模型验证；AT 死了再尝试 RT 刷新
+      let acct = null, models = [], rotatedRt = null, usedAt = false;
+      if (at && atExpMs > Date.now() + 60_000) {
+        try {
+          models = await codexFetchModels(tmpDef, tmpAcct, 15000);
+          // models 空列表也可能是版本/风控问题，但 HTTP 层通就算 AT 活
+          acct = tmpAcct; usedAt = true;
+        } catch {}
+      }
+      if (!acct) {
+        const tmpCh = { def: { id: 'codex-import-tmp', apiKey: rtTok, proxy, baseUrl: CODEX_DEFAULT_BASE }, codex: null };
+        try {
+          acct = await codexEnsureToken(tmpCh);
+          rotatedRt = tmpCh.def.apiKey !== rtTok ? tmpCh.def.apiKey : null;
+        } catch (err) {
+          return sendJson(res, 200, { ok: false, error: String(err.message || err) });
+        }
+        try { models = await codexFetchModels(tmpCh.def, acct, 15000); } catch {}
+      }
+      if (!models.length) models = ['gpt-5.5']; // 拉取失败兜底
+      const def = {
+        id,
+        name: body.name || ('ChatGPT订阅' + (email ? '·' + email : '')),
+        baseUrl: CODEX_DEFAULT_BASE,
+        apiKey: rotatedRt || rtTok,
+        protocol: 'codex',
+        priority: body.priority !== undefined ? Number(body.priority) : 0,
+        enabled: true, autoAlias: false,
+        models: Object.fromEntries(models.map((m) => [m, m])),
+        proxy,
+        accessToken: acct.accessToken, accountId: acct.accountId || accountId,
+        email, expiresAt: acct.expiresAt,
+      };
+      const existed = channels.has(id);
+      const ch = upsertChannel(def);
+      persistConfig();
+      probeChannel(ch).catch(() => {});
+      return sendJson(res, 200, { ok: true, id, existed, name: def.name, models, accountId: def.accountId || undefined, rotated: !!rotatedRt, via: usedAt ? 'access_token' : 'refresh' });
+    }
+
+    // B) 裸 RT 导入
+    const rt = raw;
     // 先用临时渠道验证 RT（codexEnsureToken 内部处理轮转；tmpCh 未注册，persistConfig 不会落它）
-    const tmpDef = { id: 'codex-import-tmp', apiKey: rt, proxy: body.proxy ? String(body.proxy) : CODEX_DEFAULT_PROXY, baseUrl: CODEX_DEFAULT_BASE };
+    const tmpDef = { id: 'codex-import-tmp', apiKey: rt, proxy, baseUrl: CODEX_DEFAULT_BASE };
     const tmpCh = { def: tmpDef, codex: null };
     let acct;
     try {
@@ -1554,7 +1634,7 @@ async function handleAdminApi(req, res, url) {
       : ('codex' + (Array.from(channels.keys()).filter((k) => /^codex\d*$/.test(k)).length + 1));
     let models = [];
     try { models = await codexFetchModels(tmpDef, acct, 15000); } catch {}
-    if (!models.length) models = ['gpt-5.1']; // 拉取失败兜底：订阅标配
+    if (!models.length) models = ['gpt-5.5']; // 拉取失败兜底
     const def = {
       id,
       name: body.name || ('ChatGPT订阅' + (acct.email ? '·' + acct.email : '')),
@@ -1565,6 +1645,8 @@ async function handleAdminApi(req, res, url) {
       enabled: true, autoAlias: false,
       models: Object.fromEntries(models.map((m) => [m, m])),
       proxy: tmpDef.proxy,
+      accessToken: acct.accessToken, accountId: acct.accountId,
+      email: acct.email || '', expiresAt: acct.expiresAt,
     };
     const existed = channels.has(id);
     const ch = upsertChannel(def);
@@ -2993,11 +3075,9 @@ async function tryWorkbuddyChannel(opts) {
 //   1) RT 一次性轮转——每次刷新若返回新 RT 必须写回 config 持久化，否则渠道报废
 //   2) 区域限制 + TLS 指纹 → 全程 curl 子进程 + def.proxy（如 http://host.docker.internal:7897）
 //   3) 无 /models 探测——模型走 def.models 别名映射，探测 = 一次令牌刷新
-const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
-const CODEX_DEFAULT_BASE = 'https://chatgpt.com/backend-api/codex';
-// codex 默认代理：容器经宿主机 Clash 出网（可用 ZZCSAPI_CODEX_PROXY 覆盖）
-const CODEX_DEFAULT_PROXY = process.env.ZZCSAPI_CODEX_PROXY || 'http://host.docker.internal:7897';
+// 注意：以下常量必须在使用它们的函数（probeChannel 等）被执行前完成初始化，
+// 但 const 存在 TDZ——若本常量块位于启动探测路径之后，启动即报
+// "Cannot access before initialization"。故保持此块在文件中的位置不得后移。
 
 function codexJwtPayload(t) {
   try {
@@ -3008,20 +3088,30 @@ function codexJwtPayload(t) {
   } catch { return null; }
 }
 
-// 确保有可用 access_token；过期/缺失则用 RT 刷新（RT 轮转 → 自动写回持久化）
+// 确保有可用 access_token：内存缓存 → def 里持久化的 AT（sub2api JSON 导入，10天有效）→ RT 刷新
 async function codexEnsureToken(ch) {
   const now = Date.now();
   if (ch.codex && ch.codex.accessToken && ch.codex.expiresAt > now + 60_000) return ch.codex;
-  const form = 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(ch.def.apiKey) + '&client_id=' + CODEX_CLIENT_ID;
-  const out = await wbCurlRequest('POST', CODEX_TOKEN_URL, { 'Content-Type': 'application/x-www-form-urlencoded' }, form, 30_000, ch.def.proxy);
+  // 持久化的 AT（JSON 导入路径）：sub2api 模式——AT 优先，RT 只在 AT 快过期时才动
+  if (ch.def.accessToken && Number(ch.def.expiresAt) > now + 60_000) {
+    ch.codex = { accessToken: ch.def.accessToken, accountId: ch.def.accountId || '', email: ch.def.email || '', expiresAt: Number(ch.def.expiresAt) };
+    return ch.codex;
+  }
+  const form = 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(ch.def.apiKey) + '&client_id=' + CODEX_CLIENT_ID
+    + '&scope=' + encodeURIComponent('openid profile email');
+  const out = await wbCurlRequest('POST', CODEX_TOKEN_URL, {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'originator': 'codex_cli_rs',
+    'User-Agent': CODEX_UA,
+  }, form, 30_000, ch.def.proxy);
   if (!out.body) { const e = new Error('codex token: ' + (out.error || 'empty')); throw e; }
   const j = safeJson(out.body);
   if (!j || !j.access_token) {
     const code = j && j.error && (j.error.code || j.error.message) || out.body.slice(0, 120);
     const err = new Error('codex token: ' + code);
     err.status = out.status;
-    // RT 失效（被轮转/撤销）→ 致命，等用户换 RT；不要反复重试
-    if (/invalid_refresh_token|token_expired|invalid_grant/i.test(String(code))) err.fatal = true;
+    // RT 失效（被轮转/撤销/已被别处消费）→ 致命，等用户换 RT；不要反复重试
+    if (/invalid_refresh_token|token_expired|invalid_grant|refresh_token_reused/i.test(String(code))) err.fatal = true;
     throw err;
   }
   const payload = codexJwtPayload(j.id_token) || codexJwtPayload(j.access_token) || {};
@@ -3030,28 +3120,36 @@ async function codexEnsureToken(ch) {
   // RT 轮转：OpenAI 刷新时会返回新 RT，旧 RT 立即作废——必须写回持久化
   if (j.refresh_token && j.refresh_token !== ch.def.apiKey) {
     ch.def.apiKey = j.refresh_token;
-    persistConfig();
     console.log(`[codex] ${ch.def.id} RT 已轮转，新值已写回 config`);
   }
+  const atPayload = codexJwtPayload(j.access_token) || {};
+  const atExpMs = atPayload.exp ? atPayload.exp * 1000 : now + (Number(j.expires_in) || 3600) * 1000;
   ch.codex = {
     accessToken: j.access_token,
     accountId,
     email: payload.email || '',
-    expiresAt: now + (Number(j.expires_in) || 3600) * 1000,
+    expiresAt: atExpMs,
   };
+  // 持久化新 AT（10 天有效期，重启容器不用重新刷 RT，减少和别人打架的窗口）
+  ch.def.accessToken = j.access_token;
+  ch.def.accountId = accountId;
+  ch.def.email = payload.email || ch.def.email || '';
+  ch.def.expiresAt = atExpMs;
+  persistConfig();
   return ch.codex;
 }
 
-// 拉取订阅可用模型列表（codex CLI 同款端点；形状防御性解析）
+// 拉取订阅可用模型列表（codex CLI 同款端点；client_version 必须 ≥0.146.0 否则返回空列表）
 async function codexFetchModels(def, acct, timeoutMs) {
   const headers = {
     'Authorization': `Bearer ${acct.accessToken}`,
     'OpenAI-Beta': 'responses=experimental',
     'originator': 'codex_cli_rs',
-    'User-Agent': 'codex_cli_rs/0.20.0 (Windows NT 10.0; x64)',
+    'version': CODEX_VERSION,
+    'User-Agent': CODEX_UA,
   };
   if (acct.accountId) headers['chatgpt-account-id'] = acct.accountId;
-  const url = (def.baseUrl || CODEX_DEFAULT_BASE) + '/models?client_version=0.20.0';
+  const url = (def.baseUrl || CODEX_DEFAULT_BASE) + '/models?client_version=' + CODEX_VERSION;
   const out = await wbCurlRequest('GET', url, headers, null, timeoutMs || 15000, def.proxy);
   if (!out.body) return [];
   const j = safeJson(out.body);
@@ -3086,8 +3184,9 @@ async function codexCallResponses(ch, model, messages, timeoutMs) {
     'Authorization': `Bearer ${acct.accessToken}`,
     'OpenAI-Beta': 'responses=experimental',
     'originator': 'codex_cli_rs',
+    'version': CODEX_VERSION,
     'session_id': require('crypto').randomUUID(),
-    'User-Agent': 'codex_cli_rs/0.20.0 (Windows NT 10.0; x64)',
+    'User-Agent': CODEX_UA,
   };
   if (acct.accountId) headers['chatgpt-account-id'] = acct.accountId;
   const target = joinUrl(ch.def.baseUrl || CODEX_DEFAULT_BASE, 'responses');
