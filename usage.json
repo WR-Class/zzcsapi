@@ -1,9 +1,9 @@
 {
  "total": {
-  "requests": 8315,
+  "requests": 8341,
   "errors": 1292,
-  "inputTokens": 344576593,
-  "outputTokens": 5893797
+  "inputTokens": 347663297,
+  "outputTokens": 5902450
  },
  "byModel": {
   "glm-5.2": {
@@ -13,10 +13,10 @@
    "outputTokens": 12
   },
   "gpt-5.6-sol": {
-   "requests": 46,
+   "requests": 47,
    "errors": 0,
-   "inputTokens": 864994,
-   "outputTokens": 1380
+   "inputTokens": 864995,
+   "outputTokens": 1389
   },
   "deepseek-v4pro": {
    "requests": 1,
@@ -313,10 +313,10 @@
    "outputTokens": 30
   },
   "wb-deepseek-v4.1-flash": {
-   "requests": 303,
+   "requests": 326,
    "errors": 0,
-   "inputTokens": 47579148,
-   "outputTokens": 154257
+   "inputTokens": 50660284,
+   "outputTokens": 162551
   },
   "deepseek-v4.1-flash-wr": {
    "requests": 2,
@@ -329,6 +329,12 @@
    "errors": 0,
    "inputTokens": 1080,
    "outputTokens": 50
+  },
+  "gpt-5.6-sol-1": {
+   "requests": 2,
+   "errors": 0,
+   "inputTokens": 5567,
+   "outputTokens": 350
   }
  },
  "byChannel": {
@@ -489,10 +495,10 @@
    "outputTokens": 825
   },
   "workbuddy": {
-   "requests": 319,
+   "requests": 342,
    "errors": 9,
-   "inputTokens": 47579229,
-   "outputTokens": 154298
+   "inputTokens": 50660365,
+   "outputTokens": 162592
   },
   "codex2": {
    "requests": 1,
@@ -507,10 +513,10 @@
    "outputTokens": 0
   },
   "prism1": {
-   "requests": 13,
+   "requests": 16,
    "errors": 4,
-   "inputTokens": 143,
-   "outputTokens": 123
+   "inputTokens": 5711,
+   "outputTokens": 482
   }
  },
  "byDay": {
@@ -587,279 +593,13 @@
    "outputTokens": 2112753
   },
   "2026-09-16": {
-   "requests": 654,
+   "requests": 680,
    "errors": 77,
-   "inputTokens": 61924981,
-   "outputTokens": 251565
+   "inputTokens": 65011685,
+   "outputTokens": 260218
   }
  },
  "recent": [
-  {
-   "ts": 1789479576614,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 66399,
-   "out": 17,
-   "ok": true,
-   "ms": 88048
-  },
-  {
-   "ts": 1789479651596,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 67358,
-   "out": 0,
-   "ok": true,
-   "ms": 72678
-  },
-  {
-   "ts": 1789479731130,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 67358,
-   "out": 13,
-   "ok": true,
-   "ms": 79038
-  },
-  {
-   "ts": 1789479837616,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 67370,
-   "out": 19,
-   "ok": true,
-   "ms": 86998
-  },
-  {
-   "ts": 1789479946250,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 69658,
-   "out": 346,
-   "ok": true,
-   "ms": 106965
-  },
-  {
-   "ts": 1789480014471,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 69752,
-   "out": 0,
-   "ok": true,
-   "ms": 66706
-  },
-  {
-   "ts": 1789480085808,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 69752,
-   "out": 214,
-   "ok": true,
-   "ms": 70802
-  },
-  {
-   "ts": 1789480160066,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 70699,
-   "out": 15,
-   "ok": true,
-   "ms": 72929
-  },
-  {
-   "ts": 1789480237190,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 72311,
-   "out": 0,
-   "ok": true,
-   "ms": 75495
-  },
-  {
-   "ts": 1789480305615,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 72311,
-   "out": 0,
-   "ok": true,
-   "ms": 67840
-  },
-  {
-   "ts": 1789480387173,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 72311,
-   "out": 22,
-   "ok": true,
-   "ms": 80534
-  },
-  {
-   "ts": 1789480488417,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 72323,
-   "out": 0,
-   "ok": true,
-   "ms": 81728
-  },
-  {
-   "ts": 1789480592250,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 72323,
-   "out": 6,
-   "ok": true,
-   "ms": 103306
-  },
-  {
-   "ts": 1789480677159,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 72336,
-   "out": 20,
-   "ok": true,
-   "ms": 74185
-  },
-  {
-   "ts": 1789480775917,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 72509,
-   "out": 20,
-   "ok": true,
-   "ms": 94484
-  },
-  {
-   "ts": 1789480854813,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 85186,
-   "out": 0,
-   "ok": true,
-   "ms": 78070
-  },
-  {
-   "ts": 1789480976038,
-   "model": "deepseek-v4-pro",
-   "channelId": "hcnsec",
-   "kind": "openai",
-   "in": 85188,
-   "out": 1174,
-   "ok": true,
-   "ms": 115257
-  },
-  {
-   "ts": 1789482866945,
-   "model": "gpt-5.6-sol",
-   "channelId": "notion12",
-   "kind": "test",
-   "in": 1,
-   "out": 5,
-   "ok": true,
-   "ms": 8828
-  },
-  {
-   "ts": 1789482926370,
-   "model": "—",
-   "channelId": "online",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "HTTP 403: {\"code\":\"INSUFFICIENT_BALANCE\",\"message\":\"Insufficient account balance\"}"
-  },
-  {
-   "ts": 1789482933261,
-   "model": "—",
-   "channelId": "notion2",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "notion stream: Something went wrong. Please try again later."
-  },
-  {
-   "ts": 1789482938390,
-   "model": "—",
-   "channelId": "notion5",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "notion stream: Something went wrong. Please try again later."
-  },
-  {
-   "ts": 1789482951222,
-   "model": "gpt-5.6-sol",
-   "channelId": "notion12",
-   "kind": "openai",
-   "in": 90872,
-   "out": 51,
-   "ok": true,
-   "ms": 12831
-  },
-  {
-   "ts": 1789482959171,
-   "model": "—",
-   "channelId": "notion2",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "notion stream: Something went wrong. Please try again later."
-  },
-  {
-   "ts": 1789482964795,
-   "model": "—",
-   "channelId": "notion5",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "notion stream: Something went wrong. Please try again later."
-  },
-  {
-   "ts": 1789482980097,
-   "model": "gpt-5.6-sol",
-   "channelId": "notion12",
-   "kind": "openai",
-   "in": 91553,
-   "out": 356,
-   "ok": true,
-   "ms": 15302
-  },
-  {
-   "ts": 1789483106684,
-   "model": "—",
-   "channelId": "online",
-   "kind": "error",
-   "in": 0,
-   "out": 0,
-   "ok": false,
-   "ms": 0,
-   "note": "HTTP 403: {\"code\":\"INSUFFICIENT_BALANCE\",\"message\":\"Insufficient account balance\"}"
-  },
   {
    "ts": 1789483113203,
    "model": "—",
@@ -8755,6 +8495,266 @@
    "out": 35,
    "ok": true,
    "ms": 11792
+  },
+  {
+   "ts": 1789570460708,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 128110,
+   "out": 263,
+   "ok": true,
+   "ms": 4468
+  },
+  {
+   "ts": 1789570469745,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 128574,
+   "out": 553,
+   "ok": true,
+   "ms": 7082
+  },
+  {
+   "ts": 1789570493560,
+   "model": "gpt-5.6-sol",
+   "channelId": "prism1",
+   "kind": "test",
+   "in": 1,
+   "out": 9,
+   "ok": true,
+   "ms": 10344
+  },
+  {
+   "ts": 1789570506676,
+   "model": "gpt-5.6-sol-1",
+   "channelId": "prism1",
+   "kind": "test",
+   "in": 1,
+   "out": 11,
+   "ok": true,
+   "ms": 9950
+  },
+  {
+   "ts": 1789570813638,
+   "model": "gpt-5.6-sol-1",
+   "channelId": "prism1",
+   "kind": "openai",
+   "in": 5566,
+   "out": 339,
+   "ok": true,
+   "ms": 15099
+  },
+  {
+   "ts": 1789570887895,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 129490,
+   "out": 317,
+   "ok": true,
+   "ms": 6445
+  },
+  {
+   "ts": 1789570894825,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 130323,
+   "out": 232,
+   "ok": true,
+   "ms": 4986
+  },
+  {
+   "ts": 1789570902406,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 136887,
+   "out": 194,
+   "ok": true,
+   "ms": 5842
+  },
+  {
+   "ts": 1789570911463,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 137757,
+   "out": 785,
+   "ok": true,
+   "ms": 7474
+  },
+  {
+   "ts": 1789571037569,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 138678,
+   "out": 367,
+   "ok": true,
+   "ms": 4899
+  },
+  {
+   "ts": 1789571043732,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 139213,
+   "out": 103,
+   "ok": true,
+   "ms": 4345
+  },
+  {
+   "ts": 1789571048237,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 139954,
+   "out": 287,
+   "ok": true,
+   "ms": 4450
+  },
+  {
+   "ts": 1789571058288,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 140408,
+   "out": 795,
+   "ok": true,
+   "ms": 8322
+  },
+  {
+   "ts": 1789571113312,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 141240,
+   "out": 266,
+   "ok": true,
+   "ms": 5441
+  },
+  {
+   "ts": 1789571123546,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 141894,
+   "out": 801,
+   "ok": true,
+   "ms": 8242
+  },
+  {
+   "ts": 1789571167412,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 142714,
+   "out": 574,
+   "ok": true,
+   "ms": 6028
+  },
+  {
+   "ts": 1789571242359,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 143321,
+   "out": 256,
+   "ok": true,
+   "ms": 4314
+  },
+  {
+   "ts": 1789571249873,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 144036,
+   "out": 379,
+   "ok": true,
+   "ms": 5600
+  },
+  {
+   "ts": 1789571258870,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 144456,
+   "out": 165,
+   "ok": true,
+   "ms": 4038
+  },
+  {
+   "ts": 1789571265931,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 144723,
+   "out": 304,
+   "ok": true,
+   "ms": 5379
+  },
+  {
+   "ts": 1789571272079,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 145110,
+   "out": 262,
+   "ok": true,
+   "ms": 4201
+  },
+  {
+   "ts": 1789571280919,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 145468,
+   "out": 305,
+   "ok": true,
+   "ms": 6915
+  },
+  {
+   "ts": 1789571287292,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 145830,
+   "out": 231,
+   "ok": true,
+   "ms": 4524
+  },
+  {
+   "ts": 1789571307837,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 146138,
+   "out": 590,
+   "ok": true,
+   "ms": 5194
+  },
+  {
+   "ts": 1789571311500,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 16,
+   "out": 1,
+   "ok": true,
+   "ms": 1733
+  },
+  {
+   "ts": 1789571315960,
+   "model": "wb-deepseek-v4.1-flash",
+   "channelId": "workbuddy",
+   "kind": "openai",
+   "in": 146796,
+   "out": 264,
+   "ok": true,
+   "ms": 4319
   }
  ]
 }

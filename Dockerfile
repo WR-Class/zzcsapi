@@ -10,7 +10,6 @@ COPY notion.js ./
 COPY notion-agent.js ./
 COPY arena.js ./
 COPY tool-emu.js ./
-COPY prism.js ./
 COPY console.html ./
 COPY config.example.json ./config.json
 ENV PORT=8787
