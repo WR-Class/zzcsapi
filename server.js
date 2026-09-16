@@ -1165,6 +1165,7 @@ function channelStatusAll() {
       consecutiveFail: ch.consecutiveFail,
       cooldownUntil: ch.cooldownUntil,
       lastError: ch.lastError,
+      codexQuota: ch.codexQuota || undefined,
       aliases: Array.from(ch.aliasMap.entries()).map(([a, u]) => ({ alias: a, upstream: u })),
       upstreamModels: ch.models,
       notionUsage: ch.notion && ch.notion.usage ? ch.notion.usage : undefined,
@@ -1653,6 +1654,19 @@ async function handleAdminApi(req, res, url) {
     persistConfig();
     probeChannel(ch).catch(() => {});
     return sendJson(res, 200, { ok: true, id, existed, name: def.name, models, accountId: acct.accountId || undefined, rotated: tmpDef.apiKey !== rt });
+  }
+  // codex 配额查询（5h/7d 窗口、计划类型、重置时间）；结果缓存到渠道随 status 下发
+  if (req.method === 'GET' && url.pathname === '/admin/api/codex-quota') {
+    const id = url.searchParams.get('id') || '';
+    const ch = channels.get(id);
+    if (!ch || ch.def.protocol !== 'codex') return sendJson(res, 404, { error: 'codex channel not found' });
+    try {
+      const quota = await codexFetchQuota(ch);
+      ch.codexQuota = quota;
+      return sendJson(res, 200, { ok: true, id, quota });
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, id, error: String(err.message || err) });
+    }
   }
   // 临时探测（不落库），用于「获取模型」按钮
   if (req.method === 'POST' && url.pathname === '/admin/api/probe') {
@@ -3156,6 +3170,53 @@ async function codexFetchModels(def, acct, timeoutMs) {
   if (!j) return [];
   const arr = Array.isArray(j) ? j : (j.models || j.data || []);
   return arr.map((m) => m && (m.slug || m.id || m.name)).filter(Boolean);
+}
+
+// 查配额（sub2api 同款 /wham/usage；注意这个端点的身份头与推理面不同：originator=Codex Desktop, beta=codex-1）
+// 返回归一化形状：{ email, planType, primary5h: {usedPercent, resetAfterSec, resetAt}|null, secondary7d: {...}|null, limitReached, reason, rawWindows }
+async function codexFetchQuota(ch, timeoutMs) {
+  const acct = await codexEnsureToken(ch);
+  const headers = {
+    'Authorization': `Bearer ${acct.accessToken}`,
+    'openai-beta': 'codex-1',
+    'oai-language': 'zh-CN',
+    'originator': 'Codex Desktop',
+    'accept': 'application/json',
+  };
+  if (acct.accountId) headers['chatgpt-account-id'] = acct.accountId;
+  const out = await wbCurlRequest('GET', 'https://chatgpt.com/backend-api/wham/usage', headers, null, timeoutMs || 20000, ch.def.proxy);
+  if (!out.body) throw new Error('codex quota: ' + (out.error || 'empty'));
+  const j = safeJson(out.body);
+  if (!j) throw new Error('codex quota: bad json (HTTP ' + out.status + ')');
+  if (j.error) throw new Error('codex quota: ' + (j.error.message || j.error.code || 'unknown'));
+  const rl = j.rate_limit || {};
+  const win = (w) => w ? {
+    usedPercent: Number(w.used_percent) || 0,
+    windowSec: Number(w.limit_window_seconds) || 0,
+    resetAfterSec: Number(w.reset_after_seconds) || 0,
+    resetAt: Number(w.reset_at) || 0,
+  } : null;
+  const primary = win(rl.primary_window);
+  const secondary = win(rl.secondary_window);
+  // 按窗口大小归类 5h/7d（sub2api Normalize 同款逻辑：小窗口=5h，大窗口=7d）
+  let primary5h = null, secondary7d = null;
+  if (primary && secondary) {
+    if (primary.windowSec <= secondary.windowSec) { primary5h = primary; secondary7d = secondary; }
+    else { primary5h = secondary; secondary7d = primary; }
+  } else if (primary) {
+    if (primary.windowSec <= 21600) primary5h = primary; else secondary7d = primary;
+  } else if (secondary) {
+    if (secondary.windowSec <= 21600) primary5h = secondary; else secondary7d = secondary;
+  }
+  return {
+    email: j.email || ch.def.email || '',
+    planType: j.plan_type || '',
+    limitReached: !!rl.limit_reached,
+    reason: (j.rate_limit_reached_type && j.rate_limit_reached_type.type) || '',
+    primary5h, secondary7d,
+    credits: j.credits ? { hasCredits: !!j.credits.has_credits, unlimited: !!j.credits.unlimited } : null,
+    fetchedAt: Date.now(),
+  };
 }
 
 // chat.completions messages → Responses API { instructions, input }

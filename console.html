@@ -996,6 +996,28 @@ function renderChannels(data) {
     })() : '';
     const checked = ch.lastCheck ? new Date(ch.lastCheck).toLocaleTimeString() : '—';
     const lat = ch.latencyMs < 0 ? '—' : ch.latencyMs + 'ms';
+    // codex 配额展示（5h/周窗口进度条，数据来自「配额」按钮的实时查询缓存）
+    const quotaBox = ch.protocol === 'codex' ? (() => {
+      const q = ch.codexQuota;
+      const winBar = (label, w) => {
+        if (!w) return '';
+        const pct = Math.min(100, Math.round(w.usedPercent));
+        const resetIn = w.resetAfterSec > 0 ? (w.resetAfterSec >= 86400 ? (w.resetAfterSec / 86400).toFixed(1) + '天' : w.resetAfterSec >= 3600 ? (w.resetAfterSec / 3600).toFixed(1) + '小时' : Math.round(w.resetAfterSec / 60) + '分钟') : '—';
+        const color = pct >= 95 ? 'var(--red)' : pct >= 70 ? 'var(--amber,#e6a23c)' : 'var(--green)';
+        return `<div style="margin-top:4px">
+          <div class="meta-row" style="margin:0"><span class="m">${label} <b>${pct}%</b></span><span class="m">${pct >= 100 ? '✗ 已用尽' : '✓ 可用'} · ${resetIn}后重置</span></div>
+          <div style="height:4px;border-radius:2px;background:var(--bg2);margin:4px 0 2px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${color};border-radius:2px;transition:width .4s"></div></div>
+        </div>`;
+      };
+      if (!q) return `<div class="quota-zone" style="margin-top:4px"><span class="help" style="color:var(--tx3);font-size:11px">点下方「配额」拉取 5小时/每周 用量</span></div>`;
+      const when = q.fetchedAt ? new Date(q.fetchedAt).toLocaleTimeString() : '—';
+      return `<div class="quota-zone" style="margin-top:4px">
+        ${winBar('5小时窗口', q.primary5h)}
+        ${winBar('每周窗口', q.secondary7d)}
+        ${!q.primary5h && !q.secondary7d ? '<div class="meta-row" style="margin:0"><span class="m">无窗口数据</span></div>' : ''}
+        <div class="meta-row" style="margin:2px 0 0"><span class="m" style="font-size:10px">${escapeHtml(q.planType || '')}${q.limitReached ? ' · <b style="color:var(--red)">限额中</b>' : ''} · 更新 ${when}</span></div>
+      </div>`;
+    })() : '';
     return `
       <div class="ch" data-id="${escapeHtml(ch.id)}">
         <div class="hd">
@@ -1015,12 +1037,14 @@ function renderChannels(data) {
           </div>
           <div class="models">${ms || '<span class="help" style="color:var(--tx3);font-size:11px">无别名</span>'}</div>
           ${usageBox}
+          ${quotaBox}
           ${errBox}
         </div>
         <div class="acts">
           <span class="prio">优先级 <input type="text" value="${ch.priority}" data-edit="priority"></span>
           <button data-act="save-prio" class="btn ghost sm" title="保存优先级">保存</button>
           <button data-act="probe" class="btn ghost sm">探测</button>
+          ${ch.protocol === 'codex' ? '<button data-act="quota" class="btn ghost sm">📊 配额</button>' : ''}
           <button data-act="test" class="btn ghost sm">🧪 测试</button>
           <button data-act="edit" class="btn ghost sm">编辑</button>
           <button data-act="toggle" class="btn ghost sm">${ch.enabled ? '停用' : '启用'}</button>
@@ -1042,6 +1066,16 @@ function renderChannels(data) {
       const b = card.querySelector('[data-act=probe]'); b.disabled = true; b.textContent = '探测中';
       await api('/admin/api/recheck', { method: 'POST', body: JSON.stringify({ id }) });
       toast('✓ 已探测'); refresh();
+    };
+    const quotaBtn = card.querySelector('[data-act=quota]');
+    if (quotaBtn) quotaBtn.onclick = async () => {
+      quotaBtn.disabled = true; quotaBtn.textContent = '⏳ 查询中';
+      try {
+        const r = await api('/admin/api/codex-quota?id=' + encodeURIComponent(id));
+        if (r.ok) { toast('✓ 配额已更新'); refresh(); }
+        else alert('配额查询失败：' + (r.error || '未知错误'));
+      } catch (e) { alert('配额查询失败：' + (e.message || e)); }
+      quotaBtn.disabled = false; quotaBtn.textContent = '📊 配额';
     };
     card.querySelector('[data-act=test]').onclick = () => openTestModal({ restrictChannelId: id });
     card.querySelector('[data-act=edit]').onclick = () => openModal(state.channels.find(c => c.id === id));
