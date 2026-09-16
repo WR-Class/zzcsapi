@@ -783,6 +783,7 @@
           <option value="arena">arena（Arena.ai 逆向）</option>
           <option value="notion-agent">notion-agent（Notion 官方 Agent API）</option>
           <option value="workbuddy">workbuddy（WorkBuddy 国际版反代）</option>
+          <option value="codex">codex（ChatGPT 官方订阅反代，RT 导入）</option>
         </select>
       </div>
       <div class="field">
@@ -798,8 +799,12 @@
       </div>
     </div>
     <div class="field">
-      <label>Base URL <span class="help">openai: https://host/v1 · notion: https://app.notion.com · notion-agent: https://api.notion.com · arena: https://arena.ai · workbuddy: https://www.workbuddy.ai/v2</span></label>
+      <label>Base URL <span class="help">openai: https://host/v1 · notion: https://app.notion.com · notion-agent: https://api.notion.com · arena: https://arena.ai · workbuddy: https://www.workbuddy.ai/v2 · codex: https://chatgpt.com/backend-api/codex</span></label>
       <input id="f-baseUrl" type="text" placeholder="https://api.example.com/v1">
+    </div>
+    <div class="field">
+      <label>代理 <span class="help">可选。codex 必填，如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
+      <input id="f-proxy" type="text" placeholder="留空 = 直连">
     </div>
     <div class="field">
       <label>API Key</label>
@@ -2056,6 +2061,7 @@ function openModal(ch) {
   $('#f-baseUrl').value = ch ? ch.baseUrl : '';
   $('#f-apiKey').value = ch ? ch.apiKey : '';
   $('#f-autoAlias').checked = ch ? ch.autoAlias === true : false;
+  $('#f-proxy').value = ch && ch.proxy ? ch.proxy : '';
   state.probedModels = [];
   state.modalChannel = ch;
   state.modalModels = ch && ch.aliases && ch.aliases.length
@@ -2071,8 +2077,8 @@ function openModal(ch) {
 $('#btn-cancel').onclick = $('#btn-x').onclick = () => $('#mask').classList.remove('show');
 $('#mask').onclick = (e) => { if (e.target.id === 'mask') $('#mask').classList.remove('show'); };
 
-/* 协议切换：notion/arena/notion-agent/workbuddy 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
-const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com', workbuddy: 'https://www.workbuddy.ai/v2' };
+/* 协议切换：notion/arena/notion-agent/workbuddy/codex 自动带出默认域名（空或旧默认值时），避免选错协议+错域名 */
+const PROTO_DEFAULT_BASE = { notion: 'https://app.notion.com', arena: 'https://arena.ai', 'notion-agent': 'https://api.notion.com', workbuddy: 'https://www.workbuddy.ai/v2', codex: 'https://chatgpt.com/backend-api/codex' };
 $('#f-protocol').addEventListener('change', () => {
   const proto = $('#f-protocol').value;
   const cur = $('#f-baseUrl').value.trim();
@@ -2083,7 +2089,8 @@ $('#f-protocol').addEventListener('change', () => {
     : (proto === 'arena' ? 'arena 协议：留空由宿主机 agent 管理（或粘贴浏览器 cookie）'
       : (proto === 'notion-agent' ? 'notion-agent 协议：填开发者门户连接的集成令牌（ntn_ 开头；连接需勾选「查看会话并与代理交互」能力）'
         : (proto === 'workbuddy' ? 'workbuddy 协议：填 CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'
-          : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值')));
+          : (proto === 'codex' ? 'codex 协议：填 ChatGPT 订阅的 refresh token（rt.1. 开头，sub2api「手动导入 rt」同款）。注意：RT 一次性轮转，每次刷新自动写回新值；别再用导出时的原值'
+            : 'notion 协议时这里填浏览器 Cookie 里的 token_v2 值'))));
   renderModelsEditor();
 });
 
@@ -2151,6 +2158,11 @@ $('#btn-probe').onclick = async () => {
       btn.disabled = false; btn.textContent = '⟳ 重新探测';
       return;
     }
+    // codex：RT 探测时已被轮转，服务端回传新值——回填表单，否则保存旧 RT 渠道即死
+    if (r.rotatedApiKey) {
+      $('#f-apiKey').value = r.rotatedApiKey;
+      toast('RT 已轮转，新值已回填到 API Key 框');
+    }
     const models = r.models || [];
     state.probedModels = models;
     $('#probe-status').textContent = `✓ ${models.length} 个 · ${r.latencyMs}ms`;
@@ -2206,6 +2218,7 @@ $('#btn-save').onclick = async () => {
     id, name: $('#f-name').value.trim() || id, protocol: $('#f-protocol').value,
     priority: Number($('#f-priority').value), enabled: $('#f-enabled').value === 'true',
     baseUrl, apiKey, autoAlias: $('#f-autoAlias').checked, models,
+    proxy: $('#f-proxy').value.trim() || undefined,
   };
   try {
     await api('/admin/api/channels', { method: 'POST', body: JSON.stringify(body) });

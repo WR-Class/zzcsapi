@@ -358,7 +358,7 @@ function aggregateModels(protocol) {
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion/arena 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
-    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy'];
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
@@ -462,6 +462,25 @@ async function probeChannel(ch) {
       ch.consecutiveFail++;
       ch.lastError = 'workbuddy: ' + (err.message || err);
       ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+    }
+    return;
+  }
+  // Codex（ChatGPT 官方订阅）：探测 = 一次令牌刷新（验证 RT 活性，轮转自动写回）
+  if ((ch.def.protocol || 'openai') === 'codex') {
+    const t0 = Date.now();
+    try {
+      await codexEnsureToken(ch);
+      ch.models = Object.values(ch.def.models || {}).filter(Boolean);
+      ch.latencyMs = Date.now() - t0;
+      ch.lastCheck = Date.now();
+      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+      ch.status = 'ok';
+    } catch (err) {
+      ch.status = 'down';
+      ch.consecutiveFail++;
+      ch.lastError = String(err.message || err);
+      // RT 失效是致命错误，拉长冷却避免反复打上游（每次失败上游日志都有记录）
+      ch.cooldownUntil = Date.now() + (err.fatal ? 300_000 : Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail)));
     }
     return;
   }
@@ -587,9 +606,29 @@ async function probeDef(def, timeoutMs) {
       return { ok: false, status: err.status || 0, error: 'workbuddy: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
   }
+  // Codex（ChatGPT 官方订阅）：探测 = 一次令牌刷新
+  if ((def.protocol || 'openai') === 'codex') {
+    const t0 = Date.now();
+    const tmpCh = { def, codex: null };
+    const origRt = def.apiKey;
+    try {
+      const acct = await codexEnsureToken(tmpCh);
+      let models = Object.values(def.models || {}).filter(Boolean);
+      if (!models.length) models = ['gpt-5.1']; // 探测时表单尚无别名配置，给出订阅默认模型建议
+      const resp = { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { accountId: acct.accountId || undefined, note: 'codex 无 /models 端点，模型列表来自别名配置（默认建议 gpt-5.1）' } };
+      // RT 轮转：探测消费了旧 RT → 把新 RT 回给前端回填，否则用户保存旧值渠道即死
+      if (tmpCh.def.apiKey !== origRt) resp.rotatedApiKey = tmpCh.def.apiKey;
+      return resp;
+    } catch (err) {
+      return { ok: false, status: err.status || 0, error: String(err.message || err), latencyMs: Date.now() - t0 };
+    }
+  }
   // 常见配置错误提示：域名是 notion/arena 但协议没选对 → 直接给出可读指引
   {
     const host = String((def || {}).baseUrl || '').toLowerCase();
+    if (/chatgpt\.com/.test(host) && (def.protocol || 'openai') !== 'codex') {
+      return { ok: false, status: 0, error: '检测到 chatgpt.com 域名但协议不是 codex——请把「协议」下拉框改成 codex（ChatGPT 订阅走 backend-api/codex，openai 协议的 /models 探测对它无效）', latencyMs: 0 };
+    }
     if (/workbuddy\.ai/.test(host) && (def.protocol || 'openai') !== 'workbuddy') {
       return { ok: false, status: 0, error: '检测到 workbuddy.ai 域名但协议不是 workbuddy——请把「协议」下拉框改成 workbuddy（openai 协议的 /models 探测对 workbuddy 无效，且该接口只支持流式）', latencyMs: 0 };
     }
@@ -660,7 +699,7 @@ function safeJson(t) { try { return JSON.parse(t); } catch { return null; } }
 // WorkBuddy 专用 curl 请求：该上游对 Node/undici TLS 指纹 ECONNRESET，必须走 curl 子进程。
 // 与 notionCurlRequest 同构：body 写临时文件避免转义，stdout 全量缓冲（SSE 短文本够用）。
 // 返回 {status, body, error}；status>0 且 body 非空时为成功响应
-function wbCurlRequest(method, url, headers, bodyStr, timeoutMs) {
+function wbCurlRequest(method, url, headers, bodyStr, timeoutMs, proxy) {
   return new Promise((resolve) => {
     const os = require('os');
     const fsSync = require('fs');
@@ -669,6 +708,7 @@ function wbCurlRequest(method, url, headers, bodyStr, timeoutMs) {
     let written = false;
     try { fsSync.writeFileSync(bodyFile, bodyStr || '', 'utf8'); written = true; } catch {}
     const args = ['-sS', '-N', '-X', String(method).toUpperCase(), '--max-time', String(Math.max(1, Math.floor((timeoutMs || 120000) / 1000)))];
+    if (proxy) args.push('-x', String(proxy));
     for (const [k, v] of Object.entries(headers || {})) args.push('-H', `${k}: ${v}`);
     if (written) args.push('--data', '@' + bodyFile);
     args.push('-w', '\n__ZZCODE__%{http_code}');
@@ -1107,6 +1147,7 @@ function channelStatusAll() {
       priority: ch.def.priority ?? 0,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
+      proxy: ch.def.proxy || undefined,
       status: ch.status,
       lastCheck: ch.lastCheck,
       latencyMs: ch.latencyMs,
@@ -1144,6 +1185,7 @@ function persistConfig() {
       priority: ch.def.priority ?? 0,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
+      proxy: ch.def.proxy || undefined,
       models: ch.def.models || {},
     })),
   };
@@ -1274,7 +1316,7 @@ function validateChannelDef(def) {
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent|workbuddy';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent|workbuddy|codex';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   return null;
 }
@@ -1466,6 +1508,7 @@ async function handleAdminApi(req, res, url) {
       priority: ch.def.priority ?? 0,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
+      proxy: ch.def.proxy || undefined,
       models: ch.def.models || {},
     })) });
   }
@@ -1483,6 +1526,7 @@ async function handleAdminApi(req, res, url) {
       enabled: body.enabled !== false,
       autoAlias: body.autoAlias === true,
       models: body.models || {},
+      proxy: body.proxy ? String(body.proxy) : undefined,
     };
     const existed = channels.has(def.id);
     const ch = upsertChannel(def);
@@ -1498,7 +1542,7 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena', 'workbuddy'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena', 'workbuddy', 'codex'].includes(body.protocol) ? body.protocol : 'openai',
     };
     const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
     return sendJson(res, 200, r);
@@ -1523,7 +1567,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : channelsServing(model, 'workbuddy'))))); // openai 优先，notion→arena→notion-agent→workbuddy 逐级兜底
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : channelsServing(model, 'codex')))))); // openai 优先，notion→arena→notion-agent→workbuddy→codex 逐级兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -1648,6 +1692,34 @@ async function handleAdminApi(req, res, url) {
             ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
           }
           results.push({ channelId: c.channelId, ok: wbOk, status: wbStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: wbOk ? undefined : (wbErr || 'empty reply') });
+          continue;
+        }
+        // Codex 渠道：RT→AT → /responses（Responses API），curl+代理，聚合 output_text
+        if (ch.def.protocol === 'codex') {
+          const tmo = Math.min(120000, Number(body.timeoutMs) || 60000);
+          let cxErr = '', reply = '', cxStatus = 200;
+          try {
+            const call = await codexCallResponses(ch, c.upstream, [{ role: 'user', content: prompt }], tmo);
+            cxStatus = call.status || 200;
+            if (!call.ok) cxErr = call.error || 'unknown';
+            else {
+              const parsed = codexParseSSE(call.text);
+              reply = parsed.fullText;
+              if (parsed.errMsg && !reply) cxErr = parsed.errMsg;
+            }
+          } catch (e) { cxErr = String(e.message || e); }
+          ttfb = Date.now() - t0;
+          const cxOk = !cxErr && !!reply.trim();
+          if (cxOk) {
+            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            if (ch.status !== 'ok') ch.status = 'ok';
+            ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+            recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
+          } else {
+            ch.consecutiveFail++; ch.lastError = 'codex: ' + String(cxErr || 'empty reply').slice(0, 150);
+            ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+          }
+          results.push({ channelId: c.channelId, ok: cxOk, status: cxStatus, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: cxOk ? undefined : (cxErr || 'empty reply') });
           continue;
         }
         // 走 dispatchRequest 复用出站请求构造
@@ -1793,6 +1865,9 @@ async function handleOpenAIRequest(req, res, url) {
   // workbuddy（国际版反代）兜底：OpenAI 兼容流式，免费 deepseek-v4.1-flash
   const wbCands = channelsServing(requested, 'workbuddy');
   for (const wc of wbCands) if (!candidates.some((c) => c.channelId === wc.channelId)) candidates.push(wc);
+  // codex（ChatGPT 官方订阅反代）兜底
+  const cxCands = channelsServing(requested, 'codex');
+  for (const xc of cxCands) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
   if (candidates.length === 0) {
     return sendJson(res, 404, upstreamErrorPayload(404, `no openai channel for model "${requested}"`));
   }
@@ -1904,6 +1979,7 @@ async function handleAnthropicRequest(req, res, url) {
     for (const nc of channelsServing(requested, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
     for (const ac of channelsServing(requested, 'arena')) if (!candidates.some((c) => c.channelId === ac.channelId)) candidates.push(ac);
     for (const gc of channelsServing(requested, 'notion-agent')) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
+    for (const xc of channelsServing(requested, 'codex')) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
     if (candidates.length === 0) {
       return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
@@ -2063,6 +2139,10 @@ async function tryChannel(opts) {
     // WorkBuddy 国际版反代：只支持流式 + 首条必须 system，OpenAI 兼容 SSE
     if ((ch.def.protocol || 'openai') === 'workbuddy') {
       return await tryWorkbuddyChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+    }
+    // Codex（ChatGPT 官方订阅）：RT→AT 令牌管理 + Responses API，curl+代理传输
+    if ((ch.def.protocol || 'openai') === 'codex') {
+      return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
     }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
@@ -2865,6 +2945,211 @@ async function tryWorkbuddyChannel(opts) {
     model: displayModel, channelId: candidate.channelId, kind: opts.kind,
     inputTokens: assembled.usage.prompt_tokens,
     outputTokens: assembled.usage.completion_tokens, ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+  });
+  return 'success';
+}
+
+// ─────────────────── Codex（ChatGPT 官方订阅反代，sub2api 同款）───────────────────
+// 链路：refresh_token →(auth.openai.com/oauth/token)→ access_token(约1h) + 新 RT
+//       → chatgpt.com/backend-api/codex/responses（Responses API，SSE）
+// 特性：
+//   1) RT 一次性轮转——每次刷新若返回新 RT 必须写回 config 持久化，否则渠道报废
+//   2) 区域限制 + TLS 指纹 → 全程 curl 子进程 + def.proxy（如 http://host.docker.internal:7897）
+//   3) 无 /models 探测——模型走 def.models 别名映射，探测 = 一次令牌刷新
+const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
+const CODEX_DEFAULT_BASE = 'https://chatgpt.com/backend-api/codex';
+
+function codexJwtPayload(t) {
+  try {
+    const p = String(t).split('.');
+    if (p.length < 2) return null;
+    const b = p[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(Buffer.from(b, 'base64').toString('utf8'));
+  } catch { return null; }
+}
+
+// 确保有可用 access_token；过期/缺失则用 RT 刷新（RT 轮转 → 自动写回持久化）
+async function codexEnsureToken(ch) {
+  const now = Date.now();
+  if (ch.codex && ch.codex.accessToken && ch.codex.expiresAt > now + 60_000) return ch.codex;
+  const form = 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(ch.def.apiKey) + '&client_id=' + CODEX_CLIENT_ID;
+  const out = await wbCurlRequest('POST', CODEX_TOKEN_URL, { 'Content-Type': 'application/x-www-form-urlencoded' }, form, 30_000, ch.def.proxy);
+  if (!out.body) { const e = new Error('codex token: ' + (out.error || 'empty')); throw e; }
+  const j = safeJson(out.body);
+  if (!j || !j.access_token) {
+    const code = j && j.error && (j.error.code || j.error.message) || out.body.slice(0, 120);
+    const err = new Error('codex token: ' + code);
+    err.status = out.status;
+    // RT 失效（被轮转/撤销）→ 致命，等用户换 RT；不要反复重试
+    if (/invalid_refresh_token|token_expired|invalid_grant/i.test(String(code))) err.fatal = true;
+    throw err;
+  }
+  const payload = codexJwtPayload(j.id_token) || codexJwtPayload(j.access_token) || {};
+  const authClaim = payload['https://api.openai.com/auth'] || {};
+  const accountId = authClaim.chatgpt_account_id || payload.chatgpt_account_id || '';
+  // RT 轮转：OpenAI 刷新时会返回新 RT，旧 RT 立即作废——必须写回持久化
+  if (j.refresh_token && j.refresh_token !== ch.def.apiKey) {
+    ch.def.apiKey = j.refresh_token;
+    persistConfig();
+    console.log(`[codex] ${ch.def.id} RT 已轮转，新值已写回 config`);
+  }
+  ch.codex = {
+    accessToken: j.access_token,
+    accountId,
+    expiresAt: now + (Number(j.expires_in) || 3600) * 1000,
+  };
+  return ch.codex;
+}
+
+// chat.completions messages → Responses API { instructions, input }
+function codexBuildInput(messages) {
+  const instructions = [];
+  const input = [];
+  for (const m of messages || []) {
+    const text = typeof m.content === 'string' ? m.content
+      : Array.isArray(m.content) ? m.content.map((p) => (p && p.text) || '').join('')
+      : String(m.content || '');
+    if (m.role === 'system' || m.role === 'developer') { if (text.trim()) instructions.push(text); continue; }
+    if (m.role === 'user') input.push({ type: 'message', role: 'user', content: [{ type: 'input_text', text }] });
+    else if (m.role === 'assistant') input.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+  }
+  return { instructions: instructions.join('\n') || 'You are a helpful assistant.', input };
+}
+
+// 调 codex /responses，返回 { ok, status, text(SSE全量), error }
+async function codexCallResponses(ch, model, messages, timeoutMs) {
+  const acct = await codexEnsureToken(ch);
+  const { instructions, input } = codexBuildInput(messages);
+  const upstreamBody = { model, instructions, input, store: false, stream: true };
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+    'Authorization': `Bearer ${acct.accessToken}`,
+    'OpenAI-Beta': 'responses=experimental',
+    'originator': 'codex_cli_rs',
+    'session_id': require('crypto').randomUUID(),
+    'User-Agent': 'codex_cli_rs/0.20.0 (Windows NT 10.0; x64)',
+  };
+  if (acct.accountId) headers['chatgpt-account-id'] = acct.accountId;
+  const target = joinUrl(ch.def.baseUrl || CODEX_DEFAULT_BASE, 'responses');
+  const out = await wbCurlRequest('POST', target, headers, JSON.stringify(upstreamBody), timeoutMs, ch.def.proxy);
+  if (out.error || !out.body) return { ok: false, status: out.status || 0, error: 'codex curl: ' + (out.error || 'empty') };
+  const text = out.body;
+  if (text.trim().startsWith('{') || (out.status && out.status >= 400)) {
+    const j = safeJson(text);
+    const msg = (j && j.error && (j.error.message || j.error.code)) || (j && j.msg) || text.slice(0, 160);
+    return { ok: false, status: out.status || 200, error: String(msg), raw: text };
+  }
+  if (!/^data:/m.test(text)) return { ok: false, status: out.status || 200, error: 'codex: non-SSE response' };
+  return { ok: true, status: 200, text };
+}
+
+// 解析 Responses API SSE 全量文本 → { fullText, usage, errMsg }
+function codexParseSSE(text) {
+  let fullText = ''; let usage = null; let errMsg = '';
+  for (const ln of String(text).split('\n')) {
+    const s = ln.trim();
+    if (!s.startsWith('data:')) continue;
+    const d = s.slice(5).trim();
+    if (!d || d === '[DONE]') continue;
+    let j; try { j = JSON.parse(d); } catch { continue; }
+    const t = j.type || '';
+    if (t === 'response.output_text.delta') { if (j.delta) fullText += j.delta; }
+    else if (t === 'response.completed' || t === 'response.incomplete') {
+      const u = j.response && j.response.usage;
+      if (u) usage = { prompt_tokens: u.input_tokens || 0, completion_tokens: u.output_tokens || 0, total_tokens: (u.input_tokens || 0) + (u.output_tokens || 0) };
+    } else if (t === 'response.failed' || t === 'error') {
+      errMsg = (j.response && j.response.error && j.response.error.message) || j.message || t;
+    }
+  }
+  return { fullText, usage, errMsg };
+}
+
+async function tryCodexChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel } = opts;
+  const t0 = Date.now();
+  const timeoutMs = ch.def.timeoutMs || 180_000;
+  const displayModel = requestedModel || candidate.upstream;
+
+  let call;
+  try {
+    call = await codexCallResponses(ch, candidate.upstream, body.messages, timeoutMs);
+  } catch (err) {
+    recordFailure(ch, String(err.message || err));
+    if (err.fatal) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } }));
+      return 'fatal_client';
+    }
+    return err.message || 'codex token error';
+  }
+  if (!call.ok) {
+    recordFailure(ch, 'codex ' + call.status + ': ' + call.error);
+    if (call.raw && call.status >= 400 && call.status < 500 && ![401, 402, 403, 408, 429].includes(call.status)) {
+      res.writeHead(call.status, { 'Content-Type': 'application/json' });
+      res.end(call.raw);
+      return 'fatal_client';
+    }
+    return 'codex ' + call.status + ': ' + call.error;
+  }
+
+  const { fullText, usage: usageOut, errMsg } = codexParseSSE(call.text);
+  if (errMsg && !fullText) {
+    recordFailure(ch, 'codex stream: ' + errMsg);
+    return 'codex stream: ' + errMsg;
+  }
+  if (!fullText.trim()) {
+    recordFailure(ch, 'codex stream: empty content');
+    return 'codex stream: empty content';
+  }
+
+  ch.consecutiveFail = 0;
+  ch.cooldownUntil = 0;
+  ch.lastError = null;
+  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  ch.latencyMs = Date.now() - t0;
+
+  const respId = 'chatcmpl-codex-' + Date.now().toString(36);
+  const created = Math.floor(Date.now() / 1000);
+
+  if (isStream) {
+    // 重放为 OpenAI chunk（role → content → finish → [DONE]）；anthropic 入口经 onStreamChunk 转换
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-ZZCSAPI-Channel': candidate.channelId,
+    });
+    const mk = (delta, fr) => 'data: ' + JSON.stringify({ id: respId, object: 'chat.completion.chunk', created, model: displayModel, choices: [{ index: 0, delta, finish_reason: fr || null }] }) + '\n';
+    const emit = (line) => {
+      if (opts.onStreamChunk) { const o = opts.onStreamChunk(line, candidate); if (o) res.write(o); }
+      else res.write(line + '\n');
+    };
+    emit(mk({ role: 'assistant', content: '' }));
+    emit(mk({ content: fullText }));
+    emit(mk({}, 'stop'));
+    emit('data: [DONE]');
+    res.end();
+  } else {
+    const assembled = {
+      id: respId,
+      object: 'chat.completion',
+      created,
+      model: displayModel,
+      choices: [{ index: 0, message: { role: 'assistant', content: fullText }, finish_reason: 'stop' }],
+      usage: usageOut || { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(fullText), total_tokens: 0 },
+    };
+    if (!usageOut) assembled.usage.total_tokens = assembled.usage.prompt_tokens + assembled.usage.completion_tokens;
+    res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+    res.end(JSON.stringify(assembled));
+  }
+  recordUsage({
+    model: displayModel, channelId: candidate.channelId, kind: opts.kind,
+    inputTokens: usageOut ? usageOut.prompt_tokens : estimateTokens(messagesText(body && body.messages)),
+    outputTokens: usageOut ? usageOut.completion_tokens : estimateTokens(fullText),
+    ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
   });
   return 'success';
 }
