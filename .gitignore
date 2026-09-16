@@ -4,3 +4,8 @@ config.json
 .DS_Store
 arena-data/
 _*.js
+
+# Prism 研究凭据（活令牌，禁止提交）
+_prism_cookies.json
+_prism_*.txt
+
