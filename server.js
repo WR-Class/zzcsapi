@@ -580,8 +580,9 @@ async function probeDef(def, timeoutMs) {
     try {
       const r = await workbuddyChatProbe(def, timeoutMs || 15000);
       if (!r.ok) throw new Error(r.error || 'probe failed');
-      const models = Object.values(def.models || {}).filter(Boolean);
-      return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { note: 'workbuddy 无 /models 端点，模型列表来自别名配置' } };
+      let models = Object.values(def.models || {}).filter(Boolean);
+      if (!models.length) models = ['deepseek-v4.1-flash']; // 探测时表单尚无别名配置，给出免费默认模型作为建议
+      return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { note: 'workbuddy 无 /models 端点，模型列表来自别名配置（默认建议 deepseek-v4.1-flash）' } };
     } catch (err) {
       return { ok: false, status: err.status || 0, error: 'workbuddy: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
@@ -1497,7 +1498,7 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena', 'workbuddy'].includes(body.protocol) ? body.protocol : 'openai',
     };
     const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
     return sendJson(res, 200, r);
@@ -1522,7 +1523,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : channelsServing(model, 'notion-agent')))); // openai 优先，notion→arena→notion-agent 逐级兜底
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : channelsServing(model, 'workbuddy'))))); // openai 优先，notion→arena→notion-agent→workbuddy 逐级兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
