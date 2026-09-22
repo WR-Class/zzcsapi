@@ -588,10 +588,10 @@ function probeUrlForDef(def) {
 }
 function probeHeadersForDef(def) {
   const proto = def.protocol || 'openai';
-  if (proto === 'notion')    return { 'User-Agent': notion.NOTION_UA, 'Cookie': `token_v2=${def.apiKey}` };
-  if (proto === 'anthropic') return { 'x-api-key': def.apiKey, 'anthropic-version': '2023-06-01' };
-  if (proto === 'gemini')    return { 'x-goog-api-key': def.apiKey };
-  return { 'Authorization': `Bearer ${def.apiKey}` };
+  if (proto === 'notion')    return applyCustomHeaders({ 'User-Agent': notion.NOTION_UA, 'Cookie': `token_v2=${def.apiKey}` }, def);
+  if (proto === 'anthropic') return applyCustomHeaders({ 'x-api-key': def.apiKey, 'anthropic-version': '2023-06-01' }, def);
+  if (proto === 'gemini')    return applyCustomHeaders({ 'x-goog-api-key': def.apiKey }, def);
+  return applyCustomHeaders({ 'Authorization': `Bearer ${def.apiKey}` }, def);
 }
 function extractModelIds(j, proto) {
   if (!j) return [];
@@ -738,6 +738,39 @@ function sendJson(res, code, obj) { const body = JSON.stringify(obj); res.writeH
 function unauthorized(res, kind) { sendJson(res, 401, { error: { message: `${kind} key required` } }); }
 function upstreamErrorPayload(status, msg) { return { error: { message: msg, type: 'upstream_error', code: status } }; }
 function safeJson(t) { try { return JSON.parse(t); } catch { return null; } }
+
+// 渠道级自定义请求头。def.headers 支持两种写法：
+//   对象：{"User-Agent":"claude-cli/2.0.0 (external, cli)"}
+//   文本：每行 "Name: value"（控制台里直接粘贴多行更顺手）
+// 值为空的行忽略；不许覆盖 Authorization（防误配把 key 冲掉）。
+function parseCustomHeaders(def) {
+  const src = def && def.headers;
+  if (!src) return {};
+  const out = {};
+  if (typeof src === 'object' && !Array.isArray(src)) {
+    for (const [k, v] of Object.entries(src)) {
+      if (k && v !== undefined && v !== null && String(v).trim()) out[String(k).trim()] = String(v).trim();
+    }
+  } else {
+    for (const line of String(src).split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s || s.startsWith('#')) continue;
+      const i = s.indexOf(':');
+      if (i <= 0) continue;
+      const k = s.slice(0, i).trim();
+      const v = s.slice(i + 1).trim();
+      if (k && v) out[k] = v;
+    }
+  }
+  delete out.Authorization;
+  delete out.authorization;
+  return out;
+}
+
+function applyCustomHeaders(base, def) {
+  const extra = parseCustomHeaders(def);
+  return Object.keys(extra).length ? Object.assign({}, base, extra) : base;
+}
 
 // WorkBuddy 专用 curl 请求：该上游对 Node/undici TLS 指纹 ECONNRESET，必须走 curl 子进程。
 // 与 notionCurlRequest 同构：body 写临时文件避免转义，stdout 全量缓冲（SSE 短文本够用）。
@@ -1231,6 +1264,8 @@ function persistConfig() {
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
       models: ch.def.models || {},
+      // 渠道级自定义请求头（解析成纯净对象后持久化）
+      headers: (ch.def.headers && Object.keys(parseCustomHeaders(ch.def)).length) ? parseCustomHeaders(ch.def) : undefined,
       // codex 专有：持久化 AT 及其元信息（10 天有效，重启免刷 RT）
       accessToken: ch.def.accessToken || undefined,
       accountId: ch.def.accountId || undefined,
@@ -1558,6 +1593,7 @@ async function handleAdminApi(req, res, url) {
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
+      headers: (ch.def.headers && Object.keys(parseCustomHeaders(ch.def)).length) ? parseCustomHeaders(ch.def) : undefined,
       models: ch.def.models || {},
       accessToken: ch.def.accessToken || undefined,
       accountId: ch.def.accountId || undefined,
@@ -1580,6 +1616,8 @@ async function handleAdminApi(req, res, url) {
       autoAlias: body.autoAlias === true,
       models: body.models || {},
       proxy: body.proxy ? String(body.proxy) : undefined,
+      // 渠道级自定义请求头（对象或 "Name: value" 多行文本）
+      headers: body.headers ? body.headers : undefined,
     };
     const existed = channels.has(def.id);
     const ch = upsertChannel(def);
@@ -1599,17 +1637,21 @@ async function handleAdminApi(req, res, url) {
     const proxy = body.proxy ? String(body.proxy) : CODEX_DEFAULT_PROXY;
 
     // A) 完整 JSON 导入：直接用 AT，避免碰 RT（拼车场景下 RT 多半已被别人消费）
-    const maybeJson = raw.startsWith('{') ? safeJson(raw) : null;
+    //    支持三种形状：
+    //      a1) 扁平：{access_token, refresh_token, account_id, email}
+    //      a2) sub2api 导出：{type:"sub2api-data", accounts:[{credentials:{access_token,…}}]}
+    //      a3) 单账号对象：{credentials:{access_token,…}}
+    const maybeJsonRaw = raw.startsWith('{') ? safeJson(raw) : null;
+    const maybeJson = maybeJsonRaw ? pickCodexCreds(maybeJsonRaw) : null;
     if (maybeJson && (maybeJson.access_token || maybeJson.refresh_token)) {
       const at = String(maybeJson.access_token || '');
       const rtTok = String(maybeJson.refresh_token || '');
       const atPayload = at ? (codexJwtPayload(at) || {}) : {};
       const atExpMs = atPayload.exp ? atPayload.exp * 1000 : 0;
       if (!rtTok) return sendJson(res, 200, { ok: false, error: 'JSON 里缺少 refresh_token' });
-      const id = (body.id && /^[a-zA-Z0-9_\-]+$/.test(body.id)) ? body.id
-        : ('codex' + (Array.from(channels.keys()).filter((k) => /^codex\d*$/.test(k)).length + 1));
-      const email = String(maybeJson.email || atPayload.email || '');
-      const accountId = String(maybeJson.account_id || (atPayload['https://api.openai.com/auth'] || {}).chatgpt_account_id || '');
+      const id = (body.id && /^[a-zA-Z0-9_\-]+$/.test(body.id)) ? body.id : nextCodexChannelId();
+      const email = String(maybeJson.email || atPayload.email || (atPayload['https://api.openai.com/profile'] || {}).email || '');
+      const accountId = String(maybeJson.account_id || maybeJson.chatgpt_account_id || (atPayload['https://api.openai.com/auth'] || {}).chatgpt_account_id || '');
       const tmpDef = { id: 'codex-import-tmp', baseUrl: CODEX_DEFAULT_BASE, proxy };
       const tmpAcct = { accessToken: at, accountId, expiresAt: atExpMs };
       // AT 活就直接拉模型验证；AT 死了再尝试 RT 刷新
@@ -1663,8 +1705,7 @@ async function handleAdminApi(req, res, url) {
     } catch (err) {
       return sendJson(res, 200, { ok: false, error: String(err.message || err) });
     }
-    const id = (body.id && /^[a-zA-Z0-9_\-]+$/.test(body.id)) ? body.id
-      : ('codex' + (Array.from(channels.keys()).filter((k) => /^codex\d*$/.test(k)).length + 1));
+    const id = (body.id && /^[a-zA-Z0-9_\-]+$/.test(body.id)) ? body.id : nextCodexChannelId();
     let models = [];
     try { models = await codexFetchModels(tmpDef, acct, 15000); } catch {}
     if (!models.length) models = ['gpt-5.5']; // 拉取失败兜底
@@ -1894,11 +1935,12 @@ async function handleAdminApi(req, res, url) {
           : ch.def.protocol === 'gemini'
             ? joinUrl(ch.def.baseUrl, 'v1beta/models/' + encodeURIComponent(c.upstream) + ':generateContent')
             : joinUrl(ch.def.baseUrl, 'chat/completions');
-        const headers = ch.def.protocol === 'anthropic'
+        const baseHeaders = ch.def.protocol === 'anthropic'
           ? { 'Content-Type': 'application/json', 'x-api-key': ch.def.apiKey, 'anthropic-version': '2023-06-01' }
           : ch.def.protocol === 'gemini'
             ? { 'Content-Type': 'application/json', 'x-goog-api-key': ch.def.apiKey }
             : { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` };
+        const headers = applyCustomHeaders(baseHeaders, ch.def);
         let bodyOut;
         if (ch.def.protocol === 'anthropic') {
           bodyOut = { model: c.upstream, max_tokens: 16, messages: [{ role: 'user', content: prompt }] };
@@ -2313,7 +2355,7 @@ async function tryChannel(opts) {
     }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch);
-  const headers = buildOutgoingHeaders(ch);
+  const headers = applyCustomHeaders(buildOutgoingHeaders(ch), ch.def);
   const bodyStr = JSON.stringify(outgoing);
   const timeoutMs = ch.def.timeoutMs || 120_000;
 
@@ -3134,6 +3176,37 @@ function codexJwtPayload(t) {
     const b = p[1].replace(/-/g, '+').replace(/_/g, '/');
     return JSON.parse(Buffer.from(b, 'base64').toString('utf8'));
   } catch { return null; }
+}
+
+// 从各种导入 JSON 里取出带 access_token/refresh_token 的那层对象。
+// 兼容：扁平对象、{credentials:{…}}、sub2api {accounts:[{credentials:{…}}]}（取第一个可用账号）
+function pickCodexCreds(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  const hasTok = (o) => o && (o.access_token || o.refresh_token);
+  if (hasTok(obj)) return obj;
+  if (hasTok(obj.credentials)) return obj.credentials;
+  // 账号数组：优先挑没被禁用的、AT 还没过期的
+  const list = Array.isArray(obj.accounts) ? obj.accounts : (Array.isArray(obj.data) ? obj.data : null);
+  if (list) {
+    const cands = list.map((a) => (a && a.credentials) || a).filter(hasTok);
+    if (cands.length) {
+      const live = cands.find((c) => {
+        const p = codexJwtPayload(c.access_token || '');
+        return !c.disabled && (!p || !p.exp || p.exp * 1000 > Date.now());
+      });
+      return live || cands[0];
+    }
+  }
+  return null;
+}
+
+// 找下一个没被占用的 codex 渠道 id（批量导入多账号时不能撞名）
+function nextCodexChannelId() {
+  for (let i = 1; i < 1000; i++) {
+    const id = 'codex' + i;
+    if (!channels.has(id)) return id;
+  }
+  return 'codex' + Date.now().toString(36);
 }
 
 // 确保有可用 access_token：内存缓存 → def 里持久化的 AT（sub2api JSON 导入，10天有效）→ RT 刷新

@@ -830,6 +830,10 @@
       <input id="f-proxy" type="text" placeholder="留空 = 直连">
     </div>
     <div class="field">
+      <label>自定义请求头 <span class="help">可选。每行一条 <code>Name: value</code>。用于需要客户端指纹的上游，例如 AgentRouter 必须发 <code>User-Agent: claude-cli/2.0.0 (external, cli)</code>，否则 401 unauthorized client detected。Authorization 不可覆盖</span></label>
+      <textarea id="f-headers" rows="3" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea>
+    </div>
+    <div class="field">
       <label>API Key</label>
       <input id="f-apiKey" type="password" placeholder="sk-... 或 notion 的 token_v2">
       <span class="help" id="f-apikey-help">notion 协议：这里填浏览器 Cookie 里的 token_v2 值</span>
@@ -2118,6 +2122,9 @@ function openModal(ch) {
   $('#f-apiKey').value = ch ? ch.apiKey : '';
   $('#f-autoAlias').checked = ch ? ch.autoAlias === true : false;
   $('#f-proxy').value = ch && ch.proxy ? ch.proxy : '';
+  // 自定义请求头：对象 → "Name: value" 多行
+  const hdrs = ch && ch.headers && typeof ch.headers === 'object' && !Array.isArray(ch.headers) ? ch.headers : null;
+  $('#f-headers').value = hdrs ? Object.entries(hdrs).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
   state.probedModels = [];
   state.modalChannel = ch;
   state.modalModels = ch && ch.aliases && ch.aliases.length
@@ -2184,10 +2191,20 @@ $('#codex-file-input').onchange = async (e) => {
     try {
       const text = await f.text();
       const j = JSON.parse(text);
-      if (!j.refresh_token) throw new Error('文件里缺少 refresh_token');
-      const r = await api('/admin/api/codex-import', { method: 'POST', body: JSON.stringify({ rt: text.trim() }) });
-      if (r.ok) { okN++; }
-      else { failN++; failMsgs.push(`${f.name}: ${r.error || '未知错误'}`); }
+      // 兼容：扁平 {refresh_token} / {credentials:{…}} / sub2api {accounts:[{credentials:{…}}]}
+      const hasTok = (o) => o && (o.access_token || o.refresh_token);
+      let units = [];
+      const list = Array.isArray(j.accounts) ? j.accounts : (Array.isArray(j.data) ? j.data : null);
+      if (hasTok(j)) units = [j];
+      else if (hasTok(j.credentials)) units = [j.credentials];
+      else if (list) units = list.map(a => (a && a.credentials) || a).filter(hasTok);
+      if (!units.length) throw new Error('文件里找不到 access_token/refresh_token');
+      for (const u of units) {
+        if (!u.refresh_token) { failN++; failMsgs.push(`${f.name}: 该账号缺少 refresh_token`); continue; }
+        const r = await api('/admin/api/codex-import', { method: 'POST', body: JSON.stringify({ rt: JSON.stringify(u) }) });
+        if (r.ok) okN++;
+        else { failN++; failMsgs.push(`${f.name}${units.length > 1 ? ' · ' + (u.email || '?') : ''}: ${r.error || '未知错误'}`); }
+      }
     } catch (err) { failN++; failMsgs.push(`${f.name}: ${err.message || err}`); }
   }
   btn.disabled = false; btn.textContent = '📂 导入 codex JSON';
@@ -2338,6 +2355,7 @@ $('#btn-save').onclick = async () => {
     priority: Number($('#f-priority').value), enabled: $('#f-enabled').value === 'true',
     baseUrl, apiKey, autoAlias: $('#f-autoAlias').checked, models,
     proxy: $('#f-proxy').value.trim() || undefined,
+    headers: $('#f-headers').value.trim() || undefined,
   };
   try {
     await api('/admin/api/channels', { method: 'POST', body: JSON.stringify(body) });
