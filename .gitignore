@@ -4,8 +4,14 @@ config.json
 .DS_Store
 arena-data/
 _*.js
+# 改造过程的中间产物（提取的 head/CSS、diff 转储、改造前备份），不提交
+_*.txt
+_*.css
+_*.html
+*.bak-*
+.trae-html-share-packages/
 
-# Prism �о�ƾ�ݣ������ƣ���ֹ�ύ��
+# Prism 研究凭据（活令牌，禁止提交）
 _prism_cookies.json
 _prism_*.txt
 

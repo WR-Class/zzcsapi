@@ -16,6 +16,11 @@ const notion = require('./notion.js');
 const notionAgent = require('./notion-agent.js');
 const arena = require('./arena.js');
 const toolEmu = require('./tool-emu.js');
+// Genspark 网页会话渠道常量：必须在启动探测路径（probeAll 在下方模块加载期同步触发）之前初始化，
+// 放文件底部会因 const TDZ 使首轮探测静默失败
+const crypto = require('crypto');
+const GENSPARK_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+const GENSPARK_REFERER = 'https://www.genspark.ai/agents?type=ai_chat';
 
 // 检测响应是否 Cloudflare WAF 拦截（JA3/TLS 指纹被识别为机器人）
 function isCloudflareBlock(status, body) {
@@ -334,7 +339,7 @@ function channelsServing(model, protocol) {
       out.push({
         channelId: ch.def.id,
         upstream: ch.aliasMap.get(want),
-        priority: ch.def.priority ?? 0,
+        priority: effPriority(ch),
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -347,7 +352,7 @@ function channelsServing(model, protocol) {
       out.push({
         channelId: ch.def.id,
         upstream: want,
-        priority: (ch.def.priority ?? 0) - 0.5,
+        priority: effPriority(ch) - 0.5,
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -401,7 +406,7 @@ function aggregateModels(protocol) {
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion/arena 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
-    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex'];
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex', 'genspark'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
@@ -489,10 +494,10 @@ async function probeChannel(ch) {
     return;
   }
   // WorkBuddy 国际版反代：无 /models 端点，探测走一次真实轻量聊天（免费 deepseek-v4.1-flash）
-  if ((ch.def.protocol || 'openai') === 'workbuddy') {
+  if ((ch.def.protocol || 'openai') === 'workbuddy' || ch.def.protocol === 'genspark') {
     const t0 = Date.now();
     try {
-      const probe = await workbuddyChatProbe(ch.def, HEALTH.timeoutMs || 15000);
+      const probe = ch.def.protocol === 'genspark' ? await gensparkIsLogin(ch.def, HEALTH.timeoutMs || 15000) : await workbuddyChatProbe(ch.def, HEALTH.timeoutMs || 15000);
       if (!probe.ok) throw new Error(probe.error || 'probe failed');
       // 无 /models 端点 → 模型列表直接用 def.models 的 upstream 值（用户配置的别名映射）
       ch.models = Object.values(ch.def.models || {}).filter(Boolean);
@@ -647,6 +652,19 @@ async function probeDef(def, timeoutMs) {
       return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { note: 'workbuddy 无 /models 端点，模型列表来自别名配置（默认建议 deepseek-v4.1-flash）' } };
     } catch (err) {
       return { ok: false, status: err.status || 0, error: 'workbuddy: ' + (err.message || err), latencyMs: Date.now() - t0 };
+    }
+  }
+  // Genspark 网页会话反代：探测 = GET /api/is_login（免费，不消耗 credit），必须走 def.proxy
+  if ((def.protocol || 'openai') === 'genspark') {
+    const t0 = Date.now();
+    try {
+      const r = await gensparkIsLogin(def, timeoutMs || 12000);
+      if (!r.ok) throw new Error(r.error || 'probe failed');
+      let models = Object.values(def.models || {}).filter(Boolean);
+      if (!models.length) models = ['gpt-6-luna', 'gpt-6-sol', 'claude-opus-5-5', 'glm-5p3', 'deep-seek-v4.1-flash', 'kimi-k3'];
+      return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { email: r.email, note: '网页会话鉴权通过（is_login 免费探测，不消耗 credit）；网页端无 models 接口，模型列表来自别名配置' } };
+    } catch (err) {
+      return { ok: false, status: err.status || 0, error: 'genspark: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
   }
   // Codex（ChatGPT 官方订阅）：探测 = 一次令牌刷新
@@ -1221,9 +1239,13 @@ function channelStatusAll() {
       apiKey: ch.def.apiKey,
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
+      effectivePriority: effPriority(ch),
+      rollFailRate: rollFailRate(ch),
+      roll: ch.roll || undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
+      headers: ch.def.headers || undefined,
       status: ch.status,
       lastCheck: ch.lastCheck,
       latencyMs: ch.latencyMs,
@@ -1354,6 +1376,29 @@ function bumpUsageBucket(map, key, inTok, outTok, ok) {
   b.outputTokens += outTok;
 }
 
+// ─── 渠道滚动健康分（自动优先级）───
+// 近期成败滚动窗口：总量 ≥120 时整体减半（旧样本指数衰减，新表现主导）。
+// ≥5 个样本才计算失败率；有效优先级 = 静态 priority − 失败率×3：
+// 常败渠道自动沉底（惩罚上限 -3，仍高于刻意调低的兜底渠道如 genspark -5），
+// 恢复后新成功稀释失败率、优先级自动回升——不需要手动调整。
+function bumpRoll(ch, ok) {
+  if (!ch) return;
+  const r = ch.roll || (ch.roll = { w: 0, f: 0 });
+  if (ok) r.w++; else r.f++;
+  if (r.w + r.f >= 120) { r.w = Math.ceil(r.w / 2); r.f = Math.ceil(r.f / 2); }
+}
+function rollFailRate(ch) {
+  const r = ch.roll;
+  if (!r) return null;
+  const t = r.w + r.f;
+  return t >= 5 ? r.f / t : null;
+}
+function effPriority(ch) {
+  const p = ch.def.priority ?? 0;
+  const fr = rollFailRate(ch);
+  return fr === null ? p : Math.round((p - fr * 3) * 100) / 100;
+}
+
 // 记一次请求用量。realUsage 可传 {prompt_tokens, completion_tokens}（上游真实值优先）
 function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage, note }) {
   try {
@@ -1364,6 +1409,7 @@ function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, la
     if (realUsage && Number.isFinite(realUsage.prompt_tokens) && realUsage.prompt_tokens > 0) inTok = realUsage.prompt_tokens;
     if (realUsage && Number.isFinite(realUsage.completion_tokens) && realUsage.completion_tokens > 0) outTok = realUsage.completion_tokens;
     const ts = Date.now();
+    bumpRoll(channels.get(channelId), ok !== false); // 滚动健康分（自动优先级用；失败经 recordFailure 也流经此处）
     u.total.requests++;
     if (!ok) u.total.errors++;
     u.total.inputTokens += inTok;
@@ -1400,7 +1446,7 @@ function validateChannelDef(def) {
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent|workbuddy|codex';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'arena', 'notion-agent', 'workbuddy', 'codex', 'genspark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|arena|notion-agent|workbuddy|codex|genspark';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   return null;
 }
@@ -1728,6 +1774,72 @@ async function handleAdminApi(req, res, url) {
     probeChannel(ch).catch(() => {});
     return sendJson(res, 200, { ok: true, id, existed, name: def.name, models, accountId: acct.accountId || undefined, rotated: tmpDef.apiKey !== rt });
   }
+  // genspark 一键导入：粘贴 session.enc JSON（{"sessionId":…,"apiKey":"gsk-…"}）/ 整段 cookie /
+  // 裸 session_id（uuid:hex）→ 提取 sessionId 当渠道 key（gsk- key 免费号走 llm_proxy 会被
+  // free_plan_block 拦，不用）。两种模式：
+  //   mode 'replace'（默认，粘贴框）——更新现有 genspark 渠道的 key（session 过期换新用）
+  //   mode 'add'（文件批量）——同 key 视为刷新，新 key 自动建新渠道 genspark/genspark2/…
+  //     （每个号 100 积分/天，多号多份）；代理/模型/优先级抄现有 genspark 渠道，没有则用默认
+  if (req.method === 'POST' && url.pathname === '/admin/api/genspark-import') {
+    const body = await safeReadJson(req) || {};
+    const raw = String(body.raw || body.json || '').trim();
+    let key = '';
+    const cookieM = raw.match(/session_id=([^;\s"']+)/);            // 整段 cookie 串
+    if (cookieM) key = cookieM[1];
+    else if (raw.startsWith('{')) {                               // session.enc JSON
+      const j = safeJson(raw);
+      const sid = j && (j.sessionId || j.session_id || (j.data && (j.data.sessionId || j.data.session_id)));
+      if (sid) key = String(sid);
+    } else if (/^[0-9a-f-]{36}:[0-9a-f]{40,}$/i.test(raw)) {      // 裸 session_id
+      key = raw;
+    }
+    if (!key) return sendJson(res, 200, { ok: false, error: '无法识别输入——支持三种格式：session.enc 的 JSON（{"sessionId":…}）、含 session_id=… 的整段 cookie、或裸 session_id（uuid:hex）' });
+    const gensparkChs = Array.from(channels.values()).filter((c) => (c.def.protocol || 'openai') === 'genspark');
+    const mode = body.mode === 'add' ? 'add' : 'replace';
+    let target = null, created = false;
+    if (mode === 'add') {
+      target = gensparkChs.find((c) => String(c.def.apiKey).trim() === key) || null;
+      if (!target) {
+        // 建新渠道：id 取 genspark / gensparkN 空位；代理/模型/优先级抄现有 genspark 渠道
+        let n = 1, id = 'genspark';
+        while (channels.has(id)) { n++; id = 'genspark' + n; }
+        const proto = gensparkChs[0] ? gensparkChs[0].def : null;
+        const def = {
+          id,
+          name: 'Genspark 网页会话' + (gensparkChs.length ? ' ' + (gensparkChs.length + 1) : ''),
+          baseUrl: proto ? proto.baseUrl : 'https://www.genspark.ai',
+          apiKey: key,
+          protocol: 'genspark',
+          priority: proto ? proto.priority : -5,
+          enabled: true, autoAlias: false,
+          models: proto && proto.models && Object.keys(proto.models).length
+            ? { ...proto.models }
+            : { 'gpt-6-luna': 'gpt-6-luna', 'gpt-6-sol': 'gpt-6-sol', 'gpt-5.6-sol': 'gpt-5.6-sol', 'claude-opus-5-5': 'claude-opus-5-5', 'claude-sonnet-5': 'claude-sonnet-5', 'glm-5.3': 'glm-5p3', 'deepseek-v4.1-flash': 'deep-seek-v4.1-flash', 'kimi-k3': 'kimi-k3', 'grok-4.7': 'grok-4.7', 'minimax-m3': 'minimax-m3', 'gemini-3.8-flash': 'gemini-3.8-flash' },
+          proxy: (proto && proto.proxy) || (body.defaultProxy ? String(body.defaultProxy) : undefined),
+        };
+        target = upsertChannel(def);
+        created = true;
+      }
+    } else {
+      target = gensparkChs[0] || null;
+      if (target) { target.def.apiKey = key; }
+    }
+    if (target) {
+      persistConfig();
+      const r = await gensparkIsLogin(target.def, 15000).catch(() => null);
+      if (r && r.ok) {
+        target.consecutiveFail = 0; target.cooldownUntil = 0; target.lastError = null;
+        target.status = 'ok'; target.lastCheck = Date.now();
+        return sendJson(res, 200, { ok: true, existed: true, created, id: target.def.id, key, email: r.email, login: true });
+      }
+      // 验证失败也保留新 key（可能只是代理/出口抖动），仅标记渠道状态
+      target.status = 'down';
+      target.lastError = 'genspark: ' + (r ? r.error : 'is_login 网络失败');
+      if (created) target.consecutiveFail = 1;
+      return sendJson(res, 200, { ok: true, existed: true, created, id: target.def.id, key, login: false, error: r ? r.error : 'is_login 网络失败（检查渠道 proxy）' });
+    }
+    return sendJson(res, 200, { ok: true, existed: false, created: false, key, hint: '尚无 genspark 渠道——key 已提取，请在前端表单补全代理后保存' });
+  }
   // codex 配额查询（5h/7d 窗口、计划类型、重置时间）；结果缓存到渠道随 status 下发
   if (req.method === 'GET' && url.pathname === '/admin/api/codex-quota') {
     const id = url.searchParams.get('id') || '';
@@ -1748,7 +1860,11 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena', 'workbuddy', 'codex'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'arena', 'workbuddy', 'codex', 'genspark'].includes(body.protocol) ? body.protocol : 'openai',
+      proxy: body.proxy ? String(body.proxy) : undefined,
+      // 渠道级自定义请求头（对象或 "Name: value" 多行文本）——AgentRouter 这类查客户端
+      // 指纹的上游，探测必须带同款 UA，否则 401 unauthorized client detected
+      headers: body.headers ? body.headers : undefined,
     };
     const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
     return sendJson(res, 200, r);
@@ -1773,7 +1889,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : channelsServing(model, 'codex')))))); // openai 优先，notion→arena→notion-agent→workbuddy→codex 逐级兜底
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'arena').length ? channelsServing(model, 'arena') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : (channelsServing(model, 'genspark').length ? channelsServing(model, 'genspark') : channelsServing(model, 'codex'))))))); // openai 优先，notion→arena→notion-agent→workbuddy→genspark→codex 逐级兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -1898,6 +2014,33 @@ async function handleAdminApi(req, res, url) {
             ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
           }
           results.push({ channelId: c.channelId, ok: wbOk, status: wbStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: wbOk ? undefined : (wbErr || 'empty reply') });
+          continue;
+        }
+        // Genspark 渠道：网页会话 ask_proxy 最小聊天（消耗 1 credit），curl+proxy 聚合全文
+        if (ch.def.protocol === 'genspark') {
+          const tmo = Math.min(90000, Number(body.timeoutMs) || 45000);
+          const gsBody = JSON.stringify(gensparkBuildPayload(c.upstream, [{ role: 'user', content: prompt }]));
+          const out = await gensparkAsk(ch.def, gsBody, tmo);
+          ttfb = Date.now() - t0;
+          const parsed = gensparkParseSSE(out.body || '');
+          let reply = '', gsErr = '';
+          const gsStatus = out.status || 0;
+          if (out.error || !out.body) gsErr = out.error || 'empty body';
+          else if (parsed.notLogin) gsErr = 'session 失效（not login / is_login:false）';
+          else if (parsed.rateLimited) gsErr = '触发限流（rate limit / too quickly / 积分已用完，已冷却）';
+          else if (parsed.error) gsErr = parsed.error;
+          else reply = (parsed.finalContent || parsed.fullText || '').trim();
+          const gsOk = !gsErr && !!reply && !parsed.placeholder;
+          if (gsOk) {
+            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            if (ch.status !== 'ok') ch.status = 'ok';
+            ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+            recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: parsed.usage ? parsed.usage.prompt_tokens : estimateTokens(prompt), outputTokens: parsed.usage ? parsed.usage.completion_tokens : estimateTokens(reply), ok: true, latencyMs: ttfb, realUsage: parsed.usage || null });
+          } else {
+            ch.consecutiveFail++; ch.lastError = 'genspark: ' + String(gsErr || (parsed.placeholder ? '上游占位符回复' : 'empty reply')).slice(0, 150);
+            ch.cooldownUntil = Date.now() + (parsed.notLogin ? 300_000 : parsed.rateLimited ? 3600_000 : Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail)));
+          }
+          results.push({ channelId: c.channelId, ok: gsOk, status: gsStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: gsOk ? undefined : (gsErr || 'empty reply') });
           continue;
         }
         // Codex 渠道：RT→AT → /responses（Responses API），curl+代理，聚合 output_text
@@ -2072,6 +2215,9 @@ async function handleOpenAIRequest(req, res, url) {
   // workbuddy（国际版反代）兜底：OpenAI 兼容流式，免费 deepseek-v4.1-flash
   const wbCands = channelsServing(requested, 'workbuddy');
   for (const wc of wbCands) if (!candidates.some((c) => c.channelId === wc.channelId)) candidates.push(wc);
+  // genspark（网页会话反代）兜底：免费号 1 credit/次、100/天 → 链尾接住（放在 codex 前）
+  const gsCands = channelsServing(requested, 'genspark');
+  for (const gc of gsCands) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
   // codex（ChatGPT 官方订阅反代）兜底
   const cxCands = channelsServing(requested, 'codex');
   for (const xc of cxCands) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
@@ -2348,6 +2494,10 @@ async function tryChannel(opts) {
     // WorkBuddy 国际版反代：只支持流式 + 首条必须 system，OpenAI 兼容 SSE
     if ((ch.def.protocol || 'openai') === 'workbuddy') {
       return await tryWorkbuddyChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+    }
+    // Genspark 网页会话反代：curl+proxy 绕 cn_code 门/CF，SSE 聚合后分发
+    if ((ch.def.protocol || 'openai') === 'genspark') {
+      return await tryGensparkChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
     }
     // Codex（ChatGPT 官方订阅）：RT→AT 令牌管理 + Responses API，curl+代理传输
     if ((ch.def.protocol || 'openai') === 'codex') {
@@ -3155,6 +3305,206 @@ async function tryWorkbuddyChannel(opts) {
     inputTokens: assembled.usage.prompt_tokens,
     outputTokens: assembled.usage.completion_tokens, ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
   });
+  return 'success';
+}
+
+// ─────────────────────────── Genspark 网页会话渠道 ───────────────────────────
+// 参考社区项目 genspark2api（github.com/xinxinshuhao-create/genspark2api）的网页端实测协议。
+// 链路：curl 子进程 + def.proxy（必须走 VPN/Clash——直连中国 IP 被 Genspark cn_code
+//       验证码门拦、.NET/undici TLS 被 CF 挑战；容器内代理填 http://host.docker.internal:7897）
+// 鉴权：Cookie: session_id=<apiKey>（实测单 session_id 即可；也兼容整段 cookie 串）
+// 端点：POST {baseUrl}/api/agent/ask_proxy（SSE：message_field_delta 增量 /
+//       message_field 全量快照 / message_result 终态，内含 _llm_usage 真实 token）
+// 额度：免费号 1 credit/请求、100/天、6 req/min、60/小时 → 建议低 priority 链尾兜底
+// 局限：上游忽略 OpenAI tools 参数（genspark2api 实测静默忽略），本渠道暂不做工具仿真；
+//       仅挂 OpenAI 入口（/v1/chat/completions），anthropic/gemini 入口不挂（流转换不支持）
+// （GENSPARK_UA / GENSPARK_REFERER / crypto 声明在文件顶部，防 TDZ）
+
+function gensparkCookie(def) {
+  const k = String(def.apiKey || '').trim();
+  if (!k) return '';
+  if (k.includes(';')) return k; // 整段 cookie 串
+  if (k.startsWith('session_id=')) return k + '; agree_terms=1; gslogin=1';
+  return `session_id=${k}; agree_terms=1; gslogin=1`;
+}
+
+function gensparkHeaders(def) {
+  const n1 = crypto.randomUUID().replace(/-/g, '');
+  const n2 = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  return {
+    'User-Agent': GENSPARK_UA,
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+    'Origin': 'https://www.genspark.ai',
+    'Referer': GENSPARK_REFERER,
+    'request-id': `|${n1}.${n2}`,
+    'traceparent': `00-${n1}-${n2}-01`,
+    'Cookie': gensparkCookie(def),
+  };
+}
+
+function gensparkBuildPayload(upstreamModel, messages) {
+  return {
+    ai_chat_model: upstreamModel,
+    ai_chat_enable_search: false,
+    ai_chat_disable_personalization: false,
+    use_moa_proxy: false,
+    moa_models: [],
+    writingContent: null,
+    sas_ask_origin: 'typed',
+    type: 'ai_chat',
+    is_private: true,
+    messages: (messages || []).map((m) => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+    })),
+  };
+}
+
+// SSE 聚合解析 → {fullText, finalContent, usage, error, notLogin, rateLimited, placeholder, sawData}
+function gensparkParseSSE(sseText) {
+  const st = { fullText: '', finalContent: '', usage: null, error: '', notLogin: false, rateLimited: false, placeholder: false, sawData: false };
+  for (const ln of String(sseText || '').split('\n')) {
+    const s = ln.trim();
+    if (!s.startsWith('data:')) continue;
+    const d = s.slice(5).trim();
+    if (!d || d === '[DONE]') continue;
+    const j = safeJson(d);
+    if (!j) continue;
+    st.sawData = true;
+    if (j.type === 'message_field_delta' && j.field_name === 'content' && typeof j.delta === 'string') st.fullText += j.delta;
+    else if (j.type === 'message_field' && j.field_name === 'content' && typeof j.field_value === 'string') st.finalContent = j.field_value;
+    else if (j.type === 'message_result' && j.message) {
+      if (typeof j.message.content === 'string' && j.message.content) st.finalContent = j.message.content;
+      const su = j.message.session_state && j.message.session_state._llm_usage;
+      if (su && Number.isFinite(su.prompt_tokens)) st.usage = { prompt_tokens: su.prompt_tokens || 0, completion_tokens: su.completion_tokens || 0, total_tokens: su.total_tokens || 0 };
+    } else if (j.type === 'error') {
+      st.error = String(j.message || j.error || 'upstream error');
+    }
+  }
+  const finalText = st.finalContent || st.fullText;
+  if (/not login/i.test(finalText)) st.notLogin = true;
+  if (/rate limit|too quickly|积分已用完/i.test(finalText)) st.rateLimited = true;
+  if (/sorry,? i (couldn'?t|could not) produce a response|i (couldn'?t|could not) generate a response|something went wrong/i.test(finalText)) st.placeholder = true;
+  return st;
+}
+
+// ask_proxy 请求（curl + proxy，body 走临时文件避开转义问题）
+async function gensparkAsk(def, bodyStr, timeoutMs) {
+  if (!def.proxy) return { status: 0, body: '', error: 'genspark: 渠道未配置代理（proxy 必填，容器内如 http://host.docker.internal:7897；直连会被 cn_code 门/CF 拦截）' };
+  return await wbCurlRequest('POST', joinUrl(def.baseUrl, '/api/agent/ask_proxy'), gensparkHeaders(def), bodyStr, timeoutMs, def.proxy);
+}
+
+// is_login 探测（免费）：{ok, email} | {ok:false, error, status}
+async function gensparkIsLogin(def, timeoutMs) {
+  if (!def.proxy) return { ok: false, error: 'proxy 必填（容器内如 http://host.docker.internal:7897；宿主机直跑填 http://127.0.0.1:7897）', status: 0 };
+  const out = await wbCurlRequest('GET', joinUrl(def.baseUrl, '/api/is_login'), {
+    'User-Agent': GENSPARK_UA, 'Accept': 'application/json', 'Referer': 'https://www.genspark.ai/',
+    'Cookie': gensparkCookie(def),
+  }, null, timeoutMs || 12000, def.proxy);
+  if (out.error || !out.body) return { ok: false, error: out.error || `HTTP ${out.status || 0}`, status: out.status || 0 };
+  const j = safeJson(out.body);
+  if (!j) return { ok: false, error: '非 JSON 响应（疑似 cn_code 验证码门或 CF 拦截，检查代理出口）: ' + out.body.slice(0, 80), status: out.status || 0 };
+  if (j.status === 0 && j.data && j.data.is_login) {
+    const email = String(j.data.cogen_email || '');
+    return { ok: true, email: email ? email.replace(/^(.{3}).*?(@.*)$/, '$1***$2') : undefined };
+  }
+  if (j.data && j.data.is_login === false) return { ok: false, error: 'session_id 失效（is_login:false）——重新导出网页会话 cookie 后更新渠道 apiKey', status: 401 };
+  return { ok: false, error: (j.message || out.body.slice(0, 100)), status: out.status || 0 };
+}
+
+async function tryGensparkChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel, kind } = opts;
+  const t0 = Date.now();
+  const timeoutMs = ch.def.timeoutMs || 180_000;
+  const displayModel = requestedModel || candidate.upstream;
+
+  const payload = gensparkBuildPayload(candidate.upstream, body.messages);
+  const out = await gensparkAsk(ch.def, JSON.stringify(payload), timeoutMs);
+  if (out.error || !out.body) {
+    recordFailure(ch, 'genspark curl: ' + (out.error || 'empty body'));
+    return 'genspark curl: ' + (out.error || 'empty body');
+  }
+  const raw = out.body;
+  if (out.status >= 400) {
+    const j = safeJson(raw);
+    const msg = (j && (j.message || (j.error && j.error.message))) || raw.slice(0, 160);
+    recordFailure(ch, `genspark HTTP ${out.status}: ${String(msg).slice(0, 160)}`);
+    // 400/422 等明确请求错误透传；401/403 会话或出口问题 → 切下一候选
+    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 408, 429].includes(out.status)) {
+      res.writeHead(out.status, { 'Content-Type': 'application/json' });
+      res.end(raw);
+      return 'fatal_client';
+    }
+    if (out.status === 401 || out.status === 403) ch.cooldownUntil = Date.now() + 300_000; // 会话/出口问题长冷却，避免反复撞墙
+    return `genspark ${out.status}: ${String(msg).slice(0, 120)}`;
+  }
+  if (!/^data:/m.test(raw)) {
+    recordFailure(ch, 'genspark: non-SSE response（疑似 cn_code 门/CF 挑战页，检查代理出口 IP）: ' + raw.slice(0, 120));
+    return 'genspark: non-SSE response';
+  }
+  const st = gensparkParseSSE(raw);
+  if (st.error && !st.finalContent && !st.fullText) {
+    recordFailure(ch, 'genspark stream: ' + st.error);
+    return 'genspark stream: ' + st.error;
+  }
+  if (st.notLogin) {
+    recordFailure(ch, 'genspark: session 失效（not login）');
+    ch.cooldownUntil = Date.now() + 300_000;
+    return 'genspark: not login (session expired)';
+  }
+  if (st.rateLimited) {
+    recordFailure(ch, 'genspark: 限流（rate limit / too quickly / 积分已用完）');
+    ch.cooldownUntil = Date.now() + 3600_000;
+    return 'genspark: rate limited (cooldown 1h)';
+  }
+  const replyText = (st.finalContent || st.fullText || '').trim();
+  if (!replyText || st.placeholder) {
+    recordFailure(ch, st.placeholder ? 'genspark: 上游占位符回复（' + replyText.slice(0, 60) + '）' : 'genspark: 空回复');
+    return st.placeholder ? 'genspark: upstream placeholder reply' : 'genspark: empty reply';
+  }
+
+  // 成功
+  ch.consecutiveFail = 0;
+  ch.cooldownUntil = 0;
+  ch.lastError = null;
+  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  ch.latencyMs = Date.now() - t0;
+
+  const respId = 'chatcmpl-gs-' + Date.now().toString(36);
+  const inTok = st.usage ? st.usage.prompt_tokens : estimateTokens(messagesText(body && body.messages));
+  const outTok = st.usage ? st.usage.completion_tokens : estimateTokens(replyText);
+
+  if (isStream) {
+    // curl 已全量缓冲 → 把聚合文本按 OpenAI SSE 重新吐出（与 workbuddy 同思路）
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'X-ZZCSAPI-Channel': candidate.channelId,
+    });
+    const chunk = (delta, finish) => `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta, finish_reason: finish || null }] })}\n\n`;
+    res.write(chunk({ role: 'assistant', content: '' }));
+    res.write(chunk({ content: replyText }));
+    if (st.usage) res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: st.usage })}\n\n`);
+    else res.write(chunk({}, 'stop'));
+    res.write('data: [DONE]\n\n');
+    res.end();
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage });
+    return 'success';
+  }
+
+  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+  res.end(JSON.stringify({
+    id: respId,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: displayModel,
+    choices: [{ index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }],
+    usage: st.usage || { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
+  }));
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage });
   return 'success';
 }
 

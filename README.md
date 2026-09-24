@@ -79,6 +79,23 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 - 触发单渠道或全量重新探测
 - 看每个协议聚合后的模型清单
 
+## 前端代码文档
+
+> ⚠️ **强制约定：改代码必须同步改文档**（无论改动来自谁）。完整规则见 [`AGENTS.md`](AGENTS.md)。
+
+改前端（`console.html` / `console-redesign.html`）前请先读这两份文档：
+
+| 文档 | 用途 |
+| --- | --- |
+| [前端代码地图](docs/frontend-code-map.md) | **快速定位**：单文件行号锚点表、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、10 条坑位清单 |
+| [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、原型→生产的接口映射、变更日志 |
+
+> `console-redesign.html` 是**纯静态原型**（单文件、零依赖、不请求后端，数据来自文件内 `DATA` 快照）；
+> `console.html` 是现役生产控制台（真实请求 `/admin/api/*`）。
+> **v0.2 起两者视觉与交互已同源**（暖色系 + MiSans + 同样的弹窗/抽屉/图表规范），但**变量名不同**（生产沿用旧命名，映射表见详细设计文档 §11.2），
+> 且生产多出原型没有的能力（genspark 双导入、codex 配额条、渠道级自定义请求头、密钥掩码↔明文切换、有效优先级角标）——**这些原型不必追平**。
+> 改配色/字体/布局时**两份文件都要改**，否则下次回填互相覆盖。
+
 ## 配置示例 (`config.example.json`)
 
 ```jsonc
@@ -136,6 +153,9 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 | `notion`       | `POST getSpaces`          | `Cookie: token_v2=...` | 逆向 Notion AI（需 token_v2 Cookie） |
 | `notion-agent` | `POST /v1/agents/query`  | `Authorization: Bearer ntn_...` | Notion 官方 Agent API（公开 beta） |
 | `arena`        | agent 自检               | 宿主机 agent 管理    | Arena.ai 逆向                         |
+| `workbuddy`    | 自检 `chat/completions`   | `Authorization: Bearer ...` | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET） |
+| `codex`        | 一次令牌刷新             | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） |
+| `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
 
 > 中转渠道如果用 OpenAI 兼容但 `protocol` 想挂到 Anthropic 端点用，把 `protocol` 设成 `anthropic` 即可——网关会把请求体自动转成 OpenAI 格式丢给它，再把响应转回 Anthropic 格式。同理 Gemini。
 
@@ -150,12 +170,40 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 - 会话中智能体的确认门（requires_action）自动批准（最多 5 次）
 - 每次对话消耗工作区 AI credits，因此 notion-agent 渠道排在调度兜底链**最后**，仅当 openai/notion/arena 渠道都失败时才启用
 
+#### genspark（Genspark 网页会话反代）
+
+把 Genspark 网页版的登录态当渠道用，走 `llm_proxy` 免费额度（详细逆向过程见 [`docs/genspark-claw-reverse-proxy-research.md`](docs/genspark-claw-reverse-proxy-research.md)）。
+
+- **Base URL**：`https://www.genspark.ai`
+- **API Key**：网页会话的 `session_id`（不是 JSON 里的 `gsk-` apiKey）。服务端会补全成 `session_id=…; agree_terms=1; gslogin=1`
+- **代理必填**：容器经宿主机代理出网（如 `http://host.docker.internal:7897`），否则过不了地区门
+- **探活**：`GET /api/is_login`，**免费、不消耗 credit**；网页端没有 models 接口，模型清单来自渠道别名配置
+- **导入**：控制台「导入 genspark」（粘贴 session.enc JSON / 整段 cookie / 裸 session_id）或「导入 genspark JSON」（多选文件批量）→ `POST /admin/api/genspark-import`
+  - `mode:'replace'`（默认）：覆盖首个 genspark 渠道的 key
+  - `mode:'add'`：**一个会话建一个渠道**（多号 = 多份每日积分）；key 已存在则视为刷新
+- ⚠️ **session 约 20 天过期**，过期后网页端重新登录、再导一份即可
+- 请求头伪装：`User-Agent` / `Origin` / `Referer` / `request-id` / `traceparent`，SSE 聚合后再分发
+
 ## 调度顺序
 
 1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias
-2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（优先级 -0.5）
-3. 排序：冷却中 → 末位；`down` → 倒数；同状态按 `priority` 降序，再看 latency
+2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
+3. 排序：冷却中 → 末位；`down` → 倒数；同状态按**有效优先级**降序，再看 latency
 4. 依次尝试直到成功；全部失败返回 502 + 错误详情
+
+### 有效优先级（失败率自动降权）
+
+同状态渠道不是死板按配置的 `priority` 排，而是按**有效优先级** `effPriority`：
+
+```
+effPriority = priority − 失败率 × 3
+```
+
+- 失败率取自**滚动窗口**（`ch.roll = {w,f}`，成功/失败各累加一次，样本 ≥ 5 才开始生效，累计 120 次后减半衰减）
+- 也就是说：一个配置 `priority=10` 但近期失败率 40% 的渠道，有效优先级降为 `8.8`，会被配置 `priority=9` 的健康渠道反超
+- 失败率回升时被新成功样本稀释，优先级**自动恢复**，不需要人工干预；配置值本身不被改写
+- 失败计入点：主调度失败、探测失败都走 `recordUsage` → `bumpRoll`
+- 控制台「渠道管理」在渠道被降权时显示 `→ 有效 X（失败率 Y%）` 角标（数据来自 `/admin/api/status` 的 `effectivePriority` / `rollFailRate` 字段）
 
 ## 端点
 
@@ -164,12 +212,25 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 | `/healthz`                          | GET  | 无          | 网关自身存活探针                      |
 | `/console`                          | GET  | admin       | Web 控制台 HTML                       |
 | `/admin/api/status`                 | GET  | admin       | 渠道详细状态（控制台用）              |
+| `/admin/api/usage`                  | GET  | admin       | 用量统计（总量 / 按模型 / 按渠道 / 按天 / 近 200 条 / 24h 分布） |
+| `/admin/api/usage/clear`            | POST | admin       | 清零用量统计                          |
 | `/admin/api/recheck`                | POST | admin       | 立即重探测（body 可传 `{id}`）        |
 | `/admin/api/channel`                | POST | admin       | 改渠道（`{id, priority?, enabled?}`） |
+| `/admin/api/channels`               | GET  | admin       | 渠道集合完整列表                      |
+| `/admin/api/channels`               | POST | admin       | 新增 / 覆盖渠道（upsert，落库并立即探测一次） |
+| `/admin/api/channels`               | DELETE | admin     | 删除渠道（body `{id}`）               |
+| `/admin/api/probe`                  | POST | admin       | 临时探测上游模型清单（不落库，控制台「获取模型」用） |
+| `/admin/api/test`                   | POST | admin       | 真发一次最小 chat 请求，返回首字延迟 / 总耗时 / 错误 |
+| `/admin/api/codex-import`           | POST | admin       | 导入 codex 凭据（完整 JSON 或裸 `rt.1.` 开头 RT） |
+| `/admin/api/codex-quota`            | GET  | admin       | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
+| `/admin/api/genspark-import`        | POST | admin       | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
+| `/admin/api/config`                 | GET  | admin       | 暴露接入信息（含 key 与 URL），仅本机 admin |
+| `/admin/api/arena-cookie`           | POST | admin       | arena.ai 登录 cookie 上传（零转录，避免手抄 3000+ 字符引入坏字节） |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
 | `/v1/models`                        | GET  | gateway     | OpenAI 聚合模型                       |
 | `/v1/chat/completions`              | POST | gateway     | OpenAI chat（支持 stream）            |
 | `/v1/embeddings`                    | POST | gateway     | 透传                                  |
+| `/v1/images/generations`            | POST | gateway     | OpenAI 生图（需上游渠道支持图像接口）  |
 | `/v1/responses` / `/v1/completions` | POST | gateway     | 透传                                  |
 | `/anthropic/v1/models`              | GET  | gateway     | Anthropic 聚合模型                    |
 | `/anthropic/v1/messages`            | POST | gateway     | Anthropic Messages（支持 stream）     |
@@ -186,6 +247,6 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 
 ## 计划中
 
-- 加权轮询（不是单纯 priority 优先）
+- 真正的加权轮询（按权重比例分流，当前只是失败率降权 + priority 排序）
 - Anthropic tool_use 完整转换
 - Gemini 多模态（图片）适配
