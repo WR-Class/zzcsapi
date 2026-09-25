@@ -1,0 +1,38 @@
+/* ═══════════════════════════ 生产补充（设计稿未覆盖的部分） ═══════════════════════════ */
+/* 全部复用设计令牌，不引入新颜色，保证与设计稿同源 */
+
+/* Codex 协议 chip（设计稿快照里没有 codex 渠道，故缺这条） */
+.chip.codex{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
+
+/* 表格排序表头 */
+.tbl th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+.tbl th.sortable:hover{color:var(--tx)}
+.tbl th.sortable .ar{font-family:var(--f-mono);font-size:9px;color:var(--accent);margin-left:3px}
+
+/* 抽屉里的迷你指标条 */
+.mini-kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:10px}
+.mini-kv .cell{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2);padding:9px 11px}
+.mini-kv .cell .k{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx-3)}
+.mini-kv .cell .v{font-family:var(--f-serif);font-weight:var(--fw-display);font-size:19px;margin-top:3px;letter-spacing:-.01em}
+
+/* Playground：生成图片结果 */
+.img-out{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:9px;margin-top:9px}
+.img-out img{width:100%;border-radius:var(--r-sm);border:1px solid var(--line);display:block;background:var(--panel-3)}
+.img-out .ph{border:1px dashed var(--line-2);border-radius:var(--r-sm);padding:18px;text-align:center;color:var(--tx-3);font-size:11.5px}
+
+/* Playground：HTML/SVG 工件预览 */
+.art{margin-top:9px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:var(--panel-2)}
+.art-hd{display:flex;align-items:center;gap:8px;padding:7px 11px;border-bottom:1px solid var(--line);background:var(--panel-3)}
+.art-hd .t{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-2)}
+.art iframe{width:100%;height:300px;border:0;background:#fff;display:block}
+.art .src{display:none}
+.art.show-src iframe{display:none}
+.art.show-src .src{display:block}
+.art .src pre{margin:0;padding:12px;max-height:300px;overflow:auto;font-family:var(--f-mono);font-size:11.5px;line-height:1.65;color:var(--tx-2)}
+
+/* 空状态 / 加载态 */
+.loading{padding:38px 20px;text-align:center;color:var(--tx-3);font-size:12.5px}
+.loading .dot{display:inline-block;margin-right:8px;animation:fade .8s infinite alternate}
+
+/* 渠道抽屉里的密钥行需要能换行 */
+.kv dd.mono{font-family:var(--f-mono)}

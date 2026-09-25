@@ -11,40 +11,62 @@
 
 ### 1.1 改什么 → 更新哪里
 
+> **前置认知：`console.html` 是构建产物，不是手写文件。**
+> 它 = `console-redesign.html` 的 `<style>` 原文 + `build/` 下的 head/shell/extra.css/app.js。
+> 改完任何源文件**必须重新 `node build/build.js`**，否则改动不生效、且下次构建会覆盖手改。
+
 | 你改动了 | 必须同步更新 |
 | --- | --- |
-| `console-redesign.html`（结构 / CSS / JS） | `docs/frontend-code-map.md`（**行号锚点、索引、修改路由表**）+ `docs/frontend-console-detailed.md`（§8 变更日志） |
-| `console.html`（生产控制台） | `docs/frontend-console-detailed.md` §7 接口映射表 / §11 变量映射表；新增或删除生产独有能力时，同步 `docs/frontend-code-map.md` §0.1 的清单与行号 |
+| `console-redesign.html` 的 `<style>`（视觉：字号 / 留白 / 圆角 / 配色 / 卡片 / 弹窗） | 重新 `node build/build.js`；`docs/frontend-code-map.md`（**行号锚点、索引、修改路由表**）+ `docs/frontend-console-detailed.md`（§2 设计系统、§8 变更日志） |
+| `console-redesign.html` 的 JS / markup（原型演示逻辑） | 重新构建（CSS 会带过去）；`docs/frontend-code-map.md` 的行号锚点 + `docs/frontend-console-detailed.md` §8 |
+| `build/app.js`（生产数据层 / 交互 / 渲染） | 重新 `node build/build.js`；`docs/frontend-console-detailed.md` §8 变更日志 + 涉及页面/流程的章节；新增函数登记到 `docs/frontend-code-map.md` §0.2 |
+| `build/shell.html`（生产 body 骨架） | 重新构建；`docs/frontend-code-map.md` §0.2 结构表 |
+| `build/extra.css`（生产独有组件样式） | 重新构建；`docs/frontend-console-detailed.md` §4 组件规范 |
+| `build/head.html`（head / 字体 CDN） | 重新构建；`docs/frontend-console-detailed.md` §2.2 |
+| `build/build.js`（组装逻辑 / 自检） | `README.md`「前端代码文档」+ `docs/frontend-code-map.md` §0.2 |
 | `server.js` 新增/修改端点 | `README.md` 端点总表 + `docs/frontend-console-detailed.md` §7 原型→生产映射表 |
 | `server.js` 调度 / 排序 / 优先级算法 | `README.md` §调度顺序（含「有效优先级」公式、生效条件与数据来源字段） |
-| 新增/修改渠道协议 | `README.md` 协议说明表 + `console-redesign.html` 的 `PROTO_META`/`PROTO_ORDER` + 两份前端文档 |
+| 新增/修改渠道协议 | `README.md` 协议说明表 + `console-redesign.html` 的 `PROTO_META`/`PROTO_ORDER` + `build/app.js` 同名字典 + 两份前端文档 |
 | 新增文档 | 登记到 `README.md` 的「前端代码文档」章节和本文件 §3 文档索引 |
 | 新增配置项 / 环境变量 | `README.md` + `config.example.json` |
 
 ### 1.2 ⚠️ 行号锚点会漂移（最容易腐烂的一环）
 
-`docs/frontend-code-map.md` 的核心是一张**行号锚点表**（如 `openChannelForm` → 1993）。
-你只要在 `console-redesign.html` 里增删任何一行，**它后面所有行号全部失效**。
+`docs/frontend-code-map.md` 的核心是**两张行号锚点表**：§1/§3 对应 `console-redesign.html`，§0.2 对应 `build/*`。
+你在任一文件里增删任何一行，**它后面所有行号全部失效**。
 
-所以改完 HTML 后，**必须重新核对代码地图里的行号**，方法：
+所以改完源文件后，**必须重新核对代码地图里的行号**，方法：
 
 ```powershell
-# 重新导出函数/常量的真实行号，与文档逐一比对
+# 重新导出 console-redesign.html 的函数/常量真实行号，与文档逐一比对
 Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html `
   -Pattern 'function\s+[A-Za-z_$][\w$]*\s*\(|^const (DATA|IC|NAV|PROTO_META|PROTO_ORDER|MODEL_POOL|PROBE_POOL|IMPORT_META|REPLIES)\s*=' |
   ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }
 ```
 
 ```powershell
-# 重新导出 CSS 区块行号
+# 重新导出 build/app.js 的函数/常量真实行号（生产侧）
+Select-String -Path d:\DSHXM\ZZCSAPI\build\app.js `
+  -Pattern '^\s*(async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|^const (IC|NAV|PROTO_META|PROTO_ORDER|OV_RANGE|IMPORT_META|CFG)\s*=' |
+  ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }
+```
+
+```powershell
+# 重新导出 CSS 区块行号（console-redesign.html）
 Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+' |
   ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }
 ```
+
+> **换算捷径**（构建是纯拼接，偏移恒定，改完源文件后可用它自查文档里的 `console.html` 行号）：
+> - `console.html` 的 CSS 行号 = `console-redesign.html` 行号 **+13**
+> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+648**
+> 偏移只在 `build/head.html`（21 行）或 `build/shell.html`（52 行）增删行时才会变，届时请一并修正。
 
 若偏移量是整体平移，可以按差值批量修正；若只是局部插入，务必逐个核对，不要凭估算改数字。
 
 ### 1.3 改完自检
 
+- [ ] 改了 `console-redesign.html` / `build/*` 后**已重新 `node build/build.js`**，且 `git diff console.html` 里能看到预期变化
 - [ ] 受影响的文档已更新，且**不是**只写"已优化"这类空话，而是写明**问题 → 根因 → 处置**
 - [ ] 代码地图里的行号已用 §1.2 的命令重新核对
 - [ ] 新增的文件/端点/协议已登记到 §1.1 表格涉及的所有位置

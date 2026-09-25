@@ -1,10 +1,12 @@
 # 控制台前端 · 详细设计文档
 
 > 对象文件：
-> - `console-redesign.html` —— 新版控制台的**高保真静态原型**（单文件、零依赖、零构建，双击即可打开）
-> - `console.html` —— **现役生产控制台**（真实请求 `/admin/api/*`），v0.2 已按原型完成视觉/交互回填，见 §11
+> - `console-redesign.html` —— **视觉唯一真源**，新版控制台的高保真静态原型（单文件、零依赖，双击即可打开）
+> - `build/head.html` · `build/shell.html` · `build/extra.css` · `build/app.js` —— 生产适配层（骨架 / 生产独有样式 / 真实数据与交互）
+> - `console.html` —— **构建产物**（`node build/build.js` 生成），现役生产控制台，真实请求 `/admin/api/*`
+>
 > 快速定位请用 [frontend-code-map.md](./frontend-code-map.md)；本文讲**为什么这么写**和**怎么继续扩展**。
-> 定稿版本：v0.3（2026-09-25）
+> 定稿版本：v0.5（2026-09-25）
 
 ---
 
@@ -12,11 +14,11 @@
 
 **本文档与代码必须同进同出。** 任何人（含其他 Agent）改动代码后，必须在同一次改动里：
 
-1. **在 §8 变更日志追加一行** —— 格式固定为「问题 → 根因 → 处置」，不接受"已优化"这类空话。
-2. **同步受影响的章节** —— 改了配色/字体/布局就更新 §2 §3，改了组件样式就更新 §4，改了页面或弹窗流程就更新 §5 §6。
-3. **改了接口就更新 §7** —— `server.js` 端点变动必须反映到「原型 → 生产」映射表，并同步 `README.md` 端点总表。
-4. **代码地图同步** —— 若涉及 `console-redesign.html` 或 `console.html`，按 [frontend-code-map.md](./frontend-code-map.md) 顶部的约定核对行号锚点。
-5. **两边都要改** —— 原型与生产是**两份独立文件**（变量名也不同，见 §11）。只改一边会导致下次回填时互相覆盖，改动必须同时落到 `console-redesign.html` 和 `console.html`。
+1. **重新构建** —— 改了 `console-redesign.html` 或 `build/*` 后必须 `node build/build.js`。忘了构建 = 改动没生效，而且下次构建会覆盖手改的 `console.html`。
+2. **在 §8 变更日志追加一行** —— 格式固定为「问题 → 根因 → 处置」，不接受"已优化"这类空话。
+3. **同步受影响的章节** —— 改了配色/字体/布局就更新 §2 §3，改了组件样式就更新 §4，改了页面或弹窗流程就更新 §5 §6。
+4. **改了接口就更新 §7** —— `server.js` 端点变动必须反映到「原型 → 生产」映射表，并同步 `README.md` 端点总表。
+5. **代码地图同步** —— 按 [frontend-code-map.md](./frontend-code-map.md) 顶部的约定核对行号锚点（原型锚点 + `build/app.js` 锚点）。
 
 完整规则见仓库根目录 [`AGENTS.md`](../AGENTS.md)。**文档与代码不一致，视为改动未完成。**
 
@@ -28,7 +30,8 @@
 | --- | --- |
 | 是什么 | 新版控制台的**高保真静态原型**，用于确定视觉与交互方案 |
 | 不是什么 | **不连后端**。没有 `fetch`、没有 WebSocket、没有鉴权，数据来自文件内 `DATA` 常量 |
-| 与 `console.html` 的关系 | 后者是现役生产控制台（真实请求 `/admin/api/*`）。v0.2 已把原型的视觉与交互回填到生产，**两份文件现在同源同貌，但变量名不同**（生产沿用旧命名，见 §11） |
+| 与 `console.html` 的关系 | 后者是**构建产物**：取本文件的 `<style>` 原文 + `build/` 下的适配层拼成。**因此视觉逐字节一致，变量名也完全一致**（不存在映射表） |
+| 原型 JS 的去向 | 原型的 JS（`DATA` / 假动作 / 渲染）**不参与构建**。生产逻辑是独立重写的 `build/app.js`，对接真实接口 |
 | 技术栈 | 原生 HTML + CSS + JS，无框架、无打包、无外部 JS 库 |
 | 图表 | **全部手写内联 SVG**（`areaChart` / `sparkline` / `donut`），不引入 ECharts 等 |
 | 字体 | MiSans（小米开源、可商用），官方 CDN 按 `unicode-range` 分片加载 |
@@ -186,9 +189,12 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - **遮罩不响应点击关闭**（`#mask` 刻意不绑 `onclick`）：拖选复制文本时鼠标容易滑出弹窗，误触会打断操作。
   关闭路径仅三条：右上角 ×、取消按钮、`Esc`
 - 表单栅格用 `.field-row > .field`，窄屏自动换行
-- **生产侧对应实现（v0.2）**：`console.html` 有 4 个 `.mask` 弹窗 —— `#mask`（渠道编辑）、`#codex-mask`、`#gs-mask`、`#test-mask`。
-  这四个在 v0.2 之前**都绑了遮罩点击关闭**，与原型策略不一致（用户反馈复制时误关）；已统一摘除，并新增一条**全局 `keydown` 监听**补上原本缺失的 `Esc` 关闭能力（生产原先没有任何 Esc 处理）。
-  抽屉 `#dmask`（个性化）**保留**遮罩点击关闭 —— 它是"看设置"不是"填表单"，没有长文本复制风险，与 §4.7 的策略一致。
+- **生产侧对应实现**：`build/shell.html` 里只有**一个** `#mask`（49 行），内容由 `modal(html, wide)` 动态注入——
+  渠道表单、四类导入、测试模型、模型编辑器全部复用这一个容器。
+  `#mask` **不绑 `onclick`**，与原型策略一致；`Esc` 由 `build/app.js` 1817 的全局 `keydown` 监听兜底
+  （优先关弹窗，其次关抽屉）。
+  > 早期版本曾有 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 四个独立弹窗，重构时已统一收敛掉。
+  > **新增弹窗不要再建新 `.mask`**，直接用 `modal()` 注入。
 
 ### 4.7 抽屉 `.scrim / .drawer`
 
@@ -216,7 +222,12 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - 请求趋势大图（`areaChart`，20 天）+ 峰值/日均 chip
 - 渠道健康环形图 `donut` + 图例（正常 23 / 降级 1 / 不可用 6）
 - Top 渠道表、Top 模型条形榜
-- 时间范围页签 `24h / 7d / 30d`：**当前仅切换选中样式，不切换数据**（原型范围限制）
+- 时间范围页签 `24h / 7d / 30d`
+  - **原型**：仅切换选中样式，不切换数据（快照里只有日粒度）
+  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 387）定义三档 → `ovSeries()`（390）按档取序列：
+    24 小时走后端 `usage.hourly`（24 桶），7/30 天走 `DATA.trend.slice(-N)`；KPI 环比窗口同步跟着天数走
+- **延迟环比 `avgLatencyDelta()`（375）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
+  **样本 < 40 返回 `null`**——宁可不显示，也不编一个假百分比
 
 ### 5.2 涨跌颜色（中国股票惯例）
 
@@ -228,15 +239,11 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 > 与欧美惯例相反，**这是需求方明确要求的**。同时移除了原本的 ↑/↓ 箭头——
 > 方向已由 `+/-` 符号和颜色双重表达，再加箭头是三重冗余（`kpiCard` 1234 行有注释留档）。
 
-生产侧同规则、不同变量名（`console.html` 沿用旧 token）：
+**生产侧零差异**：`build/app.js` 不重定义任何涨跌样式，直接吃设计稿这条规则。
+它只负责算数值与方向：`dChip(v, unit, suffix)`（371）产出带符号的文本，`kpiCard({dir:'up'|'down'})`（320）产出 `.delta.up` / `.delta.down` 类名。
+（旧版的 `deltaBadge(delta, invert)` 已随重构删除——`invert` 会把"好/坏"折算成颜色，与"方向即颜色"的规则冲突。）
 
-```css
-.delta.up  { color:var(--red);   background:var(--red-soft)   }  /* 涨 = 红 */
-.delta.down{ color:var(--green); background:var(--green-soft) }  /* 跌 = 绿 */
-```
-
-`deltaBadge(delta)` 也已去掉箭头、去掉 `invert` 参数（旧版 `invert` 会把"好/坏"折算成颜色，
-与"方向即颜色"的新规则冲突）。**改这里时别顺手改回欧美惯例**，见 `AGENTS.md` §2。
+**改这里时别顺手改回欧美惯例**，见 `AGENTS.md` §2。
 
 ### 5.3 渠道管理 `vChannels`（1351）
 
@@ -266,12 +273,21 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 ### 5.6 Playground `vPlayground`（1711）
 
 左对话区 + 右参数栏（模型、temperature、top_p 等）。
-`pgSend`（1795）模拟流式输出：逐字/逐块插入 → 结束补 usage。
-无真实请求，仅演示交互。
+
+- **原型**：`pgSend`（1795）模拟流式输出——逐字/逐块插入 → 结束补 usage，**无真实请求**，仅演示交互
+- **生产**：`pgSend`（`build/app.js` 1074）**真发 `POST /v1/chat/completions`**，与外部客户端走完全同一条链路：
+  - 支持 `stream`：读 `response.body.getReader()` 解析 SSE，逐块追加；记录**首块延迟 TTFB**
+  - 从响应头 `X-ZZCSAPI-Channel` 取实际命中渠道 → `drawRoute()` 渲染路由信息（候选渠道 / 命中 / 首块 / 总耗时）
+  - 失败时把上游错误原文显示在气泡里，不吞错
 
 ### 5.7 接入信息 `vAccess`（1852）
 
 三套协议（OpenAI / Anthropic / Gemini）的 baseURL、密钥、示例代码，代码片段用 `.code` + 页签切换（1922）。
+
+- **原型**：地址与密钥是文件内写死的演示值
+- **生产**：`vAccess`（`build/app.js` 1189）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey`、模型名，
+  按当前 `location.origin` 拼端点 URL；`showKeyHelp()`（`build/app.js` 1283）给**只读**的密钥轮换步骤（每条命令可单独复制）；
+  端点地址行与客户端配置表 Base URL 列均带复制按钮
 
 ---
 
@@ -290,10 +306,13 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 **上游探测列表**（本轮重做，替代原来的 chip 逐个点击）：
 
-- 模拟上游 `/v1/models` 返回 `PROBE_POOL`（约 46 个模型，贴近真实中转站规模）
 - 面板 `.probe-panel`：搜索框 + 可滚动列表（`max-height:212px`）+ 底部计数与批量按钮
 - 已存在的别名行标 `.have`（半透明 + 不可勾选），避免重复添加
 - 支持**搜索过滤** `filterProbeRows`、**全选** `probeSelectAll`、**清空** `probeClearSel`、**批量加入** `probeAddSelected`
+- **原型**：`probeUpstream`（2085）从 `PROBE_POOL`（1961，约 46 个模型）取数，贴近真实中转站规模
+- **生产**：`probeUpstream`（`build/app.js` 1443）真发 `POST /admin/api/probe`，
+  返回的是**该渠道上游真实的 `/v1/models` 清单**；搜索/全选/批量逻辑与原型同构。
+  ⚠️ 注意 `server.js` 的探测协议白名单——曾漏 `workbuddy` 导致误报失败
 
 ### 6.2 导入（四类）
 
@@ -310,12 +329,28 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 - 文件式 `importFiles`：逐个文件解析，逐行输出成功/失败结果与原因
 - 解析容错集中在 `parseCodexUnits`（2226）与 `parseGsSessionId`（2234），**改动务必保留多结构兼容**
 
+**生产侧（`build/app.js`）**：`IMPORT_META` 在 1569，弹窗骨架与原型同构，但**去掉了假步骤动画**，改为真实请求：
+
+| kind | 生产函数 | 真实端点 |
+| --- | --- | --- |
+| `codex-rt` / `codex-json` | `importCodexRt(rt)` 1637 | `POST /admin/api/codex-import` |
+| `gs-session` / `gs-json` | `importGsSession(raw)` 1642 | `POST /admin/api/genspark-import` |
+
+- `doImport` 1648 / `importFiles` 1668 都直接转发给上面两个函数，逐条回填真实结果
+- 原型的 `hash(s)`（2290，造假渠道 ID）**生产侧已删除**
+- 解析容错逻辑与原型一致（同样的 `parseCodexUnits` / `parseGsSessionId`），改一处要两处同步
+
 ### 6.3 测试模型 `openTestModels(opts)`（2342）
 
 - 支持 `{channelId}` 预筛（从渠道行/抽屉进入时只显示该渠道的模型）
 - 分组多选列表 `.test-list`（分组头 sticky）+ 提示词输入
-- `runTests`（2388）逐条执行：先插"等待"行 → `simTest` 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
-- `simTest`（2329）按渠道状态与历史失败率决定成功或失败（停用/不可用 → 502；失败率≥50% → 429）
+- `runTests`（2388）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
+
+- **原型**：`simTest`（2329）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
+  回复文案取自 `REPLIES`（2328）
+- **生产**：`runTests`（`build/app.js` 1778）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt}`），
+  逐条渲染真实 `latencyMs` / `promptTokens` / `completionTokens` / 上游回复或错误原文。
+  原型的 `simTest` 与 `REPLIES` **生产侧已删除**；跑完会 `loadAll()` 刷新一次数据
 
 ### 6.4 全局交互
 
@@ -326,6 +361,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | 全局搜索回车 | 关键词写入 `chQ` 并跳转渠道页（2434） |
 | 主题切换 | `#themeBtn`，写入 `localStorage['zzcs-theme']`，刷新保持 |
 | 点击菜单外部 | 关闭所有下拉菜单（1944） |
+| 复制按钮 | 统一走 `copyText(t,btn)`（`build/app.js` 221）：安全上下文用 `navigator.clipboard`，否则回落到 `execCommand('copy')`；待复制文本一律经 `data-t="${esc(x)}"` 注入，不要用 `JSON.stringify` 直接拼进属性 |
 
 ---
 
@@ -353,8 +389,12 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 3. 鉴权头：`Authorization: Bearer <ADMIN_KEY>`；旧的 `?key=` 方案只写 sessionStorage 并脱敏 URL
 4. `DATA` 就地修改的模式不能沿用——真实环境应改为"请求 → 更新本地 state → 重绘"
 
-> **回填状态（v0.2）**：以上四项注意事项目前均已满足，生产 `console.html` 真实请求后端、无假密钥逻辑。
-> 生产侧多出来的能力（genspark 双导入、codex 配额、渠道级自定义请求头、密钥明文切换）原型里没有，**原型不必追平**。
+> **回填状态（v0.4，v0.5 续修）**：以上四项均已满足。
+> 生产侧用 `chKey(id)`（`build/app.js` 1344）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
+> `DATA` 改由 `adapt()`（58）从 `/admin/api/status` 响应派生，`loadAll()`（120）统一拉取后重绘。
+> 生产独有能力（genspark 双导入、codex 配额、渠道级自定义请求头、密钥明文切换、有效优先级角标、
+> 真实 Playground / 测试 / 导入请求、端点地址与密钥一键复制、只读的密钥轮换步骤弹窗）原型里没有，**原型不必追平**。
+> v0.5 补了复制链路的两个坑（属性注入被截断、非安全上下文下 `navigator.clipboard` 静默失效），见 §8.5。
 
 ---
 
@@ -395,23 +435,67 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 ### 8.3 v0.3 生产新增能力（2026-09-25，对象 `console.html` + `server.js`）
 
-原型没有、只存在于生产的两项能力。**原型不必追平**，但改生产时要知道它们的存在（清单同步登记在 [frontend-code-map.md](./frontend-code-map.md) §0.1）。
+原型没有、只存在于生产的两项能力。**原型不必追平**，但改生产时要知道它们的存在（清单同步登记在 [frontend-code-map.md](./frontend-code-map.md) §0.2）。
 
 | # | 问题 | 根因 | 处置 |
 | --- | --- | --- | --- |
 | 1 | Genspark 网页会话无法接入：上游没有 `/models`、鉴权是 cookie 且**必须走代理**，通用 OpenAI 分支全链路不通 | 缺 `genspark` 协议分支，探测与调度都落到通用 `fetch` | `server.js` 新增 `genspark` 协议（`gensparkCookie/Headers/BuildPayload/ParseSSE` + `tryGensparkChannel`），探测走免费的 `GET /api/is_login`；控制台加协议选项、Base URL 默认值、**代理必填提示**，以及「导入 genspark 会话（粘贴）/ 导入 genspark JSON（多选批量，`mode:'add'` 一会话一渠道）」两个入口 + 导入弹窗 |
 | 2 | 渠道"连续失败"只影响熔断，配置的 `priority` 无法反映近期真实健康度，坏渠道只要 priority 高就永远先被选中 | 排序直接用 `ch.def.priority`，失败只累加 `consecutiveFail` 触发冷却 | `server.js` 加滚动窗口健康分（`bumpRoll` / `rollFailRate` / `effPriority`，样本 ≥5 生效、120 次减半衰减），`channelsServing` 改用有效优先级；`/admin/api/status` 下发 `effectivePriority` / `rollFailRate`，控制台渠道卡在降权时显示 `→ 有效 X（失败率 Y%）` 角标 |
 
+### 8.4 v0.4 与设计稿完全对齐 + 构建管线化（2026-09-25，对象 `console-redesign.html` + `build/*`）
+
+用户反馈"真实项目和设计不一样，大小、留白、卡片样式很多都不同"，要求**完全对齐**。本轮放弃"两份文件手工同步"的做法，
+改为**以设计稿为唯一视觉源、生产页由构建生成**，并顺手把生产侧剩下的假动作全部换成真实请求。
+
+| # | 问题 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 生产页与设计稿尺寸/留白/卡片形态处处不同，手工"回填"永远追不平 | 生产是**另一份手写文件**，CSS 是原型的移植改写版，两边各自演化 | 建 `build/build.js`：生产 CSS 改为**逐字节复制设计稿 `<style>` 原文**，只把生产独有组件补在 `build/extra.css`。视觉从此不可能漂移 |
+| 2 | 生产的页面骨架是旧的 `.side + .main > .content`，与设计稿的 `.app > .rail + .main > .viewport > .page` 不同源 | 同上 | 生产骨架重写为设计稿结构（`build/shell.html`），滚动容器由 `.content` 改为 `.viewport`，切页滚动重置跟着改 |
+| 3 | 生产渠道页是**卡片墙**（`.ch-grid` / `.ch`），设计稿是**表格**（`table.tbl`） | 历史实现差异 | 渠道页改为表格形态，与设计稿一致（列：启用 / 渠道 / 协议 / 状态 / 延迟 / 模型数 / 优先级 / 请求·错误 / 成功率 / 操作） |
+| 4 | 生产与原型**变量名不同**（`--indigo` / `--red` / `--card`…），改配色要改两处、看文档要查映射表 | 早期回填时为省事沿用旧 token | 生产直接复用设计稿 CSS ⇒ **变量名两边完全一致**，映射表作废（原 §11.2 已删除） |
+| 5 | 生产页 CSS 大面积失效：样式规则变成页面正文文本 | 构建 banner 注释里写了 `</style>` 字面量；HTML 解析 `<style>` 是裸文本模式，**注释里出现结束标签也会立刻闭合元素** | banner 去掉该字面量，并加**构建期自检**：产物中 `</style>` 必须恰好 1 次，否则抛错 |
+| 6 | Playground 只演示、不发真实请求 | `pgSend` 是假流式（`setTimeout` 逐块插入） | 重写为真实 `POST /v1/chat/completions`（支持 `stream`，读 `getReader()` 解析 SSE），从 `X-ZZCSAPI-Channel` 响应头取命中渠道并渲染路由信息 |
+| 7 | 测试模型是随机结果 | `simTest` 按渠道状态伪造成功/失败，回复取自 `REPLIES` | 删除 `simTest` / `REPLIES`，改 `runTests` 真调 `POST /admin/api/test`，渲染真实延迟与 token 数 |
+| 8 | 导入流程是假步骤动画 + `hash()` 造 ID | `doImport` 只跑动画不落库 | 删除假步骤与 `hash()`，改 `importCodexRt` / `importGsSession` 真调 `codex-import` / `genspark-import` |
+| 9 | 接入信息页写死网关地址与假密钥 | 硬编码演示值 | 改从 `GET /admin/api/config` 取真实 `gatewayKey` / 端口 / 模型名，按 `location.origin` 拼端点；补 `showKeyHelp()` |
+| 10 | 函数名误导：`fakeKey()` 在生产返回的其实是真实密钥 | 从原型抄名未改 | 重命名为 `chKey(id)`，同步所有引用 |
+| 11 | 总览时间范围页签只切样式、不切数据 | 原型快照只有日粒度 | 生产实现 `OV_RANGE` + `ovSeries()`：24h 走后端 `usage.hourly`（24 桶），7/30 天走 `trend.slice(-N)`；KPI 环比窗口跟着走 |
+| 12 | 总览 X 轴标签显示成 `09-04,635`（日期和数值粘连） | 直接插值 `${dt}`，而 `trend` 元素是 `['MM-DD', 请求数]` 数组 | 改为 `${Array.isArray(dt)?dt[0]:dt}`，只取日期部分 |
+| 13 | 首屏 `Cannot read property 'v' of undefined` | `vOverview` 直接读 `DATA.donut[0].v`，初始 `donut` 为空数组 | 改为 `(DATA.donut[0]||{}).v||0` |
+| 14 | 浏览器缓存导致部署后仍看到旧页面 | 未设缓存头 | 服务器侧 `Cache-Control: no-store`；调试时用随机查询参数绕过 |
+| 15 | 生产弹窗收敛 | 曾有 4 个独立 `.mask` + 1 个 `#dmask`，与设计稿的单容器模式不一致 | 统一为**单个 `#mask` + `modal()` 注入**，与设计稿同构；`Esc` 仍由全局 `keydown` 兜底 |
+
+> 校验方式：`build/build.js` 构建期自检 + 静态检查（类名/ID 全覆盖、JS 语法、引用完整性）+ 构建产物行号核对
+> （CSS +13 / JS +648）+ 浏览器实测（6 页渲染、主题切换、时间范围切换、真实测试/导入/Playground、弹窗三条关闭路径）。
+> 另用探针脚本 `_probe.js` / `_cmp_skel.js` 对设计稿与生产页做几何与计算样式的自动比对，
+> 结果：骨架 6 页全部一致，无实质样式差异（剩余差异均为数据量/文案驱动的噪声）。
+
+### 8.5 v0.5 表格对齐与复制链路修复（2026-09-25，对象 `console-redesign.html` + `build/app.js`）
+
+用户实测反馈：日志表右对齐列错位、接入信息页复制按钮点了没反应、「去设置」点开却是不可编辑的内容。
+
+| # | 问题 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 所有表格的「耗时 / 输入 / 输出」等右对齐列，**表头与下面的数值不在同一竖轴上**，看着像错位 | `table.tbl thead th{text-align:left}` 权重 (0,1,3) 压过 `.t-r` (0,1,0)，`th` 上的 `.t-r` 从来就没生效过 | 原型 300 行补 `table.tbl thead th.t-r{text-align:right}`；**与 `.t-r` 并排写在同一行**，避免增行导致后面所有原型锚点整体漂移。生产 CSS 逐字节复制，一次修好全部表格 |
+| 2 | 接入信息页「复制全部」和 `GATEWAY_KEY` 的复制按钮**点了完全没反应** | `onclick="copyText(${JSON.stringify(key)},this)"` 把 `"` 塞进了双引号属性里，属性被截断，事件压根没绑上 | 全部改成 `data-t="${esc(x)}" onclick="copyText(this.dataset.t,this)"`（`esc` 会把 `"` 转成 `&quot;`） |
+| 3 | 用**局域网 IP 走 http** 打开控制台时，页面上所有复制按钮都静默失效 | `navigator.clipboard` 只在安全上下文（https / localhost）存在；可选链 `?.` 会把整条链短路成 `undefined`——**既不复制也不报错** | `copyText` 增加 `document.execCommand('copy')` 兜底（临时 textarea + select），成功/失败都给 toast |
+| 4 | 接入信息页只有密钥能复制，三套协议地址和客户端 Base URL 要手敲 | 缺复制入口 | 端点卡地址行、客户端配置表 Base URL 列各加复制按钮 |
+| 5 | 安全提示的「去设置」点开是一段只读说明，容易被误解成"能在这里改密钥" | 按钮文案承诺了"设置"，弹窗却是一整块不可编辑文本，也没有"只读"的明示 | 按钮改「查看轮换步骤」；弹窗加「只读」角标 + 明确写"由服务端环境变量下发，**本页只能看，改不了**，需在宿主机执行"；三步拆成独立代码块、各自可复制（密钥确实只能由环境变量下发，控制台不写配置——这点没变，只是把话说清楚） |
+
+> 校验方式：`node --check build/app.js` + `node build/build.js` 自检 + 构建产物行号核对（CSS +13 / JS +648 均保持）
+> + 浏览器实测（日志表表头与数值对齐、接入信息四类复制按钮、安全提示弹窗）。
+
 ---
 
 ## 9. 后续可做（未实现）
 
-- 时间范围页签（24h/7d/30d）真正切换数据
 - 渠道列表分页 / 虚拟滚动（真实 30+ 渠道，模型探测可能上百）
 - 密钥明文显示加"仅本次会话"提示或二次确认
 - 探测结果支持"仅显示新增"过滤
 - 表单校验错误定位（当前只给行内状态文字，不滚动定位到出错字段）
 - 移动端适配（当前 ≤900px 直接隐藏侧栏，无抽屉式导航）
+- 设计稿的 `PROBE_POOL` / `DATA` 快照已是演示用途，长期可考虑删掉、让原型也能切到 mock 接口
+- 构建产物目前整体提交；若体积继续增长可考虑改为构建时生成、不提交（需同时改 `Dockerfile` / `docker-compose.yml`）
 
 ---
 
@@ -421,44 +505,61 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 ---
 
-## 11. 生产控制台落地（`console.html`）· v0.2
+## 11. 构建管线与生产落地
 
-### 11.1 为什么两边的变量名不一样
+### 11.1 为什么改成构建式
 
-回填时**没有把原型的变量名搬过来**，而是沿用生产原有的旧命名（`--indigo` / `--cyan` / `--violet` / `--card` / `--tx2` …），只把**值**整体换成暖色系。原因：
+v0.2/v0.3 的做法是「两份文件手工同步」：设计稿改了，再去生产文件里照着抄一遍。
+实践下来必然漂移——用户的原话是"真实项目和设计不一样，多个不一样的地方，不管是大小、留白、卡片样式等等很多都不一样"。
 
-- 生产的 markup 与 JS 里有大量内联 `var()` 引用（如 `style="color:var(--indigo)"`、`chColor()` 返回值、SVG 内联 `fill`），改名要连带动 JS，收益为零、风险不小
-- 生产还有原型没有的协议色（`--violet` 给 genspark、`--pink` 等），映射关系不是一对一
+v0.4 换成构建式：**生产 CSS 不再手写，而是逐字节复制设计稿的 `<style>` 原文**。
+这样"对齐"不再是需要维护的状态，而是**结构性保证**——设计稿改了什么，构建出来就是什么。
 
-**代价**：两份文件的 token 名不同，看文档时别混用。下表是权威映射。
+### 11.2 文件职责
 
-### 11.2 变量映射表（生产 ←→ 原型）
-
-| `console.html`（生产） | `console-redesign.html`（原型） | 含义 |
+| 文件 | 谁改 | 改什么 |
 | --- | --- | --- |
-| `--bg` / `--bg2` | `--bg` / `--bg-2` | 页底 / 凹陷面 |
-| `--card` / `--card2` / `--card3` | `--panel` / `--panel-2` / `--panel-3` | 容器 / 次级面 / 悬停面（三层递进） |
-| `--line` / `--line2` / `--line3` | `--line` / `--line-2` / `--line-3` | 描边三级 |
-| `--tx` / `--tx2` / `--tx3` | `--tx` / `--tx-2` / `--tx-3` | 主 / 次 / 弱文字 |
-| `--indigo`（+ `-soft` / `-line`） | `--accent`（+ `--accent-soft` / `--accent-line`） | **主强调色**（亮=暖锈橙 `#b1500f`，暗=暖琥珀 `#e39a4e`） |
-| `--accent-ink` | `--accent-ink` | 强调色块上的前景字 |
-| `--accent-grad` / `--accent-shadow` | 原型为硬编码渐变 | 渐变强调 + 光晕（新增，集中为变量） |
-| `--cyan` | `--accent-2` | 次强调（暖陶土） |
-| `--green` | `--ok` | 成功 —— **在涨跌里表示"跌"** |
-| `--amber` | `--warn` | 警告 |
-| `--red` | `--err` | 错误 —— **在涨跌里表示"涨"** |
-| `--violet` / `--pink` | `--violet` / `--info` | 协议·分类色。**生产=暖梅 `#8b4a7d` / 暖玫瑰 `#b0466b`；原型的 `--violet` / `--info` 仍是冷紫 `#6b45c4` / 冷蓝 `#1f6fe0`**，见 §9 遗留问题 |
-| `--mask-bg` | `--scrim` | 弹窗遮罩 |
-| `--hair` | `--hair` | 顶部高光内阴影 |
-| `--hdr-bg` | —（原型用 `.rail` 实底） | 顶栏/侧栏半透明底 |
-| `--radius` / `--radius-sm` / `--r-xs…--r-lg` | `--r-xs…--r-lg` | 圆角 |
-| `--ease` | `--ease` | 统一缓动 `cubic-bezier(.32,.72,0,1)` |
-| `--mono` | `--f-mono` | 等宽（**实际落到 MiSans**，见 §2.2 已知限制） |
-| `--shadow` / `-md` / `-lg` | `--sh-1` / `--sh-2` / `--sh-3` | 阴影三级（暖色阴影，带棕调） |
+| `console-redesign.html` | 改**视觉** | 它的 `<style>` 是唯一视觉真源。字号 / 留白 / 圆角 / 配色 / 卡片 / 弹窗全在这里 |
+| `build/head.html` | 极少改 | 生产 `<head>`：主题初值、MiSans CDN |
+| `build/shell.html` | 改**生产骨架** | body 结构：背景层 / rail / topbar / viewport / drawer / mask / toasts |
+| `build/extra.css` | 加**生产独有组件** | 设计稿快照里没有的组件（codex chip、排序表头、迷你指标条、生图/工件预览、空加载态）。**必须复用设计令牌** |
+| `build/app.js` | 改**生产逻辑** | 数据层（`adapt` / `loadAll` / `api`）+ 动作层 + 6 个页面渲染 |
+| `build/build.js` | 改**构建方式** | 组装顺序 + 自检 |
+| `console.html` | **没人改** | 产物。手改会被下次构建静默覆盖 |
 
-### 11.3 改配色时的硬约束
+### 11.3 构建产物结构
 
-1. **两套主题都要给值**。`--radius` / `--ease` / `--mono` 只在 `:root, html[data-theme=light]` 定义一次（暗色继承），其余颜色变量**两个块里都有**，加新变量时别只加一边。
-2. **排除冷色**。色相留在红/橙/琥珀/棕；`--green` 是唯一允许的绿，且只用于语义"成功/跌"。不要再引入青、蓝绿、紫青。
-3. **面层级方向会反转**：亮色下 `--card3` 比 `--card` **暗**，暗色下比 `--card` **亮**（都是"更靠近用户"）。抄新组件时别把方向写死。
-4. **改完必须同时改原型**，否则下次回填互相覆盖（见 §维护约定第 5 条）。
+```
+<head>                      1–20      来自 build/head.html
+<style>                     21–592
+  ├─ 设计稿 CSS 原文         24–550    来自 console-redesign.html 的 <style>（逐字节）
+  └─ 生产补充 CSS            553–590   来自 build/extra.css
+</style>
+<body>                      594–647   来自 build/shell.html
+<script>                    648–2492  来自 build/app.js（内容起于 649）
+```
+
+> 行号换算：CSS = 设计稿行号 **+13**；JS = `build/app.js` 行号 **+648**。
+> 增删 `build/head.html` / `build/shell.html` 的行会改变偏移，届时同步修正
+> [frontend-code-map.md](./frontend-code-map.md) §0.1 与 [`AGENTS.md`](../AGENTS.md) §1.2。
+
+### 11.4 构建期自检（别删）
+
+```js
+const nEnd = out.split('</style>').length - 1;
+if (nEnd !== 1) throw new Error('产物中 </style> 出现 ' + nEnd + ' 次，应为 1 次…');
+```
+
+**为什么必须留**：HTML 解析 `<style>` 是**裸文本模式**——只要遇到 `</style>` 字面量就立刻闭合元素，
+**即使在 CSS 注释里也一样**。一旦注释里混进这个字面量，后面整段 CSS 会变成页面正文文本，
+现象是"样式大面积失效但页面不报错"，极难排查。这条自检让它在构建期就炸出来。
+
+### 11.5 改配色时的硬约束
+
+1. **只改设计稿**。两套主题（`html[data-theme="dark"]` / `[data-theme="light"]`）都在 `console-redesign.html` 的 22–61 行；
+   生产是复制品，不要去 `console.html` 里改。
+2. **两套主题都要给值**。只有 `--rail-w` / 圆角 / 字体栈 / `--fw-display` / `--ease` 在 `:root` 定义一次（暗亮共用），
+   其余颜色变量**两个块里都有**，加新变量时别只加一边。
+3. **排除冷色**。色相留在红/橙/琥珀/棕；`--ok` 是唯一允许的绿，且只用于语义"成功/跌"。不要再引入青、蓝绿、紫青。
+4. **面层级方向会反转**：亮色下 `--panel-3` 比 `--panel` **暗**，暗色下比 `--panel` **亮**（都是"更靠近用户"）。抄新组件时别把方向写死。
+5. **改完必须 `node build/build.js`**，并在同一次提交里带上 `console.html`。

@@ -1,21 +1,22 @@
-# 前端代码地图 · console-redesign.html
+# 前端代码地图
 
 > 面向「接手改前端」的 Agent / 开发者的快速定位文档。
 > 配套的深入说明见 [frontend-console-detailed.md](./frontend-console-detailed.md)。
 >
-> **一句话定位**：`console-redesign.html` 是控制台**纯静态原型**（单文件、零依赖、零构建），
-> 数据全部来自文件内的 `DATA` 快照，**不请求任何后端接口**。真正的生产控制台是 `console.html`（连 `server.js`）。
+> **一句话定位**：`console-redesign.html` 是**视觉唯一真源**（高保真静态原型，单文件零依赖，数据来自文件内 `DATA` 快照，不请求任何后端）；
+> 生产控制台 `console.html` 是**构建产物**，由它的 `<style>` 原文 + `build/` 下的适配层拼成，真实请求 `/admin/api/*`。
 
 ---
 
 ## ⚠️ 维护约定（强制）
 
-**本文档与 `console-redesign.html` 必须同进同出。** 任何人（含其他 Agent）改动 HTML 后，必须在同一次改动里：
+**本文档与前端源文件必须同进同出。** 任何人（含其他 Agent）改动前端后，必须在同一次改动里：
 
-1. **重新核对 §1 的行号锚点表** —— 增删任何一行都会让后面所有行号失效。核对命令见仓库根目录 [`AGENTS.md`](../AGENTS.md) §1.2。
-2. **更新 §2 / §3 的索引** —— 新增或删除函数、CSS 区块、协议、导入类型时，对应表格必须同步。
-3. **更新 §5 修改路由表** —— 新增了可配置项就补一行，否则后来者找不到入口。
-4. **补 §7 坑位** —— 踩到新的层叠上下文 / 布局 / 交互陷阱，写进来，别让它再被踩第二次。
+1. **重新 `node build/build.js`** —— 改了 `console-redesign.html` 或 `build/*` 而不构建，等于没改（`console.html` 是覆盖式的）。
+2. **重新核对 §1 / §0.2 的行号锚点表** —— 增删任何一行都会让后面所有行号失效。核对命令见仓库根目录 [`AGENTS.md`](../AGENTS.md) §1.2。
+3. **更新 §2 / §3 / §0.2 的索引** —— 新增或删除函数、CSS 区块、协议、导入类型时，对应表格必须同步。
+4. **更新 §5 修改路由表** —— 新增了可配置项就补一行，否则后来者找不到入口。
+5. **补 §7 坑位** —— 踩到新的层叠上下文 / 布局 / 交互陷阱，写进来，别让它再被踩第二次。
 
 完整规则见 [`AGENTS.md`](../AGENTS.md)。**文档与代码不一致，视为改动未完成。**
 
@@ -23,54 +24,144 @@
 
 ## 0. 文件清单与职责
 
-| 文件 | 行数 | 职责 | 是否本文件涉及 |
+| 文件 | 行数 | 职责 | 本文件涉及 |
 | --- | --- | --- | --- |
-| `console-redesign.html` | ~2445 | **本文件**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG） | ✅ 主对象 |
-| `console.html` | ~2636 | **现役生产控制台**，真实请求 `/admin/api/*`。**v0.2 起视觉/交互已与原型同源**（暖色系 + MiSans），但变量名沿用旧命名、且多出原型没有的功能 | 参考（见 §0.1） |
+| `console-redesign.html` | ~2445 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
+| `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
+| `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
+| `build/extra.css` | 38 | 设计稿快照里没有的生产独有组件（codex chip、排序表头、迷你指标条、生图/工件预览、空加载态） | ✅ §0.2 |
+| `build/app.js` | ~1840 | **生产逻辑主体**：数据层 + 动作层 + 6 个页面渲染，真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/build.js` | ~45 | 组装脚本 + 构建期自检（产物中 `</style>` 只能出现一次） | ✅ §0.2 |
+| `console.html` | ~2492 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~4400 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import` 等 | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
-**关键结论**：改 `console-redesign.html` 时**不要**去找它的接口调用——它没有。所有"数据"都是文件内常量。
+**关键结论**：改 `console-redesign.html` 的 JS 部分时**不要**去找它的接口调用——它没有。所有"数据"都是文件内常量。
+生产侧的真实逻辑全部在 `build/app.js`。
 
 ---
 
-## 0.1 `console.html`（生产）怎么定位
+## 0.1 构建管线：`console.html` 是怎么来的
 
-本文件的**行号锚点表只覆盖原型**。生产是另一份文件，改动方式不同：
-
-| 段 | 行号范围 | 内容 |
-| --- | --- | --- |
-| `<head>` | 1–10 | `data-theme="light"` 初始主题、MiSans 字体 CDN |
-| `<style>` | 11–637 | 全部 CSS（原型 CSS 的移植版，**变量名不同**） |
-| `<body>` | 639–1034 | markup：顶栏 / 筛选栏 / 抽屉 / 4 个 `.mask` 弹窗 / toast |
-| `<script>` | 1034–2635 | 全部 JS（`api()` 真实请求 → `render*()` 重绘） |
-
-三条硬规则：
-
-1. **变量名以 [frontend-console-detailed.md](./frontend-console-detailed.md) §11.2 映射表为准**（生产 `--indigo` = 原型 `--accent`，生产 `--red` = 原型 `--err` …）。别把原型的 token 名抄进生产。
-2. **改配色/字体必须两边都改**（原型 + 生产），否则下次回填互相覆盖。
-3. **生产独有能力不要往回删**：genspark 双导入、codex 配额条、渠道级自定义请求头、密钥掩码↔明文切换、`有效优先级` 角标——原型里没有，**原型不必追平**。
-
-行号会漂移，改完用这条命令重新导出锚点：
-
-```powershell
-Select-String -Path d:\DSHXM\ZZCSAPI\console.html `
-  -Pattern '^\s*(async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|^const (DATA|ICO|NAV|PROTO_DEFAULT_BASE|PALETTE)' |
-  ForEach-Object { "$($_.LineNumber): $($_.Line.Trim())" }
+```
+node build/build.js
 ```
 
+```
+console-redesign.html ──(切出 <style>…</style> 之间的原文，逐字节复制)──┐
+                                                                       │
+build/head.html  ─────────────────────────────────────────────────────┤──→ console.html
+build/extra.css  ─────────────────────────────────────────────────────┤      (拼接后写入仓库根)
+build/shell.html ─────────────────────────────────────────────────────┤
+build/app.js     ─────────────────────────────────────────────────────┘
+```
+
+构建脚本做的事（`build/build.js`，约 45 行）：
+
+1. 从 `console-redesign.html` 切出 `<style>` 内容 —— **不重写、不改写**，视觉因此与设计稿逐字节一致
+2. 按 `head → banner → 设计CSS → extra.css → </style></head><body> → shell → <script> → app.js → </script></body></html>` 拼接
+3. **自检**：产物里 `</style>` 必须恰好出现 1 次，否则抛错
+
+### ⚠️ 为什么必须有这条自检
+
+HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量就立刻闭合元素，**即使在 CSS 注释里也一样**。
+所以任何写进 CSS 的注释都不能出现这个字面量，否则它后面的整段 CSS 会变成页面正文文本。
+（本轮踩过：构建脚本的 banner 注释里写了结束标签，导致生产页 CSS 大面积失效。）
+
+### 行号换算（构建是纯拼接，偏移恒定）
+
+| 目标 | 公式 | 校验点 |
+| --- | --- | --- |
+| `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24 |
+| `console.html` 的 JS 行号 | `build/app.js` 行号 **+648** | `const IC`：app.js 3 → 产物 651 |
+
+> 偏移只在 `build/head.html` 或 `build/shell.html` 增删行时才会变，届时请一并修正本文档与 AGENTS.md §1.2。
+
+### 三条硬规则
+
+1. **视觉只在设计稿改**。`console.html` 里的 CSS 是复制品，手改必被下次构建覆盖。
+2. **生产独有能力不要往回删**：genspark 双导入、codex 配额条、渠道级自定义请求头、密钥掩码↔明文切换、`有效优先级` 角标、真实测试/导入/Playground 请求——原型里没有，**原型不必追平**。
+3. **变量名两边完全一致**（生产直接复用设计稿 CSS），不存在映射表。旧文档里 `--indigo` / `--red` 那套映射已作废。
+
 ---
 
-## 1. 单文件三段结构（行号锚点）
+## 0.2 生产侧（`build/`）索引
+
+### 结构分段（`build/shell.html` 52 行 · `build/head.html` 21 行）
+
+| 文件 | 行号 | 内容 |
+| --- | --- | --- |
+| `build/head.html` | 1–11 | `data-theme="light"` 初值、MiSans CDN（`font.sec.miui.com`） |
+| `build/head.html` | 12–20 | 构建管线说明注释 |
+| `build/shell.html` | 1–4 | `.bg-layer` ×3 背景氛围 |
+| `build/shell.html` | 6–24 | `.app > .rail`（brand / railNav / rail-foot） |
+| `build/shell.html` | 27–41 | `.main > .topbar` + `.viewport#viewport` |
+| `build/shell.html` | 44–52 | `#scrim` + `#drawer` + `#mask` + `#toasts` |
+
+> 生产只有 **1 个 `.mask`**（`#mask`，内容由 `modal()` 注入）+ 1 个抽屉（`#drawer`）。
+> 早期版本的 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 已随重构删除。
+
+### `build/app.js` 函数索引
+
+数据层：
+
+| 行号 | 名称 | 说明 |
+| --- | --- | --- |
+| 3 | `IC` | 内联 SVG path 字典 |
+| 58 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构 |
+| 120 | `loadAll()` | 并发拉取 status / usage / config，写 `RAW` → `adapt()` |
+| 137 / 157 | `render()` / `reload()` | 重绘当前页 / 重新拉数并重绘 |
+| 160 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
+| 190 | `api(path,opts)` | **统一请求封装**：自动带 `Authorization: Bearer <ADMIN_KEY>`、错误 toast |
+| 202–234 | `downloadCsv` `toast` `copyText` | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
+| 300 | `NAV` | 侧栏导航定义 |
+| 312 / 320 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`） |
+| 333 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
+| 353–387 | `winStats` `avgLatency` `avgLatencyDelta` `OV_RANGE` | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ **时间范围配置** |
+| 390–398 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
+| 409–435 | `exportUsage` `exportLogs` `exportModels` `copyModels` | 导出与复制 |
+| 444 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
+| 562–646 | `vChannels` `drawChTable` `toggleCh` `openChannel` | 渠道页 / 排序渲染 / 启停 / 详情抽屉 |
+| 702–723 | `toggleDrawerKey` `reprobe` `delChannel` | 抽屉密钥切换 / 重探测 / 删除 |
+| 736–813 | `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉 |
+| 850–960 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl |
+| 971–1189 | `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息） |
+| 1189–1283 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
+| 1317–1326 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
+| 1330–1344 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
+| 1351–1547 | `openChannelForm` … `saveChannel` | 渠道表单：模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存 |
+| 1591–1690 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
+| 1729–1778 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`** |
+| 1812–1846 | `drawer` `closeDrawer` `setTheme` `tick()` | 抽屉 / 主题持久化 / 时钟 |
+
+> ⚠️ 原型里的 `simTest` / `REPLIES` / `hash()` / `fakeKey()` **在生产侧已全部删除**，替换为真实请求。
+> 如果你在生产代码里看到它们，说明构建源搞混了。
+
+### `build/extra.css` 区块（38 行）
+
+| 行号 | 区块 |
+| --- | --- |
+| 1–2 | 说明（复用设计令牌，不引入新颜色） |
+| 5 | `.chip.codex` 协议 chip |
+| 8–10 | `.tbl th.sortable` 排序表头 |
+| 13–16 | `.mini-kv` 抽屉迷你指标条 |
+| 19–31 | `.img-out` / `.art` Playground 生图与工件预览 |
+| 34–35 | `.loading` 空加载态 |
+| 38 | `.kv dd.mono` |
+
+
+## 1. 单文件三段结构（行号锚点 · `console-redesign.html`）
+
+> 本节及 §2 / §3 的锚点**只对应 `console-redesign.html`**（2445 行）。生产侧锚点见 §0.2。
 
 文件固定由三段组成，改任何东西先按这张表定位：
 
 | 段 | 行号范围 | 内容 |
 | --- | --- | --- |
 | `<head>` | 1–9 | `lang="zh-CN"`、`data-theme="dark"` 初始主题、**MiSans 字体 CDN**（`font.sec.miui.com`，按 unicode-range 分片） |
-| `<style>` | 10–538 | 全部 CSS（无外链样式表） |
+| `<style>` | 10–538 | 全部 CSS（无外链样式表）。**这段原文会被逐字节复制进 `console.html`** |
 | `<body>` | 540–1003 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
-| `<script>` | 1004–2442 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init） |
+| `<script>` | 1004–2442 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
 
 > ⚠️ `<body>` 里 584–931 行是**渠道页的静态占位 markup**。`init()` 末尾会 `go('overview')`，
 > 首屏立刻用 JS 重绘整个 `#viewport`，所以那段占位只在 JS 失效时可见。
@@ -134,6 +225,9 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console.html `
 ---
 
 ## 3. JS 索引（函数 / 常量 → 行号 → 职责）
+
+> 行号均指 `console-redesign.html`（**原型**，含演示用假数据与假动作）。
+> 生产侧的真实实现在 `build/app.js`，索引见 §0.2。
 
 ### 3.1 常量与数据层
 
@@ -272,6 +366,8 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 ## 5. 修改路由表（"想改 X → 去 Y"）
 
+> 前四行是**视觉**，只改设计稿的 `<style>`，改完 `node build/build.js` 即对生产生效。
+
 | 想改什么 | 去哪里 |
 | --- | --- |
 | 明暗两套配色 / 强调色 | CSS 22–41（暗）、42–61（亮）的变量 |
@@ -281,14 +377,19 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 头部下拉被遮挡 | 174–175 `.page-hd` 的 `position/z-index` |
 | 页面底部空白 / 侧栏高度 | 65–73 `body`、114 `.app`、147 `.main`、171 `.viewport` |
 | 弹窗宽度 | 403–409 `.modal` / `.modal.wide` |
-| 弹窗遮罩点击行为 | 998–1001 `#mask` markup（**当前刻意不绑 onclick**） |
-| 新增协议 | `PROTO_META` 1947 + `PROTO_ORDER` 1958 + `.chip.<proto>` 配色 227–234 |
-| 新增页面 | `NAV` 1194 + `vXxx()` + 分发表 1220 |
-| 新增导入类型 | `IMPORT_META` 2208 + 工具栏菜单 1359–1367（和占位 markup 591–599 同步） |
-| 渠道列表排序 | 1397（渠道页）/ 1565（模型页） |
-| 探测列表交互 | `renderProbeList` 2101 起整段 |
-| 图标 | `IC` 1006–1037，用 `svg('name',size)` 引用 |
-| 主题持久化 key | 2429 / 2438（`zzcs-theme`） |
+| 弹窗遮罩点击行为 | 998–1001 `#mask` markup（**当前刻意不绑 onclick**）；生产同规则，见 `build/shell.html` 48 |
+| 新增协议（原型） | `PROTO_META` 1947 + `PROTO_ORDER` 1958 + `.chip.<proto>` 配色 227–234 |
+| 新增协议（生产） | `build/app.js` 的 `PROTO_META` 1308 / `PROTO_ORDER` 1319 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
+| 新增页面（原型） | `NAV` 1194 + `vXxx()` + 分发表 1220 |
+| 新增页面（生产） | `build/app.js` 的 `NAV` 287 + `vXxx()` + `go()` 307 的分发表，然后重新构建 |
+| 新增导入类型 | `IMPORT_META` 2208（原型）/ 1569（生产）+ 工具栏菜单 1359–1367（和占位 markup 591–599 同步） |
+| 渠道列表排序 | 1397（渠道页）/ 1565（模型页）；生产 589 / 771 |
+| 探测列表交互 | `renderProbeList` 2101 起整段（原型）/ 1447（生产） |
+| 图标 | `IC` 1006–1037（原型）/ 3（生产），用 `svg('name',size)` 引用 |
+| 主题持久化 key | 2429 / 2438（`zzcs-theme`）；生产 `setTheme` 1802 |
+| 生产独有组件样式 | `build/extra.css`（**不要写进设计稿**，设计稿没有这些组件） |
+| 构建逻辑 / 产物结构 | `build/build.js` |
+| 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 374 + `ovSeries` 377 + `vOverview` 431 |
 
 ---
 
@@ -310,7 +411,8 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | Playground 生图 | `POST /v1/images/generations` |
 
 > 鉴权：`ADMIN_KEY` 走 `Authorization: Bearer`；旧版用 `?key=` 存 sessionStorage。真实接入时**不要**沿用 `fakeKey()`。
-> **回填状态（v0.2）**：上表在 `console.html` 中**已全部落地**，原型里的假动作只剩演示用途。
+> **回填状态（v0.4）**：上表在 `build/app.js` 中**已全部落地**（Playground / 测试模型 / 四类导入 / 接入信息都发真实请求），
+> 原型里的假动作（`fakeKey` / `simTest` / `REPLIES` / `hash` / 假流式）**只剩演示用途**，不再有对应生产代码。
 
 ---
 
@@ -326,19 +428,37 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 8. **`DATA` 会被就地修改**：`toggleCh` / `delChannel` / `reprobe` 直接改常量。刷新页面即复位；不要写依赖"数据不可变"的逻辑。
 9. **排序必须用副本**：`drawChTable` / `drawMTable` 都是 `[...rows].sort(...)`，直接 `rows.sort` 会污染 `DATA` 顺序。
 10. **导入解析要容错**：`parseCodexUnits` 兼容扁平 / `credentials` / `accounts[]` 三种结构；`parseGsSessionId` 用正则从任意文本里捞 `uuid:hex`。改这里务必保留容错。
+11. **`</style>` 是 CSS 里的禁忌字面量**：HTML 解析 `<style>` 是裸文本模式，注释里出现结束标签也会**立刻闭合元素**，后面整段 CSS 会变成页面正文。写构建 banner / CSS 注释时绝不能出现它（`build/build.js` 有自检兜底，但别指望它替你找语义错误）。
+12. **`console.html` 是产物，不是源文件**：直接手改会在下次 `node build/build.js` 时被静默覆盖。改视觉去 `console-redesign.html` 的 `<style>`，改生产逻辑去 `build/app.js`，改完必须重新构建。
+13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 +648（JS）。增删 `build/head.html` 或 `build/shell.html` 的行会让 JS 偏移改变。
+14. **表格表头右对齐要压权重**：`table.tbl thead th{text-align:left}` 权重是 (0,1,3)，高于 `.t-r` 的 (0,1,0)，所以 `th` 上的 `.t-r` **默认不生效**，会出现"表头左对齐、数值右对齐"的错位。必须用 `table.tbl thead th.t-r` 这种更高权重的选择器（原型 300 行与 `.t-r` 并排写在同一行，就是为了不增行数、避免锚点整体漂移）。新增右对齐列时务必肉眼确认表头也对齐了。
+15. **剪贴板只在安全上下文可用**：`navigator.clipboard` 在 `http://` + 局域网 IP 下是 `undefined`，而可选链 `?.` 会把整条链**静默短路**——既不复制也不报错，看起来就是"按钮点了没反应"。`copyText` 因此用 `document.execCommand('copy')` 兜底，别删。
+16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" onclick="copyText(this.dataset.t,this)"`。
 
 ---
 
 ## 8. 快速自测清单（改完跑一遍）
 
+**构建与产物**
+
+- [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
+- [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）
+- [ ] 产物里 `</style>` 恰好 1 次：`(Select-String -Path console.html -Pattern '</style>' -SimpleMatch).Count`
+- [ ] `git status` 里 `console.html` 与源文件**在同一次提交**中
+
+**原型 + 生产都要看**
+
 - [ ] 明暗切换正常，两套主题都是暖色系（无冷色绿）
 - [ ] 总览 KPI 涨跌为**红涨绿跌**，且无箭头
+- [ ] 总览时间范围 `24 小时 / 7 天 / 30 天` 切换后**图表与 KPI 环比真的变**（不是只切样式）
 - [ ] 渠道页"导入"下拉能完整展开、不被下方卡片遮挡
 - [ ] 渠道表格行：测试 / 编辑 / 详情三个按钮可用；点行打开详情抽屉
-- [ ] 抽屉内密钥可掩码↔明文切换、可复制
+- [ ] 抽屉内密钥可掩码↔明文切换、可复制（生产显示的是**真实密钥**，不是假串）
 - [ ] 添加/编辑渠道弹窗：协议切换后 Base URL 提示随之变化；探测结果可搜索、可全选、可批量加入
 - [ ] 导入四类（Codex RT / Codex JSON / Genspark 会话 / Genspark JSON）都能打开，JSON 类支持多选
-- [ ] 测试模型弹窗：勾选后逐条出结果与汇总
+- [ ] 测试模型弹窗：勾选后逐条出结果与汇总（结果来自 `/admin/api/test` 真实请求）
+- [ ] Playground 发一条消息，能收到真实流式回复 + 路由信息（渠道 / 首块延迟 / 总耗时）
+- [ ] 接入信息页展示的网关地址、密钥、模型名来自 `/admin/api/config`，非硬编码
 - [ ] 弹窗点遮罩**不关闭**；× / 取消 / Esc 可关闭
 - [ ] 页面底部无异常空白，侧栏高度贴合视口
 - [ ] 窗口缩到 <1320px / <900px 布局不破

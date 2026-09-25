@@ -297,7 +297,7 @@ table.tbl tbody tr{transition:background .12s}
 table.tbl tbody tr:hover{background:var(--panel-2)}
 table.tbl tbody tr.clickable{cursor:pointer}
 table.tbl tbody tr:last-child td{border-bottom:0}
-.t-r{text-align:right}
+.t-r{text-align:right}table.tbl thead th.t-r{text-align:right}/* 表头基样式 text-align:left 权重(0,1,3) 高于 .t-r(0,1,0)，右对齐列必须用更高权重补回，否则表头与数值错位 */
 .t-c{text-align:center}
 .cell-main{display:flex;align-items:center;gap:9px;min-width:0}
 .cell-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1146,7 +1146,7 @@ function areaChart(data,w,h,opts){
             <text x="${pl-8}" y="${y+3.5}" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">${v>=1000?(v/1000).toFixed(1)+'k':v}</text>`;
   }).join('');
   const step=Math.ceil(n/7);
-  const xlab=data.map((dt,i)=>i%step===0||i===n-1?`<text x="${X(i)}" y="${h-5}" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">${dt}</text>`:'').join('');
+  const xlab=data.map((dt,i)=>i%step===0||i===n-1?`<text x="${X(i)}" y="${h-5}" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">${Array.isArray(dt)?dt[0]:dt}</text>`:'').join(''); // data 的元素是 [标签,数值] 二元组，横轴只取标签：直接写 ${dt} 会把整对拼成 "09-24,1888"
   const dots=pts.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="${i===n-1?3.6:2.2}" fill="${i===n-1?'var(--accent)':'var(--panel)'}" stroke="${o.stroke}" stroke-width="1.6"/>`).join('');
   const gid='g'+Math.random().toString(36).slice(2,7);
   return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="overflow:visible">

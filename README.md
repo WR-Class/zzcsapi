@@ -19,11 +19,17 @@
 ### 方式一：Docker（推荐）
 
 ```powershell
+# usage.json 是运行时持久化文件，不入仓库，首次部署先由模板生成
+Copy-Item usage.example.json usage.json
 docker compose up -d --build
 # 控制台 http://127.0.0.1:8787/console（默认管理密钥 zz-admin-change-me）
 ```
 
-`docker-compose.yml` 挂载 `./config.json` 和 `./usage.json`，首次部署包里已带干净的初始文件。
+`docker-compose.yml` 挂载 `./config.json` 和 `./usage.json`。
+⚠️ 这两个文件都**必须先在宿主机上存在**：`config.json` 由 `server.js` 首次运行自动从 `config.example.json` 生成；
+`usage.json` 需要手动从 `usage.example.json` 复制。**若缺失，Docker 会把挂载点建成目录**，
+服务不会崩（`ensureUsage` 有兜底），但用量统计将**无法落盘、每次重启归零**，且不易察觉。
+`usage.json` 已列入 `.gitignore`（每次请求都会改写，提交它只会产生噪声 diff）。
 
 ### 方式二：裸 Node（18+）
 
@@ -83,18 +89,44 @@ http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
 
 > ⚠️ **强制约定：改代码必须同步改文档**（无论改动来自谁）。完整规则见 [`AGENTS.md`](AGENTS.md)。
 
-改前端（`console.html` / `console-redesign.html`）前请先读这两份文档：
+### 前端文件与构建管线
+
+生产控制台 `console.html` **不是手写的，是构建产物**：
+
+```
+node build/build.js
+```
+
+```
+console-redesign.html ──(取 <style> 原文，逐字节复制)──┐
+                                                      ├─→ console.html  (提交进仓库，server.js 直接读)
+build/head.html   (到 <style> 为止的 head)            │
+build/shell.html  (body 骨架：rail / topbar / viewport / drawer / mask)
+build/app.js      (数据层 + 动作层 + 渲染，真实请求 /admin/api/*)
+build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计令牌)
+```
+
+| 文件 | 角色 |
+| --- | --- |
+| `console-redesign.html` | **视觉唯一真源**（高保真静态原型，单文件零依赖，不请求后端，数据来自文件内 `DATA` 快照） |
+| `build/head.html` · `build/shell.html` · `build/extra.css` · `build/app.js` | 生产适配层：骨架、生产独有样式、真实数据与交互 |
+| `build/build.js` | 组装脚本（含「产物中 `</style>` 只能出现一次」的构建期自检） |
+| `console.html` | **构建产物**，已提交进仓库。**不要手改**——下次构建会被覆盖 |
+
+**因此：改视觉/字号/留白/圆角 → 改 `console-redesign.html` 的 `<style>` → 重新 `node build/build.js`。**
+改完请确认 `console.html` 同步更新（构建是覆盖式的，忘了构建就等于没改）。
+
+> 生产与原型**变量名完全相同**（生产直接复用设计稿 CSS），不存在映射表。
+> 生产独有能力（genspark 双导入、codex 配额条、渠道级自定义请求头、密钥掩码↔明文切换、有效优先级角标、
+> 真实测试/导入/Playground 请求）原型里没有，**原型不必追平**。
+
+改前端前请先读这两份文档：
 
 | 文档 | 用途 |
 | --- | --- |
-| [前端代码地图](docs/frontend-code-map.md) | **快速定位**：单文件行号锚点表、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、10 条坑位清单 |
-| [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、原型→生产的接口映射、变更日志 |
+| [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
+| [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
 
-> `console-redesign.html` 是**纯静态原型**（单文件、零依赖、不请求后端，数据来自文件内 `DATA` 快照）；
-> `console.html` 是现役生产控制台（真实请求 `/admin/api/*`）。
-> **v0.2 起两者视觉与交互已同源**（暖色系 + MiSans + 同样的弹窗/抽屉/图表规范），但**变量名不同**（生产沿用旧命名，映射表见详细设计文档 §11.2），
-> 且生产多出原型没有的能力（genspark 双导入、codex 配额条、渠道级自定义请求头、密钥掩码↔明文切换、有效优先级角标）——**这些原型不必追平**。
-> 改配色/字体/布局时**两份文件都要改**，否则下次回填互相覆盖。
 
 ## 配置示例 (`config.example.json`)
 
