@@ -1270,7 +1270,7 @@ function drawChTable(){
         <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
         <td class="t-r mono">${fMs(c.ms)}</td>
         <td class="t-r mono">${c.models}</td>
-        <td class="t-r mono">${c.pri}</td>
+        <td class="t-r mono">${c.pri}${c.fail>0&&c.eff!=null&&c.eff!==c.pri?`<span style="margin-left:4px;font-size:10px;color:${c.fail>=.5?'var(--err)':'var(--warn)'}" title="近期失败率 ${Math.round(c.fail*100)}% → 自动降权中，恢复后自动回升">→ ${c.eff}</span>`:''}</td>
         <td class="t-r mono">${nf(c.req)} <span class="muted">/ ${c.err?`<span style="color:var(--err)">${nf(c.err)}</span>`:0}</span></td>
         <td>${rate===null?'<span class="muted mono">—</span>':`<div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div>`}</td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
@@ -1310,7 +1310,7 @@ function openChannel(id){
       <div class="row wrap" style="gap:9px;margin-bottom:18px">
         <span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span>
         <span class="tag">延迟 ${fMs(c.ms)}</span>
-        <span class="tag">优先级 ${c.pri}</span>
+        <span class="tag">优先级 ${c.pri}${c.fail>0&&c.eff!=null&&c.eff!==c.pri?`<span style="margin-left:4px;font-size:10px;color:${c.fail>=.5?'var(--err)':'var(--warn)'}" title="近期失败率 ${Math.round(c.fail*100)}%（滚动窗口）→ 自动降权中，恢复后自动回升">→ 有效 ${c.eff}（失败率 ${Math.round(c.fail*100)}%）</span>`:''}</span>
         <span class="tag">${c.on?'已启用':'已停用'}</span>
       </div>
 
