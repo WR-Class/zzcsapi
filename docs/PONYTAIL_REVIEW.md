@@ -7,6 +7,7 @@
 > **整改记录（2026-09-27，v0.7）**：PT01 / PT03 / PT05 / PT06 / PT07 已全部完成整改（PT03 取方案 (c) 彻底撤 arena，含 chromium 全家桶移除、镜像 1.31GB→203MB，`docs/arena-protocol.md` 留档）；前端独立审查的清理类发现 PT08/PT10/PT11/PT13/PT14/PT15/PT16/PT17/PT18/PT20/PT21 同批落地，详见 §前端独立审查 各条状态。处置明细见 [frontend-console-detailed.md §8.7](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v0.8）**：**PT02 已取方案 (b) 完成整改**——proxy 对全部 openai 系协议真实生效（探测/测试/聊天经 curl `-x` 转发），实测含死端口拒绝、Clash 探测、流式 SSE 完整回放；PT09/PT12/PT19 登记进 detailed §9 后续可做；**PT04（探测双路径）仍待下次动探测逻辑时顺带收敛**。处置明细见 [frontend-console-detailed.md §8.8](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v1.0）**：PT01 同主题的**分发场景加固**——原 compose 里写死的固定默认密钥（`ADMIN_KEY`/`GATEWAY_KEY` 都给了公共字符串）等于把每个部署的管理密钥公开在仓库里（谁拿到项目谁就知道），且 `checkAuth` 存在"空 key 就放行"。现改为：默认留空 → **首启自动生成 48 位随机密钥**（打印到容器日志并写回 config.json）+ 控制台「输入管理密钥」登录门（壳页面放行、管理 API 仍每次校验、密钥记忆由 sessionStorage 升为 localStorage）。明细见 [frontend-console-detailed.md §8.10](./frontend-console-detailed.md)。
+> **整改记录（2026-09-27，v1.1）**：做「Gemini 多模态（图片）适配」时**顺带实测出 PT23 与 PT24**——前者让 Gemini / Anthropic 两条客户端协议的**非流式请求从来就是 502**，后者让**原生 Gemini / Anthropic SDK 直连一律 401**；两个都与会话本次目标无关，但同批修复（各一行到数行）并各自加了回归。同批落地：Gemini `inlineData`/`fileData` 图片入站转换 + 三条客户端协议共用的「图片能力门」（`IMAGE_CAPABLE_PROTOCOLS`，防止静默丢图）；新增零依赖回归 `test/gemini-multimodal.test.js`（36 项断言）。明细见 §PT23 / §PT24 与 README「含图请求的候选裁剪」。
 
 ## 结论
 
@@ -63,6 +64,38 @@
   2. 渠道连败 3 次进 `down` 桶后，周期探测成功会立刻清零 consecutiveFail 治愈回池（server.js:574）；坏渠道在滚动样本攒到 5 个之前，每个探测周期最多再被真实流量撞 3 次——**实测复现过**（agentrouter 补样本实验中 roll 冻结在 f=3，65 秒间隔绕开冷却才攒满）。
 - 最小修复：各加一行注释——`// ponytail: 内存态重启清零，跨重启记忆写 usage.json byChannel`；`// ponytail: 探测治愈重置熔断，坏渠道靠滚动失败率兜底（≥5 样本降 3 级）`。
 - 最小回归：无行为变化。
+
+### PT23 中：非流式路径交给 handler 的 shim 缺 `json()` —— ✅ v1.1 已整改（一行）
+
+- 来源：做「Gemini 多模态」的端到端验证时实测撞到（**不是静态推断**：假上游 + 临时网关实例复现，与图片改动无关的既有 bug）。
+- 证据（`server.js`，整改前）：`tryChannel` 非流式成功分支先 `await resp.text()` 读全文（统计用量），
+  然后构造 `const shim = { ok, status, headers, text: async () => text }` 交给 `onSuccessNonStream(shim, candidate)`——
+  **没有 `json()`**；而 `/anthropic/v1/messages` 与 `/gemini/v1beta/...` 两条路由的 `onSuccessNonStream` 实现里都是
+  `const oaiBody = await oai.json()`。于是调用即抛 `TypeError: oai.json is not a function`，被同函数的 `catch` 兜成
+  `internal: …` → 记一次渠道失败 + 502 `all channels failed`（**还会把健康渠道推进冷却**）。
+- 观察：**流式反而正常**（流式走 `onStreamChunk`，不碰 shim），OpenAI 路由也正常（它只用 `shim.text()`）。
+  所以症状是「Gemini/Anthropic 协议 + 非流式（多数客户端的默认模式）= 一律 502，流式却好用」，
+  报错文案又只有 `internal: oai.json is not a function`，从客户端看不到根因；极易被当成「上游不支持」。
+  本仓库 30 条渠道全是 openai/notion 系（无人用 gemini/anthropic 客户端协议），因此长期未被发现。
+- 最小修复：给 shim 补 `json: async () => JSON.parse(text)`（shim 是 fetch `Response` 的替身，就该同时具备两个读法）。
+- 最小回归：临时实例 + 假 OpenAI 上游，`POST /gemini/v1beta/models/{m}:generateContent` 与
+  `POST /anthropic/v1/messages`（均非流式）→ 200 且响应被正确转成各自协议形态；流式路径与 OpenAI 路由行为不变。
+- **处置（v1.1）**：按最小修复落地（`server.js` 非流式 shim 一行），并由 `test/gemini-multimodal.test.js`
+  的端到端姊妹脚本（临时实例 + 假上游，一次性验证、不入库）实测 17 项断言全绿。
+
+### PT24 中：`checkAuth` 不认原生 SDK 的鉴权头 —— ✅ v1.1 已整改（数行）
+
+- 来源：真机验证「Gemini 协议能不能带图」时，用 Gemini 原生头 `x-goog-api-key` 打活体网关 → **401 `gateway key required`**（实测，不是推断）。
+- 证据（`server.js`，整改前）：`checkAuth` 只匹配 `Authorization: Bearer <key>` 与 `?key=<key>` 两条路径；
+  而**官方 SDK 的默认鉴权头各不相同**——Gemini SDK 发 `x-goog-api-key`（另一模式才是 URL 里的 `key=`），
+  Anthropic SDK 发 `x-api-key`，只有 OpenAI SDK 恰好是 Bearer。
+- 观察：症状是「README 让你把 baseURL 指向网关，但官方 Gemini/Anthropic SDK 复制过去直接 401」，
+  而从客户端看只是"密钥不对"，很容易被误判成密钥配置问题。`?key=` 那条路能过，所以"用 curl 拼 URL"的
+  自测全绿、掩盖了 SDK 的真实行为（**自测方式与被测对象不一致**的典型）。
+- 最小修复：`checkAuth` 在 **gateway 侧**追加两个头判定；管理面**刻意不接受**这两个头，避免把客户端密钥语义混进管理面。
+- 最小回归：只带 `x-goog-api-key` / `x-api-key` 调 `/gemini/*` `/anthropic/*` → 200；错误值 → 401；
+  管理面带这两个头 → 仍 401、Bearer 仍 200（**无提权**）；`NOAUTH=1` 行为不变。
+- **处置（v1.1）**：按最小修复落地，3 项头判定 + 1 处管理面隔离；回归进 `test/gemini-multimodal.test.js` §5（8 项断言，含管理面无提权）。
 
 ## 已验证的非问题（记录在此，避免后人重查）
 

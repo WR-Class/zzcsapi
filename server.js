@@ -199,6 +199,13 @@ function checkAuth(req, kind) {
   const h = req.headers['authorization'] || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   if (m && m[1] === need) return true;
+  // 原生 SDK 兼容（仅 gateway 侧）：Gemini SDK 发 x-goog-api-key（其默认鉴权头，另一模式是 ?key=），
+  // Anthropic SDK 发 x-api-key。不认这两个头 → 官方 SDK 直连一律 401（OpenAI SDK 走 Bearer 本来就通）。
+  // 管理面不接受它们：admin 只能 Bearer / ?key=，避免把客户端密钥语义混进管理面。
+  if (kind !== 'admin') {
+    if (req.headers['x-goog-api-key'] === need) return true;
+    if (req.headers['x-api-key'] === need) return true;
+  }
   // 兼容 ?key=...
   const u = new URL(req.url, 'http://127.0.0.1');
   if (u.searchParams.get('key') === need) return true;
@@ -1084,15 +1091,29 @@ function geminiToOpenAI(body, model) {
   if (sysText) messages.push({ role: 'system', content: sysText });
   for (const c of contents) {
     const role = c.role === 'model' ? 'assistant' : 'user';
-    // functionCall / functionResponse 部件 → 工具仿真可读的文本（回退渠道时才生效）
-    const parts = [];
+    // Gemini 部件 → OpenAI content blocks。**顺序必须保留**：图片与文本的相对位置对视觉模型有语义
+    // （先图后问 vs 先问后图，回答会不一样）。text 原样转文本；inlineData（base64）与 fileData（fileUri）
+    // 转 image_url；functionCall / functionResponse 仍降级为文本（只有工具仿真链用得上，图片链用不到）。
+    const blocks = [];
     for (const p of (c.parts || [])) {
-      if (p.text) parts.push(p.text);
-      else if (p.functionCall) parts.push('```json\n{"tool_calls": [{"name": ' + JSON.stringify(p.functionCall.name || '') + ', "arguments": ' + JSON.stringify(p.functionCall.args || {}) + '}]}\n```');
-      else if (p.functionResponse) parts.push('[工具 ' + (p.functionResponse.name || '') + ' 的执行结果如下]\n' + JSON.stringify(p.functionResponse.response || {}) + '\n[请根据以上工具结果继续]');
+      const inline = p.inlineData || p.inline_data;
+      const file = p.fileData || p.file_data;
+      if (p.text) blocks.push({ type: 'text', text: p.text });
+      else if (inline && inline.data) {
+        blocks.push({ type: 'image_url', image_url: { url: `data:${inline.mimeType || inline.mime_type || 'image/png'};base64,${inline.data}` } });
+      } else if (file && (file.fileUri || file.file_uri)) {
+        blocks.push({ type: 'image_url', image_url: { url: file.fileUri || file.file_uri } });
+      } else if (p.functionCall) blocks.push({ type: 'text', text: '```json\n{"tool_calls": [{"name": ' + JSON.stringify(p.functionCall.name || '') + ', "arguments": ' + JSON.stringify(p.functionCall.args || {}) + '}]}\n```' });
+      else if (p.functionResponse) blocks.push({ type: 'text', text: '[工具 ' + (p.functionResponse.name || '') + ' 的执行结果如下]\n' + JSON.stringify(p.functionResponse.response || {}) + '\n[请根据以上工具结果继续]' });
     }
-    const text = parts.join('\n');
-    if (text) messages.push({ role, content: text });
+    const hasImage = blocks.some((b) => b.type === 'image_url');
+    if (hasImage) {
+      messages.push({ role, content: blocks });
+    } else {
+      // 纯文本仍用字符串形态：上游与各回退渠道普遍只认 string（数组形态只有 OpenAI 官方语义能接受）
+      const text = blocks.map((b) => b.text).filter(Boolean).join('\n');
+      if (text) messages.push({ role, content: text });
+    }
   }
   const gen = body.generationConfig || {};
   // Gemini functionDeclarations → OpenAI tools（回退 notion 时启用工具仿真）
@@ -2156,6 +2177,30 @@ function sanitizeOpenAIToolIds(body) {
   return body;
 }
 
+// ─────────────────── 图片（多模态）能力门 ───────────────────
+// 内部统一格式是 OpenAI：图片表示为 messages[].content 数组里的 image_url block。
+// 目前只有 openai 协议渠道会把请求体原样转发（含 image_url）；notion / notion-agent / workbuddy /
+// genspark / codex 这些逆向与文本链只把 content 当字符串用 —— 把带图请求丢给它们＝**静默丢图后照样回答**，
+// 那比直接失败更糟（用户以为模型看过图）。所以含图请求只保留能转发图片的渠道，一个都没有就明确报错。
+const IMAGE_CAPABLE_PROTOCOLS = ['openai'];
+
+function bodyHasImages(body) {
+  const msgs = Array.isArray(body && body.messages) ? body.messages : [];
+  for (const m of msgs) {
+    if (Array.isArray(m && m.content) && m.content.some((b) => b && (b.type === 'image_url' || b.type === 'image' || b.image_url))) return true;
+  }
+  return false;
+}
+
+// 含图请求裁剪候选链；未命中图片时原样返回（零开销、零行为变化）
+function filterCandidatesForImages(candidates, body) {
+  if (!bodyHasImages(body)) return candidates;
+  return candidates.filter((c) => IMAGE_CAPABLE_PROTOCOLS.includes(c.protocol || 'openai'));
+}
+
+// 含图但裁剪后没有候选 → 统一的 400 文案（避免"无渠道"的 404 误导成模型名写错）
+const NO_IMAGE_CHANNEL_MSG = 'this request contains images, but no channel can forward them: only openai-protocol channels pass image_url through as-is';
+
 async function handleOpenAIRequest(req, res, url) {
   const raw = await readBody(req);
   let body;
@@ -2180,6 +2225,12 @@ async function handleOpenAIRequest(req, res, url) {
   // codex（ChatGPT 官方订阅反代）兜底
   const cxCands = channelsServing(requested, 'codex');
   for (const xc of cxCands) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
+  // 含图请求：只留能转发 image_url 的渠道（见 IMAGE_CAPABLE_PROTOCOLS）
+  const beforeImgFilter = candidates.length;
+  candidates = filterCandidatesForImages(candidates, body);
+  if (candidates.length === 0 && beforeImgFilter > 0) {
+    return sendJson(res, 400, upstreamErrorPayload(400, NO_IMAGE_CHANNEL_MSG));
+  }
   if (candidates.length === 0) {
     const sug = suggestAliases(requested);
     const hint = sug.length ? `；你是不是想调：${sug.join(' / ')}` : '；调 GET /v1/models 可查看当前所有可用模型名';
@@ -2298,6 +2349,11 @@ async function handleAnthropicRequest(req, res, url) {
     }
     const isStream = !!body.stream;
     const oaiBody = sanitizeOpenAIToolIds(anthropicToOpenAI(body)); // 转换 + 清洗工具 id
+    const beforeImgFilter = candidates.length;
+    candidates = filterCandidatesForImages(candidates, oaiBody);
+    if (candidates.length === 0 && beforeImgFilter > 0) {
+      return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: NO_IMAGE_CHANNEL_MSG } });
+    }
     return dispatchRequest({
       kind: 'anthropic',
       res,
@@ -2366,6 +2422,11 @@ async function handleGeminiRequest(req, res, url) {
   }
 
   const oaiBody = geminiToOpenAI(body, model);
+  const beforeImgFilter = candidates.length;
+  candidates = filterCandidatesForImages(candidates, oaiBody);
+  if (candidates.length === 0 && beforeImgFilter > 0) {
+    return sendJson(res, 400, { error: { code: 400, message: NO_IMAGE_CHANNEL_MSG, status: 'INVALID_ARGUMENT' } });
+  }
   return dispatchRequest({
     kind: 'gemini',
     res,
@@ -2644,7 +2705,15 @@ async function tryChannel(opts) {
       outputTokens: estimateTokens(replyText),
       ok: true, latencyMs: Date.now() - t0, realUsage,
     });
-    const shim = { ok: resp.ok, status: resp.status, headers: resp.headers, text: async () => text };
+    // shim 必须像 fetch Response 一样同时提供 text() 与 json()：Anthropic / Gemini 两条路由的
+    // 响应转换都调 oai.json()，缺了它非流式请求会一律 502（internal: oai.json is not a function）
+    const shim = {
+      ok: resp.ok,
+      status: resp.status,
+      headers: resp.headers,
+      text: async () => text,
+      json: async () => JSON.parse(text),
+    };
     await onSuccessNonStream(shim, candidate);
     return 'success';
   }
