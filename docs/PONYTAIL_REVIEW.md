@@ -143,6 +143,21 @@
 - 证据：+13/+617 换算捷径依赖 head=21/shell=52 恒定，全靠人肉纪律；已有 `</style>` 自检，加行数断言可让锚点漂移在构建期爆错。
 - 处置：build.js 增加行数守卫（head/shell 变行数直接 throw，提示同步 AGENTS.md §1.2 与 code-map）。
 
+### PT22 中：8 秒轮询重绘把模型页搜索词与 Playground 草稿冲掉 —— ✅ v1.0.1 已整改
+
+- 来源：用户报告（「聚合模型里搜索任意模型，一会就刷新了页面，然后搜索的就没了」）。
+- 证据（`build/app.js`，整改前）：`setInterval(…,8000)` → `loadAll()` → `render()` 重建当前页整个 `#viewport` DOM；
+  `vModels` 的 `<input id="mQ" placeholder="搜索模型名…">` **无 `value=`、无状态变量**，页签把 `class="tab on"` 写死在「全部」；
+  `drawMTable()` 遂读 `$('#mQ').value`（重绘后为空）→ 搜索清空、页签跳回。
+  对照：`vChannels` 有 `chQ`/`chTab`、`vLogs` 有 `lgRange/lgCh/lgOk/lgQ`（命令式回填）、`vOverview` 有 `ovRange` —— **唯独模型页漏了**。
+  `vPlayground` 同族：`#pgInput`/`#pgSys` 草稿与 `#pgModel`/`#pgTemp`/`#pgMax`/`#pgStream` 均无回填（草稿被吞，症状更重）。
+- 最小修复：模型页补 `mTab`/`mQ` 状态并在模板回填；Playground 补 `pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn` 六个状态并回填；
+  轮询加两条护栏（`pgBusy` 流式中、视口内输入控件被聚焦时跳过这一拍）。
+- 最小回归：真机等 10 秒，模型页搜索词/页签保留、Playground 草稿保留、流式「正在路由」气泡不被抽掉；渠道页/日志页/总览页原行为不变。
+- **已固化为自动化回归**：`node test/console-state.test.js`（零依赖，27 项断言，覆盖模型页与 Playground；
+  从 `build/app.js` 现抠真实渲染函数跑最小 DOM 桩）。**变异测试 4/4**：四处修复逐个撤掉后测试全部变红，恢复后基线重新变绿。
+- 沉淀：code-map §0.2 末尾新增「状态回填约定」（视口内输入控件的值必须存 JS 变量 + 模板回填 + `oninput` 写回）；code-map §8 自测清单加了这条命令。
+
 ### 前端已验证的非问题（并入总表，避免后人重查）
 
 - **死函数扫描**：app.js 全部 121 个函数/常量定义逐一计引用，无死函数（`$`/`$$` 为扫描器正则误报）；图标表仅 arrowDown 一项死（已删）。

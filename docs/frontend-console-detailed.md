@@ -607,6 +607,59 @@ README §4xx 重试规则行改写（顺带修正了原文档把 401/403 写成"
 
 ---
 
+### 8.11 v1.0.1 修复：聚合模型页搜索/页签被 8 秒轮询冲掉 + Playground 草稿同样丢失（2026-09-27，对象 `build/app.js` + 产物 `console.html`）
+
+问题（用户报告：「聚合模型里搜索任意模型，一会就刷新了页面，然后搜索的【内容】没了」）：
+
+先澄清刷新机制：**不是浏览器整页刷新（不是 F5）**，是 SPA 内部每 8 秒的静默数据刷新——
+`setInterval(…, 8000)` → `loadAll()`（并发拉 `/admin/api/status` + `/usage` + `/config`）→ `adapt()` → `render()`，
+而 `render()` 把**当前页的整个 `#viewport` innerHTML 重建**。`render()` 本身已经保了滚动位置和焦点/光标，
+但**输入框里的文字属于 DOM，重建即丢**。
+
+| # | 问题 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | **聚合模型页**：搜索词一输，约 8 秒后清空、表格跳回全量；协议页签也自行跳回「全部」 | 该页是唯一没做状态回填的页面：`<input id="mQ">` 模板里**没有 `value=`**、无状态变量；页签把 `class="tab on"` 写死在「全部」上。渠道页（`chQ`/`chTab`）、日志页（`lgRange`/`lgCh`/`lgOk`/`lgQ`）、总览页（`ovRange`）都做了，唯独模型页漏了 | 补 `let mTab='all', mQ='';`；模板回填 `value="${esc(mQ)}"` 与 `class="tab${mTab===…?' on':''}"`；`oninput`/`onclick` 写回状态；`drawMTable()` 改为读 `mQ`/`mTab` 而不是读 DOM |
+| 2 | **Playground**：正在敲的消息草稿、System Prompt 会被 8 秒重绘吞掉（同类，症状更烦）；temperature / max_tokens / 流式开关也各自跳回默认值 | 同上：`#pgInput`/`#pgSys` 的初值只在模板里留空，`#pgModel`/`#pgTemp`/`#pgMax`/`#pgStream` 也没回填选中态 | 补 `pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn` 六个状态；模板全部回填；`oninput` 实时写回草稿与 System Prompt；`pgSend` 发送后清 `pgDraft` 并触发重绘 |
+| 3 | 流式请求进行中若撞上轮询，「正在路由…」气泡被重绘抽掉（答案本身不丢，`pgSend` 结束时由 `PG` 统一重绘） | 重绘与流式 UI 竞争同一片 DOM | 轮询加护栏：`pgBusy`（流式中）跳过这一拍 |
+
+轮询护栏（第 3 条同时解决了中文输入法的联想被打断）：
+
+```js
+setInterval(()=>{
+  if(document.visibilityState!=='visible'||pgBusy)return;
+  const a=document.activeElement, vp=$('#viewport');
+  if(a&&vp&&vp.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return;  // 用户正在输入 → 这拍不重绘
+  loadAll().catch(()=>{});
+},8000);
+```
+
+> **沉淀成约定**（已写进 code-map §0.2 末尾「状态回填约定」）：8 秒轮询重绘本页 DOM，**视口内任何输入控件的值都必须存 JS 变量并在模板回填**，
+> `oninput` 必须写回变量。判断方法：在任意页面输入文字，等 10 秒——如果文字还在，说明这页做对了。
+> 弹窗与抽屉挂在 `#viewport` 之外（`#drawer`/`#mask`/`modal()`），不受重绘影响，无需回填。
+
+校验：`node --check build/app.js` ✓、`node build/build.js` ✓（140893 字符 / 2538 行）、容器重建后活体断言 8 项 ✓
+（壳 200 含登录门、含 `mTab`/`mQ` 状态、`id="mQ"` 带 `value="${esc(mQ)}"`、页签选中态回填、含 `pgDraft`、`pgInput` 回填 `>${esc(pgDraft)}</textarea>`、
+轮询护栏两条件齐备）、管理面 200（30 渠道）、healthz 30、E2E chat 200 ✓。
+
+**行为级验证（已固化为仓库回归测试 `test/console-state.test.js`，零依赖）**：按花括号配对从 `build/app.js` **现抠真实的
+渲染函数源码**（不复制副本，永远与产品代码同步），在最小 DOM 桩里跑「首渲染 → 绑定的事件触发 → 再渲染（等价于 8 秒轮询）」。
+`node test/console-state.test.js` → **27 项断言全绿**，覆盖两个页面：
+
+- **模型页**：输入 `glm` → 状态变 `glm` → **重绘后 `value="glm"` 仍在**、表格只剩 `glm-5.3`（用户报告的回归点）；
+  点 OpenAI 页签 → **重绘后仍选中**；改搜 `kimi` → 仍保留、表格切换；搜索词按 HTML 转义回填
+- **Playground**：草稿 / System Prompt / Temperature / Max tokens / 流式开关 / 模型选择六项**重绘后全部保留**
+- **对照组**：同样断言跑「模板不带 `value=`」的旧写法 → 重绘后取到空值（测试具备捕捉能力，不是恒真）
+
+**变异测试（证明它真的守得住）**：把四处修复逐个撤掉再跑测试 → **4/4 全部变红**（撤搜索框回填 / 撤页签选中态 /
+撤草稿写回 / 撤参数回填），恢复后文件字节一致且基线重新变绿。
+
+> 新增带输入框的页面时**顺手补一条用例**。测试依赖 `vModels`/`vPlayground` 等函数名，改名会让它装配报错——
+> 这是刻意的（会逼着同步本文件与 code-map 的行号锚点）。已登记：`README.md`「前端代码文档」、`AGENTS.md` §3、code-map §8 自测清单。
+
+浏览器里的人工确认（打字 10 秒不丢）仍建议实际点一次——本机无浏览器自动化手段（镜像已撤 Chromium）。
+
+---
+
 ## 9. 后续可做（未实现）
 
 - 渠道列表分页 / 虚拟滚动（真实 30+ 渠道，模型探测可能上百）

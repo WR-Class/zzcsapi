@@ -30,9 +30,9 @@
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 8 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字） | ✅ §0.2 |
-| `build/app.js` | ~1900 | **生产逻辑主体**：数据层 + 动作层 + 6 个页面渲染 + 首启密钥登录门，真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/app.js` | ~1917 | **生产逻辑主体**：数据层 + 动作层 + 6 个页面渲染 + 首启密钥登录门，真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 52 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
-| `console.html` | ~2521 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
+| `console.html` | ~2538 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~3762 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import` 等；含首启密钥生成与双层鉴权 | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
@@ -74,7 +74,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 目标 | 公式 | 校验点 |
 | --- | --- | --- |
 | `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24 |
-| `console.html` 的 JS 行号 | `build/app.js` 行号 **+617** | `const IC`：app.js 3 → 产物 620；`tick()`：app.js 1879 → 产物 2496 |
+| `console.html` 的 JS 行号 | `build/app.js` 行号 **+617** | `const IC`：app.js 3 → 产物 620；`tick()`：app.js 1887 → 产物 2504 |
 
 > 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（8 行）增删行影响（head/shell 已有构建期行数守卫，extra.css 改动需人工重算并同步本文档与 AGENTS.md §1.2）。
 
@@ -111,7 +111,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 3 | `IC` | 内联 SVG path 字典 |
 | 57 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构 |
 | 118 | `loadAll()` | 并发拉取 status / usage / config，写 `RAW` → `adapt()` |
-| 135 / 155 | `render()` / `reload()` | 重绘当前页 / 重新拉数并重绘 |
+| 135 / 155 | `render()` / `reload()` | 重绘当前页（**保留滚动位置 + 焦点/光标**；筛选状态由各页 JS 变量回填，见下方「状态回填」约定）/ 重新拉数并重绘 |
 | 158 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
 | 188 | `api(path,opts)` | **统一请求封装**：自动带 `Authorization: Bearer <ADMIN_KEY>`、错误 toast；**401 → 清掉已存密钥并弹回登录门**（密钥被轮换时自动重新要 key） |
 | 200–232 | `downloadCsv` `toast` `copyText` | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
@@ -124,19 +124,24 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 442 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
 | 560–644 | `vChannels` `drawChTable` `toggleCh` `openChannel` | 渠道页 / 排序渲染 / 启停 / 详情抽屉 |
 | 701–722 | `toggleDrawerKey` `reprobe` `delChannel` | 抽屉密钥切换 / 重探测 / 删除 |
-| 735–812 | `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉 |
-| 849–959 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl |
-| 970–1188 | `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息） |
-| 1188–1282 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
-| 1316–1325 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
-| 1329–1342 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
-| 1349–1545 | `openChannelForm` … `saveChannel` | 渠道表单：模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存 |
-| 1589–1688 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
-| 1727–1778 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`** |
-| 1810–1833 | `drawer` `closeDrawer` `setTheme` | 抽屉 / 主题持久化 / 明暗互切 |
-| 1836–1877 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
-| 1879 | `tick()` | 时钟 |
-| 1889–1900 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动） |
+| 737–851 | `mTab` `mQ` `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
+| 852–971 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填） |
+| 972–1195 | `pgDraft` 等 `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
+| 1196–1323 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
+| 1324–1336 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
+| 1337–1356 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
+| 1357–1596 | `openChannelForm` … `saveChannel` | 渠道表单：模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存 |
+| 1597–1734 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
+| 1735–1817 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`** |
+| 1818–1844 | `drawer` `closeDrawer` `setTheme` | 抽屉 / 主题持久化 / 明暗互切 |
+| 1845–1885 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
+| 1887 | `tick()` | 时钟 |
+| 1897–1917 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+
+> **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
+> 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
+> 已有的正确样例：`chQ`/`chTab`（渠道页）、`lgQ` 等（日志页，命令式 `R.value=lgQ` 回填）、`ovRange`（总览页）、`probeQ`（弹窗）。
+> 弹窗与抽屉（`#drawer`/`#mask`/`modal()` 挂 body）在 `#viewport` 之外，不受重绘影响，无需回填。
 
 > ⚠️ 原型里的 `simTest` / `REPLIES` / `hash()` / `fakeKey()` **在生产侧已全部删除**，替换为真实请求。
 > 如果你在生产代码里看到它们，说明构建源搞混了。
@@ -443,6 +448,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 **构建与产物**
 
+- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填的自动化回归，27 项断言；改了任何带输入框的页面都要跑）
 - [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
 - [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）
 - [ ] 产物里 `</style>` 恰好 1 次：`(Select-String -Path console.html -Pattern '</style>' -SimpleMatch).Count`
@@ -462,5 +468,8 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 - [ ] Playground 发一条消息，能收到真实流式回复 + 路由信息（渠道 / 首块延迟 / 总耗时）
 - [ ] 接入信息页展示的网关地址、密钥、模型名来自 `/admin/api/config`，非硬编码
 - [ ] 弹窗点遮罩**不关闭**；× / 取消 / Esc 可关闭
+- [ ] **输入状态跨重绘**（v1.0.1 起必查）：在模型页搜索框输入文字、在 Playground 敲草稿，**静等 10 秒以上**——
+      文字必须还在、页签/参数不跳回默认；旁边的数据仍在刷新（说明不是靠停掉轮询糊过去的）
+- [ ] 轮询重绘后滚动位置与输入光标位置不跳（`render()` 的保位逻辑）
 - [ ] 页面底部无异常空白，侧栏高度贴合视口
 - [ ] 窗口缩到 <1320px / <900px 布局不破

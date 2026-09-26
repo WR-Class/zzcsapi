@@ -100,3 +100,4 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/genspark-claw-reverse-proxy-research.md` | Genspark Claw 反代研究 |
 | `docs/PONYTAIL_REVIEW.md` | Ponytail 全项目审查：整改项 PT 清单（file:line 证据 + 最小修复 + 最小回归）、已验证非问题、前端独立审查 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |
+| `test/console-state.test.js` | 前端自动化回归（`node test/console-state.test.js`，零依赖）：**视口内输入控件的值必须跨轮询重绘保留**；从 `build/app.js` 现抠真实渲染函数在最小 DOM 桩里跑。新增带输入框的页面时补用例 |

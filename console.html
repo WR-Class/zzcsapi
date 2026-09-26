@@ -1349,6 +1349,9 @@ async function delChannel(id){
 }
 
 /* ═══════════════════════════ 页面：模型 ═══════════════════════════ */
+/* 本页筛选状态必须存 JS：8 秒轮询会重绘整页 DOM，只靠 input 里的值会被重建冲掉
+   （渠道页 chQ/chTab、日志页 lgQ 等都是这个规矩，模型页此前漏了） */
+let mTab='all', mQ='';
 function vModels(v){
   const rows=DATA.models;
   /* 多源冠军 / 单点依赖数都由别名表实时算出，不写死 */
@@ -1366,12 +1369,12 @@ function vModels(v){
 
   <div class="row wrap" style="margin-bottom:14px;gap:10px">
     <div class="tabs" id="mTabs">
-      <button class="tab on" data-p="all">全部 <span class="n">${rows.length}</span></button>
-      <button class="tab" data-p="openai">OpenAI</button>
-      <button class="tab" data-p="anthropic">Anthropic</button>
-      <button class="tab" data-p="gemini">Gemini</button>
+      <button class="tab${mTab==='all'?' on':''}" data-p="all">全部 <span class="n">${rows.length}</span></button>
+      <button class="tab${mTab==='openai'?' on':''}" data-p="openai">OpenAI</button>
+      <button class="tab${mTab==='anthropic'?' on':''}" data-p="anthropic">Anthropic</button>
+      <button class="tab${mTab==='gemini'?' on':''}" data-p="gemini">Gemini</button>
     </div>
-    <div class="search" style="min-width:230px;margin-left:0">${svg('filter',14)}<input id="mQ" placeholder="搜索模型名…"></div>
+    <div class="search" style="min-width:230px;margin-left:0">${svg('filter',14)}<input id="mQ" placeholder="搜索模型名…" value="${esc(mQ)}"></div>
   </div>
 
   <div class="grid g12" style="margin-bottom:16px">
@@ -1393,14 +1396,14 @@ function vModels(v){
   </div>
 
   <div class="card"><div class="card-bd tight tbl-wrap" id="mTable"></div></div>`;
-  $('#mQ',v).oninput=()=>drawMTable();
-  $$('#mTabs .tab',v).forEach(t=>t.onclick=()=>{$$('#mTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawMTable()});
+  $('#mQ',v).oninput=e=>{mQ=e.target.value;drawMTable()};
+  $$('#mTabs .tab',v).forEach(t=>t.onclick=()=>{mTab=t.dataset.p;$$('#mTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawMTable()});
   drawMTable();
 }
 function drawMTable(){
   const box=$('#mTable'); if(!box)return;
-  const q=($('#mQ')?.value||'').trim().toLowerCase();
-  const p=$('#mTabs .tab.on')?.dataset.p||'all';
+  const q=mQ.trim().toLowerCase();
+  const p=mTab||'all';
   let rows=DATA.models.filter(m=>m.name.toLowerCase().includes(q));
   if(p!=='all') rows=rows.filter(m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&(c.proto===p||(p==='openai'&&c.proto!=='notion'&&c.proto!=='workbuddy'&&c.proto!=='genspark'&&c.proto!=='notion-agent'))}));
   // 仍有启用渠道的模型排前面，仅剩停用渠道的往后排；同组内按错误数升序、请求量降序
@@ -1584,6 +1587,9 @@ function copyCurl(model,btn){
    命中渠道取自响应头 X-ZZCSAPI-Channel（网关在每条成功响应上都带），候选渠道取自别名表，
    所以「本次路由」卡里的数字都是这次调用的真实结果，不是演示值。 */
 let PG=[], pgRoute=null, pgBusy=false;
+/* 输入区同样是「轮询重绘」的受害者：草稿与参数都存 JS，重绘后回填
+   （否则 8 秒一到，正在敲的消息和 System Prompt 就被重建的空 textarea 冲掉） */
+let pgDraft='', pgSysText='', pgModelSel='', pgTempV=0.7, pgMaxV=2048, pgStreamOn=true;
 function vPlayground(v){
   const def=(DATA.models[0]||{}).name||'';
   v.innerHTML=`
@@ -1602,14 +1608,14 @@ function vPlayground(v){
         <span class="dot ok"></span>
         <h3>会话</h3>
         <span class="sub">自动选择渠道</span>
-        <div class="r"><span class="chip accent" id="pgChip">${esc(def)}</span><span class="tag" id="pgStreamTag">流式</span></div>
+        <div class="r"><span class="chip accent" id="pgChip">${esc(pgModelSel||def)}</span><span class="tag" id="pgStreamTag">${pgStreamOn?'流式':'非流式'}</span></div>
       </div>
       <div class="chat-body" id="pgBody"></div>
       <div class="composer">
-        <textarea id="pgInput" rows="1" placeholder="输入消息，Enter 发送 / Shift+Enter 换行…"></textarea>
+        <textarea id="pgInput" rows="1" placeholder="输入消息，Enter 发送 / Shift+Enter 换行…">${esc(pgDraft)}</textarea>
         <div class="composer-row">
           <div class="row" style="gap:7px">
-            <span class="tag" id="pgTagStream">stream=true</span><span class="tag" id="pgTagTemp">temp 0.7</span><span class="tag" id="pgTagMax">max_tokens 2048</span>
+            <span class="tag" id="pgTagStream">stream=${pgStreamOn}</span><span class="tag" id="pgTagTemp">temp ${pgTempV}</span><span class="tag" id="pgTagMax">max_tokens ${pgMaxV}</span>
           </div>
           <button class="send ml-auto" id="pgSend" title="发送">${svg('send',16)}</button>
         </div>
@@ -1621,19 +1627,19 @@ function vPlayground(v){
         <div class="card-hd"><h3>参数</h3></div>
         <div class="card-bd" style="display:flex;flex-direction:column;gap:15px">
           <div class="field"><label>模型</label>
-            <select class="select" id="pgModel">${DATA.models.map(m=>`<option>${esc(m.name)}</option>`).join('')||'<option value="">（无可用模型）</option>'}</select></div>
+            <select class="select" id="pgModel">${DATA.models.map(m=>`<option${m.name===(pgModelSel||def)?' selected':''}>${esc(m.name)}</option>`).join('')||'<option value="">（无可用模型）</option>'}</select></div>
           <div>
-            <div class="param" style="margin-bottom:8px"><span class="k">Temperature</span><span class="v" id="tVal">0.7</span></div>
-            <input class="range" id="pgTemp" type="range" min="0" max="2" step="0.1" value="0.7">
+            <div class="param" style="margin-bottom:8px"><span class="k">Temperature</span><span class="v" id="tVal">${pgTempV}</span></div>
+            <input class="range" id="pgTemp" type="range" min="0" max="2" step="0.1" value="${pgTempV}">
           </div>
           <div>
-            <div class="param" style="margin-bottom:8px"><span class="k">Max tokens</span><span class="v" id="mVal">2048</span></div>
-            <input class="range" id="pgMax" type="range" min="64" max="8192" step="64" value="2048">
+            <div class="param" style="margin-bottom:8px"><span class="k">Max tokens</span><span class="v" id="mVal">${pgMaxV}</span></div>
+            <input class="range" id="pgMax" type="range" min="64" max="8192" step="64" value="${pgMaxV}">
           </div>
-          <div class="param"><span class="k">流式输出</span><button class="switch on" id="pgStream"></button></div>
+          <div class="param"><span class="k">流式输出</span><button class="switch${pgStreamOn?' on':''}" id="pgStream"></button></div>
           <div class="param"><span class="k">工具调用仿真</span><span class="tag">服务端自动</span></div>
           <div class="field"><label>System Prompt</label>
-            <textarea class="input" id="pgSys" rows="3" placeholder="可选"></textarea></div>
+            <textarea class="input" id="pgSys" rows="3" placeholder="可选">${esc(pgSysText)}</textarea></div>
         </div>
       </div>
       <div class="card">
@@ -1643,12 +1649,14 @@ function vPlayground(v){
     </div>
   </div>`;
   const M=$('#pgModel',v), T=$('#pgTemp',v), X=$('#pgMax',v), S=$('#pgStream',v);
-  M.onchange=()=>{$('#pgChip').textContent=M.value};
-  T.oninput=()=>{$('#tVal').textContent=T.value;$('#pgTagTemp').textContent='temp '+T.value};
-  X.oninput=()=>{$('#mVal').textContent=X.value;$('#pgTagMax').textContent='max_tokens '+X.value};
-  S.onclick=()=>{S.classList.toggle('on');const on=S.classList.contains('on');$('#pgStreamTag').textContent=on?'流式':'非流式';$('#pgTagStream').textContent='stream='+on};
+  M.onchange=()=>{pgModelSel=M.value;$('#pgChip').textContent=M.value};
+  T.oninput=()=>{pgTempV=T.value;$('#tVal').textContent=T.value;$('#pgTagTemp').textContent='temp '+T.value};
+  X.oninput=()=>{pgMaxV=X.value;$('#mVal').textContent=X.value;$('#pgTagMax').textContent='max_tokens '+X.value};
+  S.onclick=()=>{S.classList.toggle('on');pgStreamOn=S.classList.contains('on');$('#pgStreamTag').textContent=pgStreamOn?'流式':'非流式';$('#pgTagStream').textContent='stream='+pgStreamOn};
   drawPG(); drawRoute();
   $('#pgSend',v).onclick=pgSend;
+  $('#pgInput',v).oninput=e=>{pgDraft=e.target.value};
+  $('#pgSys',v).oninput=e=>{pgSysText=e.target.value};
   $('#pgInput',v).onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();pgSend()}};
 }
 function drawPG(){
@@ -1695,7 +1703,7 @@ async function pgSend(){
   const sys=$('#pgSys').value.trim();
   const temp=Number($('#pgTemp').value), maxTok=Number($('#pgMax').value);
   const stream=$('#pgStream').classList.contains('on');
-  PG.push({role:'user',text}); t.value=''; drawPG();
+  PG.push({role:'user',text}); t.value=''; pgDraft=''; drawPG();
 
   const b=$('#pgBody');
   const wait=document.createElement('div');
@@ -2512,7 +2520,16 @@ function boot(){
   $('#btnRecheck').onclick=()=>recheckAll($('#btnRecheck'));
   go('overview');
   loadAll().catch((e)=>toast('加载失败：'+(e&&e.message||e),'bad'));
-  setInterval(()=>{ if(document.visibilityState==='visible') loadAll().catch(()=>{}); },8000);
+  /* 8 秒静默刷新：只重绘当前页（不是整页刷新），但会重建 DOM。
+     所以两种情况跳过这一拍——正在流式请求中（会把「正在路由」气泡抽掉），
+     以及用户正在某个输入框里编辑（重绘会打断中文输入法联想、也可能吞掉未同步的草稿）。
+     数据不丢，下一个周期补上。 */
+  setInterval(()=>{
+    if(document.visibilityState!=='visible'||pgBusy)return;
+    const a=document.activeElement, vp=$('#viewport');
+    if(a&&vp&&vp.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return;
+    loadAll().catch(()=>{});
+  },8000);
 }
 __ZZ_HAS_KEY__?boot():showKeyGate();
 
