@@ -23,6 +23,12 @@ const shell = R('build/shell.html');   // body 骨架
 const app = R('build/app.js');         // 数据层 + 动作层 + 渲染
 const extra = R('build/extra.css');
 
+// 行数守卫：head=21 行、shell=52 行是 code-map「CSS +13 / JS +648」行号换算的恒定前提。
+// 谁增删了这两文件的行，构建期直接爆错，别让锚点漂移烂在文档里（改行数须同步 AGENTS.md §1.2 与 code-map）。
+const nHead = head.replace(/\n$/, '').split('\n').length;
+const nShell = shell.replace(/\n$/, '').split('\n').length;
+if (nHead !== 21 || nShell !== 52) throw new Error(`head.html=${nHead} 行 / shell.html=${nShell} 行，与 code-map 换算前提（21/52）不符：请同步更新 AGENTS.md §1.2 与 docs/frontend-code-map.md 的偏移量`);
+
 // ⚠ 这段注释里绝对不能出现结束标签的字面量：HTML 解析 <style> 是裸文本模式，
 // 一遇到结束标签（即使在 CSS 注释里）就立刻闭合元素，后面的 CSS 会整段变成正文文本。
 const BANNER = '/* ── 以下为设计稿 console-redesign.html 的 style 原文，逐字节复制，勿手改 ── */\n';

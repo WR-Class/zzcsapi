@@ -1,14 +1,11 @@
 FROM node:20-alpine
-# curl: Cloudflare 的 Linux 回退（openai 系渠道用）
-# chromium nss freetype ttf-freefont: arena.ai 协议的浏览器 sidecar（真实 Chrome 指纹过 CF + reCAPTCHA）
-# node 20 需 --experimental-websocket 开启内置 WebSocket（CDP 客户端用）；node 22+ 无需该 flag
-RUN apk add --no-cache curl chromium nss freetype harfbuzz ttf-freefont ca-certificates
-ENV ZZCSAPI_CHROMIUM=/usr/bin/chromium-browser
+# curl: Linux 下 Cloudflare 拦截的回退通道（openai 系渠道探测/聊天用）
+# （arena 协议已撤：chromium/nss/freetype 全家桶与 --experimental-websocket 一并移除，镜像 1.31GB → 瘦身）
+RUN apk add --no-cache curl ca-certificates
 WORKDIR /app
 COPY server.js ./
 COPY notion.js ./
 COPY notion-agent.js ./
-COPY arena.js ./
 COPY tool-emu.js ./
 COPY console.html ./
 COPY config.example.json ./config.json
@@ -16,4 +13,4 @@ ENV PORT=8787
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:${PORT}/healthz || exit 1
-CMD ["node", "--experimental-websocket", "server.js"]
+CMD ["node", "server.js"]

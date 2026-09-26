@@ -231,7 +231,6 @@ textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-si
 .chip.notion-agent{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
 .chip.workbuddy{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 .chip.genspark{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 30%,transparent);background:var(--violet-soft)}
-.chip.arena{color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,transparent);background:var(--err-soft)}
 .chip.accent{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--tx-2);white-space:nowrap}
@@ -1113,7 +1112,7 @@ const pct=(a,b)=>b?((a/b)*100):0;
 const fTok=n=>n>=1e8?(n/1e8).toFixed(2)+' 亿':n>=1e4?(n/1e4).toFixed(1)+' 万':nf(n);
 const fMs=ms=>ms<0?'—':ms<1000?ms+' ms':(ms/1000).toFixed(ms<10000?2:1)+' s';
 const stTxt={ok:'正常',degraded:'降级',down:'不可用',unknown:'未探测'};
-const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',genspark:'Genspark',arena:'Arena'};
+const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark'};
 
 function toast(msg,kind){
   const el=document.createElement('div');
@@ -1949,13 +1948,12 @@ const PROTO_META={
   anthropic:{label:'Anthropic',base:'',key:'Anthropic API Key（sk-ant- 开头）'},
   gemini:{label:'Gemini',base:'',key:'Google AI Studio 的 API Key'},
   notion:{label:'Notion 逆向',base:'https://app.notion.com',key:'浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'},
-  arena:{label:'Arena 逆向',base:'https://arena.ai',key:'留空由宿主机 agent 管理（或粘贴浏览器 cookie）'},
   'notion-agent':{label:'Notion Agent',base:'https://api.notion.com',key:'开发者门户集成令牌（ntn_ 开头，连接需勾选「查看会话并与代理交互」）'},
   workbuddy:{label:'WorkBuddy',base:'https://www.workbuddy.ai/v2',key:'CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'},
   codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
   genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'}
 };
-const PROTO_ORDER=['openai','anthropic','gemini','notion','arena','notion-agent','workbuddy','codex','genspark'];
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark'];
 const MODEL_POOL=['gpt-6-astra','claude-opus-5','glm-5.3','kimi-k3','grok-4.6','gpt-5.6-sol','deepseek-v4.1-flash','qwen3.5-max','gemini-3.1-pro','claude-sonnet-4.6'];
 /* 原型：模拟上游 /v1/models 返回的一大批模型（真实中转站动辄上百个），用来演示列表式 + 搜索 */
 const PROBE_POOL=[

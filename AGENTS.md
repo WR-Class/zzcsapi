@@ -59,8 +59,10 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 
 > **换算捷径**（构建是纯拼接，偏移恒定，改完源文件后可用它自查文档里的 `console.html` 行号）：
 > - `console.html` 的 CSS 行号 = `console-redesign.html` 行号 **+13**
-> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+648**
-> 偏移只在 `build/head.html`（21 行）或 `build/shell.html`（52 行）增删行时才会变，届时请一并修正。
+> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+617**
+>
+> 偏移只受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（8 行）增删行影响
+> （head/shell 已由 build.js 构建期行数守卫把住，extra.css 改动仍需人工重算偏移并同步此处）。
 
 若偏移量是整体平移，可以按差值批量修正；若只是局部插入，务必逐个核对，不要凭估算改数字。
 
@@ -93,7 +95,8 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `README.md` | 后端协议、渠道配置、端点总表、部署方式 |
 | `docs/frontend-code-map.md` | 前端代码地图：行号锚点、CSS/z-index 全景、JS 索引、数据契约、修改路由表、坑位清单 |
 | `docs/frontend-console-detailed.md` | 控制台前端详细设计：设计系统、布局、组件、页面、交互流程、原型→生产映射、变更日志 |
-| `docs/arena-protocol.md` | Arena 协议 |
+| `docs/arena-protocol.md` | Arena 协议（已撤渠道，留档） |
 | `docs/prism-reverse-proxy-research.md` | Prism 反代可行性研究（已撤渠道，留档） |
 | `docs/genspark-claw-reverse-proxy-research.md` | Genspark Claw 反代研究 |
+| `docs/PONYTAIL_REVIEW.md` | Ponytail 全项目审查：整改项 PT 清单（file:line 证据 + 最小修复 + 最小回归）、已验证非问题、前端独立审查 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |

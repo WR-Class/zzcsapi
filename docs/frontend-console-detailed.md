@@ -155,7 +155,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 | 组件 | 用途 | 关键点 |
 | --- | --- | --- |
-| `.chip` | 协议标签 | 每个协议一种配色（`.chip.openai` 蓝 / `.anthropic` 黄 / `.gemini` 紫 / `.workbuddy` 琥珀 / `.notion` 中性 / `.notion-agent` 绿 / `.genspark` 紫 / `.arena` 红） |
+| `.chip` | 协议标签 | 每个协议一种配色（`.chip.openai` 蓝 / `.anthropic` 黄 / `.gemini` 紫 / `.workbuddy` 琥珀 / `.notion` 中性 / `.notion-agent` 绿 / `.genspark` 紫 / `.codex` 绿） |
 | `.pill` + `.dot` | 健康状态 | `ok` 绿 / `degraded` 黄 / `down` 红 / `unknown` 灰；`dot` 带 `box-shadow` 光环 |
 | `.delta` | 涨跌 | **红涨绿跌**（见 §5.2） |
 | `.tag` | 中性元信息 | 延迟、优先级等 |
@@ -503,6 +503,26 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 ---
 
+### 8.7 v0.7 PT01/PT03 整改：arena 协议整体移除 + 信任边界修复 + 死代码清理（2026-09-27，对象 `server.js` + `build/*` + 产物 `console.html`）
+
+依据 `docs/PONYTAIL_REVIEW.md`（PT01/PT03/PT05/PT06/PT07 + 前端独立审查的清理类发现），一次提交内完成「删」字当头的整改。
+行号换算偏移随之变化：JS 偏移 **+648 → +617**（extra.css 38→8 行），CSS 偏移 +13 不变；`AGENTS.md` §1.2 与 code-map §0.1 已同步。
+
+| # | 问题 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | **PT03**：arena 渠道从未反代成功，chromium/nss/freetype/harfbuzz/ttf-freefont 全家桶 + `--experimental-websocket` 却全部打进镜像（1.31GB） | arena.js 逆向方案保留在主干，但实际无 arena 渠道配置 | 全链路移除：`arena.js` 删除（`tool-emu.js` 保留——notion/notion-agent 工具仿真仍用）、`server.js` 去掉 arena 分支/兜底/`/admin/api/arena-cookie` 端点/协议白名单（4218→3675 行）、Dockerfile 撤 chromium 全家桶与 flag（镜像 **1.31GB→203MB**）、`console-redesign.html`/`build/app.js` 的 `PROTO_META`/`PROTO_ORDER`/`protoLabel`/`.chip.arena` 同步删除、README 协议表改「已撤，留档」、`docs/arena-protocol.md` 留档 |
+| 2 | **PT01**：compose 端口绑 0.0.0.0 + `ZZCSAPI_NOAUTH` 默认 1，局域网任何人无 key 可读全部渠道明文 key、烧上游额度（实测复现） | 免鉴权模式默认开启 + 端口全网卡暴露 | `docker-compose.yml` 端口改 `127.0.0.1:8787:8787`、NOAUTH 默认翻成 0；实测无 key 请求 401（admin/gateway 双面）、带 key 全通、healthz 不受影响 |
+| 3 | 前端#1（信任边界）：`openModel`/`copyCurl` 3 处把模型名内联进 `onclick` JS 字符串——恶意中转站 `/models` 返回毒模型名、用户从「探测加入别名」后，点击即在控制台源执行（可偷 `sessionStorage.adminKey`，v1.0 起该密钥同时存于 localStorage，威胁同理）；`esc()` 挡不住：HTML 属性先解码实体再进 JS | 内联 JS 字符串插值 | 3 处统一改 v0.5 已有的 `data-* + dataset` 模式：`data-m="${esc(名字)}" onclick="openModel(this.dataset.m)"`（模型表格行原本连 esc 都没有，一并补上） |
+| 4 | 前端#2/#3：`codexQuota`/`notionUsage` 映射进 DATA 后零消费方，README/注释仍宣称「codex 配额条」是生产能力（v0.4 重设计丢失渲染）；`extra.css` 5 组选择器（sortable/mini-kv/img-out/art/loading）全源零引用 28 行死重；`IC.arrowDown` 唯一零引用图标 | 文档承诺了代码没做的事 + 原型遗留样式跟着产物走 | 删 `app.js:78` 映射 + 改 39 行注释；删 extra.css 5 组（38→8 行）；删 arrowDown；README:120 与 detailed §5.1 的「codex 配额条」宣称同步删除（要恢复配额展示时从 git 历史找回 v0.3 实现） |
+| 5 | 前端#4/#5/#6：`protoLabel` 与 `PROTO_META.label` 两套协议显示名（codex chip 显示裸 'codex'）；抽屉「调度优先级（按实际选中顺序）」与 Playground「候选渠道」编号实为 **config 渠道序**而非调度序，误导排障；`reprobe` 写入无人读的 `errText`（真名 `lastError`）；`openLog` 找不到 id 静默回退第一条 | 同义重复 + 文案失实 + 死字段 | `protoLabel` 补 codex 短名（chip 与表单下拉统一由 PROTO_META 管长名）；两处文案改「来源渠道（按 config 渠道序，非实时调度序）」；`errText`→`lastError`（数据归位，抽屉渲染留给后续）；`openLog` 找不到改为 toast 提示后返回；shell 搜索框 placeholder 只承诺「搜索渠道…」；渠道页副标协议数改 `PROTO_ORDER.length` 动态生成 |
+| 6 | **PT05**：`probeUrlFor`/`probeMethodFor`/`probeHeadersFor` 三个单行兼容包装，只服务 4 个调用点 | 旧签名兼容层早已无外部调用方 | 删除包装，4 个调用点直连 `probeUrlForDef(ch.def)`/`'GET'`/`probeHeadersForDef(ch.def)` |
+| 7 | **PT06/PT07 + 前端#13/#14**：文档行数漂移（server.js ~4400 实际 4218→3675；code-map 旧偏移 +648）；bumpRoll 内存态与探测治愈无天花板标注；build.js 无 head/shell 行数守卫 | 行号锚点只靠人肉纪律 | code-map 147 处锚点全量重核修正；server.js 两处 `// ponytail:` 天花板注释 + app.js 角标内联重复处补注；build.js 增加行数守卫（head=21/shell=52，变了构建期爆错） |
+
+> 校验：`node --check server.js` + `node build/build.js`（含新行数守卫）+ 全源 `arena` 残留 0 命中 + 容器重建实测
+> （无 key 401 / 带 key 200 / healthz 30 渠道 / E2E chat 200 / 镜像 203MB / console 产物含 data-m 模式）。
+
+---
+
 ## 9. 后续可做（未实现）
 
 - 渠道列表分页 / 虚拟滚动（真实 30+ 渠道，模型探测可能上百）
@@ -512,6 +532,10 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 - 移动端适配（当前 ≤900px 直接隐藏侧栏，无抽屉式导航）
 - 设计稿的 `PROBE_POOL` / `DATA` 快照已是演示用途，长期可考虑删掉、让原型也能切到 mock 接口
 - 构建产物目前整体提交；若体积继续增长可考虑改为构建时生成、不提交（需同时改 `Dockerfile` / `docker-compose.yml`）
+- 主题闪烁：head.html 默认 `data-theme="light"`、app.js init 默认 dark——深色用户每次加载闪一帧浅色（前端审查#12，需 head 内联一行读 localStorage，会改 JS 偏移需同步文档）
+- URL 来源统一 `location.origin`（前端审查#2：server.js /admin/api/config 硬编码 127.0.0.1，五个前端消费点放大；PT01 后部署已锁本机回环，紧迫性降低，但若恢复局域网访问则必修）
+- 模型页协议页签语义（前端审查#5：页签按渠道协议过滤但三入口别名表统一，openai 页签排除表与后端行为矛盾；抽屉 `lastError` 渲染展示也属此类）
+- codex 配额 / notion 用量抽屉展示恢复（前端审查#3 的另一半路：数据在 status 里，v0.4 丢失了渲染；要恢复从 git 历史找回 quotaBox 实现）
 
 ---
 
@@ -546,17 +570,19 @@ v0.4 换成构建式：**生产 CSS 不再手写，而是逐字节复制设计�
 ### 11.3 构建产物结构
 
 ```
-<head>                      1–20      来自 build/head.html
-<style>                     21–592
-  ├─ 设计稿 CSS 原文         24–550    来自 console-redesign.html 的 <style>（逐字节）
-  └─ 生产补充 CSS            553–590   来自 build/extra.css
-</style>
-<body>                      594–647   来自 build/shell.html
-<script>                    648–2492  来自 build/app.js（内容起于 649）
+<head>                      1–21      来自 build/head.html（第 21 行即 <style> 开标签）
+<style> 内部：
+  ├─ 构建说明 banner         23
+  ├─ 设计稿 CSS 原文         24–549    来自 console-redesign.html 的 <style>（逐字节）
+  └─ 生产补充 CSS            552–559   来自 build/extra.css（8 行）
+</style>                    561
+<body>                      563–616   来自 build/shell.html
+<script>                    617 起，app.js 行号换算 +617，JS 内容至 2477
+</body>                     2480
 ```
 
-> 行号换算：CSS = 设计稿行号 **+13**；JS = `build/app.js` 行号 **+648**。
-> 增删 `build/head.html` / `build/shell.html` 的行会改变偏移，届时同步修正
+> 行号换算：CSS = 设计稿行号 **+13**；JS = `build/app.js` 行号 **+617**。
+> 增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会改变偏移，届时同步修正
 > [frontend-code-map.md](./frontend-code-map.md) §0.1 与 [`AGENTS.md`](../AGENTS.md) §1.2。
 
 ### 11.4 构建期自检（别删）

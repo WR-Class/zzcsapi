@@ -20,7 +20,6 @@ const IC = {
   warn:'<path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/>',
   check:'<path d="m4 12 5 5L20 6"/>',
   arrowUp:'<path d="M12 19V5M5 12l7-7 7 7"/>',
-  arrowDown:'<path d="M12 5v14M19 12l-7 7-7-7"/>',
   filter:'<path d="M3 5h18l-7 8v6l-4-2v-4L3 5z"/>',
   key:'<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8 2 2-1.5 1.5L21 9l-2 2-1.5-1.5L15 12"/>',
   eyeOff:'<path d="M3 3l18 18"/><path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 6 10 6a17.3 17.3 0 0 1-2.9 3.7"/><path d="M6.3 7.6A16.6 16.6 0 0 0 2 12s3.6 6 10 6a9.8 9.8 0 0 0 4.1-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
@@ -182,7 +181,7 @@ const pct=(a,b)=>b?((a/b)*100):0;
 const fTok=n=>n>=1e8?(n/1e8).toFixed(2)+' 亿':n>=1e4?(n/1e4).toFixed(1)+' 万':nf(n);
 const fMs=ms=>ms<0?'—':ms<1000?ms+' ms':(ms/1000).toFixed(ms<10000?2:1)+' s';
 const stTxt={ok:'正常',degraded:'降级',down:'不可用',unknown:'未探测'};
-const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',genspark:'Genspark',arena:'Arena'};
+const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark'};
 
 /* ═══════════════════════════ 生产：API 客户端 ═══════════════════════════
    控制台唯一网络出口。ADMIN_KEY 从 sessionStorage 取（生产由服务端注入或手填），
@@ -525,7 +524,7 @@ function vOverview(v){
       <div class="card-bd">
         <div class="bars">${DATA.models.slice(0,8).map(m=>{
           const max=DATA.models[0].req||1;
-          return `<div class="bar-row" onclick="openModel('${esc(m.name)}')" style="cursor:pointer">
+          return `<div class="bar-row" data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)" style="cursor:pointer">
             <span class="bar-name">${m.name}</span><span class="bar-val">${nf(m.req)}</span>
             <span class="bar-track"><i style="width:${(m.req/max*100).toFixed(1)}%"></i></span>
           </div>`}).join('')}</div>
@@ -563,7 +562,7 @@ function vChannels(v){
   v.innerHTML=`
   <div class="page-hd">
     <div><h1 class="page-title">渠道管理</h1>
-      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 openai / anthropic / gemini / notion / workbuddy / genspark 协议</div></div>
+      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 ${PROTO_ORDER.length} 种协议</div></div>
     <div class="page-actions">
       <div class="menu-wrap">
         <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')">${svg('zap',14)}导入${svg('chev',12)}</button>
@@ -613,6 +612,7 @@ function drawChTable(){
       <th class="t-r">模型</th><th class="t-r">优先级</th><th class="t-r">请求 / 错误</th><th>成功率</th><th class="t-r">操作</th>
     </tr></thead>
     <tbody>${rows.map(c=>{
+      // ponytail: 下面「→ 有效优先级」角标表达式与 openChannel 抽屉处内联重复——为保 code-map 行号锚点刻意不抽 helper，下次动这两处时再抽
       const rate=c.req?pct(c.req-c.err,c.req):null;
       return `<tr class="clickable">
         <td><button class="switch ${c.on?'on':''}" onclick="event.stopPropagation();toggleCh('${c.id}')" title="${c.on?'停用':'启用'}"></button></td>
@@ -715,7 +715,7 @@ async function reprobe(id){
     const row=(r.results||[])[0]||{};
     if(row.status)c.status=row.status;
     if(row.latencyMs!=null)c.ms=row.latencyMs;
-    c.errText=row.error||'';
+    c.lastError=row.error||null;
     toast(`✓ 已重探测 ${c.name} · ${stTxt[c.status]||c.status}`,'ok');
     closeDrawer(); drawChTable();
   }catch(e){}
@@ -796,7 +796,7 @@ function drawMTable(){
     <tbody>${rows.map(m=>{
       const single=m.chans.length===1;
       const isLive=live(m);
-      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} onclick="openModel('${m.name}')">
+      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)">
         <td><div class="cell-main"><span class="avatar">${svg('layers',13)}</span>
           <div style="min-width:0"><div class="cell-name mono" style="font-size:12.5px">${m.name}</div>
           <div class="cell-sub">${single?'单点依赖':'多源冗余'}</div></div></div></td>
@@ -825,7 +825,7 @@ function openModel(name){
         <div class="card" style="padding:12px"><div class="micro">错误</div><div class="serif" style="font-size:24px;margin-top:4px">${m.err}</div></div>
         <div class="card" style="padding:12px"><div class="micro">来源</div><div class="serif" style="font-size:24px;margin-top:4px">${m.chans.length}</div></div>
       </div>
-      <div class="sec-title">调度优先级（按实际选中顺序）</div>
+      <div class="sec-title">来源渠道（按 config 渠道序，非实时调度序）</div>
       <div class="card card-bd" style="padding:0">
         <table class="tbl"><thead><tr><th>#</th><th>渠道</th><th>协议</th><th class="t-r">延迟</th><th class="t-r">优先级</th><th>状态</th></tr></thead>
         <tbody>${m.chans.map((cid,i)=>{
@@ -921,7 +921,7 @@ async function clearUsage(){
   try{await api('/admin/api/usage/clear',{method:'POST'});toast('✓ 已清空用量统计','ok');await loadAll()}catch(e){}
 }
 function openLog(id){
-  const l=DATA.logs.find(x=>x.id===id)||DATA.logs[0];
+  const l=DATA.logs.find(x=>x.id===id); if(!l)return toast('该记录已被轮询刷新移除，请重新点击当前列表');
   drawer(`
     <div class="drawer-hd">
       <div style="min-width:0"><h3 style="font-size:15px" class="mono">${l.id}</h3>
@@ -952,7 +952,7 @@ data: {<span class="k">"usage"</span>:{<span class="k">"prompt_tokens"</span>:${
 data: [DONE]</pre></div>
     </div>
     <div class="drawer-ft">
-      <button class="btn primary" onclick="copyCurl('${esc(l.m)}',this)">${svg('copy',14)}复制 cURL</button>
+      <button class="btn primary" data-t="${esc(l.m)}" onclick="copyCurl(this.dataset.t,this)">${svg('copy',14)}复制 cURL</button>
       <button class="btn" onclick="copyText('${l.id}',this)">复制请求 ID</button>
     </div>`);
 }
@@ -1054,7 +1054,7 @@ function drawRoute(){
   const r=pgRoute;
   if(!r){box.innerHTML='<div class="empty" style="padding:14px 0">发送一条消息后显示真实路由结果</div>';return}
   box.innerHTML=`
-    <div class="legend-row"><span class="muted">候选渠道</span><span class="v mono">${r.cands.length}</span></div>
+    <div class="legend-row"><span class="muted">来源渠道</span><span class="v mono">${r.cands.length}</span></div>
     <div class="legend-row"><span class="muted">实际命中</span><span class="v mono">${esc(r.hit||'—')}</span></div>
     <div class="legend-row"><span class="muted">首块延迟</span><span class="v mono">${r.ttfb?Math.round(r.ttfb)+' ms':'—'}</span></div>
     <div class="legend-row"><span class="muted">总耗时</span><span class="v mono">${(r.total/1000).toFixed(2)} s</span></div>
@@ -1332,13 +1332,12 @@ const PROTO_META={
   anthropic:{label:'Anthropic',base:'',key:'Anthropic API Key（sk-ant- 开头）'},
   gemini:{label:'Gemini',base:'',key:'Google AI Studio 的 API Key'},
   notion:{label:'Notion 逆向',base:'https://app.notion.com',key:'浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'},
-  arena:{label:'Arena 逆向',base:'https://arena.ai',key:'留空由宿主机 agent 管理（或粘贴浏览器 cookie）'},
   'notion-agent':{label:'Notion Agent',base:'https://api.notion.com',key:'开发者门户集成令牌（ntn_ 开头，连接需勾选「查看会话并与代理交互」）'},
   workbuddy:{label:'WorkBuddy',base:'https://www.workbuddy.ai/v2',key:'CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'},
   codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
   genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'}
 };
-const PROTO_ORDER=['openai','anthropic','gemini','notion','arena','notion-agent','workbuddy','codex','genspark'];
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark'];
 
 /* 密钥来自 /admin/api/status 下发的渠道明文 key，控制台默认掩码、按需明文显示 */
 function chKey(id){const c=DATA.channels.find(x=>x.id===id);return (c&&c.apiKey)||''}

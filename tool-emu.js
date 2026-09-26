@@ -1,4 +1,4 @@
-// tool-emu.js — 无原生 function calling 的渠道（notion / arena）的工具调用仿真
+// tool-emu.js — 无原生 function calling 的渠道（notion 系）的工具调用仿真
 // 原理：把 OpenAI tools 数组注入 system 提示 + 尾部提醒（协议：[TOOL_CALL] 方括号
 //       标记，兼容 ```json 围栏与裸 JSON），上游回复文本里解析出工具调用 → 还原成
 //       OpenAI tool_calls 格式。

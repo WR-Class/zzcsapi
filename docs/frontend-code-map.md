@@ -56,11 +56,12 @@ build/shell.html ─────────────────────
 build/app.js     ─────────────────────────────────────────────────────┘
 ```
 
-构建脚本做的事（`build/build.js`，约 45 行）：
+构建脚本做的事（`build/build.js`，52 行）：
 
 1. 从 `console-redesign.html` 切出 `<style>` 内容 —— **不重写、不改写**，视觉因此与设计稿逐字节一致
 2. 按 `head → banner → 设计CSS → extra.css → </style></head><body> → shell → <script> → app.js → </script></body></html>` 拼接
 3. **自检**：产物里 `</style>` 必须恰好出现 1 次，否则抛错
+4. **行数守卫**：head.html=21 行 / shell.html=52 行，变了就在构建期爆错（行号换算偏移的恒定前提）
 
 ### ⚠️ 为什么必须有这条自检
 
@@ -108,62 +109,63 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 行号 | 名称 | 说明 |
 | --- | --- | --- |
 | 3 | `IC` | 内联 SVG path 字典 |
-| 58 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构 |
-| 120 | `loadAll()` | 并发拉取 status / usage / config，写 `RAW` → `adapt()` |
-| 137 / 157 | `render()` / `reload()` | 重绘当前页 / 重新拉数并重绘 |
-| 160 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
-| 190 | `api(path,opts)` | **统一请求封装**：自动带 `Authorization: Bearer <ADMIN_KEY>`、错误 toast |
-| 202–234 | `downloadCsv` `toast` `copyText` | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
-| 300 | `NAV` | 侧栏导航定义 |
-| 312 / 320 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`） |
-| 333 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
-| 353–387 | `winStats` `avgLatency` `avgLatencyDelta` `OV_RANGE` | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ **时间范围配置** |
-| 390–398 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
-| 409–435 | `exportUsage` `exportLogs` `exportModels` `copyModels` | 导出与复制 |
-| 444 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
-| 562–646 | `vChannels` `drawChTable` `toggleCh` `openChannel` | 渠道页 / 排序渲染 / 启停 / 详情抽屉 |
-| 702–723 | `toggleDrawerKey` `reprobe` `delChannel` | 抽屉密钥切换 / 重探测 / 删除 |
-| 736–813 | `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉 |
-| 850–960 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl |
-| 971–1189 | `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息） |
-| 1189–1283 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
-| 1317–1326 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
-| 1330–1344 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
-| 1351–1547 | `openChannelForm` … `saveChannel` | 渠道表单：模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存 |
-| 1591–1690 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
-| 1729–1778 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`** |
-| 1812–1846 | `drawer` `closeDrawer` `setTheme` `tick()` | 抽屉 / 主题持久化 / 时钟 |
+| 57 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构 |
+| 118 | `loadAll()` | 并发拉取 status / usage / config，写 `RAW` → `adapt()` |
+| 135 / 155 | `render()` / `reload()` | 重绘当前页 / 重新拉数并重绘 |
+| 158 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
+| 188 | `api(path,opts)` | **统一请求封装**：自动带 `Authorization: Bearer <ADMIN_KEY>`、错误 toast；**401 → 清掉已存密钥并弹回登录门**（密钥被轮换时自动重新要 key） |
+| 200–232 | `downloadCsv` `toast` `copyText` | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
+| 298 | `NAV` | 侧栏导航定义 |
+| 310 / 318 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`） |
+| 331 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
+| 351–385 | `winStats` `avgLatency` `avgLatencyDelta` `OV_RANGE` | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ **时间范围配置** |
+| 388–396 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
+| 407–433 | `exportUsage` `exportLogs` `exportModels` `copyModels` | 导出与复制 |
+| 442 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
+| 560–644 | `vChannels` `drawChTable` `toggleCh` `openChannel` | 渠道页 / 排序渲染 / 启停 / 详情抽屉 |
+| 701–722 | `toggleDrawerKey` `reprobe` `delChannel` | 抽屉密钥切换 / 重探测 / 删除 |
+| 735–812 | `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉 |
+| 849–959 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl |
+| 970–1188 | `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息） |
+| 1188–1282 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
+| 1316–1325 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
+| 1329–1342 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
+| 1349–1545 | `openChannelForm` … `saveChannel` | 渠道表单：模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存 |
+| 1589–1688 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
+| 1727–1778 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`** |
+| 1810–1833 | `drawer` `closeDrawer` `setTheme` | 抽屉 / 主题持久化 / 明暗互切 |
+| 1836–1877 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
+| 1879 | `tick()` | 时钟 |
+| 1889–1900 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动） |
 
 > ⚠️ 原型里的 `simTest` / `REPLIES` / `hash()` / `fakeKey()` **在生产侧已全部删除**，替换为真实请求。
 > 如果你在生产代码里看到它们，说明构建源搞混了。
 
-### `build/extra.css` 区块（38 行）
+### `build/extra.css` 区块（8 行）
 
 | 行号 | 区块 |
 | --- | --- |
 | 1–2 | 说明（复用设计令牌，不引入新颜色） |
-| 5 | `.chip.codex` 协议 chip |
-| 8–10 | `.tbl th.sortable` 排序表头 |
-| 13–16 | `.mini-kv` 抽屉迷你指标条 |
-| 19–31 | `.img-out` / `.art` Playground 生图与工件预览 |
-| 34–35 | `.loading` 空加载态 |
-| 38 | `.kv dd.mono` |
+| 5 | `.chip.codex` 协议 chip（设计稿快照无 codex 渠道） |
+| 8 | `.kv dd.mono` 抽屉密钥行等宽字 |
+
+> PT03 整改：`.sortable` / `.mini-kv` / `.img-out` / `.art` / `.loading` 五组原型遗留死样式已删（全源零引用）。 |
 
 
 ## 1. 单文件三段结构（行号锚点 · `console-redesign.html`）
 
-> 本节及 §2 / §3 的锚点**只对应 `console-redesign.html`**（2445 行）。生产侧锚点见 §0.2。
+> 本节及 §2 / §3 的锚点**只对应 `console-redesign.html`**（~2443 行）。生产侧锚点见 §0.2。
 
 文件固定由三段组成，改任何东西先按这张表定位：
 
 | 段 | 行号范围 | 内容 |
 | --- | --- | --- |
 | `<head>` | 1–9 | `lang="zh-CN"`、`data-theme="dark"` 初始主题、**MiSans 字体 CDN**（`font.sec.miui.com`，按 unicode-range 分片） |
-| `<style>` | 10–538 | 全部 CSS（无外链样式表）。**这段原文会被逐字节复制进 `console.html`** |
-| `<body>` | 540–1003 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
-| `<script>` | 1004–2442 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
+| `<style>` | 10–537 | 全部 CSS（无外链样式表）。**这段原文会被逐字节复制进 `console.html`** |
+| `<body>` | 539–1002 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
+| `<script>` | 1003–2441 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
 
-> ⚠️ `<body>` 里 584–931 行是**渠道页的静态占位 markup**。`init()` 末尾会 `go('overview')`，
+> ⚠️ `<body>` 里 583–930 行是**渠道页的静态占位 markup**。`init()` 末尾会 `go('overview')`，
 > 首屏立刻用 JS 重绘整个 `#viewport`，所以那段占位只在 JS 失效时可见。
 > **改动 UI 时不要只改占位 markup**，否则会出现"静态和实际渲染不一致"的问题（本轮已踩过，见 §7）。
 
@@ -186,26 +188,26 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 197–202 | | `.tabs` `.tab`（`.on` 态） |
 | 204–214 | | `.field` `.input` `.select` `textarea.input` |
 | 216–219 | | `.switch` 开关（纯 CSS，`::after` 是滑块） |
-| 221–250 | `chips/pills` | `.chip` 及**协议着色** `.chip.openai/.anthropic/.gemini/.notion/.notion-agent/.workbuddy/.genspark/.arena`；`.pill` + `.dot`；`.tag`；`.delta`（**红涨绿跌**） |
-| 252–272 | `cards` | `.card` `.card-hd` `.card-bd`、`.grid` + `.g4/.g3/.g12` + `.c4..c12` 栅格与两个断点 |
-| 274–285 | | `.kpi` 系列（**曲线独占底部图表带** `.kpi-spark`） |
-| 287–311 | `tables` | `table.tbl`（表头 sticky）、`.t-r/.t-c`、`.cell-main/.cell-name/.cell-sub`、`.avatar`、`.proto-bar` |
-| 313–319 | | `.bars` 横向条形榜 |
-| 321–324 | | `.legend` 环形图图例 |
-| 326–332 | | `.code` 代码块（`.k/.s/.c` 语法着色） |
-| 334–338 | | `.ep` 接入信息端点卡 |
-| 340–371 | | `.pg` Playground 两栏布局、`.chat` `.msg` `.composer` `.send` `.toolcall` |
-| 373–378 | | `.param` `.range` 参数滑块 |
-| 380–394 | `drawer` | `.scrim`（z-index 60）`.drawer`（61）`.drawer-hd/-bd/-ft`、`.kv` 键值表 |
-| 396–421 | `modal` | `.mask`（80）`.modal`（`.wide`）`.m-hd/-bd/-ft`、`.field-row`、`.help`、`.toggle` |
-| 423–433 | | 模型编辑器 `.models-box` `.model-row`（4 列网格：alias / upstream / 测试 / 删除） |
-| 434–462 | | **上游探测列表** `.probe-panel`（`.pp-hd/.pp-search/.pp-list/.pp-row/.pp-ft`）`.status-line` |
-| 464–477 | | 测试模型 `.test-list` `.test-out` |
-| 479–487 | | 导入拖放区 `.drop` |
-| 489–500 | `menu` | `.menu-wrap` `.menu`（**z-index 70**）`.menu .hd/.sep` |
-| 502–509 | `toast` | `.toasts`（90）`.toast` |
-| 511–524 | `misc` | `.empty` `.divider` `.row/.wrap/.ml-auto/.muted` `.sec-title` `.hide` 滚动条 `:focus-visible` |
-| 526–537 | 动画 | `@keyframes fade/rise/sweep`、`.page` `.stagger`、`prefers-reduced-motion` 降级 |
+| 221–249 | `chips/pills` | `.chip` 及**协议着色** `.chip.openai/.anthropic/.gemini/.notion/.notion-agent/.workbuddy/.genspark`；`.pill` + `.dot`；`.tag`；`.delta`（**红涨绿跌**） |
+| 251–271 | `cards` | `.card` `.card-hd` `.card-bd`、`.grid` + `.g4/.g3/.g12` + `.c4..c12` 栅格与两个断点 |
+| 273–284 | | `.kpi` 系列（**曲线独占底部图表带** `.kpi-spark`） |
+| 286–310 | `tables` | `table.tbl`（表头 sticky）、`.t-r/.t-c`、`.cell-main/.cell-name/.cell-sub`、`.avatar`、`.proto-bar` |
+| 312–318 | | `.bars` 横向条形榜 |
+| 320–323 | | `.legend` 环形图图例 |
+| 325–331 | | `.code` 代码块（`.k/.s/.c` 语法着色） |
+| 333–337 | | `.ep` 接入信息端点卡 |
+| 339–370 | | `.pg` Playground 两栏布局、`.chat` `.msg` `.composer` `.send` `.toolcall` |
+| 372–377 | | `.param` `.range` 参数滑块 |
+| 379–393 | `drawer` | `.scrim`（z-index 60）`.drawer`（61）`.drawer-hd/-bd/-ft`、`.kv` 键值表 |
+| 395–420 | `modal` | `.mask`（80）`.modal`（`.wide`）`.m-hd/-bd/-ft`、`.field-row`、`.help`、`.toggle` |
+| 422–432 | | 模型编辑器 `.models-box` `.model-row`（4 列网格：alias / upstream / 测试 / 删除） |
+| 433–461 | | **上游探测列表** `.probe-panel`（`.pp-hd/.pp-search/.pp-list/.pp-row/.pp-ft`）`.status-line` |
+| 463–476 | | 测试模型 `.test-list` `.test-out` |
+| 478–486 | | 导入拖放区 `.drop` |
+| 488–499 | `menu` | `.menu-wrap` `.menu`（**z-index 70**）`.menu .hd/.sep` |
+| 501–508 | `toast` | `.toasts`（90）`.toast` |
+| 510–523 | `misc` | `.empty` `.divider` `.row/.wrap/.ml-auto/.muted` `.sec-title` `.hide` 滚动条 `:focus-visible` |
+| 525–536 | 动画 | `@keyframes fade/rise/sweep`、`.page` `.stagger`、`prefers-reduced-motion` 降级 |
 
 ### z-index 全景（改层级必看）
 
@@ -339,7 +341,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 ```js
 // DATA.channels[i]
 { id, name, proto, on, status, ms, models, pri, req, err }
-//   proto : 'openai'|'anthropic'|'gemini'|'notion'|'notion-agent'|'workbuddy'|'genspark'|'arena'|'codex'
+//   proto : 'openai'|'anthropic'|'gemini'|'notion'|'notion-agent'|'workbuddy'|'genspark'|'codex'
 //   on    : bool 启用
 //   status: 'ok'|'degraded'|'down'|'unknown'
 //   ms    : -1 表示未探到延迟（fMs 显示 '—'）
@@ -371,25 +373,25 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 想改什么 | 去哪里 |
 | --- | --- |
 | 明暗两套配色 / 强调色 | CSS 22–41（暗）、42–61（亮）的变量 |
-| 涨跌颜色规则 | 247–250 `.delta.up/.down` |
+| 涨跌颜色规则 | 246–249 `.delta.up/.down` |
 | 全站字体 | 6–9 字体 CDN；15–18 字体栈变量 |
 | 侧栏宽度 / 圆角 | 13–14 `:root` |
 | 头部下拉被遮挡 | 174–175 `.page-hd` 的 `position/z-index` |
 | 页面底部空白 / 侧栏高度 | 65–73 `body`、114 `.app`、147 `.main`、171 `.viewport` |
-| 弹窗宽度 | 403–409 `.modal` / `.modal.wide` |
-| 弹窗遮罩点击行为 | 998–1001 `#mask` markup（**当前刻意不绑 onclick**）；生产同规则，见 `build/shell.html` 48 |
-| 新增协议（原型） | `PROTO_META` 1947 + `PROTO_ORDER` 1958 + `.chip.<proto>` 配色 227–234 |
-| 新增协议（生产） | `build/app.js` 的 `PROTO_META` 1308 / `PROTO_ORDER` 1319 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
-| 新增页面（原型） | `NAV` 1194 + `vXxx()` + 分发表 1220 |
-| 新增页面（生产） | `build/app.js` 的 `NAV` 287 + `vXxx()` + `go()` 307 的分发表，然后重新构建 |
-| 新增导入类型 | `IMPORT_META` 2208（原型）/ 1569（生产）+ 工具栏菜单 1359–1367（和占位 markup 591–599 同步） |
-| 渠道列表排序 | 1397（渠道页）/ 1565（模型页）；生产 589 / 771 |
-| 探测列表交互 | `renderProbeList` 2101 起整段（原型）/ 1447（生产） |
-| 图标 | `IC` 1006–1037（原型）/ 3（生产），用 `svg('name',size)` 引用 |
-| 主题持久化 key | 2429 / 2438（`zzcs-theme`）；生产 `setTheme` 1802 |
+| 弹窗宽度 | 402–408 `.modal` / `.modal.wide` |
+| 弹窗遮罩点击行为 | 997–1000 `#mask` markup（**当前刻意不绑 onclick**）；生产同规则，见 `build/shell.html` 48 |
+| 新增协议（原型） | `PROTO_META` 1946 + `PROTO_ORDER` 1956 + `.chip.<proto>` 配色 226–233 |
+| 新增协议（生产） | `build/app.js` 的 `PROTO_META` 1329 / `PROTO_ORDER` 1339 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
+| 新增页面（原型） | `NAV` 1193 + `vXxx()` + 分发表 1219 |
+| 新增页面（生产） | `build/app.js` 的 `NAV` 298 + `vXxx()` + `go()` 318 的分发表，然后重新构建 |
+| 新增导入类型 | `IMPORT_META` 2206（原型）/ 1589（生产）+ 工具栏菜单 1358–1366（和占位 markup 590–598 同步） |
+| 渠道列表排序 | 1396（渠道页）/ 1564（模型页）；生产 606 / 791 |
+| 探测列表交互 | `renderProbeList` 2099 起整段（原型）/ 1467（生产） |
+| 图标 | `IC` 1005–1036（原型）/ 3（生产），用 `svg('name',size)` 引用 |
+| 主题持久化 key | 2427 / 2436（`zzcs-theme`）；生产 `setTheme` 1822 |
 | 生产独有组件样式 | `build/extra.css`（**不要写进设计稿**，设计稿没有这些组件） |
 | 构建逻辑 / 产物结构 | `build/build.js` |
-| 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 374 + `ovSeries` 377 + `vOverview` 431 |
+| 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 385 + `ovSeries` 388 + `vOverview` 442 |
 
 ---
 

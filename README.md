@@ -126,6 +126,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | --- | --- |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
+| [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | **动代码前过目**：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查）、前端独立审查 |
 
 
 ## 配置示例 (`config.example.json`)
@@ -184,7 +185,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | `gemini`       | `GET /v1beta/models`      | `x-goog-api-key: ...` | `/gemini/v1beta/models/{m}:{action}` |
 | `notion`       | `POST getSpaces`          | `Cookie: token_v2=...` | 逆向 Notion AI（需 token_v2 Cookie） |
 | `notion-agent` | `POST /v1/agents/query`  | `Authorization: Bearer ntn_...` | Notion 官方 Agent API（公开 beta） |
-| `arena`        | agent 自检               | 宿主机 agent 管理    | Arena.ai 逆向                         |
+| `arena`        | —                        | —                    | **已撤**：Arena.ai 逆向已整体移除（见 docs/arena-protocol.md 留档）  |
 | `workbuddy`    | 自检 `chat/completions`   | `Authorization: Bearer ...` | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET） |
 | `codex`        | 一次令牌刷新             | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） |
 | `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
@@ -200,7 +201,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 - ⚠️ **个人访问令牌（PAT）不行**：PAT 能列代理、能建会话，但执行时会被服务端直接拒绝（`session_failed`，零 credits 消耗）——这是令牌能力限制，不是配置错误
 - **模型行**：alias 填对外模型名（如 `gpt-6-astra`），上游填**智能体名称**（如 `Magnificent Pioneer`）；一个智能体锁定一个模型，多个模型就建多个代理
 - 会话中智能体的确认门（requires_action）自动批准（最多 5 次）
-- 每次对话消耗工作区 AI credits，因此 notion-agent 渠道排在调度兜底链**最后**，仅当 openai/notion/arena 渠道都失败时才启用
+- 每次对话消耗工作区 AI credits，因此 notion-agent 渠道排在调度兜底链**最后**，仅当 openai/notion 渠道都失败时才启用
 
 #### genspark（Genspark 网页会话反代）
 
@@ -257,7 +258,6 @@ effPriority = priority − 失败率 × 3
 | `/admin/api/codex-quota`            | GET  | admin       | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import`        | POST | admin       | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
 | `/admin/api/config`                 | GET  | admin       | 暴露接入信息（含 key 与 URL），仅本机 admin |
-| `/admin/api/arena-cookie`           | POST | admin       | arena.ai 登录 cookie 上传（零转录，避免手抄 3000+ 字符引入坏字节） |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
 | `/v1/models`                        | GET  | gateway     | OpenAI 聚合模型                       |
 | `/v1/chat/completions`              | POST | gateway     | OpenAI chat（支持 stream）            |
