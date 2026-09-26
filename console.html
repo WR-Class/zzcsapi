@@ -244,7 +244,6 @@ textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-si
 .chip.notion-agent{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
 .chip.workbuddy{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 .chip.genspark{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 30%,transparent);background:var(--violet-soft)}
-.chip.arena{color:var(--err);border-color:color-mix(in srgb,var(--err) 30%,transparent);background:var(--err-soft)}
 .chip.accent{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 
 .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--tx-2);white-space:nowrap}
@@ -556,36 +555,6 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 /* Codex 协议 chip（设计稿快照里没有 codex 渠道，故缺这条） */
 .chip.codex{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
 
-/* 表格排序表头 */
-.tbl th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
-.tbl th.sortable:hover{color:var(--tx)}
-.tbl th.sortable .ar{font-family:var(--f-mono);font-size:9px;color:var(--accent);margin-left:3px}
-
-/* 抽屉里的迷你指标条 */
-.mini-kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:10px}
-.mini-kv .cell{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2);padding:9px 11px}
-.mini-kv .cell .k{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx-3)}
-.mini-kv .cell .v{font-family:var(--f-serif);font-weight:var(--fw-display);font-size:19px;margin-top:3px;letter-spacing:-.01em}
-
-/* Playground：生成图片结果 */
-.img-out{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:9px;margin-top:9px}
-.img-out img{width:100%;border-radius:var(--r-sm);border:1px solid var(--line);display:block;background:var(--panel-3)}
-.img-out .ph{border:1px dashed var(--line-2);border-radius:var(--r-sm);padding:18px;text-align:center;color:var(--tx-3);font-size:11.5px}
-
-/* Playground：HTML/SVG 工件预览 */
-.art{margin-top:9px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:var(--panel-2)}
-.art-hd{display:flex;align-items:center;gap:8px;padding:7px 11px;border-bottom:1px solid var(--line);background:var(--panel-3)}
-.art-hd .t{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-2)}
-.art iframe{width:100%;height:300px;border:0;background:#fff;display:block}
-.art .src{display:none}
-.art.show-src iframe{display:none}
-.art.show-src .src{display:block}
-.art .src pre{margin:0;padding:12px;max-height:300px;overflow:auto;font-family:var(--f-mono);font-size:11.5px;line-height:1.65;color:var(--tx-2)}
-
-/* 空状态 / 加载态 */
-.loading{padding:38px 20px;text-align:center;color:var(--tx-3);font-size:12.5px}
-.loading .dot{display:inline-block;margin-right:8px;animation:fade .8s infinite alternate}
-
 /* 渠道抽屉里的密钥行需要能换行 */
 .kv dd.mono{font-family:var(--f-mono)}
 
@@ -623,7 +592,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
       <div class="crumb"><span>ZZCSAPI</span><span class="sep">/</span><span class="cur" id="crumbCur">总览</span></div>
       <div class="search">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--tx-3)"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>
-        <input id="globalSearch" placeholder="搜索渠道、模型、请求 ID…">
+        <input id="globalSearch" placeholder="搜索渠道…">
         <span class="kbd">⌘K</span>
       </div>
       <button class="icon-btn" id="btnRecheck" title="立即探测全部渠道">
@@ -668,7 +637,6 @@ const IC = {
   warn:'<path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/>',
   check:'<path d="m4 12 5 5L20 6"/>',
   arrowUp:'<path d="M12 19V5M5 12l7-7 7 7"/>',
-  arrowDown:'<path d="M12 5v14M19 12l-7 7-7-7"/>',
   filter:'<path d="M3 5h18l-7 8v6l-4-2v-4L3 5z"/>',
   key:'<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8 2 2-1.5 1.5L21 9l-2 2-1.5-1.5L15 12"/>',
   eyeOff:'<path d="M3 3l18 18"/><path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 6 10 6a17.3 17.3 0 0 1-2.9 3.7"/><path d="M6.3 7.6A16.6 16.6 0 0 0 2 12s3.6 6 10 6a9.8 9.8 0 0 0 4.1-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
@@ -684,7 +652,7 @@ const svg=(n,s=15)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="n
 
 /* ═══════════════════════════ 数据层：真实接口 → 设计稿 DATA 形状 ═══════════════════════════
    设计稿所有渲染函数都是按下面这一个 DATA 形状写的。生产端不重写渲染逻辑，只做一次适配：
-     /admin/api/status  渠道（别名、状态、延迟、有效优先级、codex 配额、notion 用量）
+     /admin/api/status  渠道（别名、状态、延迟、有效优先级、自定义请求头）
      /admin/api/usage   总量 / 按天 / 按模型 / 按渠道 / 24h / 各渠道平均延迟 / 最近 200 条
      /admin/api/config  网关地址与密钥（接入信息页）
    刷新节奏 8 秒；页面不可见时不打接口，避免后台标签页空转。 */
@@ -723,7 +691,6 @@ function adapt() {
       proxy:c.proxy || '', headers:c.headers || '',
       autoAlias:c.autoAlias !== false,
       lastError:c.lastError || '', lastCheck:c.lastCheck || 0,
-      codexQuota:c.codexQuota || null, notionUsage:c.notionUsage || null,
     };
   });
   /* 模型：别名 → 提供方集合（同一 alias 可被多个渠道提供，按渠道顺序即调度候选顺序） */
@@ -830,7 +797,7 @@ const pct=(a,b)=>b?((a/b)*100):0;
 const fTok=n=>n>=1e8?(n/1e8).toFixed(2)+' 亿':n>=1e4?(n/1e4).toFixed(1)+' 万':nf(n);
 const fMs=ms=>ms<0?'—':ms<1000?ms+' ms':(ms/1000).toFixed(ms<10000?2:1)+' s';
 const stTxt={ok:'正常',degraded:'降级',down:'不可用',unknown:'未探测'};
-const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',genspark:'Genspark',arena:'Arena'};
+const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark'};
 
 /* ═══════════════════════════ 生产：API 客户端 ═══════════════════════════
    控制台唯一网络出口。ADMIN_KEY 从 sessionStorage 取（生产由服务端注入或手填），
@@ -840,7 +807,7 @@ async function api(path,opts={}){
   const k=sessionStorage.getItem('adminKey');
   if(k)headers['Authorization']='Bearer '+k;
   const r=await fetch(path,{...opts,headers:{...headers,...(opts.headers||{})}});
-  if(r.status===401){toast('未授权：请先设置 ADMIN_KEY','bad');throw new Error('401')}
+  if(r.status===401){try{sessionStorage.removeItem('adminKey');localStorage.removeItem('adminKey')}catch(e){};showKeyGate();throw new Error('401')}
   const j=await r.json().catch(()=>null);
   if(!r.ok){toast((j&&(j.error||j.message))||('HTTP '+r.status),'bad');throw new Error('http '+r.status)}
   return j;
@@ -1173,7 +1140,7 @@ function vOverview(v){
       <div class="card-bd">
         <div class="bars">${DATA.models.slice(0,8).map(m=>{
           const max=DATA.models[0].req||1;
-          return `<div class="bar-row" onclick="openModel('${esc(m.name)}')" style="cursor:pointer">
+          return `<div class="bar-row" data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)" style="cursor:pointer">
             <span class="bar-name">${m.name}</span><span class="bar-val">${nf(m.req)}</span>
             <span class="bar-track"><i style="width:${(m.req/max*100).toFixed(1)}%"></i></span>
           </div>`}).join('')}</div>
@@ -1211,7 +1178,7 @@ function vChannels(v){
   v.innerHTML=`
   <div class="page-hd">
     <div><h1 class="page-title">渠道管理</h1>
-      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 openai / anthropic / gemini / notion / workbuddy / genspark 协议</div></div>
+      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 ${PROTO_ORDER.length} 种协议</div></div>
     <div class="page-actions">
       <div class="menu-wrap">
         <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')">${svg('zap',14)}导入${svg('chev',12)}</button>
@@ -1261,6 +1228,7 @@ function drawChTable(){
       <th class="t-r">模型</th><th class="t-r">优先级</th><th class="t-r">请求 / 错误</th><th>成功率</th><th class="t-r">操作</th>
     </tr></thead>
     <tbody>${rows.map(c=>{
+      // ponytail: 下面「→ 有效优先级」角标表达式与 openChannel 抽屉处内联重复——为保 code-map 行号锚点刻意不抽 helper，下次动这两处时再抽
       const rate=c.req?pct(c.req-c.err,c.req):null;
       return `<tr class="clickable">
         <td><button class="switch ${c.on?'on':''}" onclick="event.stopPropagation();toggleCh('${c.id}')" title="${c.on?'停用':'启用'}"></button></td>
@@ -1363,7 +1331,7 @@ async function reprobe(id){
     const row=(r.results||[])[0]||{};
     if(row.status)c.status=row.status;
     if(row.latencyMs!=null)c.ms=row.latencyMs;
-    c.errText=row.error||'';
+    c.lastError=row.error||null;
     toast(`✓ 已重探测 ${c.name} · ${stTxt[c.status]||c.status}`,'ok');
     closeDrawer(); drawChTable();
   }catch(e){}
@@ -1444,7 +1412,7 @@ function drawMTable(){
     <tbody>${rows.map(m=>{
       const single=m.chans.length===1;
       const isLive=live(m);
-      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} onclick="openModel('${m.name}')">
+      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)">
         <td><div class="cell-main"><span class="avatar">${svg('layers',13)}</span>
           <div style="min-width:0"><div class="cell-name mono" style="font-size:12.5px">${m.name}</div>
           <div class="cell-sub">${single?'单点依赖':'多源冗余'}</div></div></div></td>
@@ -1473,7 +1441,7 @@ function openModel(name){
         <div class="card" style="padding:12px"><div class="micro">错误</div><div class="serif" style="font-size:24px;margin-top:4px">${m.err}</div></div>
         <div class="card" style="padding:12px"><div class="micro">来源</div><div class="serif" style="font-size:24px;margin-top:4px">${m.chans.length}</div></div>
       </div>
-      <div class="sec-title">调度优先级（按实际选中顺序）</div>
+      <div class="sec-title">来源渠道（按 config 渠道序，非实时调度序）</div>
       <div class="card card-bd" style="padding:0">
         <table class="tbl"><thead><tr><th>#</th><th>渠道</th><th>协议</th><th class="t-r">延迟</th><th class="t-r">优先级</th><th>状态</th></tr></thead>
         <tbody>${m.chans.map((cid,i)=>{
@@ -1569,7 +1537,7 @@ async function clearUsage(){
   try{await api('/admin/api/usage/clear',{method:'POST'});toast('✓ 已清空用量统计','ok');await loadAll()}catch(e){}
 }
 function openLog(id){
-  const l=DATA.logs.find(x=>x.id===id)||DATA.logs[0];
+  const l=DATA.logs.find(x=>x.id===id); if(!l)return toast('该记录已被轮询刷新移除，请重新点击当前列表');
   drawer(`
     <div class="drawer-hd">
       <div style="min-width:0"><h3 style="font-size:15px" class="mono">${l.id}</h3>
@@ -1600,7 +1568,7 @@ data: {<span class="k">"usage"</span>:{<span class="k">"prompt_tokens"</span>:${
 data: [DONE]</pre></div>
     </div>
     <div class="drawer-ft">
-      <button class="btn primary" onclick="copyCurl('${esc(l.m)}',this)">${svg('copy',14)}复制 cURL</button>
+      <button class="btn primary" data-t="${esc(l.m)}" onclick="copyCurl(this.dataset.t,this)">${svg('copy',14)}复制 cURL</button>
       <button class="btn" onclick="copyText('${l.id}',this)">复制请求 ID</button>
     </div>`);
 }
@@ -1702,7 +1670,7 @@ function drawRoute(){
   const r=pgRoute;
   if(!r){box.innerHTML='<div class="empty" style="padding:14px 0">发送一条消息后显示真实路由结果</div>';return}
   box.innerHTML=`
-    <div class="legend-row"><span class="muted">候选渠道</span><span class="v mono">${r.cands.length}</span></div>
+    <div class="legend-row"><span class="muted">来源渠道</span><span class="v mono">${r.cands.length}</span></div>
     <div class="legend-row"><span class="muted">实际命中</span><span class="v mono">${esc(r.hit||'—')}</span></div>
     <div class="legend-row"><span class="muted">首块延迟</span><span class="v mono">${r.ttfb?Math.round(r.ttfb)+' ms':'—'}</span></div>
     <div class="legend-row"><span class="muted">总耗时</span><span class="v mono">${(r.total/1000).toFixed(2)} s</span></div>
@@ -1902,7 +1870,7 @@ function vAccess(v){
   </div>
 
   ${(()=>{
-    /* 只有真的还在用仓库默认密钥时才报警；已经自定义过就别再吓唬人 */
+    /* 只有密钥还是"公开可猜的默认串"时才报警；首启随机生成的密钥不会命中，不吓唬人 */
     const insecure=/change-me/i.test(gwKey)||/change-me/i.test((CFG&&CFG.adminKey)||'');
     return `<div class="card" style="margin-top:16px${insecure?';border-color:color-mix(in srgb,var(--warn) 34%,transparent)':''}">
     <div class="card-bd row" style="gap:12px;align-items:flex-start">
@@ -1910,8 +1878,8 @@ function vAccess(v){
       <div>
         <div style="font-weight:600;font-size:13.5px">${insecure?'安全提示':'密钥状态'}</div>
         <div class="muted" style="font-size:12.5px;margin-top:4px">${insecure
-          ?'ADMIN_KEY / GATEWAY_KEY 仍是仓库默认值，且容器以 0.0.0.0 监听。若需长期运行，建议轮换密钥并把监听地址收敛到 127.0.0.1。密钥由服务端环境变量下发，控制台只读，需按步骤在宿主机执行。'
-          :'ADMIN_KEY 与 GATEWAY_KEY 均已自定义，未使用仓库默认值。'}</div>
+          ?'ADMIN_KEY / GATEWAY_KEY 仍是公开可猜的默认串，建议轮换成随机值：改 .env 的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY（推荐），或删掉 config.json 里的 adminKey / gatewayKey 后重启（会自动重新生成）。主机端口是否收敛到 127.0.0.1 见 docker-compose.yml。'
+          :'ADMIN_KEY 与 GATEWAY_KEY 均非仓库默认值（首启自动生成或你自定义的设置）。'}</div>
       </div>
       <button class="btn ml-auto" onclick="showKeyHelp()">${insecure?'查看轮换步骤':'查看'}</button>
     </div>
@@ -1934,7 +1902,7 @@ function showKeyHelp(){
     {t:'在仓库根目录的 .env 写入新密钥（docker-compose 读的是 ZZCSAPI_ 前缀）',
      c:'ZZCSAPI_ADMIN_KEY=<新的管理密钥>\nZZCSAPI_GATEWAY_KEY=<新的网关密钥>'},
     {t:'重建并重启容器，新密钥才生效',c:'docker compose up -d --force-recreate'},
-    {t:'用新 ADMIN_KEY 重新打开控制台（?key= 会存进 sessionStorage 后从地址栏抹掉）',
+    {t:'用新 ADMIN_KEY 重新打开控制台（?key= 一次性输入，收进 localStorage 后从地址栏抹掉，之后裸开 /console 即可）',
      c:`http://127.0.0.1:${port}/console?key=<新的管理密钥>`},
   ];
   modal(`
@@ -1980,13 +1948,12 @@ const PROTO_META={
   anthropic:{label:'Anthropic',base:'',key:'Anthropic API Key（sk-ant- 开头）'},
   gemini:{label:'Gemini',base:'',key:'Google AI Studio 的 API Key'},
   notion:{label:'Notion 逆向',base:'https://app.notion.com',key:'浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'},
-  arena:{label:'Arena 逆向',base:'https://arena.ai',key:'留空由宿主机 agent 管理（或粘贴浏览器 cookie）'},
   'notion-agent':{label:'Notion Agent',base:'https://api.notion.com',key:'开发者门户集成令牌（ntn_ 开头，连接需勾选「查看会话并与代理交互」）'},
   workbuddy:{label:'WorkBuddy',base:'https://www.workbuddy.ai/v2',key:'CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'},
   codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
   genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'}
 };
-const PROTO_ORDER=['openai','anthropic','gemini','notion','arena','notion-agent','workbuddy','codex','genspark'];
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark'];
 
 /* 密钥来自 /admin/api/status 下发的渠道明文 key，控制台默认掩码、按需明文显示 */
 function chKey(id){const c=DATA.channels.find(x=>x.id===id);return (c&&c.apiKey)||''}
@@ -2025,7 +1992,7 @@ function openChannelForm(id){
       </div>
       <div class="field"><label>Base URL <span class="help">${pm.base?'默认 '+pm.base:'按上游填写'}</span></label>
         <input class="input" id="f-base" value="${esc(c?chBaseUrl(c):'')}" placeholder="https://api.example.com/v1"></div>
-      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填，如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
+      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / workbuddy 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
         <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
       <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
         <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
@@ -2480,15 +2447,50 @@ $('#globalSearch').addEventListener('keydown',e=>{
   if(e.key==='Enter'){const q=e.target.value.trim();if(!q)return;chQ=q;go('channels');toast('已在渠道中搜索：'+q,'ok')}
 });
 
-/* 用 ?key=<ADMIN_KEY> 打开控制台时，把 key 收进 sessionStorage 并立刻从地址栏抹掉，
-   避免密钥留在浏览器历史 / 截图里。后续 /admin/api 请求由 api() 自动带上。 */
-(function bootstrapKey(){
+/* 密钥三源合流（登录门配套）：?key= URL（一次性，收进本地后从地址栏抹掉，避免留在历史/截图）
+   → localStorage（持久记忆，跨标签跨重启）→ sessionStorage（api() 实际取用的会话层）。
+   无任何来源时弹「输入管理密钥」小门（见 showKeyGate）——壳页面零机密，管理 API 仍每次强制 Bearer。 */
+let __ZZ_HAS_KEY__=false;
+function showKeyGate(){
+  if(document.getElementById('zz-gate'))return;
+  const g=document.createElement('div');g.id='zz-gate';
+  g.style.cssText='position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:var(--bg);backdrop-filter:blur(6px)';
+  g.innerHTML=`<div style="max-width:420px;width:calc(100% - 48px);background:var(--panel);border:1px solid var(--accent-line);border-radius:14px;padding:28px 26px;box-shadow:0 18px 50px rgba(0,0,0,.45)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+      <span style="font-size:17px;font-weight:600">管理密钥</span></div>
+    <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY</div>
+    <input id="zz-gate-input" type="password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box"
+      onkeydown="if(event.key==='Enter'){document.getElementById('zz-gate-btn').click()}">
+    <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>
+    <button id="zz-gate-btn" class="btn" style="width:100%;margin-top:6px">进入控制台</button>
+  </div>`;
+  document.body.appendChild(g);
+  const input=g.querySelector('#zz-gate-input');input.focus();
+  const attempt=async()=>{
+    const k=input.value.trim();if(!k)return;
+    const errEl=g.querySelector('#zz-gate-err');errEl.textContent='';
+    try{
+      const r=await fetch('/admin/api/status',{headers:{'Authorization':'Bearer '+k}});
+      if(r.status!==200){errEl.textContent='密钥不对（HTTP '+r.status+'）';input.select();return}
+      try{localStorage.setItem('adminKey',k);sessionStorage.setItem('adminKey',k)}catch(e){}
+      g.remove();boot();
+    }catch(e){errEl.textContent='网络错误：'+(e&&e.message||e)}
+  };
+  g.querySelector('#zz-gate-btn').onclick=attempt;
+}
+(function keyFlow(){
   const u=new URL(location.href);
-  const k=u.searchParams.get('key');
-  if(!k)return;
-  try{sessionStorage.setItem('adminKey',k)}catch(e){}
-  u.searchParams.delete('key');
-  history.replaceState(null,'',u.toString());
+  const fromUrl=u.searchParams.get('key');
+  if(fromUrl){
+    try{localStorage.setItem('adminKey',fromUrl)}catch(e){}
+    u.searchParams.delete('key');history.replaceState(null,'',u.toString());
+  }
+  const ls=()=>{try{return localStorage.getItem('adminKey')}catch(e){return null}};
+  const ss=()=>{try{return sessionStorage.getItem('adminKey')}catch(e){return null}};
+  const k=fromUrl||ls()||ss();
+  if(k){try{sessionStorage.setItem('adminKey',k)}catch(e){}}
+  __ZZ_HAS_KEY__=!!k;
 })();
 
 function tick(){
@@ -2497,8 +2499,12 @@ function tick(){
 }
 
 /* 首屏先渲染骨架再拉数据，避免白屏；之后每 8 秒静默刷新。
-   标签页不可见时不打接口，否则后台标签会一直空转网关。 */
-(function init(){
+   标签页不可见时不打接口，否则后台标签会一直空转网关。
+   登录门配套：无密钥 → 先 showKeyGate()，验证通过后才 boot()；
+   已有密钥（localStorage / ?key=）直接启动。api() 遇 401 会清存储并重新弹门（密钥被轮换时）。 */
+let __ZZ_BOOTED__=false;
+function boot(){
+  if(__ZZ_BOOTED__)return;__ZZ_BOOTED__=true;
   let t='dark'; try{t=localStorage.getItem('zzcs-theme')||'dark'}catch(e){}
   setTheme(t);
   renderRail();
@@ -2507,7 +2513,8 @@ function tick(){
   go('overview');
   loadAll().catch((e)=>toast('加载失败：'+(e&&e.message||e),'bad'));
   setInterval(()=>{ if(document.visibilityState==='visible') loadAll().catch(()=>{}); },8000);
-})();
+}
+__ZZ_HAS_KEY__?boot():showKeyGate();
 
 </script>
 </body>

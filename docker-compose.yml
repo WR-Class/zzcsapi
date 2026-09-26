@@ -5,14 +5,19 @@ services:
     container_name: zzcsapi
     restart: unless-stopped
     ports:
-      - "8787:8787"
+      # PT01 修复：只绑本机回环，管理面不再暴露局域网（需要局域网访问时改回 "8787:8787"
+      # 并保持 NOAUTH=0，key 走 checkAuth 的 Bearer/?key= 通道）
+      - "127.0.0.1:8787:8787"
     environment:
       TZ: Asia/Shanghai
       PORT: "8787"
       ZZCSAPI_BIND: "0.0.0.0"
-      ZZCSAPI_NOAUTH: ${ZZCSAPI_NOAUTH:-1}
-      ADMIN_KEY: ${ZZCSAPI_ADMIN_KEY:-zz-admin-change-me}
-      GATEWAY_KEY: ${ZZCSAPI_GATEWAY_KEY:-zz-gw-change-me}
+      # PT01 修复：默认关闭免鉴权（原默认 1 = 所有人可读渠道明文 key/烧额度）
+      ZZCSAPI_NOAUTH: ${ZZCSAPI_NOAUTH:-0}
+      # 分发/分享场景默认留空 → 服务端首启自动生成随机密钥并打印到 docker logs、写入 config.json；
+      # 想固定自己的密钥：仓库根建 .env 写 ZZCSAPI_ADMIN_KEY=... / ZZCSAPI_GATEWAY_KEY=...（.env 不入仓库）
+      ADMIN_KEY: ${ZZCSAPI_ADMIN_KEY:-}
+      GATEWAY_KEY: ${ZZCSAPI_GATEWAY_KEY:-}
       ZZCSAPI_CONFIG: /app/config.json
     volumes:
       - ./config.json:/app/config.json

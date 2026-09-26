@@ -387,13 +387,13 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 1. `fakeKey()` / `maskKey()` 是原型专用，真实密钥来自后端，**必须删除假密钥逻辑**
 2. 密钥明文显示是敏感操作，回填时保持"默认掩码 + 手动切换 + 可复制"的交互，不要默认明文
-3. 鉴权头：`Authorization: Bearer <ADMIN_KEY>`；旧的 `?key=` 方案只写 sessionStorage 并脱敏 URL
+3. 鉴权头：`Authorization: Bearer <ADMIN_KEY>`；`?key=` 收进浏览器本地后脱敏 URL（v1.0 起：记忆升为 localStorage + 无密钥时弹登录门，见 §8.10）
 4. `DATA` 就地修改的模式不能沿用——真实环境应改为"请求 → 更新本地 state → 重绘"
 
 > **回填状态（v0.4，v0.5 续修）**：以上四项均已满足。
 > 生产侧用 `chKey(id)`（`build/app.js` 1344）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
 > `DATA` 改由 `adapt()`（58）从 `/admin/api/status` 响应派生，`loadAll()`（120）统一拉取后重绘。
-> 生产独有能力（genspark 双导入、codex 配额、渠道级自定义请求头、密钥明文切换、有效优先级角标、
+> 生产独有能力（genspark 双导入、渠道级自定义请求头、密钥明文切换、有效优先级角标、
 > 真实 Playground / 测试 / 导入请求、端点地址与密钥一键复制、只读的密钥轮换步骤弹窗）原型里没有，**原型不必追平**。
 > v0.5 补了复制链路的两个坑（属性注入被截断、非安全上下文下 `navigator.clipboard` 静默失效），见 §8.5。
 
@@ -573,6 +573,40 @@ README §4xx 重试规则行改写（顺带修正了原文档把 401/403 写成"
 
 ---
 
+### 8.10 v1.0 分享场景加固：首启密钥生成 + 控制台登录门（2026-09-27，对象 `server.js` + `build/app.js` + `docker-compose.yml` + `.env`/`.gitignore` + 产物 `console.html`）
+
+问题（用户提出"项目分享出去，这个 key 应该是什么样子"）：密钥全靠环境变量，而 `docker-compose.yml` 里写的是**公共默认值**
+`${ZZCSAPI_ADMIN_KEY:-zz-admin-change-me}` / `${ZZCSAPI_GATEWAY_KEY:-zz-gw-change-me}`——收到项目的人不配置就直接跑，
+于是**每个部署都用同一把写在公开仓库里的管理密钥**；更糟的是 `checkAuth` 里"key 为空则放行"，空密钥比公开密钥还危险。
+另一面是使用体感：控制台密钥原本只存 `sessionStorage`，**关掉标签页就丢**，每次开新标签都得重新贴一遍长 URL。
+
+根因：默认凭据是公开知识（分发场景的头号问题）；鉴权只在"用户恰好设置了 env"时生效；密钥记忆用了会话级存储。
+
+| # | 触点 | 处置 |
+| --- | --- | --- |
+| 1 | `server.js` 鉴权块 | 密钥解析改为三级优先：**显式 env > config.json 里首启生成值 > 首启生成**；`NOAUTH` 保持为显式开发开关；**删掉"空 key 就放行"两条**（NOAUTH 关闭时密钥恒存在） |
+| 2 | `server.js` `resolveGeneratedKeys()` | 空则 `crypto.randomBytes(24)` 生成 48 位随机串，**打印横幅到容器日志**（能看到 `docker logs` 的人即主机主人）并写回 `config.json`；写回失败则降级为"仅本次启动有效"并明确告警 |
+| 3 | `server.js` `persistConfig()` | 生成密钥纳入持久化字段（否则首次改渠道时被"重建式写入"丢掉）；**env 提供的密钥不落盘** |
+| 4 | `server.js` 控制台路由 | 放行 HTML 壳（零机密，密钥不落页面）；`/admin/api/*` 每次调用仍强制 `Bearer`——"页面能开 ≠ 有权限" |
+| 5 | `build/app.js` | `bootstrapKey` → `keyFlow`（`?key=` → localStorage → sessionStorage 三源合流）+ `showKeyGate()` 登录门（变相登录页：无账号体系，输一次 key 存 localStorage，之后裸开）；`init()` 改名 `boot()`，有 key 直接启动、无 key 先弹门；`api()` 401 → 清存储 + 重新弹门（密钥被轮换时自动闭环） |
+| 6 | `docker-compose.yml` | 默认值改空（`:-}`）+ 注释讲清分享场景与 `.env` 覆盖法 |
+| 7 | `.env` / `.gitignore` | 本机部署建 `.env` 固定现有密钥（env 优先，书签/DSH 不受影响）；`.env` 加入 `.gitignore` 绝不入仓库 |
+| 8 | `build/app.js` 接入页「密钥状态」卡 | 原文案声称"仍是仓库默认值，且容器以 0.0.0.0 监听……密钥由服务端环境变量下发"——本轮改了密钥来源（可首启生成）与监听收敛方式，两处失准；改为提示"公开可猜的默认串 + 给两种轮换路径（改 `.env` / 删 config.json 字段重启）+ 指向 compose 看端口收敛"。`/change-me/i` 检测本身保留（首启随机密钥不会命中，不再误报） |
+
+验证（实机双路径）：
+
+- **本机路径**（`.env` 提供密钥，不触发生成）：裸开 `/console` → **200 HTML 壳含登录门** ✓；裸调 `/admin/api/status` → **401** ✓；
+  老书签 `/console?key=…` → 200 ✓；无 key 网关 401 / 带 key 200（29 模型）✓；E2E chat 200 ✓；healthz 30 渠道 ✓；容器日志无生成横幅 ✓
+- **分享路径**（一次性容器，`ADMIN_KEY=`/`GATEWAY_KEY=` 留空 + 临时 config）：日志打出首启横幅与两枚 48 位密钥 ✓；
+  `config.json` 被写入且**渠道数据完好、中文不乱码**（30 渠道复核）✓；无 key 两面 **401**、生成 key 两面 **200**、控制台壳 200 ✓；
+  临时容器与本机 `config.json` 均已清理，后者**未被写入生成密钥** ✓
+
+> 设计取舍（记录在案）：曾考虑"首次打开网页向导设置密钥"，否掉——向导页本身要用某把 key 守门，而公开默认 key 意味着
+> 窗口期内任何本机进程都能**抢注**成自己的密钥。首启生成 + 日志抄录同样只做一次，且不存在公开默认值。
+> 已知语义：`ZZCSAPI_NOAUTH=1` 仍是完全无鉴权（显式选择，仅限本机自用）；直接 `node server.js`（无 env、无 NOAUTH）也会走首启生成并需要登录门。
+
+---
+
 ## 9. 后续可做（未实现）
 
 - 渠道列表分页 / 虚拟滚动（真实 30+ 渠道，模型探测可能上百）
@@ -612,7 +646,7 @@ v0.4 换成构建式：**生产 CSS 不再手写，而是逐字节复制设计�
 | `console-redesign.html` | 改**视觉** | 它的 `<style>` 是唯一视觉真源。字号 / 留白 / 圆角 / 配色 / 卡片 / 弹窗全在这里 |
 | `build/head.html` | 极少改 | 生产 `<head>`：主题初值、MiSans CDN |
 | `build/shell.html` | 改**生产骨架** | body 结构：背景层 / rail / topbar / viewport / drawer / mask / toasts |
-| `build/extra.css` | 加**生产独有组件** | 设计稿快照里没有的组件（codex chip、排序表头、迷你指标条、生图/工件预览、空加载态）。**必须复用设计令牌** |
+| `build/extra.css` | 加**生产独有组件** | 设计稿快照里没有的组件（codex chip、抽屉密钥行等宽字）。**必须复用设计令牌** |
 | `build/app.js` | 改**生产逻辑** | 数据层（`adapt` / `loadAll` / `api`）+ 动作层 + 6 个页面渲染 |
 | `build/build.js` | 改**构建方式** | 组装顺序 + 自检 |
 | `console.html` | **没人改** | 产物。手改会被下次构建静默覆盖 |

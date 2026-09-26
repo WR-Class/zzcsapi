@@ -35,7 +35,7 @@ const svg=(n,s=15)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="n
 
 /* ═══════════════════════════ 数据层：真实接口 → 设计稿 DATA 形状 ═══════════════════════════
    设计稿所有渲染函数都是按下面这一个 DATA 形状写的。生产端不重写渲染逻辑，只做一次适配：
-     /admin/api/status  渠道（别名、状态、延迟、有效优先级、codex 配额、notion 用量）
+     /admin/api/status  渠道（别名、状态、延迟、有效优先级、自定义请求头）
      /admin/api/usage   总量 / 按天 / 按模型 / 按渠道 / 24h / 各渠道平均延迟 / 最近 200 条
      /admin/api/config  网关地址与密钥（接入信息页）
    刷新节奏 8 秒；页面不可见时不打接口，避免后台标签页空转。 */
@@ -190,7 +190,7 @@ async function api(path,opts={}){
   const k=sessionStorage.getItem('adminKey');
   if(k)headers['Authorization']='Bearer '+k;
   const r=await fetch(path,{...opts,headers:{...headers,...(opts.headers||{})}});
-  if(r.status===401){toast('未授权：请先设置 ADMIN_KEY','bad');throw new Error('401')}
+  if(r.status===401){try{sessionStorage.removeItem('adminKey');localStorage.removeItem('adminKey')}catch(e){};showKeyGate();throw new Error('401')}
   const j=await r.json().catch(()=>null);
   if(!r.ok){toast((j&&(j.error||j.message))||('HTTP '+r.status),'bad');throw new Error('http '+r.status)}
   return j;
@@ -1253,7 +1253,7 @@ function vAccess(v){
   </div>
 
   ${(()=>{
-    /* 只有真的还在用仓库默认密钥时才报警；已经自定义过就别再吓唬人 */
+    /* 只有密钥还是"公开可猜的默认串"时才报警；首启随机生成的密钥不会命中，不吓唬人 */
     const insecure=/change-me/i.test(gwKey)||/change-me/i.test((CFG&&CFG.adminKey)||'');
     return `<div class="card" style="margin-top:16px${insecure?';border-color:color-mix(in srgb,var(--warn) 34%,transparent)':''}">
     <div class="card-bd row" style="gap:12px;align-items:flex-start">
@@ -1261,8 +1261,8 @@ function vAccess(v){
       <div>
         <div style="font-weight:600;font-size:13.5px">${insecure?'安全提示':'密钥状态'}</div>
         <div class="muted" style="font-size:12.5px;margin-top:4px">${insecure
-          ?'ADMIN_KEY / GATEWAY_KEY 仍是仓库默认值，且容器以 0.0.0.0 监听。若需长期运行，建议轮换密钥并把监听地址收敛到 127.0.0.1。密钥由服务端环境变量下发，控制台只读，需按步骤在宿主机执行。'
-          :'ADMIN_KEY 与 GATEWAY_KEY 均已自定义，未使用仓库默认值。'}</div>
+          ?'ADMIN_KEY / GATEWAY_KEY 仍是公开可猜的默认串，建议轮换成随机值：改 .env 的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY（推荐），或删掉 config.json 里的 adminKey / gatewayKey 后重启（会自动重新生成）。主机端口是否收敛到 127.0.0.1 见 docker-compose.yml。'
+          :'ADMIN_KEY 与 GATEWAY_KEY 均非仓库默认值（首启自动生成或你自定义的设置）。'}</div>
       </div>
       <button class="btn ml-auto" onclick="showKeyHelp()">${insecure?'查看轮换步骤':'查看'}</button>
     </div>
@@ -1285,7 +1285,7 @@ function showKeyHelp(){
     {t:'在仓库根目录的 .env 写入新密钥（docker-compose 读的是 ZZCSAPI_ 前缀）',
      c:'ZZCSAPI_ADMIN_KEY=<新的管理密钥>\nZZCSAPI_GATEWAY_KEY=<新的网关密钥>'},
     {t:'重建并重启容器，新密钥才生效',c:'docker compose up -d --force-recreate'},
-    {t:'用新 ADMIN_KEY 重新打开控制台（?key= 会存进 sessionStorage 后从地址栏抹掉）',
+    {t:'用新 ADMIN_KEY 重新打开控制台（?key= 一次性输入，收进 localStorage 后从地址栏抹掉，之后裸开 /console 即可）',
      c:`http://127.0.0.1:${port}/console?key=<新的管理密钥>`},
   ];
   modal(`
@@ -1830,15 +1830,50 @@ $('#globalSearch').addEventListener('keydown',e=>{
   if(e.key==='Enter'){const q=e.target.value.trim();if(!q)return;chQ=q;go('channels');toast('已在渠道中搜索：'+q,'ok')}
 });
 
-/* 用 ?key=<ADMIN_KEY> 打开控制台时，把 key 收进 sessionStorage 并立刻从地址栏抹掉，
-   避免密钥留在浏览器历史 / 截图里。后续 /admin/api 请求由 api() 自动带上。 */
-(function bootstrapKey(){
+/* 密钥三源合流（登录门配套）：?key= URL（一次性，收进本地后从地址栏抹掉，避免留在历史/截图）
+   → localStorage（持久记忆，跨标签跨重启）→ sessionStorage（api() 实际取用的会话层）。
+   无任何来源时弹「输入管理密钥」小门（见 showKeyGate）——壳页面零机密，管理 API 仍每次强制 Bearer。 */
+let __ZZ_HAS_KEY__=false;
+function showKeyGate(){
+  if(document.getElementById('zz-gate'))return;
+  const g=document.createElement('div');g.id='zz-gate';
+  g.style.cssText='position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:var(--bg);backdrop-filter:blur(6px)';
+  g.innerHTML=`<div style="max-width:420px;width:calc(100% - 48px);background:var(--panel);border:1px solid var(--accent-line);border-radius:14px;padding:28px 26px;box-shadow:0 18px 50px rgba(0,0,0,.45)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+      <span style="font-size:17px;font-weight:600">管理密钥</span></div>
+    <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY</div>
+    <input id="zz-gate-input" type="password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box"
+      onkeydown="if(event.key==='Enter'){document.getElementById('zz-gate-btn').click()}">
+    <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>
+    <button id="zz-gate-btn" class="btn" style="width:100%;margin-top:6px">进入控制台</button>
+  </div>`;
+  document.body.appendChild(g);
+  const input=g.querySelector('#zz-gate-input');input.focus();
+  const attempt=async()=>{
+    const k=input.value.trim();if(!k)return;
+    const errEl=g.querySelector('#zz-gate-err');errEl.textContent='';
+    try{
+      const r=await fetch('/admin/api/status',{headers:{'Authorization':'Bearer '+k}});
+      if(r.status!==200){errEl.textContent='密钥不对（HTTP '+r.status+'）';input.select();return}
+      try{localStorage.setItem('adminKey',k);sessionStorage.setItem('adminKey',k)}catch(e){}
+      g.remove();boot();
+    }catch(e){errEl.textContent='网络错误：'+(e&&e.message||e)}
+  };
+  g.querySelector('#zz-gate-btn').onclick=attempt;
+}
+(function keyFlow(){
   const u=new URL(location.href);
-  const k=u.searchParams.get('key');
-  if(!k)return;
-  try{sessionStorage.setItem('adminKey',k)}catch(e){}
-  u.searchParams.delete('key');
-  history.replaceState(null,'',u.toString());
+  const fromUrl=u.searchParams.get('key');
+  if(fromUrl){
+    try{localStorage.setItem('adminKey',fromUrl)}catch(e){}
+    u.searchParams.delete('key');history.replaceState(null,'',u.toString());
+  }
+  const ls=()=>{try{return localStorage.getItem('adminKey')}catch(e){return null}};
+  const ss=()=>{try{return sessionStorage.getItem('adminKey')}catch(e){return null}};
+  const k=fromUrl||ls()||ss();
+  if(k){try{sessionStorage.setItem('adminKey',k)}catch(e){}}
+  __ZZ_HAS_KEY__=!!k;
 })();
 
 function tick(){
@@ -1847,8 +1882,12 @@ function tick(){
 }
 
 /* 首屏先渲染骨架再拉数据，避免白屏；之后每 8 秒静默刷新。
-   标签页不可见时不打接口，否则后台标签会一直空转网关。 */
-(function init(){
+   标签页不可见时不打接口，否则后台标签会一直空转网关。
+   登录门配套：无密钥 → 先 showKeyGate()，验证通过后才 boot()；
+   已有密钥（localStorage / ?key=）直接启动。api() 遇 401 会清存储并重新弹门（密钥被轮换时）。 */
+let __ZZ_BOOTED__=false;
+function boot(){
+  if(__ZZ_BOOTED__)return;__ZZ_BOOTED__=true;
   let t='dark'; try{t=localStorage.getItem('zzcs-theme')||'dark'}catch(e){}
   setTheme(t);
   renderRail();
@@ -1857,4 +1896,5 @@ function tick(){
   go('overview');
   loadAll().catch((e)=>toast('加载失败：'+(e&&e.message||e),'bad'));
   setInterval(()=>{ if(document.visibilityState==='visible') loadAll().catch(()=>{}); },8000);
-})();
+}
+__ZZ_HAS_KEY__?boot():showKeyGate();

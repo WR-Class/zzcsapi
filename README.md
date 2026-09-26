@@ -10,7 +10,7 @@
 - 🛡 **熔断冷却**：连续失败的渠道进入指数退避冷却期（1s, 2s, 4s ... 上限 60s）
 - 🔍 **后台健康探测**：定时 GET 渠道的 models 端点，聚合 latency / 状态 / 真实模型清单
 - 🌊 **流式透传**：SSE 全程转发；上游响应是 OpenAI 协议时自动转成 Anthropic/Gemini 流
-- 🔐 **双层鉴权**：`GATEWAY_KEY`（客户端）+ `ADMIN_KEY`（控制台与管理 API）
+- 🔐 **双层鉴权**：`GATEWAY_KEY`（客户端）+ `ADMIN_KEY`（控制台与管理 API）；未设置则**首启自动生成**随机密钥（日志可查、写入 config.json）
 - 🖥 **Web 控制台**：浏览器打开 `http://127.0.0.1:8787/console` 看渠道状态、改优先级、启停渠道
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
 
@@ -22,7 +22,9 @@
 # usage.json 是运行时持久化文件，不入仓库，首次部署先由模板生成
 Copy-Item usage.example.json usage.json
 docker compose up -d --build
-# 控制台 http://127.0.0.1:8787/console（默认管理密钥 zz-admin-change-me）
+# 控制台 http://127.0.0.1:8787/console
+# 首次启动的 ADMIN_KEY / GATEWAY_KEY 打印在容器日志里：docker logs zzcsapi | grep ADMIN_KEY
+# 想固定自己的密钥：根目录建 .env 写 ZZCSAPI_ADMIN_KEY=... / ZZCSAPI_GATEWAY_KEY=...
 ```
 
 `docker-compose.yml` 挂载 `./config.json` 和 `./usage.json`。
@@ -46,16 +48,23 @@ node server.js
 ```bash
 GATEWAY_KEY=xxx  node server.js    # 客户端必须带 Bearer xxx
 ADMIN_KEY=yyy    node server.js    # 控制台 + /admin/* 必须带 Bearer yyy
+ZZCSAPI_NOAUTH=1 node server.js    # 本地开发：完全关闭鉴权（仅限本机自用）
 ```
 
-不设置则只允许本机 127.0.0.1 访问（不强制鉴权）。
+**密钥从哪来（分享/分发友好）**：
+
+1. **显式设置** `ADMIN_KEY` / `GATEWAY_KEY` 环境变量 → 以你设置的为准（compose 场景写进 `.env` 的 `ZZCSAPI_ADMIN_KEY` / `ZZCSAPI_GATEWAY_KEY`）；
+2. **没设置** → 首次启动自动生成 48 位随机密钥，**打印到容器日志**（`docker logs zzcsapi | grep ADMIN_KEY`）并写回 `config.json`（重启不变）；
+3. **想换** → 环境变量优先级最高；或删掉 `config.json` 里的 `adminKey`/`gatewayKey` 后重启（会重新生成）。
+
+只有显式开启 `ZZCSAPI_NOAUTH=1` 才完全不鉴权——否则密钥恒存在，不再有"空密钥 = 谁都能进"的洞。
 
 ## 在 DSH / Cursor / Cline 等客户端里配置
 
 ### OpenAI 协议
 ```
 baseURL = http://127.0.0.1:8787/v1
-apiKey  = <GATEWAY_KEY 的值，没设就随便填>
+apiKey  = <GATEWAY_KEY 的值；未显式设置时看容器日志里首启生成的那一串>
 model   = <channels[*].models 里 alias，左边的键>
 ```
 
@@ -75,10 +84,16 @@ apiKey  = <GATEWAY_KEY>
 ## Web 控制台
 
 ```
-http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY
+http://127.0.0.1:8787/console
 ```
 
-打开后把 key 存进 sessionStorage（URL 自动脱敏），可：
+首次打开会出一个「输入管理密钥」的小门，把 `ADMIN_KEY` 粘贴进去即可（页面记住它，之后**裸开 /console 就行**）。
+也兼容一次性带参访问 `http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY`（key 会被收进浏览器并自动从地址栏抹掉，避免留在历史/截图里）。
+
+> 控制台 HTML 壳本身不含任何密钥（零机密），放行；**管理 API 每次调用仍强制校验 Bearer**——"页面能开 ≠ 有权限"。
+> 密钥失效（例如服务端换了密钥）时，页面会自动清掉旧密钥并重新弹门。
+
+可做：
 
 - 实时看每个渠道的健康 / 延迟 / 错误 / 探测时间
 - 改 priority、启停某个渠道
@@ -110,14 +125,14 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | --- | --- |
 | `console-redesign.html` | **视觉唯一真源**（高保真静态原型，单文件零依赖，不请求后端，数据来自文件内 `DATA` 快照） |
 | `build/head.html` · `build/shell.html` · `build/extra.css` · `build/app.js` | 生产适配层：骨架、生产独有样式、真实数据与交互 |
-| `build/build.js` | 组装脚本（含「产物中 `</style>` 只能出现一次」的构建期自检） |
+| `build/build.js` | 组装脚本（构建期自检：产物中 `</style>` 唯一 + head/shell 行数守卫，锚点漂移构建期爆错） |
 | `console.html` | **构建产物**，已提交进仓库。**不要手改**——下次构建会被覆盖 |
 
 **因此：改视觉/字号/留白/圆角 → 改 `console-redesign.html` 的 `<style>` → 重新 `node build/build.js`。**
 改完请确认 `console.html` 同步更新（构建是覆盖式的，忘了构建就等于没改）。
 
 > 生产与原型**变量名完全相同**（生产直接复用设计稿 CSS），不存在映射表。
-> 生产独有能力（genspark 双导入、codex 配额条、渠道级自定义请求头、密钥掩码↔明文切换、有效优先级角标、
+> 生产独有能力（genspark 双导入、渠道级自定义请求头、密钥掩码↔明文切换、有效优先级角标、
 > 真实测试/导入/Playground 请求）原型里没有，**原型不必追平**。
 
 改前端前请先读这两份文档：

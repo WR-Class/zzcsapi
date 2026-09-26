@@ -185,14 +185,16 @@ ${hdrsPs}
 }
 
 // ─────────────────────────── 鉴权 ───────────────────────────
-const GATEWAY_KEY = process.env.GATEWAY_KEY || ''; // 客户端调 /v1/* / /anthropic/* / /gemini/*
-const ADMIN_KEY   = process.env.ADMIN_KEY   || ''; // 调 /admin/* + Web 控制台
+// 密钥解析优先级：显式环境变量 > config.json 里首启生成的值 > 首启生成并写回 config.json。
+// 生成动机：分发的部署不带公共默认密钥（compose 默认空），首启自动生成 48 位随机串、
+// 打印一次到容器日志（能看到 docker logs 的人即主机主人），写入挂载的 config.json 以便重启不变。
 const NOAUTH = process.env.ZZCSAPI_NOAUTH === '1';  // 本地开发：完全关闭鉴权
+let GATEWAY_KEY = process.env.GATEWAY_KEY || ''; // 客户端调 /v1/* / /anthropic/* / /gemini/*
+let ADMIN_KEY   = process.env.ADMIN_KEY   || ''; // 调 /admin/* + Web 控制台
 function checkAuth(req, kind) {
   // kind: 'gateway' | 'admin'
-  if (NOAUTH) return true;                            // 本地免鉴权
-  if (kind === 'admin' && !ADMIN_KEY) return true;    // 没设置就放行（仅本机）
-  if (kind === 'gateway' && !GATEWAY_KEY) return true; // 没设置就放行
+  if (NOAUTH) return true;                            // 本地免鉴权（显式选择的开发模式）
+  // NOAUTH 关闭时密钥恒非空（空则首启已生成，见 resolveGeneratedKeys），不再存在"没设置就放行"
   const need = kind === 'admin' ? ADMIN_KEY : GATEWAY_KEY;
   const h = req.headers['authorization'] || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
@@ -238,6 +240,37 @@ const config = loadConfig();
 const PORT = config.port || 8787;
 const HEALTH = config.health || { intervalSec: 300, timeoutMs: 8000 };
 const RETRIES = config.retries || { perChannel: 1, maxModelFallbacks: 99 };
+
+// 首启密钥生成（见鉴权块注释的优先级链）。NOAUTH 开着就不生成——那是显式选择的零鉴权开发模式。
+// 独立写回 config.json（而非走 persistConfig）：persistConfig 依赖 channels 初始化顺序，且会重建对象。
+function resolveGeneratedKeys() {
+  if (NOAUTH) return;
+  const gen = () => require('crypto').randomBytes(24).toString('hex');
+  const fresh = {};
+  if (!ADMIN_KEY) {
+    ADMIN_KEY = config.adminKey || gen();
+    if (!config.adminKey) fresh.admin = ADMIN_KEY;
+    config.adminKey = ADMIN_KEY;
+  }
+  if (!GATEWAY_KEY) {
+    GATEWAY_KEY = config.gatewayKey || gen();
+    if (!config.gatewayKey) fresh.gateway = GATEWAY_KEY;
+    config.gatewayKey = GATEWAY_KEY;
+  }
+  if (fresh.admin || fresh.gateway) {
+    let persisted = true;
+    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf8'); } catch (e) { persisted = false; }
+    console.log('');
+    console.log('════════════════════ 首启密钥 ════════════════════');
+    if (fresh.admin) console.log('  ADMIN_KEY   = ' + fresh.admin + '   （控制台 / 管理接口）');
+    if (fresh.gateway) console.log('  GATEWAY_KEY = ' + fresh.gateway + '   （/v1 等客户端接口）');
+    console.log('  控制台 http://127.0.0.1:' + PORT + '/console → 首次打开输入 ADMIN_KEY，浏览器记住后裸开即可');
+    console.log(persisted ? '  已写入 config.json，重启不变；可用环境变量 ADMIN_KEY / GATEWAY_KEY 显式接管'
+                          : '  ⚠ 写回 config.json 失败（只读挂载？）——密钥仅本次启动有效，重启将更换');
+    console.log('════════════════════════════════════════════════════');
+  }
+}
+resolveGeneratedKeys();
 
 // ─── Codex 常量（必须在任何探测/请求路径之前初始化，否则 TDZ 报错）───
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -1143,9 +1176,9 @@ function loadConsoleHtml() {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   try {
-    // 控制台 HTML
+    // 控制台 HTML 壳：零机密（密钥不落页面，数据全走 /admin/api），放行壳本身、
+    // 由前端登录门负责收 key、由 /admin/api 的每次调用强制 Bearer——「页面能开 ≠ 有权限」
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/console' || url.pathname === '/console/')) {
-      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
@@ -1260,6 +1293,9 @@ function persistConfig() {
     port: config.port,
     health: config.health,
     retries: config.retries,
+    // 首启生成的密钥随配置一起持久化（env 显式提供的密钥不落盘——config.adminKey 保持未设置）
+    adminKey: config.adminKey || undefined,
+    gatewayKey: config.gatewayKey || undefined,
     channels: Array.from(channels.values()).map((ch) => ({
       id: ch.def.id,
       name: ch.def.name,
