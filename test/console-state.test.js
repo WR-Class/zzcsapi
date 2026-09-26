@@ -87,12 +87,12 @@ function makeDom() {
 /* ── 被测环境所需的桩数据（形状取自 /admin/api/status 经 adapt() 后的结构）── */
 const DATA = {
   models: [
-    { name: 'glm-5.3', chans: ['hcnsec'], err: 0, req: 10 },
-    { name: 'kimi-k3', chans: ['hcnsec', 'bqgy'], err: 1, req: 5 },
+    { name: 'demo-model-a', chans: ['stub-alpha'], err: 0, req: 10 },
+    { name: 'demo-model-b', chans: ['stub-alpha', 'stub-beta'], err: 1, req: 5 },
   ],
   channels: [
-    { id: 'hcnsec', proto: 'openai', on: true },
-    { id: 'bqgy', proto: 'openai', on: true },
+    { id: 'stub-alpha', proto: 'openai', on: true },
+    { id: 'stub-beta', proto: 'openai', on: true },
   ],
   meta: { models: 2, total: 15 },
 };
@@ -125,28 +125,28 @@ function testModels() {
   check('首渲染：搜索框为空', v.innerHTML.includes('id="mQ" placeholder="搜索模型名…" value=""'));
   check('首渲染：页签「全部」选中', v.innerHTML.includes('class="tab on" data-p="all"'));
   check('首渲染：表格列出全部 2 个模型',
-    dom.$('#mTable').innerHTML.includes('glm-5.3') && dom.$('#mTable').innerHTML.includes('kimi-k3'));
+    dom.$('#mTable').innerHTML.includes('demo-model-a') && dom.$('#mTable').innerHTML.includes('demo-model-b'));
 
   const input = dom.$('#mQ', v);
   check('搜索框已绑定 oninput', typeof input.oninput === 'function');
-  input.oninput({ target: { value: 'glm' } });
-  check('输入后状态 mQ=glm', api.mQ === 'glm');
+  input.oninput({ target: { value: 'model-a' } });
+  check('输入后状态 mQ=model-a', api.mQ === 'model-a');
 
   api.vModels(v);                       /* ← 等价于 8 秒轮询触发的那次重绘 */
-  check('★ 重绘后 value 仍是 glm（原 bug 就在这一步丢掉）', v.innerHTML.includes('value="glm"'));
+  check('★ 重绘后 value 仍是 model-a（原 bug 就在这一步丢掉）', v.innerHTML.includes('value="model-a"'));
   check('★ 重绘后表格仍只剩命中项',
-    dom.$('#mTable').innerHTML.includes('glm-5.3') && !dom.$('#mTable').innerHTML.includes('kimi-k3'));
+    dom.$('#mTable').innerHTML.includes('demo-model-a') && !dom.$('#mTable').innerHTML.includes('demo-model-b'));
 
   dom.tabs[1].onclick();                /* OpenAI 页签 */
   check('点击 OpenAI 页签后状态 mTab=openai', api.mTab === 'openai');
   api.vModels(v);
   check('★ 重绘后 OpenAI 页签仍选中', v.innerHTML.includes('class="tab on" data-p="openai"'));
 
-  dom.$('#mQ', v).oninput({ target: { value: 'kimi' } });
+  dom.$('#mQ', v).oninput({ target: { value: 'model-b' } });
   api.vModels(v);
-  check('改搜 kimi → 重绘后仍保留', v.innerHTML.includes('value="kimi"'));
-  check('改搜 kimi → 表格切到 kimi-k3',
-    dom.$('#mTable').innerHTML.includes('kimi-k3') && !dom.$('#mTable').innerHTML.includes('glm-5.3'));
+  check('改搜 model-b → 重绘后仍保留', v.innerHTML.includes('value="model-b"'));
+  check('改搜 model-b → 表格切到 demo-model-b',
+    dom.$('#mTable').innerHTML.includes('demo-model-b') && !dom.$('#mTable').innerHTML.includes('demo-model-a'));
 
   dom.$('#mQ', v).oninput({ target: { value: '</script>"<b>' } });
   api.vModels(v);
@@ -188,8 +188,8 @@ function testPlayground() {
   check('参数写回状态：temp=1.5 / max=4096 / stream=off',
     api.pgTempV === '1.5' && api.pgMaxV === '4096' && api.pgStreamOn === false);
 
-  const m = dom.$('#pgModel', v); m.value = 'kimi-k3'; m.onchange();
-  check('模型选择写回状态', api.pgModelSel === 'kimi-k3');
+  const m = dom.$('#pgModel', v); m.value = 'demo-model-b'; m.onchange();
+  check('模型选择写回状态', api.pgModelSel === 'demo-model-b');
 
   api.vPlayground(v);                   /* ← 等价于 8 秒轮询触发的那次重绘 */
   check('★ 重绘后草稿仍在', v.innerHTML.includes('帮我写个正则'));
@@ -197,7 +197,7 @@ function testPlayground() {
   check('★ 重绘后 Temperature 仍是 1.5', v.innerHTML.includes('value="1.5"') && v.innerHTML.includes('temp 1.5'));
   check('★ 重绘后 Max tokens 仍是 4096', v.innerHTML.includes('value="4096"') && v.innerHTML.includes('max_tokens 4096'));
   check('★ 重绘后流式开关仍是关', v.innerHTML.includes('class="switch" id="pgStream"') && v.innerHTML.includes('stream=false'));
-  check('★ 重绘后模型选中项仍是 kimi-k3', v.innerHTML.includes('<option selected>kimi-k3</option>'));
+  check('★ 重绘后模型选中项仍是 demo-model-b', v.innerHTML.includes('<option selected>demo-model-b</option>'));
 }
 
 /* ═══════ 3. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */

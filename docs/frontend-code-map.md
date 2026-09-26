@@ -26,7 +26,7 @@
 
 | 文件 | 行数 | 职责 | 本文件涉及 |
 | --- | --- | --- | --- |
-| `console-redesign.html` | ~2443 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
+| `console-redesign.html` | ~2272 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 8 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字） | ✅ §0.2 |
@@ -159,7 +159,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 ## 1. 单文件三段结构（行号锚点 · `console-redesign.html`）
 
-> 本节及 §2 / §3 的锚点**只对应 `console-redesign.html`**（~2443 行）。生产侧锚点见 §0.2。
+> 本节及 §2 / §3 的锚点**只对应 `console-redesign.html`**（~2272 行）。生产侧锚点见 §0.2。
 
 文件固定由三段组成，改任何东西先按这张表定位：
 
@@ -167,12 +167,15 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | --- | --- | --- |
 | `<head>` | 1–9 | `lang="zh-CN"`、`data-theme="dark"` 初始主题、**MiSans 字体 CDN**（`font.sec.miui.com`，按 unicode-range 分片） |
 | `<style>` | 10–537 | 全部 CSS（无外链样式表）。**这段原文会被逐字节复制进 `console.html`** |
-| `<body>` | 539–1002 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
-| `<script>` | 1003–2441 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
+| `<body>` | 539–858 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
+| `<script>` | 859–2270 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
 
-> ⚠️ `<body>` 里 583–930 行是**渠道页的静态占位 markup**。`init()` 末尾会 `go('overview')`，
+> ⚠️ `<body>` 里 583–783 行是**渠道页的静态占位 markup**（`<div class="viewport" id="viewport">` 到 `</tbody></table>`）。`init()` 末尾会 `go('overview')`，
 > 首屏立刻用 JS 重绘整个 `#viewport`，所以那段占位只在 JS 失效时可见。
 > **改动 UI 时不要只改占位 markup**，否则会出现"静态和实际渲染不一致"的问题（本轮已踩过，见 §7）。
+>
+> 另：静态占位表与 `DATA` 里的渠道是**演示数据**（`demo-openai-a` 这类中性 id），
+> 用来演示各协议的渲染效果，与任何真实部署的渠道无关；公开仓库版本已把真实渠道身份全部替换掉（见 `frontend-console-detailed.md` §8.12）。
 
 ---
 
@@ -240,104 +243,104 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 | 行号 | 名称 | 说明 |
 | --- | --- | --- |
-| 1005–1036 | `IC` | 内联 SVG path 字典；`svg(name,size)` 包成 `<svg>`（1037） |
-| 1040–1104 | **`DATA`** | **唯一数据源**：`meta` / `trend` / `channels[30]` / `models[14]` / `logs[8]` / `donut`。**会被就地修改**（启停、删除、探测） |
-| 1193–1203 | `NAV` | 侧栏导航定义（`sec` 分组 / `id` / `label` / `icon` / `cnt()`） |
-| 1703 | `PG` | Playground 预置对话 |
-| 1946–1955 | `PROTO_META` | 协议元数据：`label` / 默认 `base` / `key` 填写提示（添加渠道表单据此渲染） |
-| 1956 | `PROTO_ORDER` | 协议下拉顺序（**新增协议要同时改 `PROTO_META` 和这里**） |
-| 1957 | `MODEL_POOL` | 别名补齐池（保证表格/抽屉/编辑器三处模型数一致） |
-| 1959–1967 | `PROBE_POOL` | 模拟"上游返回的一大批模型"，用于演示探测列表 + 搜索 |
-| 2206–2223 | `IMPORT_META` | 四类导入的配置：`codex-rt` / `codex-json` / `gs-session` / `gs-json`（`mode: paste\|file`、`hint`、`steps`、`warn`、`bad` 校验） |
-| 2326 | `REPLIES` | 测试模型的模拟回复池 |
+| 861–892 | `IC` | 内联 SVG path 字典；`svg(name,size)` 包成 `<svg>`（893） |
+| 896–933 | **`DATA`** | **唯一数据源**：`meta` / `trend` / `channels[9]` / `models[8]` / `logs[8]` / `donut`。**会被就地修改**（启停、删除、探测）。里面的渠道是**演示数据**，非真实部署渠道 |
+| 1022–1032 | `NAV` | 侧栏导航定义（`sec` 分组 / `id` / `label` / `icon` / `cnt()`） |
+| 1532 | `PG` | Playground 预置对话 |
+| 1775–1784 | `PROTO_META` | 协议元数据：`label` / 默认 `base` / `key` 填写提示（添加渠道表单据此渲染） |
+| 1785 | `PROTO_ORDER` | 协议下拉顺序（**新增协议要同时改 `PROTO_META` 和这里**） |
+| 1786 | `MODEL_POOL` | 别名补齐池（保证表格/抽屉/编辑器三处模型数一致） |
+| 1788–1796 | `PROBE_POOL` | 模拟"上游返回的一大批模型"，用于演示探测列表 + 搜索 |
+| 2035–2052 | `IMPORT_META` | 四类导入的配置：`codex-rt` / `codex-json` / `gs-session` / `gs-json`（`mode: paste\|file`、`hint`、`steps`、`warn`、`bad` 校验） |
+| 2155 | `REPLIES` | 测试模型的模拟回复池 |
 
 ### 3.2 全局可变状态
 
 ```js
-page                    // 1204 当前页面 id
-chTab, chQ              // 1349 渠道页签 / 搜索词
-modalChId, modalModels  // 1990 渠道表单：编辑对象 id / 模型别名数组
-probeFound, probeSel, probeQ  // 2081 探测结果 / 已勾选集合 / 搜索词
+page                    // 1033 当前页面 id
+chTab, chQ              // 1178 渠道页签 / 搜索词
+modalChId, modalModels  // 1819 渠道表单：编辑对象 id / 模型别名数组
+probeFound, probeSel, probeQ  // 1910 探测结果 / 已勾选集合 / 搜索词
 DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 ```
 
-### 3.3 工具层（1106–1127）
+### 3.3 工具层（935–956）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 1107–1113 | `$` `$$` `esc` `nf` `pct` `fTok` `fMs` | 选择器 / **HTML 转义** / 千分位 / 百分比 / Token 中文单位 / 毫秒格式化 |
-| 1114–1115 | `stTxt` `protoLabel` | 状态、协议的中文映射表 |
-| 1117 | `toast(msg,kind)` | 右下浮动提示（`kind:'ok'` 加绿边） |
-| 1124 | `copyText(t,btn)` | 复制 + 按钮图标短暂变勾 |
+| 936–942 | `$` `$$` `esc` `nf` `pct` `fTok` `fMs` | 选择器 / **HTML 转义** / 千分位 / 百分比 / Token 中文单位 / 毫秒格式化 |
+| 943–944 | `stTxt` `protoLabel` | 状态、协议的中文映射表 |
+| 946 | `toast(msg,kind)` | 右下浮动提示（`kind:'ok'` 加绿边） |
+| 953 | `copyText(t,btn)` | 复制 + 按钮图标短暂变勾 |
 
 > ⚠️ 所有插入 innerHTML 的动态文本都必须走 `esc()`，`DATA` 里有上游返回的模型名/渠道名。
 
-### 3.4 图表层（1129–1191，手写 SVG，无图表库）
+### 3.4 图表层（958–1020，手写 SVG，无图表库）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 1130 | `areaChart(data,w,h,opts)` | 面积折线图：贝塞尔平滑 + 渐变填充 + 虚线网格 + 末点放大；`preserveAspectRatio="none"` 拉伸铺满 |
-| 1161 | `sparkline(vals,w,h,c,stretch)` | 迷你曲线；`stretch=true` 时带渐变面积，用于 KPI 卡底部独立图表带 |
-| 1174 | `donut(parts,size,thick)` | 环形图（渠道健康分布） |
+| 959 | `areaChart(data,w,h,opts)` | 面积折线图：贝塞尔平滑 + 渐变填充 + 虚线网格 + 末点放大；`preserveAspectRatio="none"` 拉伸铺满 |
+| 990 | `sparkline(vals,w,h,c,stretch)` | 迷你曲线；`stretch=true` 时带渐变面积，用于 KPI 卡底部独立图表带 |
+| 1003 | `donut(parts,size,thick)` | 环形图（渠道健康分布） |
 
-### 3.5 导航与路由（1192–1223）
+### 3.5 导航与路由（1021–1052）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 1205 | `renderRail()` | 重绘侧栏（含高亮与计数） |
-| 1213 | `go(p)` | **唯一路由**：改 `page` → 重绘 rail → 清空 `#viewport` → 调对应 `vXxx(v)` → `scrollTop=0` |
+| 1034 | `renderRail()` | 重绘侧栏（含高亮与计数） |
+| 1042 | `go(p)` | **唯一路由**：改 `page` → 重绘 rail → 清空 `#viewport` → 调对应 `vXxx(v)` → `scrollTop=0` |
 
-> 页面分发是一张对象表（1219）：`{overview:vOverview, channels:vChannels, models:vModels, logs:vLogs, playground:vPlayground, access:vAccess}`。
-> **新增页面 = 加 `NAV` 项 + 写 `vXxx(v)` + 在 1219 注册**。
+> 页面分发是一张对象表（1048）：`{overview:vOverview, channels:vChannels, models:vModels, logs:vLogs, playground:vPlayground, access:vAccess}`。
+> **新增页面 = 加 `NAV` 项 + 写 `vXxx(v)` + 在 1048 注册**。
 
 ### 3.6 页面渲染层
 
 | 页面 | 渲染函数 | 关键子函数 / 行号 |
 | --- | --- | --- |
-| 总览 | `vOverview` 1240 | `kpiCard` 1226、`areaChart`、`donut`；页签 `#rangeTabs` 仅切样式不切数据 |
-| 渠道 | `vChannels` 1350 | **`drawChTable` 1390**（筛选/排序/渲染）、`toggleCh` 1425、**`openChannel` 1431**（详情抽屉）、`toggleDrawerKey` 1487、`reprobe` 1495、`delChannel` 1502 |
-| 模型 | `vModels` 1511 | **`drawMTable` 1556**（含**启用优先排序** 1564）、`openModel` 1585（模型来源抽屉，按 config 渠道序非调度序） |
-| 日志 | `vLogs` 1621 | `openLog` 1665（请求详情抽屉） |
-| Playground | `vPlayground` 1710 | `drawPG` 1778、`pgSend` 1794（模拟流式输出） |
-| 接入 | `vAccess` 1851 | 三协议端点卡 + 代码片段页签（1921） |
+| 总览 | `vOverview` 1069 | `kpiCard` 1055、`areaChart`、`donut`；页签 `#rangeTabs` 仅切样式不切数据 |
+| 渠道 | `vChannels` 1179 | **`drawChTable` 1219**（筛选/排序/渲染）、`toggleCh` 1254、**`openChannel` 1260**（详情抽屉）、`toggleDrawerKey` 1316、`reprobe` 1324、`delChannel` 1331 |
+| 模型 | `vModels` 1340 | **`drawMTable` 1385**（含**启用优先排序** 1393）、`openModel` 1414（模型来源抽屉，按 config 渠道序非调度序） |
+| 日志 | `vLogs` 1450 | `openLog` 1494（请求详情抽屉） |
+| Playground | `vPlayground` 1539 | `drawPG` 1607、`pgSend` 1623（模拟流式输出） |
+| 接入 | `vAccess` 1680 | 三协议端点卡 + 代码片段页签（1750） |
 
 ### 3.7 弹窗层
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 1932 | `modal(html,wide)` | 通用容器：写入 `#modalBox` 并给 `#mask` 加 `.on` |
-| 1939 | `closeModal()` | 移除 `.on`（**只有 ×、取消、Esc 三条关闭路径**） |
-| 1940 | `setStatus(el,text,cls)` | 行内状态文字（`ok`/`bad`/`wait`） |
-| 1942 | `toggleMenu(id)` | 下拉菜单开关；1943 全局点击外部关闭 |
-| 1970–1988 | `fakeKey` `maskKey` `chBaseUrl` `chAliases` | 原型派生数据（假密钥、默认 BaseURL、别名补齐） |
-| **1991** | **`openChannelForm(id)`** | 添加/编辑渠道弹窗（无 id = 新增）。内含表单骨架 1997–2046 |
-| 2057 | `renderModelRows()` | 渲染模型别名编辑器行 |
-| 2074 / 2080 | `addModelRow()` / `delModelRow(i)` | 增删别名行 |
-| 2083 | `probeUpstream()` | 模拟探测上游 `/v1/models` → 填充 `probeFound` |
-| 2099 | `renderProbeList()` | 渲染**列表式 + 可搜索 + 多选**的探测结果面板 |
-| 2123 / 2129 / 2135 | 行内绑定 / `filterProbeRows()` / `updateProbeSel()` | 搜索过滤、勾选计数 |
-| 2141 / 2150 / 2155 | `probeSelectAll()` / `probeClearSel()` / `probeAddSelected()` | 全选 / 清空 / 批量加入别名表 |
-| 2164 | `testRowModel(i)` | 单行模型测试（编辑器内） |
-| 2171 | `toggleKeyField()` | 密钥掩码/明文切换 |
-| 2177 | `saveChannel()` | 收集表单 → 校验 → 写回 `DATA.channels` |
-| 2224 / 2232 | `parseCodexUnits(j)` / `parseGsSessionId(raw)` | **兼容多结构的 JSON 解析**（codex 三种结构；genspark 正则提 sessionId） |
-| 2239 | `openImport(kind)` | 导入弹窗（粘贴 / 拖放两种形态） |
-| 2272 | `doImport(kind)` | 粘贴式导入：分步状态动画 → 成功提示 |
-| 2289 | `importFiles(kind,input)` | 文件式导入：多选、逐个解析、逐行结果 |
-| 2327 | `simTest(chanId)` | 模拟一次模型测试（按渠道状态/失败率造成功或失败） |
-| 2340 | `openTestModels(opts)` | 测试模型弹窗（可按 `channelId` 预筛） |
-| 2386 | `runTests()` | 逐条执行 + 进度行 + 汇总 |
+| 1761 | `modal(html,wide)` | 通用容器：写入 `#modalBox` 并给 `#mask` 加 `.on` |
+| 1768 | `closeModal()` | 移除 `.on`（**只有 ×、取消、Esc 三条关闭路径**） |
+| 1769 | `setStatus(el,text,cls)` | 行内状态文字（`ok`/`bad`/`wait`） |
+| 1771 | `toggleMenu(id)` | 下拉菜单开关；1772 全局点击外部关闭 |
+| 1799–1817 | `fakeKey` `maskKey` `chBaseUrl` `chAliases` | 原型派生数据（假密钥、默认 BaseURL、别名补齐） |
+| **1820** | **`openChannelForm(id)`** | 添加/编辑渠道弹窗（无 id = 新增）。内含表单骨架 1826–1875 |
+| 1886 | `renderModelRows()` | 渲染模型别名编辑器行 |
+| 1903 / 1909 | `addModelRow()` / `delModelRow(i)` | 增删别名行 |
+| 1912 | `probeUpstream()` | 模拟探测上游 `/v1/models` → 填充 `probeFound` |
+| 1928 | `renderProbeList()` | 渲染**列表式 + 可搜索 + 多选**的探测结果面板 |
+| 1952 / 1958 / 1964 | 行内绑定 / `filterProbeRows()` / `updateProbeSel()` | 搜索过滤、勾选计数 |
+| 1970 / 1979 / 1984 | `probeSelectAll()` / `probeClearSel()` / `probeAddSelected()` | 全选 / 清空 / 批量加入别名表 |
+| 1993 | `testRowModel(i)` | 单行模型测试（编辑器内） |
+| 2000 | `toggleKeyField()` | 密钥掩码/明文切换 |
+| 2006 | `saveChannel()` | 收集表单 → 校验 → 写回 `DATA.channels` |
+| 2053 / 2061 | `parseCodexUnits(j)` / `parseGsSessionId(raw)` | **兼容多结构的 JSON 解析**（codex 三种结构；genspark 正则提 sessionId） |
+| 2068 | `openImport(kind)` | 导入弹窗（粘贴 / 拖放两种形态） |
+| 2101 | `doImport(kind)` | 粘贴式导入：分步状态动画 → 成功提示 |
+| 2118 | `importFiles(kind,input)` | 文件式导入：多选、逐个解析、逐行结果 |
+| 2156 | `simTest(chanId)` | 模拟一次模型测试（按渠道状态/失败率造成功或失败） |
+| 2169 | `openTestModels(opts)` | 测试模型弹窗（可按 `channelId` 预筛） |
+| 2215 | `runTests()` | 逐条执行 + 进度行 + 汇总 |
 
-### 3.8 抽屉 / 主题 / 全局（2413–2441）
+### 3.8 抽屉 / 主题 / 全局（2242–2270）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 2413 / 2417 | `drawer(html)` / `closeDrawer()` | 右侧抽屉（渠道详情、模型详情、日志详情共用） |
-| 2418 | keydown 监听 | `Esc` 关弹窗（优先）或抽屉；`Cmd/Ctrl+K` 聚焦全局搜索 |
-| 2425 | `setTheme(t)` | 切 `data-theme` + 写 `localStorage['zzcs-theme']` + 换图标 |
-| 2431 | `#themeBtn.onclick` | 明暗互切 |
-| 2432 | `#globalSearch` Enter | 回车把关键词塞进 `chQ` 并跳渠道页 |
-| 2435 | `init()` | 读主题 → `setTheme` → `go('overview')` |
+| 2242 / 2246 | `drawer(html)` / `closeDrawer()` | 右侧抽屉（渠道详情、模型详情、日志详情共用） |
+| 2247 | keydown 监听 | `Esc` 关弹窗（优先）或抽屉；`Cmd/Ctrl+K` 聚焦全局搜索 |
+| 2254 | `setTheme(t)` | 切 `data-theme` + 写 `localStorage['zzcs-theme']` + 换图标 |
+| 2260 | `#themeBtn.onclick` | 明暗互切 |
+| 2261 | `#globalSearch` Enter | 回车把关键词塞进 `chQ` 并跳渠道页 |
+| 2264 | `init()` | 读主题 → `setTheme` → `go('overview')` |
 
 ---
 

@@ -6,7 +6,7 @@
 
 > **整改记录（2026-09-27，v0.7）**：PT01 / PT03 / PT05 / PT06 / PT07 已全部完成整改（PT03 取方案 (c) 彻底撤 arena，含 chromium 全家桶移除、镜像 1.31GB→203MB，`docs/arena-protocol.md` 留档）；前端独立审查的清理类发现 PT08/PT10/PT11/PT13/PT14/PT15/PT16/PT17/PT18/PT20/PT21 同批落地，详见 §前端独立审查 各条状态。处置明细见 [frontend-console-detailed.md §8.7](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v0.8）**：**PT02 已取方案 (b) 完成整改**——proxy 对全部 openai 系协议真实生效（探测/测试/聊天经 curl `-x` 转发），实测含死端口拒绝、Clash 探测、流式 SSE 完整回放；PT09/PT12/PT19 登记进 detailed §9 后续可做；**PT04（探测双路径）仍待下次动探测逻辑时顺带收敛**。处置明细见 [frontend-console-detailed.md §8.8](./frontend-console-detailed.md)。
-> **整改记录（2026-09-27，v1.0）**：PT01 同主题的**分发场景加固**——原 compose 默认密钥 `zz-admin-change-me`/`zz-gw-change-me` 是公开仓库里的公共凭据（谁拿到项目谁就知道每个部署的管理密钥），且 `checkAuth` 存在"空 key 就放行"。现改为：默认留空 → **首启自动生成 48 位随机密钥**（打印到容器日志并写回 config.json）+ 控制台「输入管理密钥」登录门（壳页面放行、管理 API 仍每次校验、密钥记忆由 sessionStorage 升为 localStorage）。明细见 [frontend-console-detailed.md §8.10](./frontend-console-detailed.md)。
+> **整改记录（2026-09-27，v1.0）**：PT01 同主题的**分发场景加固**——原 compose 里写死的固定默认密钥（`ADMIN_KEY`/`GATEWAY_KEY` 都给了公共字符串）等于把每个部署的管理密钥公开在仓库里（谁拿到项目谁就知道），且 `checkAuth` 存在"空 key 就放行"。现改为：默认留空 → **首启自动生成 48 位随机密钥**（打印到容器日志并写回 config.json）+ 控制台「输入管理密钥」登录门（壳页面放行、管理 API 仍每次校验、密钥记忆由 sessionStorage 升为 localStorage）。明细见 [frontend-console-detailed.md §8.10](./frontend-console-detailed.md)。
 
 ## 结论
 
@@ -17,10 +17,10 @@
 ### PT01 高（信任边界·部署面）：NOAUTH 默认 1 + 端口绑 0.0.0.0，管理面全开
 
 - 证据：[docker-compose.yml:13](../docker-compose.yml) `ZZCSAPI_NOAUTH: ${ZZCSAPI_NOAUTH:-1}`（默认即免鉴权）；[docker-compose.yml:8](../docker-compose.yml) `"8787:8787"` 绑所有网卡；[server.js:194](../server.js) `if (NOAUTH) return true` 先于一切 key 判断短路；[server.js:1240](../server.js) `channelStatusAll` 下发渠道**明文 apiKey**。
-- 实测（本机复现，非推断）：`GET /admin/api/status` 无任何凭证 → **200 全量渠道（含上游明文 key）**；`POST /v1/chat/completions` 无凭证 → **200 并真实消耗了 tokenbom 额度**。compose 里的 ADMIN_KEY/GATEWAY_KEY 在 NOAUTH=1 下不起任何作用。
+- 实测（本机复现，非推断）：`GET /admin/api/status` 无任何凭证 → **200 全量渠道（含上游明文 key）**；`POST /v1/chat/completions` 无凭证 → **200 并真实消耗了上游付费额度**。compose 里的 ADMIN_KEY/GATEWAY_KEY 在 NOAUTH=1 下不起任何作用。
 - 影响面：局域网内任何设备可读走全部渠道上游 key、增删改渠道、烧光付费额度；若路由器做过 8787 端口转发则直接暴露公网。
 - 最小修复（两行 compose，零代码）：`ports` 改 `"127.0.0.1:8787:8787"`；NOAUTH 默认改 `${ZZCSAPI_NOAUTH:-0}`。你现有全部客户端（console `?key=`、DSH Bearer）都带 key，翻成 0 不破坏任何工作流；若确需局域网访问则保留 0.0.0.0 但必须 NOAUTH=0。
-- 最小回归：改后本机 `curl -H "Authorization: Bearer zz-gw-change-me"` 网关调用全通、console 正常打开、`docker compose` 健康检查（healthz 免鉴权）不受影响。
+- 最小回归：改后本机 `curl -H "Authorization: Bearer $ZZCSAPI_GATEWAY_KEY"` 网关调用全通、console 正常打开、`docker compose` 健康检查（healthz 免鉴权）不受影响。
 
 ### PT02 中：渠道 proxy 字段只对 genspark/codex 生效，其余协议静默忽略 ✅ 已整改（v0.8，方案 b）
 

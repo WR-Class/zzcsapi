@@ -11,6 +11,8 @@ _*.html
 _*.jsonl
 _tmp_*
 *.bak-*
+# server.js 每次持久化前会把 config.json 复制成 config.json.bak（含全部渠道明文 apiKey），绝不入仓库
+*.bak
 .trae-html-share-packages/
 
 # Prism 研究凭据（活令牌，禁止提交）

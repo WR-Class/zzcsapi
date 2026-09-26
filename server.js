@@ -2527,8 +2527,8 @@ async function tryChannel(opts) {
     recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
     // 401/402/403/404/408/429 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底；
     // 其余 4xx（400 参数错等）换渠道也一样错，是客户端错误 → 原样透传给调用方。
-    // 404 进兜底名单的动机：渠道「声明有此模型」但上游实际没有（别名表过期，如 apmix 的 deepseek-v4.1-flash-free）
-    // ——下一个声明者（如 bqgy）很可能真的有，不该把渠道的过期声明当成客户端的错。
+    // 404 进兜底名单的动机：渠道「声明有此模型」但上游实际没有（别名表过期，渠道声明了一个它早已下架的模型）
+    // ——下一个声明者很可能真的有，不该把渠道的过期声明当成客户端的错。
     if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 404, 408, 429].includes(resp.status)) {
       // 客户端错误：直接把上游响应转发
       const ct = (resp.headers && resp.headers.get('content-type')) || '';

@@ -549,8 +549,8 @@ openai/anthropic/gemini/workbuddy 的探测、测试、聊天全部直连——�
 
 问题（用户侧实测 + 跨 agent 诊断后由本侧收窄修法落地）：渠道「声明有此模型」但上游实际没有（别名表过期）时，
 上游回的 404 被网关当成"客户端错误"原样透传、**不切下一候选**——明明有真正提供该模型的渠道在候选链上，客户端却拿到 404。
-活体标本：`deepseek-v4.1-flash-free` 有 apmix、bqgy 两个候选（按延迟 apmix 排第一），apmix 别名表写了该模型但探测清单早已没有 → 上游 404 →
-改前实测客户端直接收到 `Unknown model. See apmix.ai/models`，bqgy 根本没被试。
+活体标本：`deepseek-v4.1-flash-free` 有两个候选渠道（按延迟排序，第一个更快），排第一的渠道别名表写了该模型但探测清单早已没有 → 上游 404 →
+改前实测客户端直接收到 `Unknown model. See <该渠道上游域名>/models`，第二个候选根本没被试。
 
 根因：`tryChannel` 的 4xx 分类白名单 `[401,402,403,408,429]` 漏了 404。该名单语义 = "渠道侧问题（跨渠道各不相同）→ 切下一候选"，
 名单外 4xx（400 参数错等）= "换渠道也一样错 → 原样透传"。404（该渠道没有此模型）属于前者却被归进后者。
@@ -563,11 +563,11 @@ README §4xx 重试规则行改写（顺带修正了原文档把 401/403 写成"
 
 行为变化（已知且接受）：全部候选都 404 时，客户端从"收到某个渠道的裸上游 404"变为"网关自己的 502 all channels failed + attempts 明细"——与网关错误契约一致。
 
-验证（前后对比实测）：改前基线 `deepseek-v4.1-flash-free` → 404 `Unknown model`（apmix 透传，bqgy 未试）；
-改后同请求 → **200，X-ZZCSAPI-Channel: bqgy**（apmix 404 → 兜底命中真有该模型的渠道）✓。
+验证（前后对比实测）：改前基线 `deepseek-v4.1-flash-free` → 404 `Unknown model`（排第一的候选透传，第二个候选未试）；
+改后同请求 → **200，X-ZZCSAPI-Channel: <第二个候选>**（第一个候选 404 → 兜底命中真有该模型的渠道）✓。
 真客户端错误回归：`messages: []` + 已配模型 → 上游 400 **立即透传**，未逐渠道扫描 ✓。常规聊天 / healthz 30 渠道回归 ✓。
 
-> 顺带观察（上游侧问题，非本修复范围）：bqgy 免费池当晚对 `deepseek-v4.1-flash-free` / `glm-5.3-free` 均返回
+> 顺带观察（上游侧问题，非本修复范围）：某个候选渠道的免费池当晚对 `deepseek-v4.1-flash-free` / `glm-5.3-free` 均返回
 > HTTP 200 + `content:null`（finish_reason=length/refusal）——"活着但不干活"。周期探测只测 `/v1/models` 探不不出这种退化。
 > 已向用户标记：属探测盲区（"空回复不算失败"），若频繁出现可考虑给网关加空回复判失败的规则，先不动。
 
@@ -576,8 +576,8 @@ README §4xx 重试规则行改写（顺带修正了原文档把 401/403 写成"
 ### 8.10 v1.0 分享场景加固：首启密钥生成 + 控制台登录门（2026-09-27，对象 `server.js` + `build/app.js` + `docker-compose.yml` + `.env`/`.gitignore` + 产物 `console.html`）
 
 问题（用户提出"项目分享出去，这个 key 应该是什么样子"）：密钥全靠环境变量，而 `docker-compose.yml` 里写的是**公共默认值**
-`${ZZCSAPI_ADMIN_KEY:-zz-admin-change-me}` / `${ZZCSAPI_GATEWAY_KEY:-zz-gw-change-me}`——收到项目的人不配置就直接跑，
-于是**每个部署都用同一把写在公开仓库里的管理密钥**；更糟的是 `checkAuth` 里"key 为空则放行"，空密钥比公开密钥还危险。
+`${ZZCSAPI_ADMIN_KEY:-<写死的公共字符串>}` / `${ZZCSAPI_GATEWAY_KEY:-<写死的公共字符串>}`——收到项目的人不配置就直接跑，
+于是**每个部署都用同一把写在公开仓库里的管理密钥**（v1.0 起 compose 默认留空，手上那份具体字符串不再写进文档）；更糟的是 `checkAuth` 里"key 为空则放行"，空密钥比公开密钥还危险。
 另一面是使用体感：控制台密钥原本只存 `sessionStorage`，**关掉标签页就丢**，每次开新标签都得重新贴一遍长 URL。
 
 根因：默认凭据是公开知识（分发场景的头号问题）；鉴权只在"用户恰好设置了 env"时生效；密钥记忆用了会话级存储。
@@ -657,6 +657,43 @@ setInterval(()=>{
 > 这是刻意的（会逼着同步本文件与 code-map 的行号锚点）。已登记：`README.md`「前端代码文档」、`AGENTS.md` §3、code-map §8 自测清单。
 
 浏览器里的人工确认（打字 10 秒不丢）仍建议实际点一次——本机无浏览器自动化手段（镜像已撤 Chromium）。
+
+---
+
+### 8.12 v1.0.2 公开发布前的脱敏：原型演示数据里的真实渠道身份（2026-09-27，对象 `console-redesign.html` + `docs/*.md` + `test/console-state.test.js` + `.gitignore` + 产物 `console.html`）
+
+**问题**（用户提出"项目推到 GitHub 给别人用，但不能把我已添加的渠道也传上去"）：
+仓库里除了运行时的 `config.json`（本来就被忽略）之外，还有**三处把真实渠道身份带进了版本控制**：
+
+| 载体 | 内容 |
+| --- | --- |
+| `console-redesign.html` 的 `DATA` 演示快照 + **静态占位渠道表**（583–783 行） | **全部 30 条真实渠道**的 id 与名称（含用户自起的中文名）被当成"演示数据"写死在这里 |
+| `console-redesign.html` 的 CSS + 上面两处的密钥演示 | 每条渠道的专属 chip 配色选择器（`.chip.<channelId>`）；`copyText('…')` 里直接放的是**现网 GATEWAY_KEY 字面量**，安全提示里还写着现网 ADMIN_KEY/GATEWAY_KEY |
+| `docs/PONYTAIL_REVIEW.md` / `docs/frontend-console-detailed.md` + `test/console-state.test.js` | 整改记录与测试桩里出现现网密钥字面量与真实渠道 id |
+| `config.json.bak`（**曾被 git 跟踪**） | `server.js` 每次持久化前会把 config.json 复制一份，里面是**全部渠道的明文 apiKey**；`.gitignore` 只写了 `*.bak-*`（带横杠）没写 `*.bak`，于是被误提交 |
+
+**根因**：把"看起来真实的演示数据"当成了原型的一部分——它确实让原型更像真的，但它同时是**用户真实配置的副本**；
+而 `.bak` 的忽略规则写窄了一个字符，让运行时会自动生成的密钥备份文件混进了版本控制。
+
+**处置**
+
+| # | 触点 | 处置 |
+| --- | --- | --- |
+| 1 | `console-redesign.html` 的 `DATA.channels/models/logs` | 整块换成 9 条中性演示渠道（`demo-openai-a/b/c`、`demo-anthropic`、`demo-gemini`、`demo-notion`、`demo-notion-agent`、`demo-workbuddy`、`demo-genspark`），覆盖全部协议；`meta` 计数同步 |
+| 2 | 静态占位渠道表 19 行 | 按"每个演示渠道一行"去重为 10 行，页签计数改 9/6/3 |
+| 3 | 真实 id / 名称 / 头像 | 按**同协议一对一**映射替换（保证 chip 协议自洽）；头像只在 `<span class="avatar…">` 容器内替换；`.chip.<channelId>` 选择器一并改名 |
+| 4 | 与协议同名的 id（`workbuddy` / `genspark`） | **不替换**——它们是协议本身的标识，`PROTO_META` / `PROTO_ORDER` / chip 类名 / README 里本来就有；替换反而会破坏协议语义 |
+| 5 | 现网密钥字面量 | 原型里的复制按钮改 `zz-gw-your-key-here`；"安全提示"文案改为"尚未配置密钥 → 启动时自动生成"（与 v1.0 的真实行为对齐，原文案已过时）；两份文档里的字面量换成占位/变量名 |
+| 6 | `test/console-state.test.js` 桩数据 | 真实渠道 id / 模型名 → `stub-alpha`/`stub-beta`、`demo-model-a/b`（断言字符串同步改名） |
+| 7 | `config.json.bak` | 移出仓库留档（`D:\DSHXM\_zzcsapi-private\`），`.gitignore` 补 `*.bak` |
+| 8 | 文档锚点 | 按 §1.1 重算：`<body>` 段因静态表去重 −144 行、`DATA` 块因演示数据收缩再 −27 行；code-map §1/§3 全部锚点已逐条核对（脚本比对 100+ 个锚点） |
+
+**验证**：脱敏脚本自校验「真实 id / 名称 / 头像 / 中文名前两字 / 密钥字面量」全部归零；
+`node build/build.js` 重建产物一致；`node test/console-state.test.js` 27/27 通过；code-map 锚点脚本逐条比对通过。
+**未改动 `server.js` 与 `build/app.js`** —— 本次只动演示数据与文档，运行时行为零影响（活体 `healthz` 30 渠道不变即为证）。
+
+> 发布形态：本地 `master`（含真实配置历史）**不外推**，只把脱敏后的单提交快照推到公开仓库；
+> `.env` / `config.json` 从来不在版本控制内，用户的密钥无需轮换。
 
 ---
 
