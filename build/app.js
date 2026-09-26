@@ -1,0 +1,1917 @@
+
+/* ═══════════════════════════ 图标 ═══════════════════════════ */
+const IC = {
+  gauge:'<path d="M12 14 18 8"/><circle cx="12" cy="14" r="8"/><path d="M12 2v2M4.9 6.3 6.4 7.8M2 14h2M20 14h2M17.6 7.8l1.5-1.5"/>',
+  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  plug:'<path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9zM12 18v3"/>',
+  layers:'<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>',
+  terminal:'<path d="m5 8 4 4-4 4M13 16h6"/>',
+  book:'<path d="M4 5a2 2 0 0 1 2-2h11v18H6a2 2 0 0 1-2-2V5z"/><path d="M9 3v18"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon:'<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  x:'<path d="M18 6 6 18M6 6l12 12"/>',
+  test:'<path d="M9 3h6M10 3v6.5L5.6 17A2 2 0 0 0 7.3 20h9.4a2 2 0 0 0 1.7-3L14 9.5V3"/><path d="M7.5 14h9"/>',
+  eye:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+  download:'<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+  send:'<path d="M4 12 20 4l-7 16-2.5-6.5L4 12z"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  warn:'<path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/>',
+  check:'<path d="m4 12 5 5L20 6"/>',
+  arrowUp:'<path d="M12 19V5M5 12l7-7 7 7"/>',
+  filter:'<path d="M3 5h18l-7 8v6l-4-2v-4L3 5z"/>',
+  key:'<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8 2 2-1.5 1.5L21 9l-2 2-1.5-1.5L15 12"/>',
+  eyeOff:'<path d="M3 3l18 18"/><path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 6 10 6a17.3 17.3 0 0 1-2.9 3.7"/><path d="M6.3 7.6A16.6 16.6 0 0 0 2 12s3.6 6 10 6a9.8 9.8 0 0 0 4.1-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  zap:'<path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z"/>',
+  file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"/><path d="M14 3v5h5"/>',
+  cookie:'<path d="M12 3a9 9 0 1 0 9 9 4 4 0 0 1-5-5 4 4 0 0 1-4-4z"/><path d="M8.5 10h.01M11 15h.01M15 13.5h.01"/>',
+  edit:'<path d="M4 20h4L20 8l-4-4L4 16v4z"/><path d="m14 6 4 4"/>',
+  trash:'<path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/>',
+  chev:'<path d="m6 9 6 6 6-6"/>',
+  upload:'<path d="M12 17V5M7 10l5-5 5 5M4 21h16"/>'
+};
+const svg=(n,s=15)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[n]||''}</svg>`;
+
+/* ═══════════════════════════ 数据层：真实接口 → 设计稿 DATA 形状 ═══════════════════════════
+   设计稿所有渲染函数都是按下面这一个 DATA 形状写的。生产端不重写渲染逻辑，只做一次适配：
+     /admin/api/status  渠道（别名、状态、延迟、有效优先级、自定义请求头）
+     /admin/api/usage   总量 / 按天 / 按模型 / 按渠道 / 24h / 各渠道平均延迟 / 最近 200 条
+     /admin/api/config  网关地址与密钥（接入信息页）
+   刷新节奏 8 秒；页面不可见时不打接口，避免后台标签页空转。 */
+let DATA = {
+  meta:{ total:0, errors:0, inTok:0, outTok:0, channels:0, enabled:0, models:0, at:0 },
+  trend:[], days:[], channels:[], models:[], logs:[], donut:[]
+};
+let RAW = { channels:[], usage:null, config:null };
+let loaded = false;
+
+const protoOfChannel = (id) => {
+  const c = RAW.channels.find((x) => x.id === id);
+  return (c && c.protocol) || 'openai';
+};
+/* 后端 usage 记录不带请求 ID，用时间戳 base36 派生一个稳定短 ID：
+   同一秒的请求会撞号，但日志表按时间排序，撞号只影响展示不影响定位。 */
+const reqIdOf = (ts) => 'req_' + Number(ts || 0).toString(36);
+
+function adapt() {
+  const st = RAW.channels, us = RAW.usage;
+  const byCh = new Map(((us && us.byChannel) || []).map((x) => [x.key, x]));
+  const byModel = new Map(((us && us.byModel) || []).map((x) => [x.key, x]));
+  const lat = (us && us.latency) || {};
+  const chans = st.map((c) => {
+    const u = byCh.get(c.id) || {};
+    return {
+      id:c.id, name:c.name || c.id, proto:c.protocol || 'openai', on:c.enabled !== false,
+      status:c.status || 'unknown',
+      /* 延迟优先用最近成功请求的均值；status 里的 latencyMs 是探测值，可能很久没更新 */
+      ms:lat[c.id] != null ? lat[c.id] : (c.latencyMs == null ? -1 : c.latencyMs),
+      models:(c.aliases || []).length, pri:c.priority == null ? 0 : c.priority,
+      eff:c.effectivePriority, fail:c.rollFailRate || 0,
+      req:u.requests || 0, err:u.errors || 0,
+      aliases:c.aliases || [], upstreamModels:c.upstreamModels || [],
+      baseUrl:c.baseUrl || '', apiKey:c.apiKey || '',
+      proxy:c.proxy || '', headers:c.headers || '',
+      autoAlias:c.autoAlias !== false,
+      lastError:c.lastError || '', lastCheck:c.lastCheck || 0,
+    };
+  });
+  /* 模型：别名 → 提供方集合（同一 alias 可被多个渠道提供，按渠道顺序即调度候选顺序） */
+  const mm = new Map();
+  for (const c of chans) for (const a of c.aliases) {
+    if (!mm.has(a.alias)) mm.set(a.alias, { name:a.alias, chans:[], req:0, err:0, up:{} });
+    const m = mm.get(a.alias);
+    m.chans.push(c.id); m.up[c.id] = a.upstream;
+  }
+  for (const m of mm.values()) {
+    const u = byModel.get(m.name);
+    if (u) { m.req = u.requests || 0; m.err = u.errors || 0; }
+  }
+  const models = [...mm.values()].sort((a, b) => (b.req - a.req) || a.name.localeCompare(b.name));
+  const days = ((us && us.byDay) || []);
+  const trend = days.map((d) => [String(d.day).slice(5), d.requests || 0]);
+  const logs = ((us && us.recent) || []).map((r) => ({
+    t:fmtTs(r.ts), ts:r.ts, id:reqIdOf(r.ts),
+    m:r.model || '—', c:r.channelId || '—', p:protoOfChannel(r.channelId),
+    kind:r.kind || 'chat', ok:r.ok !== false, ms:r.ms || 0,
+    i:r.in || 0, o:r.out || 0, note:r.note || '',
+  }));
+  const tot = (us && us.total) || {};
+  const cnt = { ok:0, degraded:0, down:0, unknown:0 };
+  for (const c of chans) cnt[c.status] = (cnt[c.status] || 0) + 1;
+  DATA = {
+    meta:{
+      total:tot.requests || 0, errors:tot.errors || 0,
+      inTok:tot.inputTokens || 0, outTok:tot.outputTokens || 0,
+      channels:chans.length, enabled:chans.filter((c) => c.on).length,
+      models:models.length, at:Date.now(),
+    },
+    trend, days, channels:chans, models, logs,
+    donut:[
+      { k:'正常', v:cnt.ok, c:'var(--ok)' },
+      { k:'降级', v:cnt.degraded, c:'var(--warn)' },
+      { k:'不可用', v:cnt.down + (cnt.unknown || 0), c:'var(--err)' },
+    ],
+  };
+}
+
+async function loadAll() {
+  const [st, us, cfg] = await Promise.all([
+    api('/admin/api/status'),
+    api('/admin/api/usage').catch(() => null),
+    api('/admin/api/config').catch(() => null),
+  ]);
+  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg };
+  CFG = cfg || CFG;
+  adapt();
+  loaded = true;
+  /* 侧栏底部的网关地址取自真实配置，不写死 */
+  if (CFG && CFG.port) $('#gwHost').textContent = '127.0.0.1:' + CFG.port;
+  render();
+}
+
+/* 重渲染当前页。8 秒一次的轮询不能把滚动位置和输入框里的字冲掉，
+   所以进页面之前先记下来，出页面之后再还原。 */
+function render() {
+  const v = $('#viewport'); if (!v) return;
+  const fn = { overview:vOverview, channels:vChannels, models:vModels, logs:vLogs, playground:vPlayground, access:vAccess }[page];
+  if (!fn) return;
+  const top = v.scrollTop;
+  const act = document.activeElement;
+  const focusId = act && v.contains(act) && act.id ? act.id : null;
+  const caret = focusId && act.selectionStart != null ? act.selectionStart : null;
+  fn(v);
+  v.scrollTop = top;
+  if (focusId) {
+    const el = document.getElementById(focusId);
+    if (el) {
+      el.focus();
+      if (caret != null && el.setSelectionRange) { try { el.setSelectionRange(caret, caret); } catch (e) {} }
+    }
+  }
+}
+
+/* 渠道动作之后不重拉全量数据，只把这一行改掉，避免整页闪一下 */
+async function reload() { try { await loadAll(); } catch (e) {} }
+
+/* 顶栏与各页的「重新探测」共用一个实现 */
+async function recheckAll(btn) {
+  const old = btn ? btn.innerHTML : null;
+  if (btn) { btn.disabled = true; btn.innerHTML = svg('test',14) + '探测中…'; }
+  try {
+    const r = await api('/admin/api/recheck', { method:'POST' });
+    const s = r.summary || { ok:0, fail:0, total:0 };
+    if (!s.fail) toast(`✓ 全部 ${s.total} 个渠道正常`, 'ok');
+    else toast(`⚠ ${s.ok} 正常 / ${s.fail} 失败`);
+    await reload();
+  } catch (e) {
+    toast('探测失败：' + (e.message || e), 'bad');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = old || svg('test',14) + '重新探测'; }
+  }
+}
+
+/* ═══════════════════════════ 工具 ═══════════════════════════ */
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const nf=n=>Number(n||0).toLocaleString('en-US');
+const pct=(a,b)=>b?((a/b)*100):0;
+const fTok=n=>n>=1e8?(n/1e8).toFixed(2)+' 亿':n>=1e4?(n/1e4).toFixed(1)+' 万':nf(n);
+const fMs=ms=>ms<0?'—':ms<1000?ms+' ms':(ms/1000).toFixed(ms<10000?2:1)+' s';
+const stTxt={ok:'正常',degraded:'降级',down:'不可用',unknown:'未探测'};
+const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark'};
+
+/* ═══════════════════════════ 生产：API 客户端 ═══════════════════════════
+   控制台唯一网络出口。ADMIN_KEY 从 sessionStorage 取（生产由服务端注入或手填），
+   GATEWAY_KEY 由 /admin/api/config 下发，仅 Playground 直连 /v1 时使用。 */
+async function api(path,opts={}){
+  const headers={'Content-Type':'application/json'};
+  const k=sessionStorage.getItem('adminKey');
+  if(k)headers['Authorization']='Bearer '+k;
+  const r=await fetch(path,{...opts,headers:{...headers,...(opts.headers||{})}});
+  if(r.status===401){try{sessionStorage.removeItem('adminKey');localStorage.removeItem('adminKey')}catch(e){};showKeyGate();throw new Error('401')}
+  const j=await r.json().catch(()=>null);
+  if(!r.ok){toast((j&&(j.error||j.message))||('HTTP '+r.status),'bad');throw new Error('http '+r.status)}
+  return j;
+}
+let CFG=null;
+const csvCell=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+function downloadCsv(name,rows){
+  const csv='\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+const fmtTs=ts=>{const d=new Date(ts),p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`};
+
+function toast(msg,kind){
+  const el=document.createElement('div');
+  el.className='toast '+(kind||'');
+  el.innerHTML=svg(kind==='ok'?'check':'warn',14)+'<span>'+msg+'</span>';
+  $('#toasts').appendChild(el);
+  setTimeout(()=>{el.style.transition='opacity .3s,transform .3s';el.style.opacity=0;el.style.transform='translateY(8px)';setTimeout(()=>el.remove(),320)},2200);
+}
+/* 复制：优先用异步剪贴板 API。它只在安全上下文（https / localhost）可用，
+   用局域网 IP 走 http 打开控制台时 navigator.clipboard 是 undefined，
+   可选链会把整条链短路成 undefined —— 既不复制也不报错，所以必须有 execCommand 兜底。 */
+function copyText(t,btn){
+  const s=String(t==null?'':t);
+  const done=()=>{toast('已复制到剪贴板','ok');if(btn){const o=btn.innerHTML;btn.innerHTML=svg('check',13);setTimeout(()=>btn.innerHTML=o,1200)}};
+  const fallback=()=>{
+    const ta=document.createElement('textarea');
+    ta.value=s; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.top='-1000px';
+    document.body.appendChild(ta); ta.select();
+    let ok=false; try{ok=document.execCommand('copy')}catch(e){ok=false}
+    ta.remove();
+    ok?done():toast('复制失败，请手动选择文本');
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(s).then(done).catch(fallback);
+  else fallback();
+}
+
+/* ═══════════════════════════ 图表 ═══════════════════════════ */
+function areaChart(data,w,h,opts){
+  const o=Object.assign({pad:[14,10,22,34],stroke:'var(--accent)'},opts||{});
+  const [pt,pr,pb,pl]=o.pad, iw=w-pl-pr, ih=h-pt-pb;
+  const vals=data.map(d=>d[1]), max=Math.max(...vals)*1.12||1, n=vals.length;
+  const X=i=>pl+(n<=1?iw/2:i*iw/(n-1)), Y=v=>pt+ih-(v/max)*ih;
+  const pts=vals.map((v,i)=>[X(i),Y(v)]);
+  let d='M'+pts[0][0]+','+pts[0][1];
+  for(let i=0;i<pts.length-1;i++){
+    const [x0,y0]=pts[i],[x1,y1]=pts[i+1],cx=(x0+x1)/2;
+    d+=' C'+cx+','+y0+' '+cx+','+y1+' '+x1+','+y1;
+  }
+  const area=d+' L'+X(n-1)+','+(pt+ih)+' L'+X(0)+','+(pt+ih)+' Z';
+  const grid=[0,.25,.5,.75,1].map(f=>{
+    const y=pt+ih*f, v=Math.round(max*(1-f));
+    return `<line x1="${pl}" y1="${y}" x2="${w-pr}" y2="${y}" stroke="var(--line)" stroke-dasharray="2 5" opacity=".55"/>
+            <text x="${pl-8}" y="${y+3.5}" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">${v>=1000?(v/1000).toFixed(1)+'k':v}</text>`;
+  }).join('');
+  const step=Math.ceil(n/7);
+  const xlab=data.map((dt,i)=>i%step===0||i===n-1?`<text x="${X(i)}" y="${h-5}" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">${Array.isArray(dt)?dt[0]:dt}</text>`:'').join(''); // data 的元素是 [标签,数值] 二元组，横轴只取标签：直接写 ${dt} 会把整对拼成 "09-24,1888"
+  const dots=pts.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="${i===n-1?3.6:2.2}" fill="${i===n-1?'var(--accent)':'var(--panel)'}" stroke="${o.stroke}" stroke-width="1.6"/>`).join('');
+  const gid='g'+Math.random().toString(36).slice(2,7);
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="overflow:visible">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity=".28"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid}
+    <path d="${area}" fill="url(#${gid})"/>
+    <path d="${d}" fill="none" stroke="${o.stroke}" stroke-width="2" stroke-linecap="round" pathLength="1"/>
+    ${dots}${xlab}
+  </svg>`;
+}
+function sparkline(vals,w=72,h=22,c,stretch){
+  const max=Math.max(...vals)||1,min=Math.min(...vals);
+  const rng=(max-min)||1;
+  const pts=vals.map((v,i)=>[i*(w/(vals.length-1)),h-3-((v-min)/rng)*(h-9)]);
+  const line='M'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L');
+  const stroke=c||'var(--accent)';
+  const gid='sp'+Math.random().toString(36).slice(2,7);
+  const area=stretch?`<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${stroke}" stop-opacity=".2"/><stop offset="100%" stop-color="${stroke}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="${line} L${pts[pts.length-1][0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z" fill="url(#${gid})"/>`:'';
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"${stretch?' preserveAspectRatio="none"':''}>${area}<path d="${line}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"${stretch?' vector-effect="non-scaling-stroke"':''}/></svg>`;
+}
+function donut(parts,size=142,thick=13){
+  const total=parts.reduce((s,p)=>s+p.v,0)||1, r=(size-thick)/2, C=2*Math.PI*r;
+  let off=0;
+  const arcs=parts.map(p=>{
+    const len=(p.v/total)*C;
+    const seg=`<circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${p.c}" stroke-width="${thick}"
+      stroke-dasharray="${len-3} ${C-len+3}" stroke-dashoffset="${-off}" stroke-linecap="round"
+      transform="rotate(-90 ${size/2} ${size/2})" style="transition:stroke-dasharray .9s var(--ease)"/>`;
+    off+=len; return seg;
+  }).join('');
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--panel-3)" stroke-width="${thick}"/>
+    ${arcs}
+    <text x="${size/2}" y="${size/2-3}" text-anchor="middle" fill="var(--tx)" font-size="26" font-weight="700" font-family="var(--f-serif)">${total}</text>
+    <text x="${size/2}" y="${size/2+15}" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)" letter-spacing=".5">渠道总数</text>
+  </svg>`;
+}
+
+/* ═══════════════════════════ 导航 ═══════════════════════════ */
+const NAV=[
+  {sec:'监控'},
+  {id:'overview',label:'总览',icon:'gauge'},
+  {id:'logs',label:'调用日志',icon:'list',cnt:()=>nf(DATA.meta.total)},
+  {sec:'资源'},
+  {id:'channels',label:'渠道管理',icon:'plug',cnt:()=>DATA.meta.channels},
+  {id:'models',label:'聚合模型',icon:'layers',cnt:()=>DATA.meta.models},
+  {sec:'工具'},
+  {id:'playground',label:'Playground',icon:'terminal'},
+  {id:'access',label:'接入信息',icon:'book'}
+];
+let page='overview';
+function renderRail(){
+  $('#railNav').innerHTML=NAV.map(it=>{
+    if(it.sec) return `<div class="rail-sec micro">${it.sec}</div>`;
+    const on=page===it.id;
+    return `<button class="rail-item${on?' on':''}" data-nav="${it.id}">${svg(it.icon,16)}<span>${it.label}</span>${it.cnt?`<span class="cnt">${it.cnt()}</span>`:''}</button>`;
+  }).join('');
+  $$('#railNav [data-nav]').forEach(b=>b.onclick=()=>go(b.dataset.nav));
+}
+function go(p){
+  page=p;
+  $('#crumbCur').textContent=(NAV.find(n=>n.id===p)||{}).label||'';
+  renderRail();
+  const v=$('#viewport');
+  v.innerHTML='';
+  ({overview:vOverview,channels:vChannels,models:vModels,logs:vLogs,playground:vPlayground,access:vAccess}[p]||vOverview)(v);
+  v.firstElementChild?.classList.add('page');
+  // 现在滚动容器是 .viewport 自己，scrollIntoView 不会生效，必须直接归零
+  v.scrollTop=0;
+}
+
+/* ═══════════════════════════ 页面：总览 ═══════════════════════════ */
+function kpiCard(o){
+  /* 迷你曲线跟随总览的时间范围（o.spark 传 ovSeries()），没传就退回按天的 DATA.trend */
+  const vals=(o.spark||DATA.trend).map(t=>t[1]);
+  /* 迷你曲线直接画真实的最近 12 天请求量，不做任何抖动伪造 */
+  const tail=vals.slice(-12);
+  const up=(o.dir||'up')==='down'?'down':'up';
+  return `<div class="card kpi">
+    <div class="kpi-lbl">${svg(o.icon,12)}${o.lbl}</div>
+    <div class="kpi-val">${o.val}${o.unit?`<span class="unit">${o.unit}</span>`:''}</div>
+    <div class="kpi-foot">
+      <!-- 方向已由 +/- 与红涨绿跌双重点明，再放箭头是三重冗余 -->
+      ${o.delta?`<span class="delta ${up}">${o.delta}</span>`:''}
+      <span>${o.note}</span>
+    </div>
+    <div class="kpi-spark">${sparkline(tail.length>1?tail:[0,0],300,46,up==='down'?'var(--ok)':'var(--err)',true)}</div>
+  </div>`;
+}
+
+/* 近 N 天 / 前 N 天汇总，用于 KPI 环比。后端 byDay 只按天聚合，所以口径就是
+   「最近 7 天 vs 之前 7 天」；不足 2N 天时前段为空，环比按 0 处理并在文案里说明。 */
+function winStats(n){
+  const d=DATA.days||[];
+  const cur=d.slice(-n), prev=d.slice(-2*n,-n);
+  const sum=(a,k)=>a.reduce((s,x)=>s+(x[k]||0),0);
+  const req=sum(cur,'requests'), preq=sum(prev,'requests');
+  const err=sum(cur,'errors'), perr=sum(prev,'errors');
+  const tok=sum(cur,'inputTokens')+sum(cur,'outputTokens');
+  const ptok=sum(prev,'inputTokens')+sum(prev,'outputTokens');
+  return {
+    req, preq, tok, ptok, err,
+    okRate:req?((req-err)/req*100):0,
+    prevOkRate:preq?((preq-perr)/preq*100):0,
+    span:cur.length?`${cur[0].day} → ${cur[cur.length-1].day}`:'—',
+  };
+}
+/* 平均延迟取最近 200 条日志里成功请求的均值（后端 latency 是渠道维度，这里是全局口径） */
+function avgLatency(){
+  const ok=DATA.logs.filter(l=>l.ok&&l.ms>0);
+  return ok.length?ok.reduce((a,l)=>a+l.ms,0)/ok.length:0;
+}
+/* 延迟环比：日志是新→旧，前一半当「本期」、后一半当「上期」。样本太少时不给数，
+   宁可不显示也不编一个假百分比。 */
+function avgLatencyDelta(){
+  const ok=DATA.logs.filter(l=>l.ok&&l.ms>0);
+  if(ok.length<40)return null;
+  const half=Math.floor(ok.length/2);
+  const avg=a=>a.reduce((s,l)=>s+l.ms,0)/a.length;
+  const p=avg(ok.slice(half,half*2));
+  return p?((avg(ok.slice(0,half))-p)/p*100):null;
+}
+const dPct=(a,b)=>b?((a-b)/b*100):null;
+const dChip=(v,unit,suffix)=>v==null?'':`${v>=0?'+':''}${v.toFixed(1)}${unit||'%'}${suffix||''}`;
+
+/* 总览时间范围：24 小时走后端 hourly（24 桶），7/30 天走 byDay；KPI 环比窗口跟着天数走 */
+const OV_RANGE={ '24h':{days:1,label:'近 24 小时',tab:'24 小时',hourly:true}, '7d':{days:7,label:'近 7 天',tab:'7 天'}, '30d':{days:30,label:'近 30 天',tab:'30 天'} };
+let ovRange='7d';
+const ovRangeCfg=()=>OV_RANGE[ovRange]||OV_RANGE['7d'];
+function ovSeries(){
+  const r=ovRangeCfg(), H=r.hourly&&RAW.usage&&RAW.usage.hourly;
+  if(Array.isArray(H)&&H.length)return H.map(x=>[String(x.h).padStart(2,'0')+':00',x.requests||0]);
+  return DATA.trend.slice(-r.days);
+}
+
+/* 渠道趋势：把最近 200 条日志按时间分 12 桶，统计该渠道每桶命中次数。
+   日志是新→旧，所以 i=0 落在最右桶。近期没有请求的渠道会是一条贴底直线，这是真实情况。 */
+function chSpark(id){
+  const L=DATA.logs, N=12;
+  if(!L.length)return [0,0];
+  const b=new Array(N).fill(0);
+  for(let i=0;i<L.length;i++){
+    if(L[i].c!==id)continue;
+    b[N-1-Math.min(N-1,Math.floor(i/L.length*N))]++;
+  }
+  return b;
+}
+/* 导出：总计 + 按天 + 按渠道 + 按模型拼一个 CSV，口径与页面一致 */
+function exportUsage(){
+  const t=DATA.meta;
+  const rows=[['类型','键','请求','错误','输入Token','输出Token']];
+  rows.push(['总计','全部',t.total,t.errors,t.inTok,t.outTok]);
+  for(const d of DATA.days)rows.push(['按天',d.day,d.requests||0,d.errors||0,d.inputTokens||0,d.outputTokens||0]);
+  const byCh=new Map(((RAW.usage&&RAW.usage.byChannel)||[]).map(x=>[x.key,x]));
+  for(const c of DATA.channels){const u=byCh.get(c.id)||{};rows.push(['按渠道',c.id,u.requests||0,u.errors||0,u.inputTokens||0,u.outputTokens||0])}
+  for(const m of DATA.models)rows.push(['按模型',m.name,m.req,m.err,'','']);
+  downloadCsv('zzcsapi-usage-'+new Date().toISOString().slice(0,10)+'.csv',rows);
+  toast('✓ 已导出用量 CSV','ok');
+}
+/* 导出最近 200 条调用明细 */
+function exportLogs(){
+  const rows=[['时间','请求ID','模型','渠道','协议','状态','耗时ms','输入Token','输出Token','备注']];
+  for(const l of DATA.logs)rows.push([l.t,l.id,l.m,l.c,l.p,l.ok?'成功':'失败',l.ms,l.i,l.o,l.note]);
+  downloadCsv('zzcsapi-logs-'+new Date().toISOString().slice(0,10)+'.csv',rows);
+  toast('✓ 已导出日志 CSV','ok');
+}
+/* 模型清单：别名 + 来源渠道 + 请求/错误 */
+function exportModels(){
+  const rows=[['模型别名','来源渠道数','来源渠道','请求','错误']];
+  for(const m of DATA.models)rows.push([m.name,m.chans.length,m.chans.join(' '),m.req,m.err]);
+  downloadCsv('zzcsapi-models-'+new Date().toISOString().slice(0,10)+'.csv',rows);
+  toast('✓ 已导出模型清单','ok');
+}
+/* 复制网关真实的 /v1/models 响应，而不是前端自己拼的清单 */
+async function copyModels(){
+  const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
+  try{
+    const r=await fetch(base+'/models',{headers:{'Authorization':'Bearer '+((CFG&&CFG.gatewayKey)||'')}});
+    const j=await r.json();
+    await navigator.clipboard.writeText(JSON.stringify(j,null,2));
+    toast('✓ 已复制 /v1/models（'+((j&&j.data||[]).length)+' 个）','ok');
+  }catch(e){toast('复制失败：'+(e&&e.message||e),'bad')}
+}
+function vOverview(v){
+  /* 首屏是无数据先渲染骨架，donut 可能还是空数组，这里不能直接取 [0] */
+  const ok=(DATA.donut[0]||{}).v||0, total=DATA.meta.channels;
+  const rc=ovRangeCfg(), series=ovSeries();
+  const s=winStats(rc.days);
+  /* 24 小时走小时桶，没有「日期 → 日期」区间可讲，用范围名代替 */
+  const chartSpan=rc.hourly?rc.label:s.span, subRange=rc.hourly?rc.label:`${rc.label} ${s.span}`;
+  const dReq=dPct(s.req,s.preq), dTok=dPct(s.tok,s.ptok);
+  const lat=avgLatency(), dLat=avgLatencyDelta();
+  const peak=series.reduce((a,t)=>Math.max(a,t[1]),0);
+  const avgDay=series.length?Math.round(series.reduce((a,t)=>a+t[1],0)/series.length):0;
+  v.innerHTML=`
+  <div class="page-hd">
+    <div>
+      <h1 class="page-title">总览</h1>
+      <div class="page-sub">网关运行概览 · 每 8 秒自动刷新 · ${subRange}</div>
+    </div>
+    <div class="page-actions">
+      <div class="tabs" id="rangeTabs">
+        ${Object.keys(OV_RANGE).map(r=>`<button class="tab${ovRange===r?' on':''}" data-r="${r}">${OV_RANGE[r].tab}</button>`).join('')}
+      </div>
+      <button class="btn" onclick="exportUsage()">${svg('download',14)}导出</button>
+      <button class="btn primary" onclick="recheckAll(this)">${svg('test',14)}重新探测</button>
+    </div>
+  </div>
+
+  <div class="grid g4 stagger" style="margin-bottom:16px">
+    ${kpiCard({lbl:'累计请求',icon:'gauge',val:nf(s.req),dir:(dReq||0)>=0?'up':'down',delta:dChip(dReq),note:`${rc.label}环比`,spark:series})}
+    ${kpiCard({lbl:'成功率',icon:'check',val:s.okRate.toFixed(1),unit:'%',dir:s.okRate>=s.prevOkRate?'up':'down',delta:dChip(s.prevOkRate?s.okRate-s.prevOkRate:null,'pt'),note:`失败 ${nf(s.err)} 次`,spark:series})}
+    ${kpiCard({lbl:'平均延迟',icon:'clock',val:lat?(lat/1000).toFixed(2):'—',unit:lat?'s':'',dir:(dLat||0)<=0?'down':'up',delta:dChip(dLat),note:'最近 200 条成功请求均值',spark:series})}
+    ${kpiCard({lbl:'Token 消耗',icon:'layers',val:fTok(s.tok),dir:(dTok||0)>=0?'up':'down',delta:dChip(dTok),note:`输出 ${fTok(s.outTok)}`,spark:series})}
+  </div>
+
+  <div class="grid g12" style="margin-bottom:16px">
+    <div class="card c8">
+      <div class="card-hd">
+        <h3>请求趋势</h3><span class="sub">${chartSpan}</span>
+        <div class="r"><span class="chip accent">峰值 ${nf(peak)}</span><span class="chip">日均 ${nf(avgDay)}</span></div>
+      </div>
+      <div class="card-bd" style="padding:18px 20px 10px">${series.length?areaChart(series,760,238):'<div class="empty">暂无用量数据</div>'}</div>
+    </div>
+    <div class="card c4">
+      <div class="card-hd"><h3>渠道健康</h3><span class="sub">${ok}/${total} 正常</span></div>
+      <div class="card-bd" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+        ${donut(DATA.donut)}
+        <div class="legend" style="flex:1;min-width:120px">
+          ${DATA.donut.map(d=>`<div class="legend-row"><span class="dot ${d.k==='正常'?'ok':d.k==='降级'?'degraded':'down'}"></span><span>${d.k}</span><span class="v">${d.v}</span></div>`).join('')}
+          <div class="divider" style="margin:6px 0"></div>
+          <div class="legend-row"><span class="muted">已启用</span><span class="v">${DATA.meta.enabled}</span></div>
+          <div class="legend-row"><span class="muted">已停用</span><span class="v">${total-DATA.meta.enabled}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid g12">
+    <div class="card c7">
+      <div class="card-hd"><h3>渠道流量与健康</h3><span class="sub">按请求量排序</span>
+        <div class="r"><button class="btn ghost sm" onclick="go('channels')">全部渠道 ${svg('arrowUp',12)}</button></div>
+      </div>
+      <div class="card-bd tight tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>渠道</th><th>状态</th><th class="t-r">延迟</th><th class="t-r">请求</th><th>成功率</th><th class="t-r">趋势</th></tr></thead>
+          <tbody>${DATA.channels.slice(0,7).map(c=>{
+            const rate=pct(c.req-c.err,c.req);
+            return `<tr class="clickable" onclick="openChannel('${c.id}')">
+              <td><div class="cell-main"><span class="avatar">${c.name.slice(0,2)}</span>
+                <div style="min-width:0"><div class="cell-name">${c.name}</div><div class="cell-sub">${c.id} · ${protoLabel[c.proto]}</div></div></div></td>
+              <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
+              <td class="t-r mono">${fMs(c.ms)}</td>
+              <td class="t-r mono">${nf(c.req)}</td>
+              <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div></td>
+              <td class="t-r">${sparkline(chSpark(c.id),72,20)}</td>
+            </tr>`}).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card c5">
+      <div class="card-hd"><h3>热门模型</h3><span class="sub">按请求量</span>
+        <div class="r"><button class="btn ghost sm" onclick="go('models')">全部模型 ${svg('arrowUp',12)}</button></div>
+      </div>
+      <div class="card-bd">
+        <div class="bars">${DATA.models.slice(0,8).map(m=>{
+          const max=DATA.models[0].req||1;
+          return `<div class="bar-row" data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)" style="cursor:pointer">
+            <span class="bar-name">${m.name}</span><span class="bar-val">${nf(m.req)}</span>
+            <span class="bar-track"><i style="width:${(m.req/max*100).toFixed(1)}%"></i></span>
+          </div>`}).join('')}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-hd"><h3>近期调用</h3><span class="sub">最近 8 条</span>
+      <div class="r"><button class="btn ghost sm" onclick="go('logs')">查看全部 ${svg('arrowUp',12)}</button></div>
+    </div>
+    <div class="card-bd tight tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>时间</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th></tr></thead>
+        <tbody>${DATA.logs.slice(0,8).map(l=>`<tr class="clickable" onclick="openLog('${l.id}')">
+          <td class="mono" style="font-size:12px">${l.t}</td>
+          <td class="cell-name">${l.m}</td>
+          <td><span class="mono" style="font-size:12px">${l.c}</span></td>
+          <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
+          <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
+          <td class="t-r mono">${fMs(l.ms)}</td>
+          <td class="t-r mono">${nf(l.i)}</td>
+          <td class="t-r mono">${nf(l.o)}</td>
+        </tr>`).join('')||'<tr><td colspan="8"><div class="empty">暂无调用记录</div></td></tr>'}</tbody>
+      </table>
+    </div>
+  </div>`;
+  /* 切换时间范围只重渲染总览；render() 会保留滚动位置与焦点，不会跳顶 */
+  $$('#rangeTabs .tab',v).forEach(t=>t.onclick=()=>{ovRange=t.dataset.r;render()});
+}
+
+/* ═══════════════════════════ 页面：渠道 ═══════════════════════════ */
+let chTab='all', chQ='';
+function vChannels(v){
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">渠道管理</h1>
+      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 ${PROTO_ORDER.length} 种协议</div></div>
+    <div class="page-actions">
+      <div class="menu-wrap">
+        <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')">${svg('zap',14)}导入${svg('chev',12)}</button>
+        <div class="menu" id="impMenu">
+          <div class="hd">Codex</div>
+          <button onclick="openImport('codex-rt')">${svg('zap',14)}Codex RT<span class="d">粘贴</span></button>
+          <button onclick="openImport('codex-json')">${svg('file',14)}Codex JSON<span class="d">文件</span></button>
+          <div class="sep"></div>
+          <div class="hd">Genspark</div>
+          <button onclick="openImport('gs-session')">${svg('cookie',14)}Genspark 会话<span class="d">粘贴</span></button>
+          <button onclick="openImport('gs-json')">${svg('file',14)}Genspark JSON<span class="d">文件</span></button>
+        </div>
+      </div>
+      <button class="btn" onclick="openTestModels()">${svg('test',14)}测试模型</button>
+      <button class="btn primary" onclick="openChannelForm()">${svg('plus',14)}添加渠道</button>
+    </div>
+  </div>
+
+  <div class="row wrap" style="margin-bottom:14px;gap:10px">
+    <div class="tabs" id="chTabs">
+      <button class="tab on" data-t="all">全部 <span class="n">${DATA.channels.length}</span></button>
+      <button class="tab" data-t="on">已启用 <span class="n">${DATA.channels.filter(c=>c.on).length}</span></button>
+      <button class="tab" data-t="off">已停用 <span class="n">${DATA.channels.filter(c=>!c.on).length}</span></button>
+    </div>
+    <div class="search" style="min-width:230px;margin-left:0">
+      ${svg('filter',14)}<input id="chQ" placeholder="按名称 / ID / 协议过滤…" value="${chQ}">
+    </div>
+    <button class="btn ml-auto" onclick="recheckAll(this)">${svg('test',14)}全部重探测</button>
+  </div>
+
+  <div class="card"><div class="card-bd tight tbl-wrap" id="chTable"></div></div>`;
+  $$('#chTabs .tab',v).forEach(t=>t.onclick=()=>{chTab=t.dataset.t;$$('#chTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawChTable()});
+  $('#chQ',v).oninput=e=>{chQ=e.target.value;drawChTable()};
+  drawChTable();
+}
+function drawChTable(){
+  const box=$('#chTable'); if(!box) return;
+  const q=chQ.trim().toLowerCase();
+  let rows=DATA.channels.filter(c=>chTab==='all'||(chTab==='on'?c.on:!c.on));
+  if(q) rows=rows.filter(c=>(c.name+c.id+c.proto).toLowerCase().includes(q));
+  // 「全部」页签：已启用排前面，未启用的往后排；同组内按优先级、请求量降序
+  if(chTab==='all')rows=[...rows].sort((a,b)=>(b.on?1:0)-(a.on?1:0)||(b.pri-a.pri)||(b.req-a.req));
+  if(!rows.length){box.innerHTML='<div class="empty">没有匹配的渠道</div>';return}
+  box.innerHTML=`<table class="tbl">
+    <thead><tr>
+      <th style="width:38px"></th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">延迟</th>
+      <th class="t-r">模型</th><th class="t-r">优先级</th><th class="t-r">请求 / 错误</th><th>成功率</th><th class="t-r">操作</th>
+    </tr></thead>
+    <tbody>${rows.map(c=>{
+      // ponytail: 下面「→ 有效优先级」角标表达式与 openChannel 抽屉处内联重复——为保 code-map 行号锚点刻意不抽 helper，下次动这两处时再抽
+      const rate=c.req?pct(c.req-c.err,c.req):null;
+      return `<tr class="clickable">
+        <td><button class="switch ${c.on?'on':''}" onclick="event.stopPropagation();toggleCh('${c.id}')" title="${c.on?'停用':'启用'}"></button></td>
+        <td><div class="cell-main"><span class="avatar">${c.name.slice(0,2)}</span>
+          <div style="min-width:0"><div class="cell-name">${c.name}</div><div class="cell-sub">${c.id}</div></div></div></td>
+        <td><span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span></td>
+        <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
+        <td class="t-r mono">${fMs(c.ms)}</td>
+        <td class="t-r mono">${c.models}</td>
+        <td class="t-r mono">${c.pri}${c.fail>0&&c.eff!=null&&c.eff!==c.pri?`<span style="margin-left:4px;font-size:10px;color:${c.fail>=.5?'var(--err)':'var(--warn)'}" title="近期失败率 ${Math.round(c.fail*100)}% → 自动降权中，恢复后自动回升">→ ${c.eff}</span>`:''}</td>
+        <td class="t-r mono">${nf(c.req)} <span class="muted">/ ${c.err?`<span style="color:var(--err)">${nf(c.err)}</span>`:0}</span></td>
+        <td>${rate===null?'<span class="muted mono">—</span>':`<div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div>`}</td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'${c.id}'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('${c.id}')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('${c.id}')">详情</button>
+        </div></td>
+      </tr>`}).join('')}
+    </tbody></table>`;
+  $$('#chTable tbody tr',box).forEach((tr,i)=>tr.onclick=()=>openChannel(rows[i].id));
+}
+async function toggleCh(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  try{
+    await api('/admin/api/channel',{method:'POST',body:JSON.stringify({id,enabled:!c.on})});
+    c.on=!c.on;
+    toast(`${c.name} 已${c.on?'启用':'停用'}`,c.on?'ok':'');
+    drawChTable();
+  }catch(e){}
+}
+function openChannel(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  const rate=c.req?pct(c.req-c.err,c.req):0;
+  drawer(`
+    <div class="drawer-hd">
+      <span class="avatar" style="width:34px;height:34px;border-radius:9px;font-size:13px">${c.name.slice(0,2)}</span>
+      <div style="min-width:0">
+        <h3 style="font-size:16px">${c.name}</h3>
+        <div class="cell-sub">${c.id}</div>
+      </div>
+      <div class="ml-auto row" style="gap:8px">
+        <span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span>
+        <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button>
+      </div>
+    </div>
+    <div class="drawer-bd">
+      <div class="row wrap" style="gap:9px;margin-bottom:18px">
+        <span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span>
+        <span class="tag">延迟 ${fMs(c.ms)}</span>
+        <span class="tag">优先级 ${c.pri}${c.fail>0&&c.eff!=null&&c.eff!==c.pri?`<span style="margin-left:4px;font-size:10px;color:${c.fail>=.5?'var(--err)':'var(--warn)'}" title="近期失败率 ${Math.round(c.fail*100)}%（滚动窗口）→ 自动降权中，恢复后自动回升">→ 有效 ${c.eff}（失败率 ${Math.round(c.fail*100)}%）</span>`:''}</span>
+        <span class="tag">${c.on?'已启用':'已停用'}</span>
+      </div>
+
+      <div class="sec-title">接入配置</div>
+      <dl class="kv">
+        <dt>Base URL</dt><dd class="mono">${chBaseUrl(c)}</dd>
+        <dt>密钥</dt><dd class="mono row" style="gap:6px">
+          <span id="chKeyTx" data-plain="0">${maskKey(chKey(c.id))}</span>
+          <button class="icon-btn" id="chKeyBtn" style="width:22px;height:22px" title="明文显示" onclick="toggleDrawerKey('${c.id}',this)">${svg('eye',12)}</button>
+          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyText(chKey('${c.id}'),this)">${svg('copy',12)}</button>
+        </dd>
+        <dt>协议</dt><dd class="mono">${c.proto}</dd>
+        <dt>模型数</dt><dd class="mono">${c.models} 个别名</dd>
+      </dl>
+
+      <div class="sec-title">近 7 天表现</div>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px">
+        <div class="card" style="padding:12px"><div class="micro">请求</div><div class="serif" style="font-size:24px;margin-top:4px">${nf(c.req)}</div></div>
+        <div class="card" style="padding:12px"><div class="micro">成功率</div><div class="serif" style="font-size:24px;margin-top:4px">${rate.toFixed(0)}%</div></div>
+        <div class="card" style="padding:12px"><div class="micro">错误</div><div class="serif" style="font-size:24px;margin-top:4px;color:${c.err?'var(--err)':'inherit'}">${nf(c.err)}</div></div>
+      </div>
+      <div style="margin-top:12px">${areaChart(DATA.trend.slice(-12),520,150,{pad:[12,10,22,32]})}</div>
+
+      <div class="sec-title">模型别名</div>
+      <div class="row wrap" style="gap:7px">
+        ${chAliases(c).map(r=>`<span class="chip">${esc(r.alias)}</span>`).join('')}
+      </div>
+    </div>
+    <div class="drawer-ft">
+      <button class="btn primary" onclick="openTestModels({channelId:'${c.id}'})">${svg('test',14)}测试模型</button>
+      <button class="btn" onclick="reprobe('${c.id}')">${svg('test',14)}重探测</button>
+      <button class="btn" onclick="closeDrawer();openChannelForm('${c.id}')">${svg('edit',14)}编辑</button>
+      <button class="btn ml-auto" onclick="toggleCh('${c.id}');openChannel('${c.id}')">${c.on?'停用':'启用'}</button>
+      <button class="btn danger" onclick="delChannel('${c.id}')">${svg('trash',14)}删除</button>
+    </div>`);
+}
+function toggleDrawerKey(id,btn){
+  const tx=$('#chKeyTx'); if(!tx)return;
+  const plain=tx.dataset.plain==='1';
+  tx.textContent=plain?maskKey(chKey(id)):chKey(id);
+  tx.dataset.plain=plain?'0':'1';
+  btn.innerHTML=svg(plain?'eye':'eyeOff',12);
+  btn.title=plain?'明文显示':'隐藏';
+}
+async function reprobe(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  toast('探测中…');
+  try{
+    const r=await api('/admin/api/recheck',{method:'POST',body:JSON.stringify({id})});
+    const row=(r.results||[])[0]||{};
+    if(row.status)c.status=row.status;
+    if(row.latencyMs!=null)c.ms=row.latencyMs;
+    c.lastError=row.error||null;
+    toast(`✓ 已重探测 ${c.name} · ${stTxt[c.status]||c.status}`,'ok');
+    closeDrawer(); drawChTable();
+  }catch(e){}
+}
+async function delChannel(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  if(!confirm('确定要删除渠道「'+id+'」吗？会写入 config.json，不可撤销。'))return;
+  try{
+    await api('/admin/api/channels',{method:'DELETE',body:JSON.stringify({id})});
+    DATA.channels.splice(DATA.channels.indexOf(c),1);
+    DATA.meta.channels=DATA.channels.length;
+    closeDrawer(); drawChTable(); renderRail();
+    toast('✓ 已删除渠道 '+id,'ok');
+  }catch(e){}
+}
+
+/* ═══════════════════════════ 页面：模型 ═══════════════════════════ */
+/* 本页筛选状态必须存 JS：8 秒轮询会重绘整页 DOM，只靠 input 里的值会被重建冲掉
+   （渠道页 chQ/chTab、日志页 lgQ 等都是这个规矩，模型页此前漏了） */
+let mTab='all', mQ='';
+function vModels(v){
+  const rows=DATA.models;
+  /* 多源冠军 / 单点依赖数都由别名表实时算出，不写死 */
+  const multi=rows.length?[...rows].sort((a,b)=>b.chans.length-a.chans.length)[0]:null;
+  const singleN=rows.filter(m=>m.chans.length===1).length;
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">聚合模型</h1>
+      <div class="page-sub">对外暴露 ${DATA.meta.models} 个模型 · OpenAI / Anthropic / Gemini 三套端点共用同一份别名表</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="exportModels()">${svg('download',14)}导出清单</button>
+      <button class="btn primary" onclick="copyModels()">${svg('copy',14)}复制 /v1/models</button>
+    </div>
+  </div>
+
+  <div class="row wrap" style="margin-bottom:14px;gap:10px">
+    <div class="tabs" id="mTabs">
+      <button class="tab${mTab==='all'?' on':''}" data-p="all">全部 <span class="n">${rows.length}</span></button>
+      <button class="tab${mTab==='openai'?' on':''}" data-p="openai">OpenAI</button>
+      <button class="tab${mTab==='anthropic'?' on':''}" data-p="anthropic">Anthropic</button>
+      <button class="tab${mTab==='gemini'?' on':''}" data-p="gemini">Gemini</button>
+    </div>
+    <div class="search" style="min-width:230px;margin-left:0">${svg('filter',14)}<input id="mQ" placeholder="搜索模型名…" value="${esc(mQ)}"></div>
+  </div>
+
+  <div class="grid g12" style="margin-bottom:16px">
+    <div class="card c4"><div class="card-bd">
+      <div class="micro">最多来源的模型</div>
+      <div class="serif" style="font-size:22px;margin-top:6px">${multi?esc(multi.name):'—'}</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">${multi?`${multi.chans.length} 个渠道同时提供，故障切换余量最充足`:'暂无别名'}</div>
+    </div></div>
+    <div class="card c4"><div class="card-bd">
+      <div class="micro">单点依赖</div>
+      <div class="serif" style="font-size:22px;margin-top:6px">${singleN} 个</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">仅 1 个渠道提供的模型，存在单点风险</div>
+    </div></div>
+    <div class="card c4"><div class="card-bd">
+      <div class="micro">别名近似纠错</div>
+      <div class="serif" style="font-size:22px;margin-top:6px">已开启</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">模型名拼错时返回最接近的可用别名建议</div>
+    </div></div>
+  </div>
+
+  <div class="card"><div class="card-bd tight tbl-wrap" id="mTable"></div></div>`;
+  $('#mQ',v).oninput=e=>{mQ=e.target.value;drawMTable()};
+  $$('#mTabs .tab',v).forEach(t=>t.onclick=()=>{mTab=t.dataset.p;$$('#mTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawMTable()});
+  drawMTable();
+}
+function drawMTable(){
+  const box=$('#mTable'); if(!box)return;
+  const q=mQ.trim().toLowerCase();
+  const p=mTab||'all';
+  let rows=DATA.models.filter(m=>m.name.toLowerCase().includes(q));
+  if(p!=='all') rows=rows.filter(m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&(c.proto===p||(p==='openai'&&c.proto!=='notion'&&c.proto!=='workbuddy'&&c.proto!=='genspark'&&c.proto!=='notion-agent'))}));
+  // 仍有启用渠道的模型排前面，仅剩停用渠道的往后排；同组内按错误数升序、请求量降序
+  const live=m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&c.on});
+  rows=[...rows].sort((a,b)=>(live(b)?1:0)-(live(a)?1:0)||(a.err-b.err)||(b.req-a.req));
+  if(!rows.length){box.innerHTML='<div class="empty">没有匹配的模型</div>';return}
+  box.innerHTML=`<table class="tbl">
+    <thead><tr><th>模型别名</th><th class="t-r">来源渠道</th><th>提供方</th><th class="t-r">请求</th><th>错误</th><th>状态</th></tr></thead>
+    <tbody>${rows.map(m=>{
+      const single=m.chans.length===1;
+      const isLive=live(m);
+      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)">
+        <td><div class="cell-main"><span class="avatar">${svg('layers',13)}</span>
+          <div style="min-width:0"><div class="cell-name mono" style="font-size:12.5px">${m.name}</div>
+          <div class="cell-sub">${single?'单点依赖':'多源冗余'}</div></div></div></td>
+        <td class="t-r"><span class="mono">${m.chans.length}</span></td>
+        <td><div class="row wrap" style="gap:5px">${m.chans.slice(0,4).map(cid=>{
+          const c=DATA.channels.find(x=>x.id===cid);
+          return `<span class="chip ${c?c.proto:''}">${cid}</span>`}).join('')}${m.chans.length>4?`<span class="tag">+${m.chans.length-4}</span>`:''}</div></td>
+        <td class="t-r mono">${nf(m.req)}</td>
+        <td class="mono" style="color:${m.err?'var(--err)':'var(--tx-3)'}">${m.err}</td>
+        <td>${!isLive?'<span class="pill unknown"><span class="dot unknown"></span>来源已停用</span>':m.err===0?'<span class="pill ok"><span class="dot ok"></span>稳定</span>':'<span class="pill degraded"><span class="dot degraded"></span>有失败</span>'}</td>
+      </tr>`}).join('')}</tbody></table>`;
+  $$('#mTable tbody tr',box).forEach((tr,i)=>tr.onclick=()=>openModel(rows[i].name));
+}
+function openModel(name){
+  const m=DATA.models.find(x=>x.name===name); if(!m)return;
+  drawer(`
+    <div class="drawer-hd">
+      <span class="avatar" style="width:34px;height:34px;border-radius:9px">${svg('layers',15)}</span>
+      <div style="min-width:0"><h3 style="font-size:16px" class="mono">${m.name}</h3>
+      <div class="cell-sub">${m.chans.length} 个来源渠道</div></div>
+      <div class="ml-auto"><button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
+    </div>
+    <div class="drawer-bd">
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
+        <div class="card" style="padding:12px"><div class="micro">请求</div><div class="serif" style="font-size:24px;margin-top:4px">${nf(m.req)}</div></div>
+        <div class="card" style="padding:12px"><div class="micro">错误</div><div class="serif" style="font-size:24px;margin-top:4px">${m.err}</div></div>
+        <div class="card" style="padding:12px"><div class="micro">来源</div><div class="serif" style="font-size:24px;margin-top:4px">${m.chans.length}</div></div>
+      </div>
+      <div class="sec-title">来源渠道（按 config 渠道序，非实时调度序）</div>
+      <div class="card card-bd" style="padding:0">
+        <table class="tbl"><thead><tr><th>#</th><th>渠道</th><th>协议</th><th class="t-r">延迟</th><th class="t-r">优先级</th><th>状态</th></tr></thead>
+        <tbody>${m.chans.map((cid,i)=>{
+          const c=DATA.channels.find(x=>x.id===cid)||{name:cid,proto:'openai',ms:-1,pri:0,status:'unknown'};
+          return `<tr><td class="mono">${i+1}</td><td class="cell-name">${c.name}</td>
+            <td><span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span></td>
+            <td class="t-r mono">${fMs(c.ms)}</td><td class="t-r mono">${c.pri}</td>
+            <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td></tr>`}).join('')}</tbody></table>
+      </div>
+      <div class="sec-title">调用示例</div>
+      <div class="code"><div class="code-hd"><span class="fname">curl</span>
+        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d "{\\"model\\":\\"${m.name}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"'>${svg('copy',13)}</button>
+      </div><pre>curl http://127.0.0.1:8787/v1/chat/completions \
+  -H <span class="s">"Authorization: Bearer $GATEWAY_KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{"model":"<span class="k">${m.name}</span>","messages":[{"role":"user","content":"hi"}]}'</span></pre></div>
+    </div>`);
+}
+
+/* ═══════════════════════════ 页面：日志 ═══════════════════════════ */
+let lgRange='7d', lgCh='', lgOk='all', lgQ='';
+function vLogs(v){
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">调用日志</h1>
+      <div class="page-sub">保留最近 200 条明细 · 累计 ${nf(DATA.meta.total)} 次请求 / ${nf(DATA.meta.errors)} 次失败</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="clearUsage()">清空</button>
+      <button class="btn primary" onclick="exportLogs()">${svg('download',14)}导出 CSV</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px"><div class="card-bd">
+    <div class="row wrap" style="gap:12px">
+      <div class="field" style="min-width:150px"><label>时间范围</label>
+        <select class="select" id="lgRange">
+          <option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option>
+          <option value="30d">最近 30 天</option><option value="all">全部</option></select></div>
+      <div class="field" style="min-width:150px"><label>渠道</label>
+        <select class="select" id="lgCh"><option value="">全部渠道</option>${DATA.channels.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></div>
+      <div class="field" style="min-width:150px"><label>状态</label>
+        <select class="select" id="lgOk"><option value="all">全部</option><option value="ok">仅成功</option><option value="bad">仅失败</option></select></div>
+      <div class="field" style="flex:1;min-width:200px"><label>搜索</label>
+        <input class="input" id="lgQ" placeholder="模型名 / 渠道 ID / 请求 ID…"></div>
+      <button class="btn" style="align-self:flex-end" onclick="drawLogTable()">${svg('filter',14)}应用筛选</button>
+    </div>
+  </div></div>
+
+  <div class="card"><div class="card-bd tight tbl-wrap" id="lgTable"></div></div>`;
+  const R=$('#lgRange',v), C=$('#lgCh',v), K=$('#lgOk',v), Q=$('#lgQ',v);
+  R.value=lgRange; C.value=lgCh; K.value=lgOk; Q.value=lgQ;
+  R.onchange=()=>{lgRange=R.value;drawLogTable()};
+  C.onchange=()=>{lgCh=C.value;drawLogTable()};
+  K.onchange=()=>{lgOk=K.value;drawLogTable()};
+  Q.oninput=()=>{lgQ=Q.value;drawLogTable()};
+  drawLogTable();
+}
+function logRows(){
+  const span={'24h':864e5,'7d':7*864e5,'30d':30*864e5}[lgRange]||0;
+  const now=Date.now(), q=lgQ.trim().toLowerCase();
+  return DATA.logs.filter(l=>{
+    if(span&&!(l.ts>=now-span))return false;
+    if(lgCh&&l.c!==lgCh)return false;
+    if(lgOk==='ok'&&!l.ok)return false;
+    if(lgOk==='bad'&&l.ok)return false;
+    if(q&&!((l.m+' '+l.c+' '+l.id).toLowerCase().includes(q)))return false;
+    return true;
+  });
+}
+function drawLogTable(){
+  const box=$('#lgTable'); if(!box)return;
+  const rows=logRows();
+  if(!rows.length){box.innerHTML='<div class="empty">没有匹配的调用记录</div>';return}
+  box.innerHTML=`<table class="tbl">
+    <thead><tr><th>时间</th><th>请求 ID</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
+    <tbody>${rows.map(l=>`<tr class="clickable">
+      <td class="mono" style="font-size:12px;white-space:nowrap">${l.t}</td>
+      <td class="mono muted" style="font-size:11.5px">${l.id}</td>
+      <td class="cell-name">${l.m}</td>
+      <td class="mono" style="font-size:12px">${l.c}</td>
+      <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
+      <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
+      <td class="t-r mono">${fMs(l.ms)}</td>
+      <td class="t-r mono">${nf(l.i)}</td>
+      <td class="t-r mono">${nf(l.o)}</td>
+      <td class="t-r muted">${svg('eye',14)}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+  $$('#lgTable tbody tr',box).forEach((tr,i)=>tr.onclick=()=>openLog(rows[i].id));
+}
+async function clearUsage(){
+  if(!confirm('确定清空全部用量统计与最近调用记录吗？会写入 usage.json，不可撤销。'))return;
+  try{await api('/admin/api/usage/clear',{method:'POST'});toast('✓ 已清空用量统计','ok');await loadAll()}catch(e){}
+}
+function openLog(id){
+  const l=DATA.logs.find(x=>x.id===id); if(!l)return toast('该记录已被轮询刷新移除，请重新点击当前列表');
+  drawer(`
+    <div class="drawer-hd">
+      <div style="min-width:0"><h3 style="font-size:15px" class="mono">${l.id}</h3>
+      <div class="cell-sub">${l.t}</div></div>
+      <div class="ml-auto row" style="gap:8px">
+        <span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span>
+        <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
+    </div>
+    <div class="drawer-bd">
+      <dl class="kv">
+        <dt>模型</dt><dd class="mono">${l.m}</dd>
+        <dt>渠道</dt><dd class="mono">${l.c}</dd>
+        <dt>协议</dt><dd><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></dd>
+        <dt>耗时</dt><dd class="mono">${fMs(l.ms)}</dd>
+        <dt>Token</dt><dd class="mono">输入 ${nf(l.i)} · 输出 ${nf(l.o)}</dd>
+      </dl>
+      ${l.ok?'':'<div class="sec-title">失败原因</div><div class="card" style="padding:12px;border-color:color-mix(in srgb,var(--err) 30%,transparent)"><span class="mono" style="font-size:12px;color:var(--err)">'+esc(l.note||'上游返回失败，网关已自动切换到下一候选渠道')+'</span></div>'}
+      <div class="sec-title">请求体</div>
+      <div class="code"><div class="code-hd"><span class="fname">request.json</span>
+        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='{"model":"${l.m}","messages":[{"role":"user","content":"…"}],"stream":true}'>${svg('copy',13)}</button></div>
+        <pre>{ <span class="k">"model"</span>: <span class="s">"${l.m}"</span>,
+  <span class="k">"messages"</span>: [{ <span class="k">"role"</span>: <span class="s">"user"</span>, <span class="k">"content"</span>: <span class="s">"…"</span> }],
+  <span class="k">"stream"</span>: <span class="s">true</span> }</pre></div>
+      <div class="sec-title">响应摘要</div>
+      <div class="code"><div class="code-hd"><span class="fname">response.sse</span></div>
+        <pre><span class="c">// 用量记录只保留聚合字段，不落 SSE 原文；耗时 ${fMs(l.ms)}，输入 ${nf(l.i)} / 输出 ${nf(l.o)} tok</span>
+data: {<span class="k">"usage"</span>:{<span class="k">"prompt_tokens"</span>:${l.i},<span class="k">"completion_tokens"</span>:${l.o}}}
+data: [DONE]</pre></div>
+    </div>
+    <div class="drawer-ft">
+      <button class="btn primary" data-t="${esc(l.m)}" onclick="copyCurl(this.dataset.t,this)">${svg('copy',14)}复制 cURL</button>
+      <button class="btn" onclick="copyText('${l.id}',this)">复制请求 ID</button>
+    </div>`);
+}
+/* 复制一条可直接跑的 cURL；$GATEWAY_KEY 保持占位，避免把真实密钥写进剪贴板 */
+function copyCurl(model,btn){
+  const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
+  const body=JSON.stringify({model,messages:[{role:'user',content:'hi'}]});
+  copyText('curl '+base+'/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d \''+body+'\'',btn);
+}
+
+/* ═══════════════════════════ 页面：Playground ═══════════════════════════ */
+/* Playground 真的把请求打到网关 /v1/chat/completions：流式、温度、max_tokens、system 全部生效；
+   命中渠道取自响应头 X-ZZCSAPI-Channel（网关在每条成功响应上都带），候选渠道取自别名表，
+   所以「本次路由」卡里的数字都是这次调用的真实结果，不是演示值。 */
+let PG=[], pgRoute=null, pgBusy=false;
+/* 输入区同样是「轮询重绘」的受害者：草稿与参数都存 JS，重绘后回填
+   （否则 8 秒一到，正在敲的消息和 System Prompt 就被重建的空 textarea 冲掉） */
+let pgDraft='', pgSysText='', pgModelSel='', pgTempV=0.7, pgMaxV=2048, pgStreamOn=true;
+function vPlayground(v){
+  const def=(DATA.models[0]||{}).name||'';
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">Playground</h1>
+      <div class="page-sub">直接调试网关路由 · 请求走 /v1/chat/completions，与客户端调用完全一致</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="pgClear()">清空会话</button>
+      <button class="btn primary" onclick="pgCopyCurl()">${svg('copy',14)}复制 cURL</button>
+    </div>
+  </div>
+
+  <div class="pg">
+    <div class="card chat">
+      <div class="card-hd">
+        <span class="dot ok"></span>
+        <h3>会话</h3>
+        <span class="sub">自动选择渠道</span>
+        <div class="r"><span class="chip accent" id="pgChip">${esc(pgModelSel||def)}</span><span class="tag" id="pgStreamTag">${pgStreamOn?'流式':'非流式'}</span></div>
+      </div>
+      <div class="chat-body" id="pgBody"></div>
+      <div class="composer">
+        <textarea id="pgInput" rows="1" placeholder="输入消息，Enter 发送 / Shift+Enter 换行…">${esc(pgDraft)}</textarea>
+        <div class="composer-row">
+          <div class="row" style="gap:7px">
+            <span class="tag" id="pgTagStream">stream=${pgStreamOn}</span><span class="tag" id="pgTagTemp">temp ${pgTempV}</span><span class="tag" id="pgTagMax">max_tokens ${pgMaxV}</span>
+          </div>
+          <button class="send ml-auto" id="pgSend" title="发送">${svg('send',16)}</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="card">
+        <div class="card-hd"><h3>参数</h3></div>
+        <div class="card-bd" style="display:flex;flex-direction:column;gap:15px">
+          <div class="field"><label>模型</label>
+            <select class="select" id="pgModel">${DATA.models.map(m=>`<option${m.name===(pgModelSel||def)?' selected':''}>${esc(m.name)}</option>`).join('')||'<option value="">（无可用模型）</option>'}</select></div>
+          <div>
+            <div class="param" style="margin-bottom:8px"><span class="k">Temperature</span><span class="v" id="tVal">${pgTempV}</span></div>
+            <input class="range" id="pgTemp" type="range" min="0" max="2" step="0.1" value="${pgTempV}">
+          </div>
+          <div>
+            <div class="param" style="margin-bottom:8px"><span class="k">Max tokens</span><span class="v" id="mVal">${pgMaxV}</span></div>
+            <input class="range" id="pgMax" type="range" min="64" max="8192" step="64" value="${pgMaxV}">
+          </div>
+          <div class="param"><span class="k">流式输出</span><button class="switch${pgStreamOn?' on':''}" id="pgStream"></button></div>
+          <div class="param"><span class="k">工具调用仿真</span><span class="tag">服务端自动</span></div>
+          <div class="field"><label>System Prompt</label>
+            <textarea class="input" id="pgSys" rows="3" placeholder="可选">${esc(pgSysText)}</textarea></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>本次路由</h3><span class="sub">取自响应头 X-ZZCSAPI-Channel</span></div>
+        <div class="card-bd" style="display:flex;flex-direction:column;gap:11px" id="pgRoute"></div>
+      </div>
+    </div>
+  </div>`;
+  const M=$('#pgModel',v), T=$('#pgTemp',v), X=$('#pgMax',v), S=$('#pgStream',v);
+  M.onchange=()=>{pgModelSel=M.value;$('#pgChip').textContent=M.value};
+  T.oninput=()=>{pgTempV=T.value;$('#tVal').textContent=T.value;$('#pgTagTemp').textContent='temp '+T.value};
+  X.oninput=()=>{pgMaxV=X.value;$('#mVal').textContent=X.value;$('#pgTagMax').textContent='max_tokens '+X.value};
+  S.onclick=()=>{S.classList.toggle('on');pgStreamOn=S.classList.contains('on');$('#pgStreamTag').textContent=pgStreamOn?'流式':'非流式';$('#pgTagStream').textContent='stream='+pgStreamOn};
+  drawPG(); drawRoute();
+  $('#pgSend',v).onclick=pgSend;
+  $('#pgInput',v).oninput=e=>{pgDraft=e.target.value};
+  $('#pgSys',v).oninput=e=>{pgSysText=e.target.value};
+  $('#pgInput',v).onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();pgSend()}};
+}
+function drawPG(){
+  const b=$('#pgBody'); if(!b)return;
+  if(!PG.length){b.innerHTML='<div class="empty" style="padding:26px 0">还没有消息 · 在下方输入并回车，请求会真的打到网关</div>';return}
+  b.innerHTML=PG.map(m=>{
+    if(m.role==='user') return `<div class="msg user"><div class="who">YOU</div>
+      <div class="bubble"><div class="meta"><span class="role">你</span></div><div class="body">${esc(m.text)}</div></div></div>`;
+    return `<div class="msg ai"><div class="who">AI</div>
+      <div class="bubble"><div class="meta"><span class="role">助手</span>${m.model?`<span class="chip accent" style="font-size:9.5px">${esc(m.model)}</span>`:''}</div>
+      <div class="body"${m.error?' style="color:var(--err)"':''}>${esc(m.text)}</div>
+      </div>
+      ${m.usage?`<div class="usage"><span>${esc(m.usage)}</span><span>channel: ${esc(m.channel||'—')}</span></div>`:''}</div></div>`;
+  }).join('');
+  b.scrollTop=b.scrollHeight;
+}
+function drawRoute(){
+  const box=$('#pgRoute'); if(!box)return;
+  const r=pgRoute;
+  if(!r){box.innerHTML='<div class="empty" style="padding:14px 0">发送一条消息后显示真实路由结果</div>';return}
+  box.innerHTML=`
+    <div class="legend-row"><span class="muted">来源渠道</span><span class="v mono">${r.cands.length}</span></div>
+    <div class="legend-row"><span class="muted">实际命中</span><span class="v mono">${esc(r.hit||'—')}</span></div>
+    <div class="legend-row"><span class="muted">首块延迟</span><span class="v mono">${r.ttfb?Math.round(r.ttfb)+' ms':'—'}</span></div>
+    <div class="legend-row"><span class="muted">总耗时</span><span class="v mono">${(r.total/1000).toFixed(2)} s</span></div>
+    <div class="divider" style="margin:4px 0"></div>
+    <div class="row wrap" style="gap:6px">${r.cands.length?r.cands.map((c,i)=>`<span class="chip ${c===r.hit?'accent':''}">${i+1}. ${esc(c)}</span>`).join(''):'<span class="muted">该模型暂无来源渠道</span>'}</div>`;
+}
+function fmtUsage(u,ms){
+  return `输入 ${nf(u.prompt_tokens||0)} · 输出 ${nf(u.completion_tokens||0)} · ${(ms/1000).toFixed(2)}s`;
+}
+function pgClear(){PG=[];pgRoute=null;drawPG();drawRoute();toast('已清空会话')}
+function pgCopyCurl(){
+  const model=$('#pgModel')?$('#pgModel').value:'';
+  const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
+  const body=JSON.stringify({model,messages:[{role:'user',content:'hi'}],stream:true});
+  copyText('curl '+base+'/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d \''+body+'\'');
+}
+async function pgSend(){
+  if(pgBusy)return;
+  const t=$('#pgInput'), text=(t.value||'').trim(); if(!text)return;
+  const model=$('#pgModel').value;
+  if(!model)return toast('没有可用模型','bad');
+  const sys=$('#pgSys').value.trim();
+  const temp=Number($('#pgTemp').value), maxTok=Number($('#pgMax').value);
+  const stream=$('#pgStream').classList.contains('on');
+  PG.push({role:'user',text}); t.value=''; pgDraft=''; drawPG();
+
+  const b=$('#pgBody');
+  const wait=document.createElement('div');
+  wait.className='msg ai';
+  wait.innerHTML=`<div class="who">AI</div><div class="bubble"><div class="meta"><span class="role">助手</span><span class="chip accent" style="font-size:9.5px">${esc(model)}</span></div>
+    <div class="body" style="display:flex;gap:5px;align-items:center">
+      <span class="dot ok" style="animation:fade .8s infinite alternate"></span><span class="muted" style="font-size:12.5px">正在路由…</span></div></div>`;
+  b.appendChild(wait); b.scrollTop=b.scrollHeight;
+
+  const msgs=[];
+  if(sys)msgs.push({role:'system',content:sys});
+  for(const m of PG)msgs.push({role:m.role==='user'?'user':'assistant',content:m.text});
+  const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
+  const key=(CFG&&CFG.gatewayKey)||'';
+  const t0=performance.now();
+  let ttfb=0, answer='', usage='', channel='', err='';
+  pgBusy=true;
+  try{
+    const r=await fetch(base+'/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model,messages:msgs,temperature:temp,max_tokens:maxTok,stream}),
+    });
+    channel=r.headers.get('X-ZZCSAPI-Channel')||'';
+    if(!r.ok){
+      const j=await r.json().catch(()=>null);
+      err=(j&&((j.error&&(j.error.message||j.error))||j.message))||('HTTP '+r.status);
+    }else if(stream){
+      const rd=r.body.getReader(), dec=new TextDecoder();
+      let buf='', first=true;
+      for(;;){
+        const {done,value}=await rd.read(); if(done)break;
+        buf+=dec.decode(value,{stream:true});
+        const lines=buf.split('\n'); buf=lines.pop();
+        for(const line of lines){
+          const s=line.trim(); if(!s.startsWith('data:'))continue;
+          const d=s.slice(5).trim(); if(!d||d==='[DONE]')continue;
+          let j; try{j=JSON.parse(d)}catch(e){continue}
+          const dl=(j.choices&&j.choices[0]&&j.choices[0].delta)||{};
+          if(dl.content){if(first){ttfb=performance.now()-t0;first=false}answer+=dl.content}
+          if(j.usage)usage=fmtUsage(j.usage,performance.now()-t0);
+        }
+      }
+      if(first)ttfb=performance.now()-t0;
+    }else{
+      const j=await r.json();
+      ttfb=performance.now()-t0;
+      const ch=(j.choices&&j.choices[0])||{};
+      answer=(ch.message&&ch.message.content)||'';
+      if(j.usage)usage=fmtUsage(j.usage,ttfb);
+    }
+  }catch(e){ err=String(e&&e.message||e); }
+  pgBusy=false;
+
+  const total=performance.now()-t0;
+  if(err) PG.push({role:'ai',text:'请求失败：'+err,error:true,model,channel});
+  else PG.push({role:'ai',text:answer||'（上游返回空内容）',model,channel,
+    usage:usage||('首块 '+(ttfb/1000).toFixed(2)+'s · 总 '+(total/1000).toFixed(2)+'s')});
+  drawPG();
+  const mm=DATA.models.find(x=>x.name===model);
+  pgRoute={cands:mm?mm.chans.slice():[],hit:channel,ttfb,total};
+  drawRoute();
+  /* 这次调用已写进用量，刷新一次让总览 / 日志同步 */
+  loadAll().catch(()=>{});
+}
+
+/* ═══════════════════════════ 页面：接入 ═══════════════════════════ */
+const SNIP={
+  curl:`<span class="c"># OpenAI 协议</span>
+curl http://127.0.0.1:8787/v1/chat/completions \\
+  -H <span class="s">"Authorization: Bearer $GATEWAY_KEY"</span> \\
+  -H <span class="s">"Content-Type: application/json"</span> \\
+  -d <span class="s">'{"model":"gpt-6-astra","messages":[{"role":"user","content":"hi"}]}'</span>
+
+<span class="c"># Anthropic 协议</span>
+curl http://127.0.0.1:8787/anthropic/v1/messages \\
+  -H <span class="s">"x-api-key: $GATEWAY_KEY"</span> \\
+  -H <span class="s">"anthropic-version: 2023-06-01"</span> \\
+  -d <span class="s">'{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'</span>`,
+  python:`<span class="k">from</span> openai <span class="k">import</span> OpenAI
+
+client = OpenAI(
+    base_url=<span class="s">"http://127.0.0.1:8787/v1"</span>,
+    api_key=<span class="s">"$GATEWAY_KEY"</span>,
+)
+resp = client.chat.completions.create(
+    model=<span class="s">"gpt-6-astra"</span>,
+    messages=[{<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"hi"</span>}],
+    stream=<span class="k">True</span>,
+)
+<span class="k">for</span> chunk <span class="k">in</span> resp:
+    <span class="k">print</span>(chunk.choices[0].delta.content <span class="k">or</span> <span class="s">""</span>, end=<span class="s">""</span>)`,
+  node:`<span class="k">import</span> OpenAI <span class="k">from</span> <span class="s">'openai'</span>;
+
+<span class="k">const</span> client = <span class="k">new</span> OpenAI({
+  baseURL: <span class="s">'http://127.0.0.1:8787/v1'</span>,
+  apiKey: process.env.GATEWAY_KEY,
+});
+
+<span class="k">const</span> stream = <span class="k">await</span> client.chat.completions.create({
+  model: <span class="s">'gpt-6-astra'</span>,
+  messages: [{ role: <span class="s">'user'</span>, content: <span class="s">'hi'</span> }],
+  stream: <span class="k">true</span>,
+});
+<span class="k">for await</span> (<span class="k">const</span> chunk <span class="k">of</span> stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? <span class="s">''</span>);`
+};
+function vAccess(v){
+  /* 全部取自 /admin/api/config，不写死端口与密钥：CFG.urls 由服务端按实际 PORT 拼好 */
+  const u=(CFG&&CFG.urls)||{};
+  const base=(u.openai||(location.origin+'/v1')).replace(/\/v1$/,'');
+  const gwKey=(CFG&&CFG.gatewayKey)||'';
+  const m1=(DATA.models[0]||{}).name||'自定义别名';
+  const m2=((DATA.models.find(m=>/claude/i.test(m.name))||{}).name)||m1;
+  const eps=[
+    {t:'OpenAI 协议',p:'openai',u:u.openai||base+'/v1',note:'/v1/chat/completions · /v1/models · /v1/embeddings'},
+    {t:'Anthropic 协议',p:'anthropic',u:u.anthropic||base+'/anthropic',note:'/anthropic/v1/messages · 支持 stream'},
+    {t:'Gemini 协议',p:'gemini',u:u.gemini||base+'/gemini/v1beta',note:'/gemini/v1beta/models/{m}:generateContent'}
+  ];
+  const allText=[...eps.map(e=>`${e.t}\t${e.u}`),`GATEWAY_KEY\t${gwKey||'（未设置）'}`].join('\n');
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">接入信息</h1>
+      <div class="page-sub">网关地址与密钥 · 三套协议端点共用同一个 GATEWAY_KEY</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="showKeyHelp()">${svg('key',14)}轮换密钥</button>
+      <button class="btn primary" data-t="${esc(allText)}" onclick="copyText(this.dataset.t,this)">${svg('copy',14)}复制全部</button>
+    </div>
+  </div>
+
+  <div class="grid g3 stagger" style="margin-bottom:16px">
+    ${eps.map(x=>`<div class="card"><div class="card-bd ep">
+      <div class="row"><span class="chip ${x.p}">${x.t}</span><span class="dot ok ml-auto"></span></div>
+      <div class="ep-url"><span style="flex:1;min-width:0">${x.u}</span>
+        <button class="btn ghost sm" data-t="${esc(x.u)}" onclick="copyText(this.dataset.t,this)">${svg('copy',12)}复制</button></div>
+      <div class="muted" style="font-size:11.5px">${x.note}</div>
+      <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">${esc(maskKey(gwKey))}</span>
+        <button class="btn ghost sm ml-auto" data-t="${esc(gwKey)}" onclick="copyText(this.dataset.t,this)">${svg('copy',13)}复制</button></div>
+    </div></div>`).join('')}
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-hd"><h3>调用示例</h3>
+      <div class="r"><div class="tabs" id="snipTabs">
+        <button class="tab on" data-s="curl">cURL</button><button class="tab" data-s="python">Python</button><button class="tab" data-s="node">Node</button>
+      </div></div>
+    </div>
+    <div class="card-bd">
+      <div class="code"><div class="code-hd"><span class="fname" id="snipName">example.sh</span>
+        <button class="btn ghost sm copy" id="snipCopy">${svg('copy',13)}复制</button></div>
+        <pre id="snipBody">${SNIP.curl}</pre></div>
+    </div>
+  </div>
+
+  <div class="grid g12">
+    <div class="card c7">
+      <div class="card-hd"><h3>客户端配置</h3><span class="sub">DSH / Cursor / Cline</span></div>
+      <div class="card-bd tight tbl-wrap">
+        <table class="tbl"><thead><tr><th>客户端</th><th>Base URL</th><th>模型名</th></tr></thead><tbody>
+          ${[['DSH（OpenAI 兼容）',u.openai||base+'/v1',m1],['DSH（Anthropic 兼容）',u.anthropic||base+'/anthropic',m2],['Cursor',u.openai||base+'/v1','自定义别名'],['Cline',u.openai||base+'/v1','自定义别名']]
+            .map(r=>`<tr><td class="cell-name">${r[0]}</td><td class="mono" style="font-size:12px"><span style="display:inline-flex;align-items:center;gap:7px">${r[1]}<button class="btn ghost sm" data-t="${esc(r[1])}" onclick="copyText(this.dataset.t,this)" title="复制地址">${svg('copy',12)}</button></span></td><td class="mono" style="font-size:12px">${esc(r[2])}</td></tr>`).join('')}
+        </tbody></table>
+      </div>
+    </div>
+    <div class="card c5">
+      <div class="card-hd"><h3>管理端点</h3><span class="sub">需要 ADMIN_KEY</span></div>
+      <div class="card-bd tight tbl-wrap">
+        <table class="tbl"><thead><tr><th>路径</th><th>方法</th><th>说明</th></tr></thead><tbody>
+          ${[['/console','GET','Web 控制台'],['/healthz','GET','存活探针（免鉴权）'],['/admin/api/status','GET','渠道状态'],['/admin/api/usage','GET','用量统计'],['/admin/api/recheck','POST','触发重探测'],['/admin/api/channel','POST','改优先级 / 启停']].map(r=>`<tr><td class="mono" style="font-size:12px">${r[0]}</td><td><span class="tag">${r[1]}</span></td><td class="muted" style="font-size:12px">${r[2]}</td></tr>`).join('')}
+        </tbody></table>
+      </div>
+    </div>
+  </div>
+
+  ${(()=>{
+    /* 只有密钥还是"公开可猜的默认串"时才报警；首启随机生成的密钥不会命中，不吓唬人 */
+    const insecure=/change-me/i.test(gwKey)||/change-me/i.test((CFG&&CFG.adminKey)||'');
+    return `<div class="card" style="margin-top:16px${insecure?';border-color:color-mix(in srgb,var(--warn) 34%,transparent)':''}">
+    <div class="card-bd row" style="gap:12px;align-items:flex-start">
+      <span style="color:var(--${insecure?'warn':'ok'})">${svg(insecure?'warn':'check',17)}</span>
+      <div>
+        <div style="font-weight:600;font-size:13.5px">${insecure?'安全提示':'密钥状态'}</div>
+        <div class="muted" style="font-size:12.5px;margin-top:4px">${insecure
+          ?'ADMIN_KEY / GATEWAY_KEY 仍是公开可猜的默认串，建议轮换成随机值：改 .env 的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY（推荐），或删掉 config.json 里的 adminKey / gatewayKey 后重启（会自动重新生成）。主机端口是否收敛到 127.0.0.1 见 docker-compose.yml。'
+          :'ADMIN_KEY 与 GATEWAY_KEY 均非仓库默认值（首启自动生成或你自定义的设置）。'}</div>
+      </div>
+      <button class="btn ml-auto" onclick="showKeyHelp()">${insecure?'查看轮换步骤':'查看'}</button>
+    </div>
+  </div>`;
+  })()}`;
+  $$('#snipTabs .tab',v).forEach(t=>t.onclick=()=>{
+    $$('#snipTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');
+    const s=t.dataset.s;
+    $('#snipBody').innerHTML=SNIP[s];
+    $('#snipName').textContent=s==='curl'?'example.sh':s==='python'?'example.py':'example.mjs';
+    $('#snipCopy').onclick=function(){copyText($('#snipBody').textContent,this)};
+  });
+  $('#snipCopy').onclick=function(){copyText($('#snipBody').textContent,this)};
+}
+/* 密钥只能由服务端环境变量决定，控制台不写配置，所以这里给的是真实改法而不是假按钮。
+   弹窗刻意做成「只读步骤清单」：每条命令单独一块、各自可复制，避免让人以为能在这里直接编辑保存。 */
+function showKeyHelp(){
+  const port=(CFG&&CFG.port)||location.port||8787;
+  const steps=[
+    {t:'在仓库根目录的 .env 写入新密钥（docker-compose 读的是 ZZCSAPI_ 前缀）',
+     c:'ZZCSAPI_ADMIN_KEY=<新的管理密钥>\nZZCSAPI_GATEWAY_KEY=<新的网关密钥>'},
+    {t:'重建并重启容器，新密钥才生效',c:'docker compose up -d --force-recreate'},
+    {t:'用新 ADMIN_KEY 重新打开控制台（?key= 一次性输入，收进 localStorage 后从地址栏抹掉，之后裸开 /console 即可）',
+     c:`http://127.0.0.1:${port}/console?key=<新的管理密钥>`},
+  ];
+  modal(`
+    <div class="m-hd"><span class="m-ico">${svg('key',14)}</span><h2>轮换密钥</h2>
+      <span class="chip ml-auto" style="margin-right:8px">只读</span>
+      <button class="icon-btn" onclick="closeModal()">${svg('x',15)}</button></div>
+    <div class="m-bd">
+      <div class="card" style="padding:11px 13px;border-color:color-mix(in srgb,var(--warn) 30%,transparent)">
+        <div class="row" style="gap:9px;align-items:flex-start">
+          <span style="color:var(--warn)">${svg('warn',15)}</span>
+          <span class="help" style="margin:0">ADMIN_KEY 与 GATEWAY_KEY 由服务端环境变量下发，<b>本页只能看，改不了</b>。
+            请按下面的步骤在<b>宿主机</b>执行，改完必须重启容器才生效。</span>
+        </div>
+      </div>
+      ${steps.map((s,i)=>`
+        <div class="field">
+          <span class="help" style="display:block;margin-bottom:6px">${i+1}. ${s.t}</span>
+          <div class="code"><div class="code-hd"><span class="fname">step ${i+1}</span>
+            <button class="btn ghost sm copy" data-t="${esc(s.c)}" onclick="copyText(this.dataset.t,this)">${svg('copy',13)}复制</button></div>
+          <pre>${esc(s.c)}</pre></div>
+        </div>`).join('')}
+      <div class="field"><span class="help">⚠ 只改 GATEWAY_KEY 不影响已登录的控制台；改 ADMIN_KEY 后需要用新值重新打开控制台。</span></div>
+    </div>
+    <div class="m-ft"><button class="btn ghost ml-auto" onclick="closeModal()">关闭</button></div>`);
+}
+
+/* ═══════════════════════════ 弹窗：通用容器 ═══════════════════════════ */
+function modal(html,wide){
+  const box=$('#modalBox');
+  box.className='modal'+(wide?' wide':'');
+  box.innerHTML=html;
+  $('#mask').classList.add('on');
+  box.scrollTop=0;
+}
+function closeModal(){$('#mask').classList.remove('on')}
+function setStatus(el,text,cls){if(!el)return;el.className='status-line '+(cls||'');el.textContent=text}
+function toggleMenu(id){const m=document.getElementById(id);if(!m)return;const on=m.classList.contains('on');$$('.menu.on').forEach(x=>x.classList.remove('on'));m.classList.toggle('on',!on)}
+document.addEventListener('click',e=>{if(!e.target.closest('.menu-wrap'))$$('.menu.on').forEach(m=>m.classList.remove('on'))});
+
+/* ═══════════════════════════ 渠道：协议元数据 / 派生字段 ═══════════════════════════ */
+const PROTO_META={
+  openai:{label:'OpenAI 兼容',base:'',key:'中转站 / 官方 v1 的 API Key（sk- 开头）'},
+  anthropic:{label:'Anthropic',base:'',key:'Anthropic API Key（sk-ant- 开头）'},
+  gemini:{label:'Gemini',base:'',key:'Google AI Studio 的 API Key'},
+  notion:{label:'Notion 逆向',base:'https://app.notion.com',key:'浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'},
+  'notion-agent':{label:'Notion Agent',base:'https://api.notion.com',key:'开发者门户集成令牌（ntn_ 开头，连接需勾选「查看会话并与代理交互」）'},
+  workbuddy:{label:'WorkBuddy',base:'https://www.workbuddy.ai/v2',key:'CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'},
+  codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
+  genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'}
+};
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark'];
+
+/* 密钥来自 /admin/api/status 下发的渠道明文 key，控制台默认掩码、按需明文显示 */
+function chKey(id){const c=DATA.channels.find(x=>x.id===id);return (c&&c.apiKey)||''}
+const maskKey=k=>{k=String(k||'');if(!k)return '—';if(k.length<=12)return k.slice(0,3)+'••••';return k.slice(0,7)+'•'.repeat(Math.min(20,k.length-11))+'•'+k.slice(-4)};
+const chBaseUrl=c=>c.baseUrl||(PROTO_META[c.proto]||{}).base||'—';
+const chAliases=c=>(c.aliases||[]).map(r=>({alias:r.alias,upstream:r.upstream}));
+
+/* ═══════════════════════════ 弹窗：添加 / 编辑渠道 ═══════════════════════════ */
+let modalChId=null, modalModels=[];
+function openChannelForm(id){
+  const c=id?DATA.channels.find(x=>x.id===id):null;
+  modalChId=c?c.id:null;
+  modalModels=c?chAliases(c).map(r=>({...r})):[];
+  probeFound=[]; probeSel=new Set(); probeQ='';
+  const proto=c?c.proto:'openai', pm=PROTO_META[proto];
+  modal(`
+    <div class="m-hd">
+      <span class="m-ico">${svg(c?'edit':'plus',14)}</span>
+      <h2>${c?'编辑渠道 · '+esc(c.name||c.id):'添加渠道'}</h2>
+      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+    </div>
+    <div class="m-bd">
+      <div class="field-row">
+        <div class="field" style="flex:1.7"><label>渠道 ID <span class="help">英文 / 数字 / _ / -</span></label>
+          <input class="input" id="f-id" value="${esc(c?c.id:'')}" placeholder="vendor-x" ${c?'disabled':''}></div>
+        <div class="field"><label>显示名称</label>
+          <input class="input" id="f-name" value="${esc(c?c.name:'')}" placeholder="中转 X"></div>
+      </div>
+      <div class="field-row">
+        <div class="field" style="flex:1.5"><label>协议</label>
+          <select class="select" id="f-proto">${PROTO_ORDER.map(p=>`<option value="${p}" ${p===proto?'selected':''}>${PROTO_META[p].label}（${p}）</option>`).join('')}</select></div>
+        <div class="field" style="flex:.7"><label>优先级</label>
+          <input class="input" id="f-pri" type="number" value="${c?c.pri:0}"></div>
+        <div class="field" style="flex:.7"><label>启用</label>
+          <select class="select" id="f-on"><option value="1" ${(c?c.on:true)?'selected':''}>是</option><option value="0" ${(c?!c.on:false)?'selected':''}>否</option></select></div>
+      </div>
+      <div class="field"><label>Base URL <span class="help">${pm.base?'默认 '+pm.base:'按上游填写'}</span></label>
+        <input class="input" id="f-base" value="${esc(c?chBaseUrl(c):'')}" placeholder="https://api.example.com/v1"></div>
+      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / workbuddy 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
+        <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
+      <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
+        <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
+      <div class="field"><label>API Key</label>
+        <div class="row" style="gap:8px">
+          <input class="input" id="f-key" type="password" value="${esc(c?chKey(c.id):'')}" placeholder="sk-… 或 notion 的 token_v2">
+          <button class="btn ghost sm" id="f-key-btn" style="flex:0 0 auto" onclick="toggleKeyField()">${svg('eye',13)}明文</button>
+        </div>
+        <span class="help" id="f-key-help">${pm.key}</span></div>
+      <div class="field">
+        <label>模型 <span class="help" id="modelsCount">${modalModels.length} 个</span></label>
+        <div class="probe-bar">
+          <button class="btn ghost sm" onclick="addModelRow()">${svg('plus',13)}添加一行</button>
+          <button class="btn ghost sm" id="f-probe" onclick="probeUpstream()">${svg('test',13)}从上游探测更多</button>
+          <span class="status-line ml-auto" id="probeStatus"></span>
+        </div>
+        <div class="models-box" id="modelsEditor"></div>
+        <div class="probe-panel" id="probePanel" style="display:none"></div>
+      </div>
+      <div class="field"><label class="toggle"><input type="checkbox" id="f-autoAlias" ${c&&c.autoAlias?'checked':''}> 自动路由上游所有模型 <span class="help">（不勾则只暴露上表所列）</span></label></div>
+    </div>
+    <div class="m-ft">
+      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
+      <button class="btn primary" onclick="saveChannel()">${svg('check',13)}保存渠道</button>
+    </div>`);
+  renderModelRows();
+  $('#f-proto').onchange=e=>{
+    const p=e.target.value, m=PROTO_META[p];
+    const cur=$('#f-base').value.trim();
+    const isDefault=!cur||Object.values(PROTO_META).some(x=>x.base===cur);
+    if(m.base&&isDefault)$('#f-base').value=m.base;
+    $('#f-base').previousElementSibling.querySelector('.help').textContent=m.base?'默认 '+m.base:'按上游填写';
+    $('#f-key-help').textContent=m.key;
+    renderModelRows();
+  };
+}
+function renderModelRows(){
+  const box=$('#modelsEditor'); if(!box)return;
+  const upLabel=$('#f-proto').value==='notion-agent'?'上游智能体名称':'上游真实模型';
+  box.innerHTML=modalModels.length
+    ? `<div class="model-row head"><div>对外名称 alias</div><div>${upLabel}</div><div></div><div></div></div>`+modalModels.map((r,i)=>`<div class="model-row" data-i="${i}">
+        <input data-k="alias" value="${esc(r.alias)}" placeholder="alias">
+        <input data-k="upstream" value="${esc(r.upstream)}" placeholder="upstream model">
+        <button class="tst" title="测试此模型" onclick="testRowModel(${i})">测</button>
+        <button class="del" title="删除" onclick="delModelRow(${i})">×</button>
+      </div>`).join('')
+    : '<div class="model-empty">还没有模型<br><span class="help">点「添加一行」手动加，或「从上游探测更多」批量拉取</span></div>';
+  $('#modelsCount').textContent=modalModels.length+' 个';
+  $$('#modelsEditor .model-row:not(.head)').forEach(row=>{
+    const i=Number(row.dataset.i);
+    $$('input',row).forEach(inp=>inp.oninput=()=>{modalModels[i][inp.dataset.k]=inp.value});
+  });
+}
+function addModelRow(){
+  modalModels.push({alias:'',upstream:''});
+  renderModelRows();
+  const rows=$$('#modelsEditor .model-row:not(.head)');
+  rows[rows.length-1]?.querySelector('input')?.focus();
+}
+function delModelRow(i){modalModels.splice(i,1);renderModelRows();if(probeShown())renderProbeList()}
+let probeFound=[],probeSel=new Set(),probeQ='';
+const probeShown=()=>$('#probePanel')?.style.display!=='none';
+async function probeUpstream(){
+  const base=$('#f-base').value.trim(), key=$('#f-key').value;
+  const st=$('#probeStatus'), btn=$('#f-probe');
+  if(!base)return setStatus(st,'先填 Base URL','bad');
+  if(!key)return setStatus(st,'先填 API Key','bad');
+  btn.disabled=true; btn.innerHTML=svg('test',13)+'探测中…';
+  setStatus(st,'请求上游 /v1/models …','wait');
+  try{
+    const r=await api('/admin/api/probe',{method:'POST',body:JSON.stringify({
+      baseUrl:base,apiKey:key,protocol:$('#f-proto').value,
+      proxy:$('#f-proxy').value.trim()||undefined,
+      headers:$('#f-headers').value.trim()||undefined,
+    })});
+    if(!r.ok){setStatus(st,'✗ '+(r.error||'探测失败'),'bad');return}
+    probeFound=(r.models||[]).slice().sort();
+    probeSel=new Set(); probeQ='';
+    const extra=r.agents?`（智能体 ${r.agents.length} 个）`:(r.account&&r.account.spaces?`（空间 ${r.account.spaces.length} 个）`:'');
+    setStatus(st,`✓ ${probeFound.length} 个${extra} · ${r.latencyMs} ms`,'ok');
+    renderProbeList();
+    $('#probePanel')?.scrollIntoView({block:'nearest'});
+  }catch(e){
+    setStatus(st,'✗ '+(e.message||e),'bad');
+  }finally{
+    btn.disabled=false; btn.innerHTML=svg('test',13)+'重新探测';
+  }
+}
+function renderProbeList(){
+  const box=$('#probePanel'); if(!box)return;
+  const have=new Set(modalModels.flatMap(r=>[r.alias,r.upstream]).filter(Boolean));
+  [...probeSel].forEach(m=>{if(have.has(m))probeSel.delete(m)});
+  box.style.display='';
+  box.innerHTML=`
+    <div class="pp-hd">
+      <span class="t">探测到 ${probeFound.length} 个</span>
+      <div class="pp-search">${svg('filter',12)}<input id="probeQ" value="${esc(probeQ)}" placeholder="搜索模型名…"></div>
+    </div>
+    <div class="pp-list">${probeFound.map(m=>{
+      const has=have.has(m);
+      return `<label class="pp-row${has?' have':''}" data-m="${esc(m)}" title="${esc(m)}">
+        <input type="checkbox" ${probeSel.has(m)?'checked':''} ${has?'disabled':''}>
+        <span class="nm">${esc(m)}</span>${has?'<span class="tag2">已在表中</span>':''}
+      </label>`}).join('')}</div>
+    <div class="pp-ft">
+      <span class="sel" id="probeSelCnt"></span>
+      <button class="btn ghost sm ml-auto" onclick="probeSelectAll()">全选</button>
+      <button class="btn ghost sm" onclick="probeClearSel()">清空</button>
+      <button class="btn primary sm" id="probeAddBtn" onclick="probeAddSelected()">${svg('plus',13)}加入所选</button>
+    </div>`;
+  const qi=$('#probeQ',box);
+  qi.oninput=()=>{probeQ=qi.value;filterProbeRows()};
+  $$('.pp-row',box).forEach(row=>{
+    const cb=$('input',row);
+    cb.onchange=()=>{cb.checked?probeSel.add(row.dataset.m):probeSel.delete(row.dataset.m);updateProbeSel()};
+  });
+  filterProbeRows();
+}
+function filterProbeRows(){
+  const box=$('#probePanel'); if(!box)return;
+  const q=probeQ.trim().toLowerCase();
+  $$('.pp-row',box).forEach(row=>row.style.display=(!q||row.dataset.m.toLowerCase().includes(q))?'':'none');
+  updateProbeSel();
+}
+function updateProbeSel(){
+  const box=$('#probePanel'); if(!box)return;
+  const n=probeSel.size, cnt=$('#probeSelCnt',box), btn=$('#probeAddBtn',box);
+  if(cnt)cnt.textContent=n?`已选 ${n} 个`:'勾选要加入的模型';
+  if(btn)btn.disabled=!n;
+}
+function probeSelectAll(){
+  const box=$('#probePanel'); if(!box)return;
+  $$('.pp-row',box).forEach(row=>{
+    if(row.style.display==='none')return;
+    const cb=$('input',row); if(cb.disabled)return;
+    cb.checked=true; probeSel.add(row.dataset.m);
+  });
+  updateProbeSel();
+}
+function probeClearSel(){
+  const box=$('#probePanel'); if(!box)return;
+  $$('.pp-row',box).forEach(row=>{$('input',row).checked=false});
+  probeSel.clear(); updateProbeSel();
+}
+function probeAddSelected(){
+  const names=[...probeSel]; if(!names.length)return;
+  const existing=new Set(modalModels.flatMap(r=>[r.alias,r.upstream]).filter(Boolean));
+  let n=0;
+  for(const m of names){if(existing.has(m))continue;modalModels.push({alias:m,upstream:m});existing.add(m);n++}
+  probeSel.clear();
+  renderModelRows(); renderProbeList();
+  toast(n?`已加入 ${n} 个模型`:'所选模型都已在表中',n?'ok':'');
+}
+function testRowModel(i){
+  const row=modalModels[i]; if(!row)return;
+  if(!modalChId)return toast('先保存渠道再测试该模型');
+  if(!row.upstream)return toast('上游模型名为空');
+  closeModal();
+  openTestModels({channelId:modalChId,only:row.alias||row.upstream});
+}
+function toggleKeyField(){
+  const inp=$('#f-key'), btn=$('#f-key-btn');
+  const show=inp.type==='password';
+  inp.type=show?'text':'password';
+  btn.innerHTML=svg(show?'eyeOff':'eye',13)+(show?'隐藏':'明文');
+}
+async function saveChannel(){
+  const id=($('#f-id').value||'').trim();
+  const base=$('#f-base').value.trim();
+  const key=$('#f-key').value.trim();
+  if(!id)return toast('渠道 ID 必填');
+  if(!/^[A-Za-z0-9_-]+$/.test(id))return toast('渠道 ID 只能用英文 / 数字 / _ / -');
+  if(!modalChId&&DATA.channels.some(c=>c.id===id))return toast('渠道 ID「'+id+'」已存在');
+  if(!base)return toast('Base URL 必填');
+  if(!key)return toast('API Key 必填');
+  const seen=new Set(), models={};
+  for(const r of modalModels){
+    const alias=(r.alias||'').trim(), up=(r.upstream||'').trim();
+    if(!alias&&!up)continue;
+    if(!up)return toast('alias「'+alias+'」缺上游模型名');
+    const a=alias||up;
+    if(seen.has(a))return toast('重复 alias：'+a);
+    seen.add(a); models[a]=up;
+  }
+  const body={
+    id,
+    name:$('#f-name').value.trim()||id,
+    baseUrl:base,
+    apiKey:key,
+    protocol:$('#f-proto').value,
+    priority:Number($('#f-pri').value)||0,
+    enabled:$('#f-on').value==='1',
+    autoAlias:$('#f-autoAlias').checked,
+    proxy:$('#f-proxy').value.trim()||undefined,
+    headers:$('#f-headers').value.trim()||undefined,
+    models,
+  };
+  const btn=$('.m-ft .btn.primary');
+  if(btn){btn.disabled=true;btn.textContent='保存中…'}
+  try{
+    const r=await api('/admin/api/channels',{method:'POST',body:JSON.stringify(body)});
+    closeModal();
+    toast(`✓ 已${r.existed?'更新':'创建'}渠道 ${id} · 正在后台探测`,'ok');
+    await loadAll();
+  }catch(e){
+    if(btn){btn.disabled=false;btn.innerHTML=svg('check',13)+'保存渠道'}
+  }
+}
+
+/* ═══════════════════════════ 弹窗：导入（Codex RT / Codex JSON / Genspark） ═══════════════════════════ */
+const IMPORT_META={
+  'codex-rt':{ico:'zap',title:'导入 Codex RT',mode:'paste',label:'Refresh Token',ph:'rt.1.…',
+    hint:'rt.1. 开头，与 sub2api「手动导入 RT」同款。',
+    steps:'粘贴后自动完成：换令牌 → 拿账号 → 拉订阅模型列表 → 建渠道。',
+    warn:'RT 一次性轮转：导入后这份字符串即作废。同一个号别同时挂 sub2api 和这里，谁刷新谁活。',
+    bad:v=>/^rt\.1\./.test(v)?'':'Refresh Token 应以 rt.1. 开头'},
+  'codex-json':{ico:'file',title:'导入 Codex JSON',mode:'file',accept:'.json,application/json',
+    hint:'选择 sub2api 导出的 codex JSON（含 access_token / refresh_token），支持多选批量导入。',
+    warn:'兼容三种结构：扁平 {refresh_token} · {credentials:{…}} · {accounts:[{credentials:{…}}]}。'},
+  'gs-session':{ico:'cookie',title:'导入 Genspark 会话',mode:'paste',label:'会话 JSON / session_id',ph:'{"sessionId":"xxxxxxxx-…:hex…"}',
+    hint:'Claw session.enc 内容、整段 cookie、或裸 session_id 均可。',
+    steps:'自动提取 sessionId 换成渠道 key，并免费验证登录（is_login，不耗积分）。',
+    warn:'只用 sessionId，JSON 里的 gsk- apiKey 不需要。session 约 20 天过期，过期后重新登录再导一份。',
+    bad:v=>parseGsSessionId(v)?'':'没找到 sessionId（uuid:hex 格式）'},
+  'gs-json':{ico:'file',title:'导入 Genspark JSON',mode:'file',accept:'.json,.txt,application/json,text/plain',
+    hint:'选择 genspark 会话 JSON 文件，支持多选批量：每个新会话自动建一个新渠道（多号 = 多份每日积分）。',
+    warn:'同一 key 视为刷新会话，不会重复建渠道。'}
+};
+function parseCodexUnits(j){
+  const has=o=>o&&(o.access_token||o.refresh_token);
+  const list=Array.isArray(j.accounts)?j.accounts:(Array.isArray(j.data)?j.data:null);
+  if(has(j))return [j];
+  if(has(j.credentials))return [j.credentials];
+  if(list)return list.map(a=>(a&&a.credentials)||a).filter(has);
+  return [];
+}
+function parseGsSessionId(raw){
+  const s=String(raw);
+  const m=s.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?::[0-9a-f]{8,})?/i);
+  if(m)return m[0];
+  const m2=s.match(/"sessionId"\s*:\s*"([^"]+)"/i)||s.match(/session_id\s*[:=]\s*"?([A-Za-z0-9:\-_.]+)/i);
+  return m2?m2[1]:null;
+}
+function openImport(kind){
+  const m=IMPORT_META[kind];
+  const body=m.mode==='paste'
+    ? `<div class="field"><label>${m.label} <span class="help">${m.hint}</span></label>
+         <textarea class="input" id="impText" rows="3" placeholder="${esc(m.ph)}"></textarea></div>
+       ${m.steps?`<div class="field"><span class="help">${m.steps}</span></div>`:''}
+       <div class="field"><span class="help">⚠ ${m.warn}</span></div>
+       <div class="field"><span class="status-line" id="impStatus"></span></div>`
+    : `<label class="drop" for="impFile">
+         <span class="d-ico">${svg('upload',16)}</span>
+         <span>点击选择文件（可多选批量导入）</span>
+         <span class="d-sub">${esc(m.accept)}</span>
+       </label>
+       <input type="file" id="impFile" class="hide" accept="${m.accept}" multiple onchange="importFiles('${kind}',this)">
+       <div class="field"><span class="help">${m.hint}</span></div>
+       <div class="field"><span class="help">⚠ ${m.warn}</span></div>
+       <div class="field"><span class="status-line" id="impStatus"></span></div>
+       <div class="field" id="impFilesWrap" style="display:none"><label>处理结果</label><div class="test-out" id="impFiles"></div></div>`;
+  modal(`
+    <div class="m-hd">
+      <span class="m-ico">${svg(m.ico,14)}</span>
+      <h2>${m.title}</h2>
+      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+    </div>
+    <div class="m-bd">${body}</div>
+    <div class="m-ft">
+      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
+      ${m.mode==='paste'
+        ? `<button class="btn primary" id="impGo" onclick="doImport('${kind}')">${svg('upload',13)}导入</button>`
+        : `<button class="btn primary" onclick="document.getElementById('impFile').click()">${svg('upload',13)}选择文件</button>`}
+    </div>`);
+  if(m.mode==='paste')setTimeout(()=>$('#impText')?.focus(),60);
+}
+/* 真导入：Codex RT 与 Genspark 会话各打自己的端点，返回体统一收敛成 {label,detail}，
+   便于同一套 UI 渲染。两端点在失败时都返回 HTTP 200 + {ok:false,error}，必须显式判 ok。 */
+async function importCodexRt(rt){
+  const r=await api('/admin/api/codex-import',{method:'POST',body:JSON.stringify({rt})});
+  if(!r||r.ok===false)throw new Error((r&&r.error)||'导入失败');
+  return {label:r.id,detail:`${(r.models||[]).length} 个模型${r.rotated?' · RT 已轮转存新值':''}`};
+}
+async function importGsSession(raw){
+  const r=await api('/admin/api/genspark-import',{method:'POST',body:JSON.stringify({raw,mode:'add'})});
+  if(!r||r.ok===false)throw new Error((r&&r.error)||'导入失败');
+  if(r.hint)throw new Error(r.hint);
+  return {label:r.id,detail:`${r.created?'新建渠道':'刷新已有渠道'}${r.email?' · '+r.email:''}${r.login?' · 登录验证通过':' · ⚠ 登录验证失败，检查该渠道 proxy'}`};
+}
+async function doImport(kind){
+  const m=IMPORT_META[kind];
+  const raw=($('#impText').value||'').trim();
+  const st=$('#impStatus'), btn=$('#impGo');
+  if(!raw)return setStatus(st,'先粘贴内容','bad');
+  const bad=m.bad&&m.bad(raw);
+  if(bad)return setStatus(st,'✗ '+bad,'bad');
+  btn.disabled=true; const old=btn.innerHTML; btn.innerHTML=svg('upload',13)+'导入中…';
+  setStatus(st,kind==='gs-session'?'⏳ 换取渠道 key 并免费验证登录…':'⏳ 换令牌 → 拉账号 → 拉模型 → 建渠道…','wait');
+  try{
+    const r=kind==='gs-session'?await importGsSession(raw):await importCodexRt(raw);
+    setStatus(st,`✓ 已导入 → 渠道 ${r.label} · ${r.detail}`,'ok');
+    toast(`✓ 已导入渠道 ${r.label}`,'ok');
+    await loadAll();
+  }catch(e){
+    setStatus(st,'✗ '+String((e&&e.message)||e),'bad');
+  }finally{
+    btn.disabled=false; btn.innerHTML=old;
+  }
+}
+async function importFiles(kind,input){
+  const files=Array.from(input.files||[]);
+  input.value='';
+  if(!files.length)return;
+  const st=$('#impStatus'), out=$('#impFiles'), wrap=$('#impFilesWrap');
+  const isGs=kind==='gs-json';
+  wrap.style.display=''; out.innerHTML='';
+  let ok=0,bad=0;
+  for(let i=0;i<files.length;i++){
+    const f=files[i];
+    setStatus(st,`⏳ ${i+1}/${files.length} ${f.name}`,'wait');
+    let row;
+    try{
+      const text=await f.text();
+      if(isGs){
+        const r=await importGsSession(text);
+        ok++;
+        row=`<div class="r ok"><span>${svg('check',12)}</span><span>${esc(f.name)}</span><span class="e">渠道 ${esc(r.label)} · ${esc(r.detail)}</span></div>`;
+      }else{
+        const units=parseCodexUnits(JSON.parse(text));
+        if(!units.length)throw new Error('文件里找不到 access_token / refresh_token');
+        const withRt=units.filter(u=>u.refresh_token);
+        if(!withRt.length)throw new Error(units.length+' 个账号均缺少 refresh_token');
+        const ids=[];
+        for(const u of withRt){const r=await importCodexRt(JSON.stringify(u));ids.push(r.label);ok++}
+        row=`<div class="r ok"><span>${svg('check',12)}</span><span>${esc(f.name)}</span><span class="e">导入 ${withRt.length} 个渠道：${esc(ids.join(', '))}</span></div>`;
+      }
+    }catch(e){
+      bad++;
+      row=`<div class="r fail"><span>${svg('warn',12)}</span><span>${esc(f.name)}</span><span class="e">${esc(String((e&&e.message)||e))}</span></div>`;
+    }
+    out.insertAdjacentHTML('beforeend',row);
+  }
+  setStatus(st,`✓ 成功 ${ok} · 失败 ${bad}`.replace('失败 0','全部成功'),bad?'bad':'ok');
+  toast(bad?`⚠ 导入完成：成功 ${ok}，失败 ${bad}`:`✓ 已导入 ${ok} 个渠道`,bad?'':'ok');
+  await loadAll();
+}
+
+/* ═══════════════════════════ 弹窗：测试模型 ═══════════════════════════ */
+function openTestModels(opts){
+  opts=opts||{};
+  const chId=opts.channelId||null, only=opts.only||null;
+  const groups=[];
+  for(const c of DATA.channels){
+    if(chId&&c.id!==chId)continue;
+    if(!c.on)continue;
+    let items=chAliases(c).map(r=>r.alias);
+    if(only)items=items.filter(a=>a===only);
+    if(items.length)groups.push({c,items});
+  }
+  const total=groups.reduce((s,g)=>s+g.items.length,0);
+  modal(`
+    <div class="m-hd">
+      <span class="m-ico">${svg('test',14)}</span>
+      <h2>测试模型</h2>
+      <span class="help">${chId?'· 渠道 '+esc(chId):'· 完整调度'}</span>
+      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+    </div>
+    <div class="m-bd">
+      <div class="probe-bar">
+        <span class="status-line wait" id="testSummary">${total} 个模型</span>
+        <label class="toggle ml-auto"><input type="checkbox" id="testAll" checked> 全选</label>
+      </div>
+      <div class="test-list" id="testList">${total
+        ? groups.map(g=>`<div class="g">${esc(g.c.name||g.c.id)}<span class="n">${g.items.length} 个</span></div>`+
+            g.items.map(a=>`<label><input type="checkbox" data-m="${esc(a)}" data-c="${esc(g.c.id)}" checked><span>${esc(a)}</span></label>`).join('')
+          ).join('')
+        : '<div class="model-empty">暂无可测试模型 — 先在渠道里配置别名</div>'}</div>
+      <div class="field"><label>提示词 <span class="help">默认 hi</span></label>
+        <input class="input" id="testPrompt" value="hi"></div>
+      <div class="field" id="testOutWrap" style="display:none"><label>测试结果</label>
+        <div class="test-out" id="testOut"></div></div>
+    </div>
+    <div class="m-ft">
+      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
+      <button class="btn primary" id="testRun" onclick="runTests()" ${total?'':'disabled'}>${svg('send',13)}运行测试</button>
+    </div>`,true);
+  const all=$('#testAll');
+  all.onchange=()=>$$('#testList input[type=checkbox]').forEach(c=>c.checked=all.checked);
+  $$('#testList input[type=checkbox]').forEach(c=>c.onchange=()=>{
+    const boxes=$$('#testList input[type=checkbox]');
+    all.checked=boxes.every(x=>x.checked);
+    all.indeterminate=!all.checked&&boxes.some(x=>x.checked);
+  });
+}
+/* 逐个模型打真实 /admin/api/test：指定 channelId 时上游只会返回该渠道一行结果。
+   提示词与超时都走服务端默认（30s），测试成功会由服务端清零失败计数并回写渠道状态，
+   所以跑完要 loadAll() 把最新状态拉回来。 */
+async function runTests(){
+  const picks=$$('#testList input:checked').map(i=>({model:i.dataset.m,chan:i.dataset.c}));
+  if(!picks.length)return toast('至少勾选一个模型');
+  const prompt=($('#testPrompt').value||'').trim()||'hi';
+  const btn=$('#testRun'), old=btn.innerHTML;
+  btn.disabled=true; btn.innerHTML=svg('send',13)+'运行中…';
+  const wrap=$('#testOutWrap'), out=$('#testOut');
+  wrap.style.display=''; out.innerHTML='';
+  let okN=0;
+  for(const p of picks){
+    const pend=document.createElement('div');
+    pend.className='r wait';
+    pend.innerHTML=`${svg('clock',12)} 测试 ${esc(p.model)} @ ${esc(p.chan)} …`;
+    out.appendChild(pend); out.scrollTop=out.scrollHeight;
+    let row;
+    try{
+      const r=await api('/admin/api/test',{method:'POST',body:JSON.stringify({model:p.model,channelId:p.chan,prompt})});
+      row=(r.results||[])[0]||{ok:false,error:'上游未返回结果'};
+    }catch(e){row={ok:false,error:String((e&&e.message)||e)}}
+    pend.remove();
+    if(row.ok)okN++;
+    const tok=(row.promptTokens!=null||row.completionTokens!=null)?` · ${row.promptTokens||0}+${row.completionTokens||0} tok`:'';
+    out.insertAdjacentHTML('beforeend',row.ok
+      ? `<div class="r ok"><span>${svg('check',12)}</span><span><b>${esc(p.chan)}</b> · ${fMs(row.latencyMs)}${tok}</span><span class="e">"${esc(String(row.reply||'').slice(0,160))}"</span></div>`
+      : `<div class="r fail"><span>${svg('warn',12)}</span><span><b>${esc(p.chan)}</b> · ${fMs(row.latencyMs)}${row.status?' · HTTP '+row.status:''}</span><span class="e">${esc(String(row.error||'失败').slice(0,200))}</span></div>`);
+    out.scrollTop=out.scrollHeight;
+  }
+  btn.disabled=false; btn.innerHTML=old;
+  setStatus($('#testSummary'),`${okN}/${picks.length} 通过 · 提示词「${prompt}」`,okN===picks.length?'ok':okN?'wait':'bad');
+  toast(okN===picks.length?`✓ 全部通过（${okN}/${picks.length}）`:okN===0?`✗ 全部失败（0/${picks.length}）`:`⚠ ${okN}/${picks.length} 通过`,okN===picks.length?'ok':'');
+  loadAll().catch(()=>{});
+}
+
+/* ═══════════════════════════ 抽屉 / 主题 / 全局 ═══════════════════════════ */
+function drawer(html){
+  $('#drawer').innerHTML=html;
+  $('#drawer').classList.add('on'); $('#scrim').classList.add('on');
+}
+function closeDrawer(){$('#drawer').classList.remove('on');$('#scrim').classList.remove('on')}
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if($('#mask').classList.contains('on'))closeModal();
+    else closeDrawer();
+  }
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('#globalSearch').focus()}
+});
+function setTheme(t){
+  document.documentElement.dataset.theme=t;
+  try{localStorage.setItem('zzcs-theme',t)}catch(e){}
+  $('#themeBtn').innerHTML=svg(t==='dark'?'sun':'moon',15);
+  $('#themeBtn').title=t==='dark'?'切换到浅色':'切换到深色';
+}
+$('#themeBtn').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+$('#globalSearch').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){const q=e.target.value.trim();if(!q)return;chQ=q;go('channels');toast('已在渠道中搜索：'+q,'ok')}
+});
+
+/* 密钥三源合流（登录门配套）：?key= URL（一次性，收进本地后从地址栏抹掉，避免留在历史/截图）
+   → localStorage（持久记忆，跨标签跨重启）→ sessionStorage（api() 实际取用的会话层）。
+   无任何来源时弹「输入管理密钥」小门（见 showKeyGate）——壳页面零机密，管理 API 仍每次强制 Bearer。 */
+let __ZZ_HAS_KEY__=false;
+function showKeyGate(){
+  if(document.getElementById('zz-gate'))return;
+  const g=document.createElement('div');g.id='zz-gate';
+  g.style.cssText='position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:var(--bg);backdrop-filter:blur(6px)';
+  g.innerHTML=`<div style="max-width:420px;width:calc(100% - 48px);background:var(--panel);border:1px solid var(--accent-line);border-radius:14px;padding:28px 26px;box-shadow:0 18px 50px rgba(0,0,0,.45)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+      <span style="font-size:17px;font-weight:600">管理密钥</span></div>
+    <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY</div>
+    <input id="zz-gate-input" type="password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box"
+      onkeydown="if(event.key==='Enter'){document.getElementById('zz-gate-btn').click()}">
+    <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>
+    <button id="zz-gate-btn" class="btn" style="width:100%;margin-top:6px">进入控制台</button>
+  </div>`;
+  document.body.appendChild(g);
+  const input=g.querySelector('#zz-gate-input');input.focus();
+  const attempt=async()=>{
+    const k=input.value.trim();if(!k)return;
+    const errEl=g.querySelector('#zz-gate-err');errEl.textContent='';
+    try{
+      const r=await fetch('/admin/api/status',{headers:{'Authorization':'Bearer '+k}});
+      if(r.status!==200){errEl.textContent='密钥不对（HTTP '+r.status+'）';input.select();return}
+      try{localStorage.setItem('adminKey',k);sessionStorage.setItem('adminKey',k)}catch(e){}
+      g.remove();boot();
+    }catch(e){errEl.textContent='网络错误：'+(e&&e.message||e)}
+  };
+  g.querySelector('#zz-gate-btn').onclick=attempt;
+}
+(function keyFlow(){
+  const u=new URL(location.href);
+  const fromUrl=u.searchParams.get('key');
+  if(fromUrl){
+    try{localStorage.setItem('adminKey',fromUrl)}catch(e){}
+    u.searchParams.delete('key');history.replaceState(null,'',u.toString());
+  }
+  const ls=()=>{try{return localStorage.getItem('adminKey')}catch(e){return null}};
+  const ss=()=>{try{return sessionStorage.getItem('adminKey')}catch(e){return null}};
+  const k=fromUrl||ls()||ss();
+  if(k){try{sessionStorage.setItem('adminKey',k)}catch(e){}}
+  __ZZ_HAS_KEY__=!!k;
+})();
+
+function tick(){
+  const d=new Date(), p=n=>String(n).padStart(2,'0');
+  $('#clock').textContent=p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+}
+
+/* 首屏先渲染骨架再拉数据，避免白屏；之后每 8 秒静默刷新。
+   标签页不可见时不打接口，否则后台标签会一直空转网关。
+   登录门配套：无密钥 → 先 showKeyGate()，验证通过后才 boot()；
+   已有密钥（localStorage / ?key=）直接启动。api() 遇 401 会清存储并重新弹门（密钥被轮换时）。 */
+let __ZZ_BOOTED__=false;
+function boot(){
+  if(__ZZ_BOOTED__)return;__ZZ_BOOTED__=true;
+  let t='dark'; try{t=localStorage.getItem('zzcs-theme')||'dark'}catch(e){}
+  setTheme(t);
+  renderRail();
+  tick(); setInterval(tick,1000);
+  $('#btnRecheck').onclick=()=>recheckAll($('#btnRecheck'));
+  go('overview');
+  loadAll().catch((e)=>toast('加载失败：'+(e&&e.message||e),'bad'));
+  /* 8 秒静默刷新：只重绘当前页（不是整页刷新），但会重建 DOM。
+     所以两种情况跳过这一拍——正在流式请求中（会把「正在路由」气泡抽掉），
+     以及用户正在某个输入框里编辑（重绘会打断中文输入法联想、也可能吞掉未同步的草稿）。
+     数据不丢，下一个周期补上。 */
+  setInterval(()=>{
+    if(document.visibilityState!=='visible'||pgBusy)return;
+    const a=document.activeElement, vp=$('#viewport');
+    if(a&&vp&&vp.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return;
+    loadAll().catch(()=>{});
+  },8000);
+}
+__ZZ_HAS_KEY__?boot():showKeyGate();

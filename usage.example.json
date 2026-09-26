@@ -1,0 +1,7 @@
+{
+ "total": { "requests": 0, "errors": 0, "inputTokens": 0, "outputTokens": 0 },
+ "byModel": {},
+ "byChannel": {},
+ "byDay": {},
+ "recent": []
+}

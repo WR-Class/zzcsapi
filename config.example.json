@@ -1,0 +1,41 @@
+{
+  "port": 8787,
+  "health": { "intervalSec": 300, "timeoutMs": 8000 },
+  "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
+  "channels": [
+    {
+      "id": "vendor-a-openai",
+      "name": "中转站A (OpenAI 协议)",
+      "baseUrl": "https://api.example-a.com/v1",
+      "apiKey": "sk-xxxxxxxx",
+      "protocol": "openai",
+      "priority": 10,
+      "enabled": true,
+      "autoAlias": true,
+      "proxy": "",
+      "models": {}
+    },
+    {
+      "id": "vendor-anthropic",
+      "name": "Anthropic 中转",
+      "baseUrl": "https://api.example-c.com",
+      "apiKey": "sk-ant-xxxx",
+      "protocol": "anthropic",
+      "priority": 10,
+      "enabled": true,
+      "autoAlias": true,
+      "models": {}
+    },
+    {
+      "id": "vendor-gemini",
+      "name": "Gemini 中转",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "apiKey": "AIza-xxxx",
+      "protocol": "gemini",
+      "priority": 10,
+      "enabled": true,
+      "autoAlias": true,
+      "models": {}
+    }
+  ]
+}

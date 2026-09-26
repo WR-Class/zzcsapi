@@ -1,0 +1,2272 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZZCSAPI · 控制台原型 v0.1</title>
+<!-- 全站字体：MiSans（小米开源，可商用）· 官方 CDN，按 unicode-range 分片按需加载 -->
+<link rel="preconnect" href="https://font.sec.miui.com" crossorigin="">
+<link rel="preconnect" href="https://cdn-file.hyperos.mi.com" crossorigin="">
+<link href="https://font.sec.miui.com/font/css?family=MiSans:400,500,600,700:MiSans" rel="stylesheet">
+<style>
+/* ═══════════════════════════ tokens ═══════════════════════════ */
+:root{
+  --rail-w:248px;
+  --r-xs:4px; --r-sm:7px; --r-md:10px; --r-lg:14px;
+  /* 全站统一 MiSans；无等宽/衬线变体，层级改由字重与字距区分 */
+  --f-ui:"MiSans","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif;
+  --f-mono:"MiSans","PingFang SC","Microsoft YaHei",ui-monospace,"Cascadia Code",Consolas,monospace;
+  --f-serif:"MiSans","PingFang SC","Songti SC",Georgia,serif;
+  --fw-display:700;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+html[data-theme="dark"]{
+  /* 暖色暗色主题：中性色偏暖炭/棕，强调色为暖琥珀陶土（替代原柠檬绿），不用冷色系 */
+  --bg:#0e0c0a; --bg-2:#12100d; --panel:#1a1613; --panel-2:#201b17; --panel-3:#272019;
+  --line:#2b241d; --line-2:#3a3128; --line-3:#4e4237;
+  --tx:#f0eae2; --tx-2:#b0a496; --tx-3:#7d7264;
+  --accent:#e39a4e; --accent-ink:#1a1206; --accent-soft:rgba(227,154,78,.14); --accent-line:rgba(227,154,78,.36);
+  --accent-2:#c26a3c;
+  --ok:#4fc47f; --ok-soft:rgba(79,196,127,.13);
+  --warn:#eec13f; --warn-soft:rgba(238,193,63,.13);
+  --err:#ef6a5f; --err-soft:rgba(239,106,95,.13);
+  --info:#63b3ff; --info-soft:rgba(99,179,255,.13);
+  --violet:#b08cff; --violet-soft:rgba(176,140,255,.13);
+  --grid:rgba(255,231,204,.026);
+  --hair:inset 0 1px 0 rgba(255,240,220,.04);
+  --sh-1:0 1px 2px rgba(0,0,0,.5);
+  --sh-2:0 8px 28px -8px rgba(0,0,0,.72);
+  --sh-3:0 28px 70px -18px rgba(0,0,0,.8);
+  --scrim:rgba(14,9,4,.74);
+  --noise:.035;
+}
+html[data-theme="light"]{
+  /* 暖色亮色主题：中性色偏米/暖纸，强调色为暖锈橙（替代原橄榄绿） */
+  --bg:#f8f5f0; --bg-2:#f3eee6; --panel:#fffefb; --panel-2:#fcf9f4; --panel-3:#f6f1e8;
+  --line:#eae2d6; --line-2:#dcd2c2; --line-3:#c5b9a6;
+  --tx:#1b1710; --tx-2:#645a4d; --tx-3:#847867;
+  --accent:#b1500f; --accent-ink:#fff6ec; --accent-soft:rgba(177,80,15,.13); --accent-line:rgba(177,80,15,.34);
+  --accent-2:#dd9c26;
+  --ok:#0b8055; --ok-soft:rgba(11,128,85,.12);
+  --warn:#9a6a05; --warn-soft:rgba(190,140,10,.14);
+  --err:#c62f34; --err-soft:rgba(198,47,52,.1);
+  --info:#1f6fe0; --info-soft:rgba(31,111,224,.1);
+  --violet:#6b45c4; --violet-soft:rgba(107,69,196,.1);
+  --grid:rgba(90,62,26,.035);
+  --hair:inset 0 1px 0 rgba(255,255,255,.9);
+  --sh-1:0 1px 2px rgba(72,52,28,.06);
+  --sh-2:0 8px 26px -10px rgba(72,52,28,.16);
+  --sh-3:0 26px 60px -18px rgba(72,52,28,.22);
+  --scrim:rgba(48,36,22,.42);
+  --noise:.02;
+}
+/* ═══════════════════════════ base ═══════════════════════════ */
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--tx);
+  font:14px/1.5 var(--f-ui);
+  -webkit-font-smoothing:antialiased;
+  font-feature-settings:"tnum" 1;
+  transition:background .35s var(--ease),color .35s var(--ease);
+  /* 应用外壳：整页不滚动，让 rail / 内容区各自内部滚动，侧栏高度永远等于剩余视口高度 */
+  display:flex;flex-direction:column;
+}
+::selection{background:var(--accent);color:var(--accent-ink)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+table{border-collapse:collapse;width:100%}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.serif{font-family:var(--f-serif);font-weight:600;letter-spacing:-.015em}
+.micro{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
+.num{font-variant-numeric:tabular-nums}
+
+/* atmosphere */
+.bg-layer{position:fixed;inset:0;pointer-events:none;z-index:0}
+.bg-grid{
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:54px 54px;
+  -webkit-mask-image:radial-gradient(130% 90% at 76% -12%,#000 12%,transparent 72%);
+  mask-image:radial-gradient(130% 90% at 76% -12%,#000 12%,transparent 72%);
+}
+.bg-glow{
+  background:
+    radial-gradient(760px 420px at 78% -8%,var(--accent-soft),transparent 68%),
+    radial-gradient(620px 380px at 8% 108%,var(--info-soft),transparent 70%);
+  opacity:.85;
+}
+.bg-noise{
+  opacity:var(--noise);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ═══════════════════════════ shell ═══════════════════════════ */
+.proto{
+  position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:10px;
+  padding:7px 16px;background:var(--accent);color:var(--accent-ink);
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.02em;
+}
+.proto b{font-weight:600}
+.proto .x{margin-left:auto;opacity:.6;padding:0 4px}
+.proto .x:hover{opacity:1}
+/* flex:1 而不是 min-height:calc(100vh - 30px)：不写死横幅高度，横幅在不在都能正好铺满 */
+.app{position:relative;z-index:1;flex:1 1 auto;min-height:0;display:flex}
+
+/* rail */
+.rail{
+  width:var(--rail-w);flex:0 0 var(--rail-w);display:flex;flex-direction:column;min-height:0;
+  border-right:1px solid var(--line);background:color-mix(in srgb,var(--panel) 55%,transparent);
+  backdrop-filter:blur(14px);
+}
+.brand{display:flex;align-items:center;gap:11px;padding:20px 20px 18px}
+.brand-mark{
+  width:32px;height:32px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto;
+  background:linear-gradient(150deg,var(--accent),color-mix(in srgb,var(--accent) 55%,var(--accent-2)));
+  color:var(--accent-ink);box-shadow:0 6px 18px -6px var(--accent-line);
+}
+.brand-name{font-weight:700;letter-spacing:-.02em;font-size:15px;line-height:1.1}
+.brand-sub{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx-3)}
+.rail-nav{flex:1;min-height:0;overflow-y:auto;padding:6px 12px 18px}
+.rail-sec{margin:16px 0 6px;padding:0 8px}
+.rail-item{
+  display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:var(--r-sm);
+  color:var(--tx-2);font-size:13.5px;font-weight:500;position:relative;
+  transition:background .14s,color .14s;
+}
+.rail-item svg{opacity:.72;flex:0 0 auto}
+.rail-item:hover{background:var(--panel-3);color:var(--tx)}
+.rail-item.on{background:var(--panel-3);color:var(--tx)}
+.rail-item.on::before{content:"";position:absolute;left:-12px;top:7px;bottom:7px;width:2px;border-radius:2px;background:var(--accent)}
+.rail-item.on svg{color:var(--accent);opacity:1}
+.rail-item .cnt{margin-left:auto;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3);background:var(--panel-2);border:1px solid var(--line);padding:1px 6px;border-radius:20px}
+.rail-foot{flex:0 0 auto;border-top:1px solid var(--line);padding:12px 14px;display:flex;align-items:center;gap:8px}
+.rail-foot .ver{margin-left:auto;font-family:var(--f-mono);font-size:10px;color:var(--tx-3)}
+
+/* main */
+.main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.topbar{
+  position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;
+  padding:12px 26px;border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(16px) saturate(1.4);
+}
+.crumb{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:11px;color:var(--tx-3);letter-spacing:.04em}
+.crumb .sep{opacity:.4}
+.crumb .cur{color:var(--tx-2)}
+.search{
+  margin-left:auto;display:flex;align-items:center;gap:9px;min-width:290px;
+  padding:7px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2);
+  transition:border-color .16s,box-shadow .16s;
+}
+.search:focus-within{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft)}
+.search input{flex:1;border:0;background:none;outline:none;font-size:13px}
+.search input::placeholder{color:var(--tx-3)}
+.kbd{font-family:var(--f-mono);font-size:10px;color:var(--tx-3);border:1px solid var(--line);border-radius:4px;padding:1px 5px;background:var(--panel)}
+.icon-btn{
+  width:34px;height:34px;border-radius:var(--r-sm);display:grid;place-items:center;
+  border:1px solid var(--line);background:var(--panel-2);color:var(--tx-2);
+  transition:.15s;
+}
+.icon-btn:hover{color:var(--tx);border-color:var(--line-2);background:var(--panel-3)}
+.viewport{padding:26px 26px 60px;flex:1;min-width:0;min-height:0;overflow-y:auto}
+
+/* page head */
+/* z-index 必须给：fade 动画会让本元素生成层叠上下文，若不定位则整块头部（含下拉菜单）会被后面的 .card 盖住 */
+.page-hd{position:relative;z-index:5;display:flex;align-items:flex-end;gap:18px;margin-bottom:22px;flex-wrap:wrap}
+.page-title{font-family:var(--f-serif);font-weight:var(--fw-display);font-size:34px;line-height:1.12;letter-spacing:-.02em}
+.page-sub{margin-top:5px;color:var(--tx-2);font-size:13px}
+.page-actions{margin-left:auto;display:flex;gap:9px;flex-wrap:wrap}
+
+/* ═══════════════════════════ controls ═══════════════════════════ */
+.btn{
+  display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border-radius:var(--r-sm);
+  border:1px solid var(--line);background:var(--panel-2);color:var(--tx);font-size:13px;font-weight:500;
+  transition:.15s;white-space:nowrap;
+}
+.btn:hover{border-color:var(--line-2);background:var(--panel-3)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--tx-2)}
+.btn.ghost:hover{background:var(--panel-3);color:var(--tx)}
+.btn.danger{color:var(--err);border-color:color-mix(in srgb,var(--err) 34%,transparent)}
+.btn.danger:hover{background:var(--err-soft)}
+.btn.sm{padding:5px 9px;font-size:12px}
+.btn[disabled]{opacity:.45;pointer-events:none}
+
+.tabs{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2)}
+.tab{padding:6px 12px;border-radius:5px;font-size:12.5px;color:var(--tx-2);font-weight:500;transition:.14s;display:inline-flex;align-items:center;gap:6px}
+.tab:hover{color:var(--tx)}
+.tab.on{background:var(--panel-3);color:var(--tx);box-shadow:var(--hair)}
+.tab .n{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+.tab.on .n{color:var(--accent)}
+
+.field{display:flex;flex-direction:column;gap:6px}
+.field>label{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
+.input,.select{
+  width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:var(--panel-2);outline:none;font-size:13px;transition:.15s;
+}
+.input:focus,.select:focus{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft)}
+.select{appearance:none;padding-right:30px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239aabb8' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center}
+textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-size:12.5px}
+
+.switch{position:relative;width:38px;height:21px;border-radius:20px;border:1px solid var(--line-2);background:var(--panel-3);transition:.2s;flex:0 0 auto}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--tx-3);transition:.2s var(--ease)}
+.switch.on{background:var(--accent-soft);border-color:var(--accent-line)}
+.switch.on::after{left:19px;background:var(--accent)}
+
+/* chips / pills */
+.chip{
+  display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:20px;
+  font-family:var(--f-mono);font-size:10.5px;letter-spacing:.02em;border:1px solid var(--line);
+  background:var(--panel-2);color:var(--tx-2);white-space:nowrap;
+}
+.chip.openai{color:var(--info);border-color:color-mix(in srgb,var(--info) 32%,transparent);background:var(--info-soft)}
+.chip.anthropic{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 32%,transparent);background:var(--warn-soft)}
+.chip.gemini{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 32%,transparent);background:var(--violet-soft)}
+.chip.notion{color:var(--tx-2);border-color:var(--line-2);background:var(--panel-3)}
+.chip.notion-agent{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
+.chip.workbuddy{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+.chip.genspark{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 30%,transparent);background:var(--violet-soft)}
+.chip.accent{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--tx-2);white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:var(--tx-3);position:relative}
+.dot.ok{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.dot.degraded{background:var(--warn);box-shadow:0 0 0 3px var(--warn-soft)}
+.dot.down{background:var(--err);box-shadow:0 0 0 3px var(--err-soft)}
+.dot.unknown{background:var(--tx-3)}
+.pill.ok{color:var(--ok)} .pill.degraded{color:var(--warn)} .pill.down{color:var(--err)}
+
+.tag{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:4px;font-family:var(--f-mono);font-size:10px;background:var(--panel-3);border:1px solid var(--line);color:var(--tx-3)}
+.delta{display:inline-flex;align-items:center;gap:3px;font-family:var(--f-mono);font-size:11px;font-weight:500;padding:1px 6px;border-radius:20px}
+/* 中国市场惯例：红涨绿跌 */
+.delta.up{color:var(--err);background:var(--err-soft)}
+.delta.down{color:var(--ok);background:var(--ok-soft)}
+.delta.flat{color:var(--tx-3);background:var(--panel-3)}
+
+/* ═══════════════════════════ cards ═══════════════════════════ */
+.card{
+  border:1px solid var(--line);border-radius:var(--r-lg);background:var(--panel);
+  box-shadow:var(--sh-1),var(--hair);overflow:hidden;position:relative;
+}
+.card-hd{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.card-hd h3{font-size:13.5px;font-weight:600;letter-spacing:-.005em}
+.card-hd .sub{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+.card-hd .r{margin-left:auto;display:flex;align-items:center;gap:8px}
+.card-bd{padding:16px}
+.card-bd.tight{padding:0}
+
+.grid{display:grid;gap:16px}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g12{grid-template-columns:repeat(12,minmax(0,1fr))}
+.c8{grid-column:span 8} .c4{grid-column:span 4}
+.c7{grid-column:span 7} .c5{grid-column:span 5}
+.c12{grid-column:span 12} .c6{grid-column:span 6}
+@media(max-width:1320px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.c8,.c7,.c5,.c4{grid-column:span 12}}
+@media(max-width:900px){.g4{grid-template-columns:1fr}.rail{display:none}}
+
+/* KPI：曲线独占卡片底部一条带，与文字彻底分离 */
+.kpi{padding:17px 18px 0;position:relative;overflow:hidden;display:flex;flex-direction:column}
+.kpi::after{content:"";position:absolute;inset:0 0 auto 0;height:1px;background:linear-gradient(90deg,transparent,var(--accent-line),transparent);opacity:.7}
+.kpi-lbl{display:flex;align-items:center;gap:7px;font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
+.kpi-val{font-family:var(--f-serif);font-weight:var(--fw-display);font-size:40px;line-height:1.14;letter-spacing:-.035em;margin-top:9px;display:flex;align-items:baseline;gap:7px}
+.kpi-val .unit{font-family:var(--f-mono);font-weight:500;font-size:13px;color:var(--tx-2);letter-spacing:0}
+.kpi-foot{display:flex;align-items:center;gap:9px;margin:11px 0 14px;font-size:11.5px;color:var(--tx-3)}
+.kpi-spark{
+  margin:auto -18px 0;height:46px;pointer-events:none;
+  border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent);
+}
+.kpi-spark svg{width:100%;height:46px;display:block}
+
+/* tables */
+.tbl-wrap{overflow-x:auto}
+table.tbl{font-size:13px}
+table.tbl thead th{
+  position:sticky;top:0;z-index:1;text-align:left;padding:10px 14px;white-space:nowrap;
+  font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);
+  background:var(--panel-2);border-bottom:1px solid var(--line);font-weight:500;
+}
+table.tbl tbody td{padding:11px 14px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);vertical-align:middle}
+table.tbl tbody tr{transition:background .12s}
+table.tbl tbody tr:hover{background:var(--panel-2)}
+table.tbl tbody tr.clickable{cursor:pointer}
+table.tbl tbody tr:last-child td{border-bottom:0}
+.t-r{text-align:right}table.tbl thead th.t-r{text-align:right}/* 表头基样式 text-align:left 权重(0,1,3) 高于 .t-r(0,1,0)，右对齐列必须用更高权重补回，否则表头与数值错位 */
+.t-c{text-align:center}
+.cell-main{display:flex;align-items:center;gap:9px;min-width:0}
+.cell-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cell-sub{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avatar{
+  width:26px;height:26px;border-radius:7px;display:grid;place-items:center;flex:0 0 auto;
+  font-family:var(--f-mono);font-size:10.5px;font-weight:600;color:var(--tx-2);
+  background:var(--panel-3);border:1px solid var(--line);text-transform:uppercase;
+}
+.proto-bar{height:3px;border-radius:3px;background:var(--panel-3);overflow:hidden;min-width:54px}
+.proto-bar i{display:block;height:100%;border-radius:3px}
+
+/* bars list */
+.bars{display:flex;flex-direction:column;gap:11px}
+.bar-row{display:grid;grid-template-columns:1fr auto;gap:6px 10px;align-items:center}
+.bar-name{font-size:12.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-val{font-family:var(--f-mono);font-size:11px;color:var(--tx-2)}
+.bar-track{grid-column:1/-1;height:5px;border-radius:4px;background:var(--panel-3);overflow:hidden}
+.bar-track i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 40%,var(--accent-2)));transition:width .9s var(--ease)}
+
+/* donut legend */
+.legend{display:flex;flex-direction:column;gap:10px}
+.legend-row{display:flex;align-items:center;gap:9px;font-size:12.5px}
+.legend-row .v{margin-left:auto;font-family:var(--f-mono);font-size:12px;color:var(--tx)}
+
+/* code */
+.code{border:1px solid var(--line);border-radius:var(--r-md);background:var(--bg-2);overflow:hidden}
+.code-hd{display:flex;align-items:center;gap:9px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+.code-hd .fname{font-family:var(--f-mono);font-size:11px;color:var(--tx-2)}
+.code pre{margin:0;padding:14px;overflow-x:auto;font-family:var(--f-mono);font-size:12px;line-height:1.7;color:var(--tx-2)}
+.code .k{color:var(--accent)} .code .s{color:var(--info)} .code .c{color:var(--tx-3);font-style:italic}
+.copy{margin-left:auto}
+
+/* endpoint card */
+.ep{padding:15px 16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2);display:flex;flex-direction:column;gap:11px}
+.ep-url{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12.5px;color:var(--tx);word-break:break-all}
+.ep-key{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12px;color:var(--tx-2)}
+.ep-key .mask{letter-spacing:.08em}
+
+/* playground */
+.pg{display:grid;grid-template-columns:1fr 316px;gap:16px;align-items:start}
+@media(max-width:1180px){.pg{grid-template-columns:1fr}}
+.chat{display:flex;flex-direction:column;min-height:520px}
+.chat-body{flex:1;padding:20px;display:flex;flex-direction:column;gap:18px;overflow-y:auto;max-height:560px}
+.msg{display:flex;gap:11px;animation:fade .35s var(--ease) both}
+.msg .who{
+  width:26px;height:26px;border-radius:7px;flex:0 0 auto;display:grid;place-items:center;
+  font-family:var(--f-mono);font-size:10px;font-weight:600;
+}
+.msg.user .who{background:var(--panel-3);border:1px solid var(--line);color:var(--tx-2)}
+.msg.ai .who{background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent)}
+.msg .bubble{max-width:min(680px,86%)}
+.msg .meta{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.msg .meta .role{font-size:12px;font-weight:600}
+.msg .body{
+  padding:11px 14px;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);
+  font-size:13.5px;line-height:1.65;
+}
+.msg.user .body{background:var(--panel-3)}
+.msg .usage{margin-top:7px;display:flex;gap:12px;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+.composer{border-top:1px solid var(--line);padding:12px 14px;display:flex;flex-direction:column;gap:9px;background:var(--panel-2)}
+.composer-row{display:flex;gap:9px;align-items:flex-end}
+.composer textarea{
+  flex:1;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel);
+  padding:9px 11px;outline:none;resize:none;font-size:13px;line-height:1.55;min-height:42px;max-height:130px;
+}
+.composer textarea:focus{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft)}
+.send{width:40px;height:40px;border-radius:var(--r-sm);background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;flex:0 0 auto;transition:.15s}
+.send:hover{filter:brightness(1.08)}
+.toolcall{border:1px dashed var(--accent-line);border-radius:var(--r-md);background:var(--accent-soft);padding:11px 13px;margin-top:9px}
+.toolcall .tc-hd{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:11px;color:var(--accent);margin-bottom:8px}
+
+/* params */
+.param{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.param .k{font-size:12.5px;color:var(--tx-2)}
+.param .v{font-family:var(--f-mono);font-size:12px}
+.range{-webkit-appearance:none;appearance:none;width:100%;height:3px;border-radius:3px;background:var(--panel-3);outline:none}
+.range::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--panel)}
+
+/* drawer */
+.scrim{position:fixed;inset:0;background:var(--scrim);backdrop-filter:blur(3px);z-index:60;opacity:0;pointer-events:none;transition:opacity .25s}
+.scrim.on{opacity:1;pointer-events:auto}
+.drawer{
+  position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);z-index:61;
+  background:var(--panel);border-left:1px solid var(--line);box-shadow:var(--sh-3);
+  transform:translateX(102%);transition:transform .34s var(--ease);display:flex;flex-direction:column;
+}
+.drawer.on{transform:none}
+.drawer-hd{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.drawer-bd{flex:1;overflow-y:auto;padding:18px}
+.drawer-ft{border-top:1px solid var(--line);padding:13px 18px;display:flex;gap:9px}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:9px 14px;font-size:12.5px;align-items:baseline}
+.kv dt{font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx-3)}
+.kv dd{margin:0;overflow-wrap:anywhere}
+
+/* ═══════════════════════════ modal ═══════════════════════════ */
+.mask{
+  position:fixed;inset:0;z-index:80;background:var(--scrim);backdrop-filter:blur(4px);
+  display:grid;place-items:center;padding:24px;overflow-y:auto;
+  opacity:0;pointer-events:none;transition:opacity .2s var(--ease);
+}
+.mask.on{opacity:1;pointer-events:auto}
+.modal{
+  width:min(620px,100%);max-height:calc(100vh - 48px);display:flex;flex-direction:column;
+  background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r-lg);box-shadow:var(--sh-3);
+  transform:translateY(14px) scale(.985);transition:transform .26s var(--ease);
+}
+.mask.on .modal{transform:none}
+.modal.wide{width:min(760px,100%)}
+.m-hd{display:flex;align-items:center;gap:11px;padding:15px 18px;border-bottom:1px solid var(--line)}
+.m-hd h2{font-size:15px;font-weight:600}
+.m-hd .m-ico{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;flex:0 0 auto;background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent)}
+.m-bd{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:15px}
+.m-ft{border-top:1px solid var(--line);padding:13px 18px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.field-row{display:flex;gap:12px;flex-wrap:wrap}
+.field-row>.field{flex:1;min-width:150px}
+.help{font-family:var(--f-mono);font-size:10px;line-height:1.7;color:var(--tx-3);letter-spacing:0;text-transform:none;font-weight:400}
+.field>label .help{text-transform:none;letter-spacing:0}
+.toggle{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--tx-2);cursor:pointer}
+.field>label.toggle{font-family:var(--f-ui);font-size:12.5px;letter-spacing:0;text-transform:none;color:var(--tx-2)}
+.toggle input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+
+/* 模型编辑器 */
+.models-box{border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;background:var(--panel-2)}
+.models-box .model-empty,.test-list .model-empty{padding:20px 16px;text-align:center;color:var(--tx-3);font-size:12px;line-height:1.8}
+.model-row{display:grid;grid-template-columns:1fr 1fr 30px 30px;gap:7px;align-items:center;padding:6px 8px;border-bottom:1px solid color-mix(in srgb,var(--line) 65%,transparent)}
+.model-row:last-child{border-bottom:0}
+.model-row.head{padding:7px 8px;background:var(--panel-3);border-bottom:1px solid var(--line);font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
+.model-row input{width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);outline:none;font-family:var(--f-mono);font-size:12px;transition:.15s}
+.model-row input:focus{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft)}
+.model-row .tst,.model-row .del{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--tx-3);display:grid;place-items:center;font-size:11px;transition:.15s}
+.model-row .tst:hover{color:var(--accent);border-color:var(--accent-line)}
+.model-row .del:hover{color:var(--err);border-color:color-mix(in srgb,var(--err) 34%,transparent)}
+.probe-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* 上游探测结果：列表式 + 可搜索 + 多选，替代原来的 chip 逐个点击 */
+.probe-panel{margin-top:9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2);overflow:hidden}
+.probe-panel .pp-hd{display:flex;align-items:center;gap:9px;padding:8px 10px;background:var(--panel-3);border-bottom:1px solid var(--line)}
+.probe-panel .pp-hd .t{font-size:11.5px;color:var(--tx-2);white-space:nowrap}
+.probe-panel .pp-search{
+  display:flex;align-items:center;gap:7px;flex:1;min-width:110px;padding:4px 9px;
+  border:1px solid var(--line);border-radius:6px;background:var(--panel);transition:border-color .16s,box-shadow .16s;
+}
+.probe-panel .pp-search:focus-within{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft)}
+.probe-panel .pp-search input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:12px;color:var(--tx)}
+.probe-panel .pp-search input::placeholder{color:var(--tx-3)}
+.probe-panel .pp-list{max-height:212px;overflow-y:auto}
+.probe-panel .pp-row{
+  display:flex;align-items:center;gap:9px;padding:7px 11px;cursor:pointer;
+  font-family:var(--f-mono);font-size:12px;color:var(--tx-2);
+  border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);
+}
+.probe-panel .pp-row:last-child{border-bottom:0}
+.probe-panel .pp-row:hover{background:var(--panel-3);color:var(--tx)}
+.probe-panel .pp-row input{width:14px;height:14px;flex:0 0 auto;accent-color:var(--accent);cursor:pointer}
+.probe-panel .pp-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.probe-panel .pp-row .tag2{font-family:var(--f-ui);font-size:10px;color:var(--tx-3);flex:0 0 auto}
+.probe-panel .pp-row.have{opacity:.5}
+.probe-panel .pp-row.have input{cursor:not-allowed}
+.probe-panel .pp-ft{display:flex;align-items:center;gap:7px;padding:8px 10px;background:var(--panel-3);border-top:1px solid var(--line)}
+.probe-panel .pp-ft .sel{font-size:11px;color:var(--tx-3);font-family:var(--f-mono)}
+.status-line{font-family:var(--f-mono);font-size:11px;line-height:1.7;min-height:16px}
+.status-line.ok{color:var(--ok)} .status-line.bad{color:var(--err)} .status-line.wait{color:var(--tx-3)}
+
+/* 测试模型 */
+.test-list{max-height:264px;overflow-y:auto;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2)}
+.test-list .g{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--panel-3);border-bottom:1px solid var(--line);font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
+.test-list .g .n{margin-left:auto}
+.test-list label{display:flex;align-items:center;gap:9px;padding:7px 12px;font-family:var(--f-mono);font-size:12px;color:var(--tx-2);cursor:pointer;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.test-list label:last-child{border-bottom:0}
+.test-list label:hover{background:var(--panel-3);color:var(--tx)}
+.test-list input{width:14px;height:14px;accent-color:var(--accent);cursor:pointer}
+.test-out{border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;background:var(--panel-2)}
+.test-out .r{display:flex;gap:9px;padding:7px 11px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);font-family:var(--f-mono);font-size:11.5px;line-height:1.6}
+.test-out .r:last-child{border-bottom:0}
+.test-out .r.ok{color:var(--ok)} .test-out .r.fail{color:var(--err)} .test-out .r.wait{color:var(--tx-3)}
+.test-out .r .e{color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.test-out .r b{font-weight:600}
+
+/* 导入：拖放区 */
+.drop{
+  display:flex;flex-direction:column;align-items:center;gap:7px;padding:26px 18px;text-align:center;
+  border:1px dashed var(--line-2);border-radius:var(--r-md);background:var(--panel-2);color:var(--tx-3);
+  font-size:12.5px;cursor:pointer;transition:.16s;
+}
+.drop:hover{border-color:var(--accent-line);color:var(--tx-2);background:var(--panel-3)}
+.drop .d-ico{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--panel-3);border:1px solid var(--line);color:var(--tx-2)}
+.drop .d-sub{font-family:var(--f-mono);font-size:10px}
+
+/* 下拉菜单 */
+.menu-wrap{position:relative}
+.menu{
+  position:absolute;right:0;top:calc(100% + 7px);z-index:70;min-width:236px;padding:6px;
+  border-radius:var(--r-md);background:var(--panel);border:1px solid var(--line-2);box-shadow:var(--sh-2);display:none;
+}
+.menu.on{display:block;animation:fade .18s var(--ease) both}
+.menu .hd{padding:7px 10px 4px;font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
+.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border-radius:6px;font-size:12.5px;color:var(--tx-2);text-align:left;transition:.13s}
+.menu button:hover{background:var(--panel-3);color:var(--tx)}
+.menu button .d{margin-left:auto;font-family:var(--f-mono);font-size:10px;color:var(--tx-3)}
+.menu .sep{height:1px;background:var(--line);margin:5px 4px}
+
+/* toast */
+.toasts{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:90;display:flex;flex-direction:column;gap:9px;align-items:center}
+.toast{
+  display:flex;align-items:center;gap:9px;padding:10px 15px;border-radius:var(--r-md);
+  background:var(--panel);border:1px solid var(--line-2);box-shadow:var(--sh-2);font-size:13px;
+  animation:rise .3s var(--ease) both;
+}
+.toast.ok{border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+
+/* misc */
+.empty{padding:44px 20px;text-align:center;color:var(--tx-3);font-size:13px}
+.divider{height:1px;background:var(--line);margin:16px 0}
+.row{display:flex;align-items:center;gap:10px}
+.wrap{flex-wrap:wrap}
+.ml-auto{margin-left:auto}
+.muted{color:var(--tx-3)}
+.sec-title{font-family:var(--f-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx-3);margin:22px 0 11px}
+.hide{display:none !important}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:9px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--line-3);background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+@keyframes fade{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes sweep{from{stroke-dashoffset:var(--len)}to{stroke-dashoffset:0}}
+.page{animation:fade .38s var(--ease) both}
+.stagger>*{animation:fade .5s var(--ease) both}
+.stagger>*:nth-child(1){animation-delay:.02s}
+.stagger>*:nth-child(2){animation-delay:.06s}
+.stagger>*:nth-child(3){animation-delay:.1s}
+.stagger>*:nth-child(4){animation-delay:.14s}
+.stagger>*:nth-child(5){animation-delay:.18s}
+.stagger>*:nth-child(6){animation-delay:.22s}
+@media(prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+</style>
+</head>
+<body>
+<div class="bg-layer bg-grid"></div>
+<div class="bg-layer bg-glow"></div>
+<div class="bg-layer bg-noise"></div>
+
+<div class="proto" id="protoBar">
+  <b>原型预览 v0.1</b>
+  <span>静态演示 · 数据取自 2026-09-25 的真实用量快照，未连接网关</span>
+  <button class="x" onclick="document.getElementById('protoBar').remove()" title="关闭">✕</button>
+</div>
+
+<div class="app">
+  <!-- ══ rail ══ -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8z"></path></svg>
+      </div>
+      <div>
+        <div class="brand-name">ZZCSAPI</div>
+        <div class="brand-sub">Gateway Console</div>
+      </div>
+    </div>
+    <nav class="rail-nav" id="railNav"><div class="rail-sec micro">监控</div><button class="rail-item" data-nav="overview"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14 18 8"></path><circle cx="12" cy="14" r="8"></circle><path d="M12 2v2M4.9 6.3 6.4 7.8M2 14h2M20 14h2M17.6 7.8l1.5-1.5"></path></svg><span>总览</span></button><button class="rail-item" data-nav="logs"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg><span>调用日志</span><span class="cnt">14,804</span></button><div class="rail-sec micro">资源</div><button class="rail-item on" data-nav="channels"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9zM12 18v3"></path></svg><span>渠道管理</span><span class="cnt">30</span></button><button class="rail-item" data-nav="models"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5z"></path><path d="m3 13 9 5 9-5"></path></svg><span>聚合模型</span><span class="cnt">29</span></button><div class="rail-sec micro">工具</div><button class="rail-item" data-nav="playground"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4M13 16h6"></path></svg><span>Playground</span></button><button class="rail-item" data-nav="access"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h11v18H6a2 2 0 0 1-2-2V5z"></path><path d="M9 3v18"></path></svg><span>接入信息</span></button></nav>
+    <div class="rail-foot">
+      <button class="icon-btn" id="themeBtn" title="切换到深色"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg></button>
+      <span class="mono muted" style="font-size:10.5px">127.0.0.1:8787</span>
+      <span class="ver">v0.1</span>
+    </div>
+  </aside>
+
+  <!-- ══ main ══ -->
+  <div class="main">
+    <header class="topbar">
+      <div class="crumb"><span>ZZCSAPI</span><span class="sep">/</span><span class="cur" id="crumbCur">渠道管理</span></div>
+      <div class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--tx-3)"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.2-3.2"></path></svg>
+        <input id="globalSearch" placeholder="搜索渠道、模型、请求 ID…">
+        <span class="kbd">⌘K</span>
+      </div>
+      <button class="icon-btn" onclick="toast('已触发全量探测（原型演示）','ok')" title="重新探测">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 3v6h-6"></path></svg>
+      </button>
+    </header>
+    <div class="viewport" id="viewport">
+  <div class="page-hd page">
+    <div><h1 class="page-title">渠道管理</h1>
+      <div class="page-sub">30 个渠道 · 已启用 19 · 支持 openai / anthropic / gemini / notion / workbuddy / genspark 协议</div></div>
+    <div class="page-actions">
+      <div class="menu-wrap">
+        <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z"></path></svg>导入<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+        <div class="menu" id="impMenu">
+          <div class="hd">Codex</div>
+          <button onclick="openImport('codex-rt')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z"></path></svg>Codex RT<span class="d">粘贴</span></button>
+          <button onclick="openImport('codex-json')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"></path><path d="M14 3v5h5"></path></svg>Codex JSON<span class="d">文件</span></button>
+          <div class="sep"></div>
+          <div class="hd">Genspark</div>
+          <button onclick="openImport('gs-session')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9 4 4 0 0 1-5-5 4 4 0 0 1-4-4z"></path><path d="M8.5 10h.01M11 15h.01M15 13.5h.01"></path></svg>Genspark 会话<span class="d">粘贴</span></button>
+          <button onclick="openImport('gs-json')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"></path><path d="M14 3v5h5"></path></svg>Genspark JSON<span class="d">文件</span></button>
+        </div>
+      </div>
+      <button class="btn" onclick="openTestModels()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6.5L5.6 17A2 2 0 0 0 7.3 20h9.4a2 2 0 0 0 1.7-3L14 9.5V3"></path><path d="M7.5 14h9"></path></svg>测试模型</button>
+      <button class="btn primary" onclick="openChannelForm()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>添加渠道</button>
+    </div>
+  </div>
+
+  <div class="row wrap" style="margin-bottom:14px;gap:10px">
+    <div class="tabs" id="chTabs">
+      <button class="tab on" data-t="all">全部 <span class="n">9</span></button>
+      <button class="tab" data-t="on">已启用 <span class="n">6</span></button>
+      <button class="tab" data-t="off">已停用 <span class="n">3</span></button>
+    </div>
+    <div class="search" style="min-width:230px;margin-left:0">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4-2v-4L3 5z"></path></svg><input id="chQ" placeholder="按名称 / ID / 协议过滤…" value="">
+    </div>
+    <button class="btn ml-auto" onclick="toast('已触发全量重探测（原型演示）','ok')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6.5L5.6 17A2 2 0 0 0 7.3 20h9.4a2 2 0 0 0 1.7-3L14 9.5V3"></path><path d="M7.5 14h9"></path></svg>全部重探测</button>
+  </div>
+
+  <div class="card"><div class="card-bd tight tbl-wrap" id="chTable"><table class="tbl">
+    <thead><tr>
+      <th style="width:38px"></th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">延迟</th>
+      <th class="t-r">模型</th><th class="t-r">优先级</th><th class="t-r">请求 / 错误</th><th>成功率</th><th class="t-r">操作</th>
+    </tr></thead>
+    <tbody><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-c')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演C</span>
+          <div style="min-width:0"><div class="cell-name">演示中转 C（OpenAI）</div><div class="cell-sub">demo-openai-c</div></div></div></td>
+        <td><span class="chip openai">OpenAI</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">459 ms</td>
+        <td class="t-r mono">5</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">4,518 <span class="muted">/ <span style="color:var(--err)">565</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:87.49446657813192%;background:var(--warn)"></i></div><span class="mono" style="font-size:11px">87%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-c'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-c')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-c')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-a')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演A</span>
+          <div style="min-width:0"><div class="cell-name">演示中转 A（OpenAI）</div><div class="cell-sub">demo-openai-a</div></div></div></td>
+        <td><span class="chip openai">OpenAI</span></td>
+        <td><span class="pill down"><span class="dot down"></span>不可用</span></td>
+        <td class="t-r mono">5.30 s</td>
+        <td class="t-r mono">5</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">2,812 <span class="muted">/ <span style="color:var(--err)">49</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:98.2574679943101%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">98%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-a'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-a')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-a')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-a')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演A</span>
+          <div style="min-width:0"><div class="cell-name">演示中转 A（OpenAI）</div><div class="cell-sub">demo-openai-a</div></div></div></td>
+        <td><span class="chip openai">OpenAI</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">2.00 s</td>
+        <td class="t-r mono">2</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">1,827 <span class="muted">/ <span style="color:var(--err)">88</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:95.18336070060208%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">95%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-a'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-a')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-a')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-workbuddy')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演W</span>
+          <div style="min-width:0"><div class="cell-name">演示 WorkBuddy 逆向</div><div class="cell-sub">demo-workbuddy</div></div></div></td>
+        <td><span class="chip workbuddy">WorkBuddy</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">1.40 s</td>
+        <td class="t-r mono">1</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">1,211 <span class="muted">/ <span style="color:var(--err)">16</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:98.67877786952931%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">99%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-workbuddy'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-workbuddy')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-workbuddy')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-b')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演B</span>
+          <div style="min-width:0"><div class="cell-name">演示中转 B（OpenAI）</div><div class="cell-sub">demo-openai-b</div></div></div></td>
+        <td><span class="chip openai">OpenAI</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">926 ms</td>
+        <td class="t-r mono">2</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">815 <span class="muted">/ <span style="color:var(--err)">24</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:97.05521472392637%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">97%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-b'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-b')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-b')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-notion')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演N</span>
+          <div style="min-width:0"><div class="cell-name">演示 Notion 逆向</div><div class="cell-sub">demo-notion</div></div></div></td>
+        <td><span class="chip notion">Notion 逆向</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">2.46 s</td>
+        <td class="t-r mono">2</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">246 <span class="muted">/ <span style="color:var(--err)">95</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:61.382113821138205%;background:var(--err)"></i></div><span class="mono" style="font-size:11px">61%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-notion'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-notion')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-notion')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-c')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演C</span>
+          <div style="min-width:0"><div class="cell-name">演示中转 C（OpenAI）</div><div class="cell-sub">demo-openai-c</div></div></div></td>
+        <td><span class="chip openai">OpenAI</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">415 ms</td>
+        <td class="t-r mono">5</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">127 <span class="muted">/ <span style="color:var(--err)">64</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:49.60629921259843%;background:var(--err)"></i></div><span class="mono" style="font-size:11px">50%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-c'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-c')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-c')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-b')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演B</span>
+          <div style="min-width:0"><div class="cell-name">演示中转 B（OpenAI）</div><div class="cell-sub">demo-openai-b</div></div></div></td>
+        <td><span class="chip openai">OpenAI</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">1.53 s</td>
+        <td class="t-r mono">2</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">57 <span class="muted">/ <span style="color:var(--err)">29</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:49.122807017543856%;background:var(--err)"></i></div><span class="mono" style="font-size:11px">49%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-b'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-b')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-b')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-notion-agent')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演N</span>
+          <div style="min-width:0"><div class="cell-name">演示 Notion Agent</div><div class="cell-sub">demo-notion-agent</div></div></div></td>
+        <td><span class="chip notion-agent">Notion Agent</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">872 ms</td>
+        <td class="t-r mono">1</td>
+        <td class="t-r mono">0</td>
+        <td class="t-r mono">23 <span class="muted">/ <span style="color:var(--err)">2</span></span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:91.30434782608695%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">91%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-notion-agent'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-notion-agent')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-notion-agent')">详情</button>
+        </div></td>
+      </tr><tr class="clickable">
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('genspark')" title="停用"></button></td>
+        <td><div class="cell-main"><span class="avatar">演S</span>
+          <div style="min-width:0"><div class="cell-name">演示 Genspark 网页会话</div><div class="cell-sub">genspark</div></div></div></td>
+        <td><span class="chip genspark">Genspark</span></td>
+        <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
+        <td class="t-r mono">436 ms</td>
+        <td class="t-r mono">10</td>
+        <td class="t-r mono">-5</td>
+        <td class="t-r mono">4 <span class="muted">/ 0</span></td>
+        <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:100%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">100%</span></div></td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'genspark'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('genspark')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('genspark')">详情</button>
+        </div></td>
+      </tr>
+    </tbody></table></div></div></div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer">
+    <div class="drawer-hd">
+      <span class="avatar" style="width:34px;height:34px;border-radius:9px;font-size:13px">演C</span>
+      <div style="min-width:0">
+        <h3 style="font-size:16px">演示中转 C（OpenAI）</h3>
+        <div class="cell-sub">demo-openai-c</div>
+      </div>
+      <div class="ml-auto row" style="gap:8px">
+        <span class="chip openai">OpenAI</span>
+        <button class="icon-btn" onclick="closeDrawer()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+    </div>
+    <div class="drawer-bd">
+      <div class="row wrap" style="gap:9px;margin-bottom:18px">
+        <span class="pill ok"><span class="dot ok"></span>正常</span>
+        <span class="tag">延迟 459 ms</span>
+        <span class="tag">优先级 0</span>
+        <span class="tag">已启用</span>
+      </div>
+
+      <div class="sec-title">接入配置</div>
+      <dl class="kv">
+        <dt>Base URL</dt><dd class="mono">https://demo-openai-c.example.com/v1</dd>
+        <dt>密钥</dt><dd class="mono row" style="gap:6px">
+          <span id="chKeyTx" data-plain="0">sk-huch••••••••••••••••••••2e04</span>
+          <button class="icon-btn" style="width:22px;height:22px" title="明文显示" onclick="toggleDrawerKey('demo-openai-c',this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
+          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyText(fakeKey('demo-openai-c'),this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>
+        </dd>
+        <dt>协议</dt><dd class="mono">openai</dd>
+        <dt>模型数</dt><dd class="mono">5 个别名</dd>
+      </dl>
+
+      <div class="sec-title">近 7 天表现</div>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px">
+        <div class="card" style="padding:12px"><div class="micro">请求</div><div class="serif" style="font-size:24px;margin-top:4px">4,518</div></div>
+        <div class="card" style="padding:12px"><div class="micro">成功率</div><div class="serif" style="font-size:24px;margin-top:4px">87%</div></div>
+        <div class="card" style="padding:12px"><div class="micro">错误</div><div class="serif" style="font-size:24px;margin-top:4px;color:var(--err)">565</div></div>
+      </div>
+      <div style="margin-top:12px"><svg viewBox="0 0 520 150" width="100%" height="150" preserveAspectRatio="none" style="overflow:visible">
+    <defs><linearGradient id="ggdewf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity=".28"></stop><stop offset="100%" stop-color="var(--accent)" stop-opacity="0"></stop>
+    </linearGradient></defs>
+    <line x1="32" y1="12" x2="510" y2="12" stroke="var(--line)" stroke-dasharray="2 5" opacity=".55"></line>
+            <text x="24" y="15.5" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">2.3k</text><line x1="32" y1="41" x2="510" y2="41" stroke="var(--line)" stroke-dasharray="2 5" opacity=".55"></line>
+            <text x="24" y="44.5" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">1.7k</text><line x1="32" y1="70" x2="510" y2="70" stroke="var(--line)" stroke-dasharray="2 5" opacity=".55"></line>
+            <text x="24" y="73.5" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">1.2k</text><line x1="32" y1="99" x2="510" y2="99" stroke="var(--line)" stroke-dasharray="2 5" opacity=".55"></line>
+            <text x="24" y="102.5" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">577</text><line x1="32" y1="128" x2="510" y2="128" stroke="var(--line)" stroke-dasharray="2 5" opacity=".55"></line>
+            <text x="24" y="131.5" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">0</text>
+    <path d="M32,111.5010060362173 C53.72727272727273,111.5010060362173 53.72727272727273,96.00804828973844 75.45454545454545,96.00804828973844 C97.18181818181819,96.00804828973844 97.18181818181819,68.09054325955735 118.9090909090909,68.09054325955735 C140.63636363636363,68.09054325955735 140.63636363636363,96.7625754527163 162.36363636363637,96.7625754527163 C184.0909090909091,96.7625754527163 184.0909090909091,93.64386317907446 205.8181818181818,93.64386317907446 C227.54545454545456,93.64386317907446 227.54545454545456,114.16700201207243 249.27272727272728,114.16700201207243 C271,114.16700201207243 271,127.79879275653924 292.72727272727275,127.79879275653924 C314.4545454545455,127.79879275653924 314.4545454545455,119.95171026156942 336.1818181818182,119.95171026156942 C357.9090909090909,119.95171026156942 357.9090909090909,104.35814889336017 379.6363636363636,104.35814889336017 C401.3636363636364,104.35814889336017 401.3636363636364,46.913480885311884 423.09090909090907,46.913480885311884 C444.8181818181818,46.913480885311884 444.8181818181818,24.428571428571445 466.54545454545456,24.428571428571445 C488.27272727272725,24.428571428571445 488.27272727272725,33.030181086519136 510,33.030181086519136 L510,128 L32,128 Z" fill="url(#ggdewf)"></path>
+    <path d="M32,111.5010060362173 C53.72727272727273,111.5010060362173 53.72727272727273,96.00804828973844 75.45454545454545,96.00804828973844 C97.18181818181819,96.00804828973844 97.18181818181819,68.09054325955735 118.9090909090909,68.09054325955735 C140.63636363636363,68.09054325955735 140.63636363636363,96.7625754527163 162.36363636363637,96.7625754527163 C184.0909090909091,96.7625754527163 184.0909090909091,93.64386317907446 205.8181818181818,93.64386317907446 C227.54545454545456,93.64386317907446 227.54545454545456,114.16700201207243 249.27272727272728,114.16700201207243 C271,114.16700201207243 271,127.79879275653924 292.72727272727275,127.79879275653924 C314.4545454545455,127.79879275653924 314.4545454545455,119.95171026156942 336.1818181818182,119.95171026156942 C357.9090909090909,119.95171026156942 357.9090909090909,104.35814889336017 379.6363636363636,104.35814889336017 C401.3636363636364,104.35814889336017 401.3636363636364,46.913480885311884 423.09090909090907,46.913480885311884 C444.8181818181818,46.913480885311884 444.8181818181818,24.428571428571445 466.54545454545456,24.428571428571445 C488.27272727272725,24.428571428571445 488.27272727272725,33.030181086519136 510,33.030181086519136" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" pathLength="1"></path>
+    <circle cx="32" cy="111.5010060362173" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="75.45454545454545" cy="96.00804828973844" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="118.9090909090909" cy="68.09054325955735" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="162.36363636363637" cy="96.7625754527163" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="205.8181818181818" cy="93.64386317907446" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="249.27272727272728" cy="114.16700201207243" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="292.72727272727275" cy="127.79879275653924" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="336.1818181818182" cy="119.95171026156942" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="379.6363636363636" cy="104.35814889336017" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="423.09090909090907" cy="46.913480885311884" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="466.54545454545456" cy="24.428571428571445" r="2.2" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"></circle><circle cx="510" cy="33.030181086519136" r="3.6" fill="var(--accent)" stroke="var(--accent)" stroke-width="1.6"></circle><text x="32" y="145" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">09-12,328</text><text x="118.9090909090909" y="145" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">09-14,1191</text><text x="205.8181818181818" y="145" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">09-16,683</text><text x="292.72727272727275" y="145" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">09-18,4</text><text x="379.6363636363636" y="145" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">09-21,470</text><text x="466.54545454545456" y="145" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">09-23,2059</text><text x="510" y="145" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">09-24,1888</text>
+  </svg></div>
+
+      <div class="sec-title">模型别名</div>
+      <div class="row wrap" style="gap:7px">
+        <span class="chip">gpt-6-astra</span><span class="chip">claude-opus-5</span><span class="chip">glm-5.3</span><span class="chip">kimi-k3</span><span class="chip">grok-4.6</span>
+      </div>
+    </div>
+    <div class="drawer-ft">
+      <button class="btn primary" onclick="openTestModels({channelId:'demo-openai-c'})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6.5L5.6 17A2 2 0 0 0 7.3 20h9.4a2 2 0 0 0 1.7-3L14 9.5V3"></path><path d="M7.5 14h9"></path></svg>测试模型</button>
+      <button class="btn" onclick="reprobe('demo-openai-c')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6.5L5.6 17A2 2 0 0 0 7.3 20h9.4a2 2 0 0 0 1.7-3L14 9.5V3"></path><path d="M7.5 14h9"></path></svg>重探测</button>
+      <button class="btn" onclick="closeDrawer();openChannelForm('demo-openai-c')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L20 8l-4-4L4 16v4z"></path><path d="m14 6 4 4"></path></svg>编辑</button>
+      <button class="btn ml-auto" onclick="toggleCh('demo-openai-c');openChannel('demo-openai-c')">停用</button>
+      <button class="btn danger" onclick="delChannel('demo-openai-c')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"></path></svg>删除</button>
+    </div></aside>
+<!-- 遮罩不响应点击关闭：拖选复制时鼠标容易滑出弹窗，误触会打断操作。关闭请用右上角 ×、取消按钮或 Esc -->
+<div class="mask" id="mask">
+  <div class="modal" id="modalBox"></div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+/* ═══════════════════════════ 图标 ═══════════════════════════ */
+const IC = {
+  gauge:'<path d="M12 14 18 8"/><circle cx="12" cy="14" r="8"/><path d="M12 2v2M4.9 6.3 6.4 7.8M2 14h2M20 14h2M17.6 7.8l1.5-1.5"/>',
+  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  plug:'<path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9zM12 18v3"/>',
+  layers:'<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>',
+  terminal:'<path d="m5 8 4 4-4 4M13 16h6"/>',
+  book:'<path d="M4 5a2 2 0 0 1 2-2h11v18H6a2 2 0 0 1-2-2V5z"/><path d="M9 3v18"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon:'<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  x:'<path d="M18 6 6 18M6 6l12 12"/>',
+  test:'<path d="M9 3h6M10 3v6.5L5.6 17A2 2 0 0 0 7.3 20h9.4a2 2 0 0 0 1.7-3L14 9.5V3"/><path d="M7.5 14h9"/>',
+  eye:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+  download:'<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+  send:'<path d="M4 12 20 4l-7 16-2.5-6.5L4 12z"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  warn:'<path d="M12 3 2 20h20L12 3z"/><path d="M12 9v5M12 17h.01"/>',
+  check:'<path d="m4 12 5 5L20 6"/>',
+  arrowUp:'<path d="M12 19V5M5 12l7-7 7 7"/>',
+  arrowDown:'<path d="M12 5v14M19 12l-7 7-7-7"/>',
+  filter:'<path d="M3 5h18l-7 8v6l-4-2v-4L3 5z"/>',
+  key:'<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8 2 2-1.5 1.5L21 9l-2 2-1.5-1.5L15 12"/>',
+  eyeOff:'<path d="M3 3l18 18"/><path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 6 10 6a17.3 17.3 0 0 1-2.9 3.7"/><path d="M6.3 7.6A16.6 16.6 0 0 0 2 12s3.6 6 10 6a9.8 9.8 0 0 0 4.1-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  zap:'<path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z"/>',
+  file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"/><path d="M14 3v5h5"/>',
+  cookie:'<path d="M12 3a9 9 0 1 0 9 9 4 4 0 0 1-5-5 4 4 0 0 1-4-4z"/><path d="M8.5 10h.01M11 15h.01M15 13.5h.01"/>',
+  edit:'<path d="M4 20h4L20 8l-4-4L4 16v4z"/><path d="m14 6 4 4"/>',
+  trash:'<path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/>',
+  chev:'<path d="m6 9 6 6 6-6"/>',
+  upload:'<path d="M12 17V5M7 10l5-5 5 5M4 21h16"/>'
+};
+const svg=(n,s=15)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[n]||''}</svg>`;
+
+/* ═══════════════════════════ 真实数据快照 ═══════════════════════════ */
+const DATA = {
+  meta:{ total:14804, errors:2269, inTok:809191605, outTok:7181778, channels:9, enabled:6, models:8 },
+  trend:[['09-04',635],['09-05',676],['09-06',1492],['09-07',517],['09-08',526],['09-09',365],['09-10',532],
+         ['09-11',142],['09-12',328],['09-13',636],['09-14',1191],['09-15',621],['09-16',683],['09-17',275],
+         ['09-18',4],['09-20',160],['09-21',470],['09-22',1612],['09-23',2059],['09-24',1888]],
+  channels:[
+    {id:'demo-openai-a',name:'演示中转 A（OpenAI）',proto:'openai',on:true,status:'ok',ms:459,models:5,pri:0,req:4518,err:565},
+    {id:'demo-openai-b',name:'演示中转 B（OpenAI）',proto:'openai',on:true,status:'degraded',ms:2003,models:2,pri:0,req:1827,err:88},
+    {id:'demo-openai-c',name:'演示中转 C（OpenAI）',proto:'openai',on:false,status:'down',ms:-1,models:1,pri:0,req:89,err:28},
+    {id:'demo-anthropic',name:'演示中转（Anthropic）',proto:'anthropic',on:true,status:'ok',ms:743,models:3,pri:0,req:287,err:12},
+    {id:'demo-gemini',name:'演示中转（Gemini）',proto:'gemini',on:true,status:'ok',ms:826,models:2,pri:0,req:246,err:9},
+    {id:'demo-notion',name:'演示 Notion 逆向',proto:'notion',on:true,status:'ok',ms:967,models:4,pri:0,req:146,err:10},
+    {id:'demo-notion-agent',name:'演示 Notion Agent',proto:'notion-agent',on:false,status:'down',ms:-1,models:1,pri:0,req:23,err:2},
+    {id:'demo-workbuddy',name:'演示 WorkBuddy 逆向',proto:'workbuddy',on:true,status:'ok',ms:1404,models:1,pri:0,req:1211,err:16},
+    {id:'demo-genspark',name:'演示 Genspark 网页会话',proto:'genspark',on:true,status:'ok',ms:436,models:2,pri:-5,req:4,err:0}
+  ],
+  models:[
+    {name:'demo-gpt-4o',chans:['demo-openai-a','demo-openai-b'],req:2764,err:0},
+    {name:'demo-claude-sonnet',chans:['demo-anthropic','demo-openai-a'],req:2147,err:0},
+    {name:'demo-gemini-pro',chans:['demo-gemini'],req:1367,err:0},
+    {name:'demo-deepseek-chat',chans:['demo-openai-a','demo-openai-b','demo-workbuddy'],req:1300,err:0},
+    {name:'demo-notion-gpt',chans:['demo-notion'],req:413,err:0},
+    {name:'demo-notion-agent-model',chans:['demo-notion-agent'],req:23,err:0},
+    {name:'demo-genspark-model',chans:['demo-genspark'],req:46,err:0},
+    {name:'demo-gpt-4o-mini',chans:['demo-openai-b','demo-openai-c'],req:361,err:0}
+  ],
+  logs:[
+    {t:'09-25 04:18:31',m:'demo-gpt-4o',c:'demo-openai-a',p:'openai',ok:true,ms:1741,i:931,o:2,id:'req_8f3a91c2'},
+    {t:'09-24 20:25:44',m:'demo-deepseek-chat',c:'demo-openai-b',p:'openai',ok:true,ms:13731,i:71419,o:493,id:'req_2c77b0e4'},
+    {t:'09-24 20:25:12',m:'demo-deepseek-chat',c:'demo-openai-b',p:'openai',ok:true,ms:30266,i:71390,o:288,id:'req_9a10ff35'},
+    {t:'09-24 20:24:38',m:'demo-deepseek-chat',c:'demo-workbuddy',p:'workbuddy',ok:true,ms:55218,i:71204,o:611,id:'req_40d8b17a'},
+    {t:'09-24 20:23:57',m:'demo-claude-sonnet',c:'demo-anthropic',p:'anthropic',ok:false,ms:8842,i:0,o:0,id:'req_5b2e6c90'},
+    {t:'09-24 20:23:02',m:'demo-gpt-4o',c:'demo-openai-c',p:'openai',ok:false,ms:5300,i:0,o:0,id:'req_71fa3d08'},
+    {t:'09-24 20:22:19',m:'demo-notion-gpt',c:'demo-notion',p:'notion',ok:true,ms:1820,i:1204,o:356,id:'req_c31e77ab'},
+    {t:'09-24 20:21:05',m:'demo-deepseek-chat',c:'demo-workbuddy',p:'workbuddy',ok:true,ms:1404,i:892,o:214,id:'req_e0b45d19'}
+  ],
+  donut:[{k:'正常',v:5,c:'var(--ok)'},{k:'降级',v:1,c:'var(--warn)'},{k:'不可用',v:3,c:'var(--err)'}]
+};
+
+/* ═══════════════════════════ 工具 ═══════════════════════════ */
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const nf=n=>Number(n||0).toLocaleString('en-US');
+const pct=(a,b)=>b?((a/b)*100):0;
+const fTok=n=>n>=1e8?(n/1e8).toFixed(2)+' 亿':n>=1e4?(n/1e4).toFixed(1)+' 万':nf(n);
+const fMs=ms=>ms<0?'—':ms<1000?ms+' ms':(ms/1000).toFixed(ms<10000?2:1)+' s';
+const stTxt={ok:'正常',degraded:'降级',down:'不可用',unknown:'未探测'};
+const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark'};
+
+function toast(msg,kind){
+  const el=document.createElement('div');
+  el.className='toast '+(kind||'');
+  el.innerHTML=svg(kind==='ok'?'check':'warn',14)+'<span>'+msg+'</span>';
+  $('#toasts').appendChild(el);
+  setTimeout(()=>{el.style.transition='opacity .3s,transform .3s';el.style.opacity=0;el.style.transform='translateY(8px)';setTimeout(()=>el.remove(),320)},2200);
+}
+function copyText(t,btn){
+  navigator.clipboard?.writeText(t).then(()=>{toast('已复制到剪贴板','ok')}).catch(()=>toast('复制失败，请手动选择'));
+  if(btn){const o=btn.innerHTML;btn.innerHTML=svg('check',13);setTimeout(()=>btn.innerHTML=o,1200)}
+}
+
+/* ═══════════════════════════ 图表 ═══════════════════════════ */
+function areaChart(data,w,h,opts){
+  const o=Object.assign({pad:[14,10,22,34],stroke:'var(--accent)'},opts||{});
+  const [pt,pr,pb,pl]=o.pad, iw=w-pl-pr, ih=h-pt-pb;
+  const vals=data.map(d=>d[1]), max=Math.max(...vals)*1.12||1, n=vals.length;
+  const X=i=>pl+(n<=1?iw/2:i*iw/(n-1)), Y=v=>pt+ih-(v/max)*ih;
+  const pts=vals.map((v,i)=>[X(i),Y(v)]);
+  let d='M'+pts[0][0]+','+pts[0][1];
+  for(let i=0;i<pts.length-1;i++){
+    const [x0,y0]=pts[i],[x1,y1]=pts[i+1],cx=(x0+x1)/2;
+    d+=' C'+cx+','+y0+' '+cx+','+y1+' '+x1+','+y1;
+  }
+  const area=d+' L'+X(n-1)+','+(pt+ih)+' L'+X(0)+','+(pt+ih)+' Z';
+  const grid=[0,.25,.5,.75,1].map(f=>{
+    const y=pt+ih*f, v=Math.round(max*(1-f));
+    return `<line x1="${pl}" y1="${y}" x2="${w-pr}" y2="${y}" stroke="var(--line)" stroke-dasharray="2 5" opacity=".55"/>
+            <text x="${pl-8}" y="${y+3.5}" text-anchor="end" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">${v>=1000?(v/1000).toFixed(1)+'k':v}</text>`;
+  }).join('');
+  const step=Math.ceil(n/7);
+  const xlab=data.map((dt,i)=>i%step===0||i===n-1?`<text x="${X(i)}" y="${h-5}" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)">${Array.isArray(dt)?dt[0]:dt}</text>`:'').join(''); // data 的元素是 [标签,数值] 二元组，横轴只取标签：直接写 ${dt} 会把整对拼成 "09-24,1888"
+  const dots=pts.map(([x,y],i)=>`<circle cx="${x}" cy="${y}" r="${i===n-1?3.6:2.2}" fill="${i===n-1?'var(--accent)':'var(--panel)'}" stroke="${o.stroke}" stroke-width="1.6"/>`).join('');
+  const gid='g'+Math.random().toString(36).slice(2,7);
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="overflow:visible">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity=".28"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid}
+    <path d="${area}" fill="url(#${gid})"/>
+    <path d="${d}" fill="none" stroke="${o.stroke}" stroke-width="2" stroke-linecap="round" pathLength="1"/>
+    ${dots}${xlab}
+  </svg>`;
+}
+function sparkline(vals,w=72,h=22,c,stretch){
+  const max=Math.max(...vals)||1,min=Math.min(...vals);
+  const rng=(max-min)||1;
+  const pts=vals.map((v,i)=>[i*(w/(vals.length-1)),h-3-((v-min)/rng)*(h-9)]);
+  const line='M'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L');
+  const stroke=c||'var(--accent)';
+  const gid='sp'+Math.random().toString(36).slice(2,7);
+  const area=stretch?`<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${stroke}" stop-opacity=".2"/><stop offset="100%" stop-color="${stroke}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="${line} L${pts[pts.length-1][0].toFixed(1)},${h} L${pts[0][0].toFixed(1)},${h} Z" fill="url(#${gid})"/>`:'';
+  return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"${stretch?' preserveAspectRatio="none"':''}>${area}<path d="${line}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"${stretch?' vector-effect="non-scaling-stroke"':''}/></svg>`;
+}
+function donut(parts,size=142,thick=13){
+  const total=parts.reduce((s,p)=>s+p.v,0)||1, r=(size-thick)/2, C=2*Math.PI*r;
+  let off=0;
+  const arcs=parts.map(p=>{
+    const len=(p.v/total)*C;
+    const seg=`<circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${p.c}" stroke-width="${thick}"
+      stroke-dasharray="${len-3} ${C-len+3}" stroke-dashoffset="${-off}" stroke-linecap="round"
+      transform="rotate(-90 ${size/2} ${size/2})" style="transition:stroke-dasharray .9s var(--ease)"/>`;
+    off+=len; return seg;
+  }).join('');
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--panel-3)" stroke-width="${thick}"/>
+    ${arcs}
+    <text x="${size/2}" y="${size/2-3}" text-anchor="middle" fill="var(--tx)" font-size="26" font-weight="700" font-family="var(--f-serif)">${total}</text>
+    <text x="${size/2}" y="${size/2+15}" text-anchor="middle" fill="var(--tx-3)" font-size="9.5" font-family="var(--f-mono)" letter-spacing=".5">渠道总数</text>
+  </svg>`;
+}
+
+/* ═══════════════════════════ 导航 ═══════════════════════════ */
+const NAV=[
+  {sec:'监控'},
+  {id:'overview',label:'总览',icon:'gauge'},
+  {id:'logs',label:'调用日志',icon:'list',cnt:()=>nf(DATA.meta.total)},
+  {sec:'资源'},
+  {id:'channels',label:'渠道管理',icon:'plug',cnt:()=>DATA.meta.channels},
+  {id:'models',label:'聚合模型',icon:'layers',cnt:()=>DATA.meta.models},
+  {sec:'工具'},
+  {id:'playground',label:'Playground',icon:'terminal'},
+  {id:'access',label:'接入信息',icon:'book'}
+];
+let page='overview';
+function renderRail(){
+  $('#railNav').innerHTML=NAV.map(it=>{
+    if(it.sec) return `<div class="rail-sec micro">${it.sec}</div>`;
+    const on=page===it.id;
+    return `<button class="rail-item${on?' on':''}" data-nav="${it.id}">${svg(it.icon,16)}<span>${it.label}</span>${it.cnt?`<span class="cnt">${it.cnt()}</span>`:''}</button>`;
+  }).join('');
+  $$('#railNav [data-nav]').forEach(b=>b.onclick=()=>go(b.dataset.nav));
+}
+function go(p){
+  page=p;
+  $('#crumbCur').textContent=(NAV.find(n=>n.id===p)||{}).label||'';
+  renderRail();
+  const v=$('#viewport');
+  v.innerHTML='';
+  ({overview:vOverview,channels:vChannels,models:vModels,logs:vLogs,playground:vPlayground,access:vAccess}[p]||vOverview)(v);
+  v.firstElementChild?.classList.add('page');
+  // 现在滚动容器是 .viewport 自己，scrollIntoView 不会生效，必须直接归零
+  v.scrollTop=0;
+}
+
+/* ═══════════════════════════ 页面：总览 ═══════════════════════════ */
+function kpiCard(o){
+  const vals=DATA.trend.map(t=>t[1]);
+  const tail=vals.slice(-12).map((v,i)=>v+((i%3)-1)*v*.06);
+  return `<div class="card kpi">
+    <div class="kpi-lbl">${svg(o.icon,12)}${o.lbl}</div>
+    <div class="kpi-val">${o.val}${o.unit?`<span class="unit">${o.unit}</span>`:''}</div>
+    <div class="kpi-foot">
+      <!-- 方向已由 +/- 与红涨绿跌双重点明，再放箭头是三重冗余 -->
+      <span class="delta ${o.dir}">${o.delta}</span>
+      <span>${o.note}</span>
+    </div>
+    <div class="kpi-spark">${sparkline(tail,300,46,o.dir==='down'?'var(--ok)':'var(--err)',true)}</div>
+  </div>`;
+}
+function vOverview(v){
+  const ok=DATA.donut[0].v, total=DATA.meta.channels;
+  v.innerHTML=`
+  <div class="page-hd">
+    <div>
+      <h1 class="page-title">总览</h1>
+      <div class="page-sub">网关运行概览 · 数据每 30 秒自动刷新 · 快照时间 2026-09-25 04:18</div>
+    </div>
+    <div class="page-actions">
+      <div class="tabs" id="rangeTabs">
+        <button class="tab" data-r="24h">24 小时</button>
+        <button class="tab on" data-r="7d">7 天</button>
+        <button class="tab" data-r="30d">30 天</button>
+      </div>
+      <button class="btn" onclick="toast('已导出用量报表（原型演示）','ok')">${svg('download',14)}导出</button>
+      <button class="btn primary" onclick="toast('已触发全量探测（原型演示）','ok')">${svg('test',14)}重新探测</button>
+    </div>
+  </div>
+
+  <div class="grid g4 stagger" style="margin-bottom:16px">
+    ${kpiCard({lbl:'累计请求',icon:'gauge',val:nf(DATA.meta.total),dir:'up',delta:'+12.4%',note:'较上一周期'})}
+    ${kpiCard({lbl:'成功率',icon:'check',val:'84.7',unit:'%',dir:'up',delta:'+2.1pt',note:`失败 ${nf(DATA.meta.errors)} 次`})}
+    ${kpiCard({lbl:'平均延迟',icon:'clock',val:'22.8',unit:'s',dir:'down',delta:'-8.3%',note:'流式含完整响应时长'})}
+    ${kpiCard({lbl:'Token 消耗',icon:'layers',val:fTok(DATA.meta.inTok),dir:'up',delta:'+18.6%',note:`输出 ${fTok(DATA.meta.outTok)}`})}
+  </div>
+
+  <div class="grid g12" style="margin-bottom:16px">
+    <div class="card c8">
+      <div class="card-hd">
+        <h3>请求趋势</h3><span class="sub">2026-09-04 → 09-24</span>
+        <div class="r"><span class="chip accent">峰值 2,059</span><span class="chip">日均 740</span></div>
+      </div>
+      <div class="card-bd" style="padding:18px 20px 10px">${areaChart(DATA.trend,760,238)}</div>
+    </div>
+    <div class="card c4">
+      <div class="card-hd"><h3>渠道健康</h3><span class="sub">${ok}/${total} 正常</span></div>
+      <div class="card-bd" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+        ${donut(DATA.donut)}
+        <div class="legend" style="flex:1;min-width:120px">
+          ${DATA.donut.map(d=>`<div class="legend-row"><span class="dot ${d.k==='正常'?'ok':d.k==='降级'?'degraded':'down'}"></span><span>${d.k}</span><span class="v">${d.v}</span></div>`).join('')}
+          <div class="divider" style="margin:6px 0"></div>
+          <div class="legend-row"><span class="muted">已启用</span><span class="v">${DATA.meta.enabled}</span></div>
+          <div class="legend-row"><span class="muted">已停用</span><span class="v">${total-DATA.meta.enabled}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid g12">
+    <div class="card c7">
+      <div class="card-hd"><h3>渠道流量与健康</h3><span class="sub">按请求量排序</span>
+        <div class="r"><button class="btn ghost sm" onclick="go('channels')">全部渠道 ${svg('arrowUp',12)}</button></div>
+      </div>
+      <div class="card-bd tight tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>渠道</th><th>状态</th><th class="t-r">延迟</th><th class="t-r">请求</th><th>成功率</th><th class="t-r">趋势</th></tr></thead>
+          <tbody>${DATA.channels.slice(0,7).map(c=>{
+            const rate=pct(c.req-c.err,c.req);
+            return `<tr class="clickable" onclick="openChannel('${c.id}')">
+              <td><div class="cell-main"><span class="avatar">${c.name.slice(0,2)}</span>
+                <div style="min-width:0"><div class="cell-name">${c.name}</div><div class="cell-sub">${c.id} · ${protoLabel[c.proto]}</div></div></div></td>
+              <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
+              <td class="t-r mono">${fMs(c.ms)}</td>
+              <td class="t-r mono">${nf(c.req)}</td>
+              <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div></td>
+              <td class="t-r">${sparkline([3,5,4,7,6,9,8,11,10,13].map(x=>x*(c.req/1500)),72,20)}</td>
+            </tr>`}).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card c5">
+      <div class="card-hd"><h3>热门模型</h3><span class="sub">按请求量</span>
+        <div class="r"><button class="btn ghost sm" onclick="go('models')">全部模型 ${svg('arrowUp',12)}</button></div>
+      </div>
+      <div class="card-bd">
+        <div class="bars">${DATA.models.slice(0,8).map(m=>{
+          const max=DATA.models[0].req;
+          return `<div class="bar-row" onclick="toast('模型详情：${m.name}')" style="cursor:pointer">
+            <span class="bar-name">${m.name}</span><span class="bar-val">${nf(m.req)}</span>
+            <span class="bar-track"><i style="width:${(m.req/max*100).toFixed(1)}%"></i></span>
+          </div>`}).join('')}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-hd"><h3>近期调用</h3><span class="sub">最近 8 条</span>
+      <div class="r"><button class="btn ghost sm" onclick="go('logs')">查看全部 ${svg('arrowUp',12)}</button></div>
+    </div>
+    <div class="card-bd tight tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>时间</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th></tr></thead>
+        <tbody>${DATA.logs.map(l=>`<tr class="clickable" onclick="openLog('${l.id}')">
+          <td class="mono" style="font-size:12px">${l.t}</td>
+          <td class="cell-name">${l.m}</td>
+          <td><span class="mono" style="font-size:12px">${l.c}</span></td>
+          <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
+          <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
+          <td class="t-r mono">${fMs(l.ms)}</td>
+          <td class="t-r mono">${nf(l.i)}</td>
+          <td class="t-r mono">${nf(l.o)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>
+  </div>`;
+  $$('#rangeTabs .tab',v).forEach(t=>t.onclick=()=>{$$('#rangeTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on')});
+}
+
+/* ═══════════════════════════ 页面：渠道 ═══════════════════════════ */
+let chTab='all', chQ='';
+function vChannels(v){
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">渠道管理</h1>
+      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 openai / anthropic / gemini / notion / workbuddy / genspark 协议</div></div>
+    <div class="page-actions">
+      <div class="menu-wrap">
+        <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')">${svg('zap',14)}导入${svg('chev',12)}</button>
+        <div class="menu" id="impMenu">
+          <div class="hd">Codex</div>
+          <button onclick="openImport('codex-rt')">${svg('zap',14)}Codex RT<span class="d">粘贴</span></button>
+          <button onclick="openImport('codex-json')">${svg('file',14)}Codex JSON<span class="d">文件</span></button>
+          <div class="sep"></div>
+          <div class="hd">Genspark</div>
+          <button onclick="openImport('gs-session')">${svg('cookie',14)}Genspark 会话<span class="d">粘贴</span></button>
+          <button onclick="openImport('gs-json')">${svg('file',14)}Genspark JSON<span class="d">文件</span></button>
+        </div>
+      </div>
+      <button class="btn" onclick="openTestModels()">${svg('test',14)}测试模型</button>
+      <button class="btn primary" onclick="openChannelForm()">${svg('plus',14)}添加渠道</button>
+    </div>
+  </div>
+
+  <div class="row wrap" style="margin-bottom:14px;gap:10px">
+    <div class="tabs" id="chTabs">
+      <button class="tab on" data-t="all">全部 <span class="n">${DATA.channels.length}</span></button>
+      <button class="tab" data-t="on">已启用 <span class="n">${DATA.channels.filter(c=>c.on).length}</span></button>
+      <button class="tab" data-t="off">已停用 <span class="n">${DATA.channels.filter(c=>!c.on).length}</span></button>
+    </div>
+    <div class="search" style="min-width:230px;margin-left:0">
+      ${svg('filter',14)}<input id="chQ" placeholder="按名称 / ID / 协议过滤…" value="${chQ}">
+    </div>
+    <button class="btn ml-auto" onclick="toast('已触发全量重探测（原型演示）','ok')">${svg('test',14)}全部重探测</button>
+  </div>
+
+  <div class="card"><div class="card-bd tight tbl-wrap" id="chTable"></div></div>`;
+  $$('#chTabs .tab',v).forEach(t=>t.onclick=()=>{chTab=t.dataset.t;$$('#chTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawChTable()});
+  $('#chQ',v).oninput=e=>{chQ=e.target.value;drawChTable()};
+  drawChTable();
+}
+function drawChTable(){
+  const box=$('#chTable'); if(!box) return;
+  const q=chQ.trim().toLowerCase();
+  let rows=DATA.channels.filter(c=>chTab==='all'||(chTab==='on'?c.on:!c.on));
+  if(q) rows=rows.filter(c=>(c.name+c.id+c.proto).toLowerCase().includes(q));
+  // 「全部」页签：已启用排前面，未启用的往后排；同组内按优先级、请求量降序
+  if(chTab==='all')rows=[...rows].sort((a,b)=>(b.on?1:0)-(a.on?1:0)||(b.pri-a.pri)||(b.req-a.req));
+  if(!rows.length){box.innerHTML='<div class="empty">没有匹配的渠道</div>';return}
+  box.innerHTML=`<table class="tbl">
+    <thead><tr>
+      <th style="width:38px"></th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">延迟</th>
+      <th class="t-r">模型</th><th class="t-r">优先级</th><th class="t-r">请求 / 错误</th><th>成功率</th><th class="t-r">操作</th>
+    </tr></thead>
+    <tbody>${rows.map(c=>{
+      const rate=c.req?pct(c.req-c.err,c.req):null;
+      return `<tr class="clickable">
+        <td><button class="switch ${c.on?'on':''}" onclick="event.stopPropagation();toggleCh('${c.id}')" title="${c.on?'停用':'启用'}"></button></td>
+        <td><div class="cell-main"><span class="avatar">${c.name.slice(0,2)}</span>
+          <div style="min-width:0"><div class="cell-name">${c.name}</div><div class="cell-sub">${c.id}</div></div></div></td>
+        <td><span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span></td>
+        <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
+        <td class="t-r mono">${fMs(c.ms)}</td>
+        <td class="t-r mono">${c.models}</td>
+        <td class="t-r mono">${c.pri}</td>
+        <td class="t-r mono">${nf(c.req)} <span class="muted">/ ${c.err?`<span style="color:var(--err)">${nf(c.err)}</span>`:0}</span></td>
+        <td>${rate===null?'<span class="muted mono">—</span>':`<div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div>`}</td>
+        <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'${c.id}'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('${c.id}')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('${c.id}')">详情</button>
+        </div></td>
+      </tr>`}).join('')}
+    </tbody></table>`;
+  $$('#chTable tbody tr',box).forEach((tr,i)=>tr.onclick=()=>openChannel(rows[i].id));
+}
+function toggleCh(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  c.on=!c.on;
+  toast(`${c.name} 已${c.on?'启用':'停用'}（原型演示，不会写入 config.json）`,c.on?'ok':'');
+  drawChTable();
+}
+function openChannel(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  const rate=c.req?pct(c.req-c.err,c.req):0;
+  drawer(`
+    <div class="drawer-hd">
+      <span class="avatar" style="width:34px;height:34px;border-radius:9px;font-size:13px">${c.name.slice(0,2)}</span>
+      <div style="min-width:0">
+        <h3 style="font-size:16px">${c.name}</h3>
+        <div class="cell-sub">${c.id}</div>
+      </div>
+      <div class="ml-auto row" style="gap:8px">
+        <span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span>
+        <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button>
+      </div>
+    </div>
+    <div class="drawer-bd">
+      <div class="row wrap" style="gap:9px;margin-bottom:18px">
+        <span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span>
+        <span class="tag">延迟 ${fMs(c.ms)}</span>
+        <span class="tag">优先级 ${c.pri}</span>
+        <span class="tag">${c.on?'已启用':'已停用'}</span>
+      </div>
+
+      <div class="sec-title">接入配置</div>
+      <dl class="kv">
+        <dt>Base URL</dt><dd class="mono">${chBaseUrl(c)}</dd>
+        <dt>密钥</dt><dd class="mono row" style="gap:6px">
+          <span id="chKeyTx" data-plain="0">${maskKey(fakeKey(c.id))}</span>
+          <button class="icon-btn" id="chKeyBtn" style="width:22px;height:22px" title="明文显示" onclick="toggleDrawerKey('${c.id}',this)">${svg('eye',12)}</button>
+          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyText(fakeKey('${c.id}'),this)">${svg('copy',12)}</button>
+        </dd>
+        <dt>协议</dt><dd class="mono">${c.proto}</dd>
+        <dt>模型数</dt><dd class="mono">${c.models} 个别名</dd>
+      </dl>
+
+      <div class="sec-title">近 7 天表现</div>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px">
+        <div class="card" style="padding:12px"><div class="micro">请求</div><div class="serif" style="font-size:24px;margin-top:4px">${nf(c.req)}</div></div>
+        <div class="card" style="padding:12px"><div class="micro">成功率</div><div class="serif" style="font-size:24px;margin-top:4px">${rate.toFixed(0)}%</div></div>
+        <div class="card" style="padding:12px"><div class="micro">错误</div><div class="serif" style="font-size:24px;margin-top:4px;color:${c.err?'var(--err)':'inherit'}">${nf(c.err)}</div></div>
+      </div>
+      <div style="margin-top:12px">${areaChart(DATA.trend.slice(-12),520,150,{pad:[12,10,22,32]})}</div>
+
+      <div class="sec-title">模型别名</div>
+      <div class="row wrap" style="gap:7px">
+        ${chAliases(c).map(r=>`<span class="chip">${esc(r.alias)}</span>`).join('')}
+      </div>
+    </div>
+    <div class="drawer-ft">
+      <button class="btn primary" onclick="openTestModels({channelId:'${c.id}'})">${svg('test',14)}测试模型</button>
+      <button class="btn" onclick="reprobe('${c.id}')">${svg('test',14)}重探测</button>
+      <button class="btn" onclick="closeDrawer();openChannelForm('${c.id}')">${svg('edit',14)}编辑</button>
+      <button class="btn ml-auto" onclick="toggleCh('${c.id}');openChannel('${c.id}')">${c.on?'停用':'启用'}</button>
+      <button class="btn danger" onclick="delChannel('${c.id}')">${svg('trash',14)}删除</button>
+    </div>`);
+}
+function toggleDrawerKey(id,btn){
+  const tx=$('#chKeyTx'); if(!tx)return;
+  const plain=tx.dataset.plain==='1';
+  tx.textContent=plain?maskKey(fakeKey(id)):fakeKey(id);
+  tx.dataset.plain=plain?'0':'1';
+  btn.innerHTML=svg(plain?'eye':'eyeOff',12);
+  btn.title=plain?'明文显示':'隐藏';
+}
+function reprobe(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  c.status=c.on?(Math.random()<0.75?'ok':'degraded'):c.status;
+  c.ms=c.status==='down'?-1:Math.round(320+Math.random()*2200);
+  toast(`✓ 已重新探测 ${c.name}（原型演示）`,'ok');
+  closeDrawer(); drawChTable();
+}
+function delChannel(id){
+  const c=DATA.channels.find(x=>x.id===id); if(!c)return;
+  if(!confirm('确定要删除渠道「'+id+'」吗？'))return;
+  DATA.channels.splice(DATA.channels.indexOf(c),1);
+  closeDrawer(); drawChTable();
+  toast('✓ 已删除渠道 '+id,'ok');
+}
+
+/* ═══════════════════════════ 页面：模型 ═══════════════════════════ */
+function vModels(v){
+  const rows=DATA.models;
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">聚合模型</h1>
+      <div class="page-sub">对外暴露 ${DATA.meta.models} 个模型 · OpenAI / Anthropic / Gemini 三套端点共用同一份别名表</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="toast('已导出模型清单（原型演示）','ok')">${svg('download',14)}导出清单</button>
+      <button class="btn primary" onclick="toast('已复制 /v1/models 响应（原型演示）','ok')">${svg('copy',14)}复制 /v1/models</button>
+    </div>
+  </div>
+
+  <div class="row wrap" style="margin-bottom:14px;gap:10px">
+    <div class="tabs" id="mTabs">
+      <button class="tab on" data-p="all">全部 <span class="n">${rows.length}</span></button>
+      <button class="tab" data-p="openai">OpenAI</button>
+      <button class="tab" data-p="anthropic">Anthropic</button>
+      <button class="tab" data-p="gemini">Gemini</button>
+    </div>
+    <div class="search" style="min-width:230px;margin-left:0">${svg('filter',14)}<input id="mQ" placeholder="搜索模型名…"></div>
+  </div>
+
+  <div class="grid g12" style="margin-bottom:16px">
+    <div class="card c4"><div class="card-bd">
+      <div class="micro">最多来源的模型</div>
+      <div class="serif" style="font-size:22px;margin-top:6px">gpt-5.6-sol</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">9 个渠道同时提供，故障切换余量最充足</div>
+    </div></div>
+    <div class="card c4"><div class="card-bd">
+      <div class="micro">单点依赖</div>
+      <div class="serif" style="font-size:22px;margin-top:6px">6 个</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">仅 1 个渠道提供的模型，存在单点风险</div>
+    </div></div>
+    <div class="card c4"><div class="card-bd">
+      <div class="micro">别名近似纠错</div>
+      <div class="serif" style="font-size:22px;margin-top:6px">已开启</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">模型名拼错时返回最接近的可用别名建议</div>
+    </div></div>
+  </div>
+
+  <div class="card"><div class="card-bd tight tbl-wrap" id="mTable"></div></div>`;
+  $('#mQ',v).oninput=()=>drawMTable();
+  $$('#mTabs .tab',v).forEach(t=>t.onclick=()=>{$$('#mTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawMTable()});
+  drawMTable();
+}
+function drawMTable(){
+  const box=$('#mTable'); if(!box)return;
+  const q=($('#mQ')?.value||'').trim().toLowerCase();
+  const p=$('#mTabs .tab.on')?.dataset.p||'all';
+  let rows=DATA.models.filter(m=>m.name.toLowerCase().includes(q));
+  if(p!=='all') rows=rows.filter(m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&(c.proto===p||(p==='openai'&&c.proto!=='notion'&&c.proto!=='workbuddy'&&c.proto!=='genspark'&&c.proto!=='notion-agent'))}));
+  // 仍有启用渠道的模型排前面，仅剩停用渠道的往后排；同组内按错误数升序、请求量降序
+  const live=m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&c.on});
+  rows=[...rows].sort((a,b)=>(live(b)?1:0)-(live(a)?1:0)||(a.err-b.err)||(b.req-a.req));
+  if(!rows.length){box.innerHTML='<div class="empty">没有匹配的模型</div>';return}
+  box.innerHTML=`<table class="tbl">
+    <thead><tr><th>模型别名</th><th class="t-r">来源渠道</th><th>提供方</th><th class="t-r">请求</th><th>错误</th><th>状态</th></tr></thead>
+    <tbody>${rows.map(m=>{
+      const single=m.chans.length===1;
+      const isLive=live(m);
+      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} onclick="openModel('${m.name}')">
+        <td><div class="cell-main"><span class="avatar">${svg('layers',13)}</span>
+          <div style="min-width:0"><div class="cell-name mono" style="font-size:12.5px">${m.name}</div>
+          <div class="cell-sub">${single?'单点依赖':'多源冗余'}</div></div></div></td>
+        <td class="t-r"><span class="mono">${m.chans.length}</span></td>
+        <td><div class="row wrap" style="gap:5px">${m.chans.slice(0,4).map(cid=>{
+          const c=DATA.channels.find(x=>x.id===cid);
+          return `<span class="chip ${c?c.proto:''}">${cid}</span>`}).join('')}${m.chans.length>4?`<span class="tag">+${m.chans.length-4}</span>`:''}</div></td>
+        <td class="t-r mono">${nf(m.req)}</td>
+        <td class="mono" style="color:${m.err?'var(--err)':'var(--tx-3)'}">${m.err}</td>
+        <td>${!isLive?'<span class="pill unknown"><span class="dot unknown"></span>来源已停用</span>':m.err===0?'<span class="pill ok"><span class="dot ok"></span>稳定</span>':'<span class="pill degraded"><span class="dot degraded"></span>有失败</span>'}</td>
+      </tr>`}).join('')}</tbody></table>`;
+  $$('#mTable tbody tr',box).forEach((tr,i)=>tr.onclick=()=>openModel(rows[i].name));
+}
+function openModel(name){
+  const m=DATA.models.find(x=>x.name===name); if(!m)return;
+  drawer(`
+    <div class="drawer-hd">
+      <span class="avatar" style="width:34px;height:34px;border-radius:9px">${svg('layers',15)}</span>
+      <div style="min-width:0"><h3 style="font-size:16px" class="mono">${m.name}</h3>
+      <div class="cell-sub">${m.chans.length} 个来源渠道</div></div>
+      <div class="ml-auto"><button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
+    </div>
+    <div class="drawer-bd">
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
+        <div class="card" style="padding:12px"><div class="micro">请求</div><div class="serif" style="font-size:24px;margin-top:4px">${nf(m.req)}</div></div>
+        <div class="card" style="padding:12px"><div class="micro">错误</div><div class="serif" style="font-size:24px;margin-top:4px">${m.err}</div></div>
+        <div class="card" style="padding:12px"><div class="micro">来源</div><div class="serif" style="font-size:24px;margin-top:4px">${m.chans.length}</div></div>
+      </div>
+      <div class="sec-title">调度优先级（按实际选中顺序）</div>
+      <div class="card card-bd" style="padding:0">
+        <table class="tbl"><thead><tr><th>#</th><th>渠道</th><th>协议</th><th class="t-r">延迟</th><th class="t-r">优先级</th><th>状态</th></tr></thead>
+        <tbody>${m.chans.map((cid,i)=>{
+          const c=DATA.channels.find(x=>x.id===cid)||{name:cid,proto:'openai',ms:-1,pri:0,status:'unknown'};
+          return `<tr><td class="mono">${i+1}</td><td class="cell-name">${c.name}</td>
+            <td><span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span></td>
+            <td class="t-r mono">${fMs(c.ms)}</td><td class="t-r mono">${c.pri}</td>
+            <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td></tr>`}).join('')}</tbody></table>
+      </div>
+      <div class="sec-title">调用示例</div>
+      <div class="code"><div class="code-hd"><span class="fname">curl</span>
+        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d "{\\"model\\":\\"${m.name}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"'>${svg('copy',13)}</button>
+      </div><pre>curl http://127.0.0.1:8787/v1/chat/completions \
+  -H <span class="s">"Authorization: Bearer $GATEWAY_KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{"model":"<span class="k">${m.name}</span>","messages":[{"role":"user","content":"hi"}]}'</span></pre></div>
+    </div>`);
+}
+
+/* ═══════════════════════════ 页面：日志 ═══════════════════════════ */
+function vLogs(v){
+  const rows=DATA.logs;
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">调用日志</h1>
+      <div class="page-sub">保留最近 800 条明细 · 累计 ${nf(DATA.meta.total)} 次请求 / ${nf(DATA.meta.errors)} 次失败</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="toast('已清空日志（原型演示，不会真的清空）')">清空</button>
+      <button class="btn primary" onclick="toast('已导出 CSV（原型演示）','ok')">${svg('download',14)}导出 CSV</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px"><div class="card-bd">
+    <div class="row wrap" style="gap:12px">
+      <div class="field" style="min-width:150px"><label>时间范围</label>
+        <select class="select"><option>最近 24 小时</option><option selected>最近 7 天</option><option>最近 30 天</option></select></div>
+      <div class="field" style="min-width:150px"><label>渠道</label>
+        <select class="select"><option>全部渠道</option>${DATA.channels.slice(0,10).map(c=>`<option>${c.name}</option>`).join('')}</select></div>
+      <div class="field" style="min-width:150px"><label>状态</label>
+        <select class="select"><option>全部</option><option>仅成功</option><option>仅失败</option></select></div>
+      <div class="field" style="flex:1;min-width:200px"><label>搜索</label>
+        <input class="input" placeholder="模型名 / 渠道 ID / 请求 ID…"></div>
+      <button class="btn" style="align-self:flex-end" onclick="toast('已应用筛选（原型演示）','ok')">${svg('filter',14)}应用筛选</button>
+    </div>
+  </div></div>
+
+  <div class="card"><div class="card-bd tight tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>时间</th><th>请求 ID</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
+      <tbody>${rows.map(l=>`<tr class="clickable" onclick="openLog('${l.id}')">
+        <td class="mono" style="font-size:12px;white-space:nowrap">${l.t}</td>
+        <td class="mono muted" style="font-size:11.5px">${l.id}</td>
+        <td class="cell-name">${l.m}</td>
+        <td class="mono" style="font-size:12px">${l.c}</td>
+        <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
+        <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
+        <td class="t-r mono">${fMs(l.ms)}</td>
+        <td class="t-r mono">${nf(l.i)}</td>
+        <td class="t-r mono">${nf(l.o)}</td>
+        <td class="t-r muted">${svg('eye',14)}</td>
+      </tr>`).join('')}</tbody>
+    </table>
+  </div></div>`;
+}
+function openLog(id){
+  const l=DATA.logs.find(x=>x.id===id)||DATA.logs[0];
+  drawer(`
+    <div class="drawer-hd">
+      <div style="min-width:0"><h3 style="font-size:15px" class="mono">${l.id}</h3>
+      <div class="cell-sub">${l.t}</div></div>
+      <div class="ml-auto row" style="gap:8px">
+        <span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span>
+        <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
+    </div>
+    <div class="drawer-bd">
+      <dl class="kv">
+        <dt>模型</dt><dd class="mono">${l.m}</dd>
+        <dt>渠道</dt><dd class="mono">${l.c}</dd>
+        <dt>协议</dt><dd><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></dd>
+        <dt>耗时</dt><dd class="mono">${fMs(l.ms)}</dd>
+        <dt>Token</dt><dd class="mono">输入 ${nf(l.i)} · 输出 ${nf(l.o)}</dd>
+      </dl>
+      ${l.ok?'':'<div class="sec-title">失败原因</div><div class="card" style="padding:12px;border-color:color-mix(in srgb,var(--err) 30%,transparent)"><span class="mono" style="font-size:12px;color:var(--err)">upstream_error: channel returned HTTP 429 (rate limited)，已自动切换到下一候选</span></div>'}
+      <div class="sec-title">请求体</div>
+      <div class="code"><div class="code-hd"><span class="fname">request.json</span>
+        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='{"model":"${l.m}","messages":[{"role":"user","content":"…"}],"stream":true}'>${svg('copy',13)}</button></div>
+        <pre>{ <span class="k">"model"</span>: <span class="s">"${l.m}"</span>,
+  <span class="k">"messages"</span>: [{ <span class="k">"role"</span>: <span class="s">"user"</span>, <span class="k">"content"</span>: <span class="s">"…"</span> }],
+  <span class="k">"stream"</span>: <span class="s">true</span> }</pre></div>
+      <div class="sec-title">响应摘要</div>
+      <div class="code"><div class="code-hd"><span class="fname">response.sse</span></div>
+        <pre><span class="c">// 上游 SSE 已透传，首块延迟 1.2s</span>
+data: {<span class="k">"choices"</span>:[{<span class="k">"delta"</span>:{<span class="k">"content"</span>:<span class="s">"pong"</span>}}]}
+data: [DONE]</pre></div>
+    </div>
+    <div class="drawer-ft">
+      <button class="btn primary" onclick="toast('已复制为 cURL（原型演示）','ok')">${svg('copy',14)}复制 cURL</button>
+      <button class="btn" onclick="toast('已复制请求 ID','ok')">复制请求 ID</button>
+    </div>`);
+}
+
+/* ═══════════════════════════ 页面：Playground ═══════════════════════════ */
+const PG=[{role:'user',text:'用一句话解释这个网关的故障切换策略。'},
+  {role:'ai',text:'按 priority + 健康状态排序候选渠道，逐个尝试；遇到 5xx、超时或网络错误立刻切下一个，连续失败的渠道进入指数退避冷却（1s→2s→4s…上限 60s）。',
+   usage:'输入 931 · 输出 86 · 1.74s',tool:null},
+  {role:'user',text:'帮我查一下 demo-openai-c 渠道最近的错误率。'},
+  {role:'ai',text:'demo-openai-c 近 7 天共 4,518 次请求、565 次错误，成功率 87.5%。错误集中在限流（429），建议把 priority 下调或让 演示中转 C（OpenAI） 承接部分流量。',
+   usage:'输入 1,204 · 输出 214 · 3.02s',
+   tool:{name:'get_channel_stats',args:'{ "channel": "demo-openai-c", "window": "7d" }',note:'该渠道无原生 function calling，由网关的工具调用仿真（tool-emu）注入 [TOOL_CALL] 协议解析'}}];
+function vPlayground(v){
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">Playground</h1>
+      <div class="page-sub">直接调试网关路由 · 请求走 /v1/chat/completions，与客户端调用完全一致</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="toast('已清空会话（原型演示）')">清空会话</button>
+      <button class="btn primary" onclick="toast('已复制为 cURL（原型演示）','ok')">${svg('copy',14)}复制 cURL</button>
+    </div>
+  </div>
+
+  <div class="pg">
+    <div class="card chat">
+      <div class="card-hd">
+        <span class="dot ok"></span>
+        <h3>会话</h3>
+        <span class="sub">自动选择渠道</span>
+        <div class="r"><span class="chip accent">[free]glm-5.3</span><span class="tag">流式</span></div>
+      </div>
+      <div class="chat-body" id="pgBody"></div>
+      <div class="composer">
+        <textarea id="pgInput" rows="1" placeholder="输入消息，Enter 发送 / Shift+Enter 换行…"></textarea>
+        <div class="composer-row">
+          <div class="row" style="gap:7px">
+            <span class="tag">stream=true</span><span class="tag">temp 0.7</span><span class="tag">max_tokens 2048</span>
+          </div>
+          <button class="send ml-auto" id="pgSend" title="发送">${svg('send',16)}</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="card">
+        <div class="card-hd"><h3>参数</h3></div>
+        <div class="card-bd" style="display:flex;flex-direction:column;gap:15px">
+          <div class="field"><label>模型</label>
+            <select class="select" id="pgModel">${DATA.models.slice(0,10).map((m,i)=>`<option${i===8?' selected':''}>${m.name}</option>`).join('')}</select></div>
+          <div>
+            <div class="param" style="margin-bottom:8px"><span class="k">Temperature</span><span class="v" id="tVal">0.7</span></div>
+            <input class="range" type="range" min="0" max="2" step="0.1" value="0.7" oninput="document.getElementById('tVal').textContent=this.value">
+          </div>
+          <div>
+            <div class="param" style="margin-bottom:8px"><span class="k">Max tokens</span><span class="v" id="mVal">2048</span></div>
+            <input class="range" type="range" min="64" max="8192" step="64" value="2048" oninput="document.getElementById('mVal').textContent=this.value">
+          </div>
+          <div class="param"><span class="k">流式输出</span><button class="switch on" onclick="this.classList.toggle('on')"></button></div>
+          <div class="param"><span class="k">工具调用仿真</span><button class="switch on" onclick="this.classList.toggle('on')"></button></div>
+          <div class="field"><label>System Prompt</label>
+            <textarea class="input" rows="3" placeholder="可选">你是一个严谨的技术助手。</textarea></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><h3>本次路由</h3><span class="sub">实时</span></div>
+        <div class="card-bd" style="display:flex;flex-direction:column;gap:11px">
+          <div class="legend-row"><span class="muted">候选渠道</span><span class="v mono">4</span></div>
+          <div class="legend-row"><span class="muted">实际命中</span><span class="v mono">demo-openai-c</span></div>
+          <div class="legend-row"><span class="muted">首块延迟</span><span class="v mono">312 ms</span></div>
+          <div class="legend-row"><span class="muted">总耗时</span><span class="v mono">1.74 s</span></div>
+          <div class="divider" style="margin:4px 0"></div>
+          <div class="row wrap" style="gap:6px">${['demo-openai-c','demo-anthropic','demo-openai-b','demo-openai-a'].map((c,i)=>`<span class="chip ${i===0?'accent':''}">${i+1}. ${c}</span>`).join('')}</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  drawPG();
+  $('#pgSend',v).onclick=pgSend;
+  $('#pgInput',v).onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();pgSend()}};
+}
+function drawPG(){
+  const b=$('#pgBody'); if(!b)return;
+  b.innerHTML=PG.map(m=>{
+    if(m.role==='user') return `<div class="msg user"><div class="who">YOU</div>
+      <div class="bubble"><div class="meta"><span class="role">你</span></div><div class="body">${m.text}</div></div></div>`;
+    return `<div class="msg ai"><div class="who">AI</div>
+      <div class="bubble"><div class="meta"><span class="role">助手</span><span class="chip accent" style="font-size:9.5px">[free]glm-5.3</span></div>
+      <div class="body">${m.text}
+      ${m.tool?`<div class="toolcall"><div class="tc-hd">${svg('terminal',12)}工具调用 · ${m.tool.name}</div>
+        <div class="mono" style="font-size:11.5px;color:var(--tx-2)">${m.tool.args}</div>
+        <div style="font-size:11.5px;color:var(--tx-3);margin-top:7px">${m.tool.note}</div></div>`:''}
+      </div>
+      <div class="usage"><span>${m.usage}</span><span>channel: demo-openai-c</span></div></div></div>`;
+  }).join('');
+  b.scrollTop=b.scrollHeight;
+}
+function pgSend(){
+  const t=$('#pgInput'); const text=(t.value||'').trim(); if(!text)return;
+  PG.push({role:'user',text}); t.value=''; drawPG();
+  const b=$('#pgBody');
+  const wait=document.createElement('div');
+  wait.className='msg ai';
+  wait.innerHTML=`<div class="who">AI</div><div class="bubble"><div class="meta"><span class="role">助手</span></div>
+    <div class="body" style="display:flex;gap:5px;align-items:center">
+      <span class="dot ok" style="animation:fade .8s infinite alternate"></span><span class="muted" style="font-size:12.5px">正在路由…</span></div></div>`;
+  b.appendChild(wait); b.scrollTop=b.scrollHeight;
+  setTimeout(()=>{
+    PG.push({role:'ai',text:'（原型演示）这里会返回网关的真实流式响应。设计稿只还原交互与视觉，未接入 /v1/chat/completions。',
+      usage:'输入 412 · 输出 48 · 0.86s'});
+    drawPG();
+  },900);
+}
+
+/* ═══════════════════════════ 页面：接入 ═══════════════════════════ */
+const SNIP={
+  curl:`<span class="c"># OpenAI 协议</span>
+curl http://127.0.0.1:8787/v1/chat/completions \\
+  -H <span class="s">"Authorization: Bearer $GATEWAY_KEY"</span> \\
+  -H <span class="s">"Content-Type: application/json"</span> \\
+  -d <span class="s">'{"model":"gpt-6-astra","messages":[{"role":"user","content":"hi"}]}'</span>
+
+<span class="c"># Anthropic 协议</span>
+curl http://127.0.0.1:8787/anthropic/v1/messages \\
+  -H <span class="s">"x-api-key: $GATEWAY_KEY"</span> \\
+  -H <span class="s">"anthropic-version: 2023-06-01"</span> \\
+  -d <span class="s">'{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'</span>`,
+  python:`<span class="k">from</span> openai <span class="k">import</span> OpenAI
+
+client = OpenAI(
+    base_url=<span class="s">"http://127.0.0.1:8787/v1"</span>,
+    api_key=<span class="s">"$GATEWAY_KEY"</span>,
+)
+resp = client.chat.completions.create(
+    model=<span class="s">"gpt-6-astra"</span>,
+    messages=[{<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"hi"</span>}],
+    stream=<span class="k">True</span>,
+)
+<span class="k">for</span> chunk <span class="k">in</span> resp:
+    <span class="k">print</span>(chunk.choices[0].delta.content <span class="k">or</span> <span class="s">""</span>, end=<span class="s">""</span>)`,
+  node:`<span class="k">import</span> OpenAI <span class="k">from</span> <span class="s">'openai'</span>;
+
+<span class="k">const</span> client = <span class="k">new</span> OpenAI({
+  baseURL: <span class="s">'http://127.0.0.1:8787/v1'</span>,
+  apiKey: process.env.GATEWAY_KEY,
+});
+
+<span class="k">const</span> stream = <span class="k">await</span> client.chat.completions.create({
+  model: <span class="s">'gpt-6-astra'</span>,
+  messages: [{ role: <span class="s">'user'</span>, content: <span class="s">'hi'</span> }],
+  stream: <span class="k">true</span>,
+});
+<span class="k">for await</span> (<span class="k">const</span> chunk <span class="k">of</span> stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? <span class="s">''</span>);`
+};
+function vAccess(v){
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">接入信息</h1>
+      <div class="page-sub">网关地址与密钥 · 三套协议端点共用同一个 GATEWAY_KEY</div></div>
+    <div class="page-actions">
+      <button class="btn" onclick="toast('已生成新的 GATEWAY_KEY（原型演示）')">${svg('key',14)}轮换密钥</button>
+      <button class="btn primary" onclick="toast('已复制全部接入信息（原型演示）','ok')">${svg('copy',14)}复制全部</button>
+    </div>
+  </div>
+
+  <div class="grid g3 stagger" style="margin-bottom:16px">
+    ${[
+      {t:'OpenAI 协议',p:'openai',u:'http://127.0.0.1:8787/v1',note:'/v1/chat/completions · /v1/models · /v1/embeddings'},
+      {t:'Anthropic 协议',p:'anthropic',u:'http://127.0.0.1:8787/anthropic',note:'/anthropic/v1/messages · 支持 stream'},
+      {t:'Gemini 协议',p:'gemini',u:'http://127.0.0.1:8787/gemini/v1beta',note:'/gemini/v1beta/models/{m}:generateContent'}
+    ].map(x=>`<div class="card"><div class="card-bd ep">
+      <div class="row"><span class="chip ${x.p}">${x.t}</span><span class="dot ok ml-auto"></span></div>
+      <div class="ep-url">${x.u}</div>
+      <div class="muted" style="font-size:11.5px">${x.note}</div>
+      <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">zz-gw-••••••••••••</span>
+        <button class="btn ghost sm ml-auto" onclick="copyText('zz-gw-your-key-here',this)">${svg('copy',13)}复制</button></div>
+    </div></div>`).join('')}
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-hd"><h3>调用示例</h3>
+      <div class="r"><div class="tabs" id="snipTabs">
+        <button class="tab on" data-s="curl">cURL</button><button class="tab" data-s="python">Python</button><button class="tab" data-s="node">Node</button>
+      </div></div>
+    </div>
+    <div class="card-bd">
+      <div class="code"><div class="code-hd"><span class="fname" id="snipName">example.sh</span>
+        <button class="btn ghost sm copy" id="snipCopy">${svg('copy',13)}复制</button></div>
+        <pre id="snipBody">${SNIP.curl}</pre></div>
+    </div>
+  </div>
+
+  <div class="grid g12">
+    <div class="card c7">
+      <div class="card-hd"><h3>客户端配置</h3><span class="sub">DSH / Cursor / Cline</span></div>
+      <div class="card-bd tight tbl-wrap">
+        <table class="tbl"><thead><tr><th>客户端</th><th>Base URL</th><th>模型名</th></tr></thead><tbody>
+          <tr><td class="cell-name">DSH（OpenAI 兼容）</td><td class="mono" style="font-size:12px">http://127.0.0.1:8787/v1</td><td class="mono" style="font-size:12px">gpt-6-astra</td></tr>
+          <tr><td class="cell-name">DSH（Anthropic 兼容）</td><td class="mono" style="font-size:12px">http://127.0.0.1:8787/anthropic</td><td class="mono" style="font-size:12px">claude-opus-5</td></tr>
+          <tr><td class="cell-name">Cursor</td><td class="mono" style="font-size:12px">http://127.0.0.1:8787/v1</td><td class="mono" style="font-size:12px">自定义别名</td></tr>
+          <tr><td class="cell-name">Cline</td><td class="mono" style="font-size:12px">http://127.0.0.1:8787/v1</td><td class="mono" style="font-size:12px">自定义别名</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+    <div class="card c5">
+      <div class="card-hd"><h3>管理端点</h3><span class="sub">需要 ADMIN_KEY</span></div>
+      <div class="card-bd tight tbl-wrap">
+        <table class="tbl"><thead><tr><th>路径</th><th>方法</th><th>说明</th></tr></thead><tbody>
+          ${[['/console','GET','Web 控制台'],['/healthz','GET','存活探针（免鉴权）'],['/admin/api/status','GET','渠道状态'],['/admin/api/usage','GET','用量统计'],['/admin/api/recheck','POST','触发重探测'],['/admin/api/channel','POST','改优先级 / 启停']].map(r=>`<tr><td class="mono" style="font-size:12px">${r[0]}</td><td><span class="tag">${r[1]}</span></td><td class="muted" style="font-size:12px">${r[2]}</td></tr>`).join('')}
+        </tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;border-color:color-mix(in srgb,var(--warn) 34%,transparent)">
+    <div class="card-bd row" style="gap:12px;align-items:flex-start">
+      <span style="color:var(--warn)">${svg('warn',17)}</span>
+      <div>
+        <div style="font-weight:600;font-size:13.5px">安全提示</div>
+        <div class="muted" style="font-size:12.5px;margin-top:4px">当前容器尚未配置密钥，正在使用启动时自动生成的临时密钥；监听地址为 0.0.0.0。若需长期运行，建议在 .env 里固定 ADMIN_KEY / GATEWAY_KEY，并把监听地址收敛到 127.0.0.1。</div>
+      </div>
+      <button class="btn ml-auto" onclick="toast('已打开密钥设置（原型演示）')">去设置</button>
+    </div>
+  </div>`;
+  $$('#snipTabs .tab',v).forEach(t=>t.onclick=()=>{
+    $$('#snipTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');
+    const s=t.dataset.s;
+    $('#snipBody').innerHTML=SNIP[s];
+    $('#snipName').textContent=s==='curl'?'example.sh':s==='python'?'example.py':'example.mjs';
+    $('#snipCopy').onclick=function(){copyText($('#snipBody').textContent,this)};
+  });
+  $('#snipCopy').onclick=function(){copyText($('#snipBody').textContent,this)};
+}
+
+/* ═══════════════════════════ 弹窗：通用容器 ═══════════════════════════ */
+function modal(html,wide){
+  const box=$('#modalBox');
+  box.className='modal'+(wide?' wide':'');
+  box.innerHTML=html;
+  $('#mask').classList.add('on');
+  box.scrollTop=0;
+}
+function closeModal(){$('#mask').classList.remove('on')}
+function setStatus(el,text,cls){if(!el)return;el.className='status-line '+(cls||'');el.textContent=text}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function toggleMenu(id){const m=document.getElementById(id);if(!m)return;const on=m.classList.contains('on');$$('.menu.on').forEach(x=>x.classList.remove('on'));m.classList.toggle('on',!on)}
+document.addEventListener('click',e=>{if(!e.target.closest('.menu-wrap'))$$('.menu.on').forEach(m=>m.classList.remove('on'))});
+
+/* ═══════════════════════════ 渠道：协议元数据 / 派生字段 ═══════════════════════════ */
+const PROTO_META={
+  openai:{label:'OpenAI 兼容',base:'',key:'中转站 / 官方 v1 的 API Key（sk- 开头）'},
+  anthropic:{label:'Anthropic',base:'',key:'Anthropic API Key（sk-ant- 开头）'},
+  gemini:{label:'Gemini',base:'',key:'Google AI Studio 的 API Key'},
+  notion:{label:'Notion 逆向',base:'https://app.notion.com',key:'浏览器 F12 → Application → Cookies → app.notion.com → 复制 token_v2 的完整值'},
+  'notion-agent':{label:'Notion Agent',base:'https://api.notion.com',key:'开发者门户集成令牌（ntn_ 开头，连接需勾选「查看会话并与代理交互」）'},
+  workbuddy:{label:'WorkBuddy',base:'https://www.workbuddy.ai/v2',key:'CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头，勿填 refreshToken）'},
+  codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
+  genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'}
+};
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark'];
+const MODEL_POOL=['gpt-6-astra','claude-opus-5','glm-5.3','kimi-k3','grok-4.6','gpt-5.6-sol','deepseek-v4.1-flash','qwen3.5-max','gemini-3.1-pro','claude-sonnet-4.6'];
+/* 原型：模拟上游 /v1/models 返回的一大批模型（真实中转站动辄上百个），用来演示列表式 + 搜索 */
+const PROBE_POOL=[
+  'gpt-6-astra','gpt-5.6-sol','gpt-5.6','gpt-5.6-mini','gpt-5.4-turbo','gpt-4o','gpt-4o-mini','gpt-4.1','o5-preview','o4-mini',
+  'claude-opus-5','claude-opus5','claude-sonnet-4.6','claude-3-7-sonnet','claude-3-5-haiku','claude-opus-4.1',
+  'gemini-3.1-pro','gemini-3.1-flash','gemini-2.5-pro','gemini-2.5-flash','gemini-2.0-flash-lite',
+  'glm-5.3','glm-5.3-free','glm-4.6-air','glm-4-flash','kimi-k3','kimi-k3-free','kimi-k2.5',
+  'grok-4.6','grok-4.6-mini','deepseek-v4.1-flash','deepseek-v4.1-flash-free','deepseek-v4-pro','deepseek-r2',
+  'qwen3.5-max','qwen3.5-plus','qwen3-coder','qwen3-vl-72b','doubao-1.6-pro','doubao-seed-1.6',
+  'ernie-5.0','hunyuan-t2','minimax-m2','step-3','spark-x1','yi-lightning-v2'
+];
+
+/* 原型里没有真实密钥，用 id 派生一个稳定假值，仅用于演示「明文显示 / 复制」交互 */
+function fakeKey(id){
+  let h=0;for(const ch of String(id))h=(h*131+ch.charCodeAt(0))>>>0;
+  const hex=h.toString(16).padStart(8,'0');
+  return 'sk-'+String(id).slice(0,4)+hex+hex.split('').reverse().join('');
+}
+const maskKey=k=>k.slice(0,7)+'•'.repeat(20)+k.slice(-4);
+function chBaseUrl(c){const pm=PROTO_META[c.proto]||{};return pm.base||('https://'+c.id+'.example.com/v1')}
+/* 渠道别名：优先用快照里真实归属的模型，不足 c.models 时用模型池补齐，保证表格 / 抽屉 / 编辑器三处数量一致 */
+function chAliases(c){
+  const out=DATA.models.filter(m=>m.chans.includes(c.id))
+    .map(m=>({alias:m.name,upstream:m.name.replace(/^\[free\]/,'').replace(/^wb-/,'')}));
+  for(const p of MODEL_POOL){
+    if(out.length>=c.models)break;
+    if(out.some(r=>r.alias===p))continue;
+    out.push({alias:p,upstream:p});
+  }
+  return out;
+}
+
+/* ═══════════════════════════ 弹窗：添加 / 编辑渠道 ═══════════════════════════ */
+let modalChId=null, modalModels=[];
+function openChannelForm(id){
+  const c=id?DATA.channels.find(x=>x.id===id):null;
+  modalChId=c?c.id:null;
+  modalModels=c?chAliases(c).map(r=>({...r})):[];
+  probeFound=[]; probeSel=new Set(); probeQ='';
+  const proto=c?c.proto:'openai', pm=PROTO_META[proto];
+  modal(`
+    <div class="m-hd">
+      <span class="m-ico">${svg(c?'edit':'plus',14)}</span>
+      <h2>${c?'编辑渠道 · '+esc(c.name||c.id):'添加渠道'}</h2>
+      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+    </div>
+    <div class="m-bd">
+      <div class="field-row">
+        <div class="field" style="flex:1.7"><label>渠道 ID <span class="help">英文 / 数字 / _ / -</span></label>
+          <input class="input" id="f-id" value="${esc(c?c.id:'')}" placeholder="vendor-x" ${c?'disabled':''}></div>
+        <div class="field"><label>显示名称</label>
+          <input class="input" id="f-name" value="${esc(c?c.name:'')}" placeholder="中转 X"></div>
+      </div>
+      <div class="field-row">
+        <div class="field" style="flex:1.5"><label>协议</label>
+          <select class="select" id="f-proto">${PROTO_ORDER.map(p=>`<option value="${p}" ${p===proto?'selected':''}>${PROTO_META[p].label}（${p}）</option>`).join('')}</select></div>
+        <div class="field" style="flex:.7"><label>优先级</label>
+          <input class="input" id="f-pri" type="number" value="${c?c.pri:0}"></div>
+        <div class="field" style="flex:.7"><label>启用</label>
+          <select class="select" id="f-on"><option value="1" ${(c?c.on:true)?'selected':''}>是</option><option value="0" ${(c?!c.on:false)?'selected':''}>否</option></select></div>
+      </div>
+      <div class="field"><label>Base URL <span class="help">${pm.base?'默认 '+pm.base:'按上游填写'}</span></label>
+        <input class="input" id="f-base" value="${esc(c?chBaseUrl(c):'')}" placeholder="https://api.example.com/v1"></div>
+      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / workbuddy 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
+        <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
+      <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
+        <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
+      <div class="field"><label>API Key</label>
+        <div class="row" style="gap:8px">
+          <input class="input" id="f-key" type="password" value="${esc(c?fakeKey(c.id):'')}" placeholder="sk-… 或 notion 的 token_v2">
+          <button class="btn ghost sm" id="f-key-btn" style="flex:0 0 auto" onclick="toggleKeyField()">${svg('eye',13)}明文</button>
+        </div>
+        <span class="help" id="f-key-help">${pm.key}</span></div>
+      <div class="field">
+        <label>模型 <span class="help" id="modelsCount">${modalModels.length} 个</span></label>
+        <div class="probe-bar">
+          <button class="btn ghost sm" onclick="addModelRow()">${svg('plus',13)}添加一行</button>
+          <button class="btn ghost sm" id="f-probe" onclick="probeUpstream()">${svg('test',13)}从上游探测更多</button>
+          <span class="status-line ml-auto" id="probeStatus"></span>
+        </div>
+        <div class="models-box" id="modelsEditor"></div>
+        <div class="probe-panel" id="probePanel" style="display:none"></div>
+      </div>
+      <div class="field"><label class="toggle"><input type="checkbox" id="f-autoAlias" ${c&&c.autoAlias?'checked':''}> 自动路由上游所有模型 <span class="help">（不勾则只暴露上表所列）</span></label></div>
+    </div>
+    <div class="m-ft">
+      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
+      <button class="btn primary" onclick="saveChannel()">${svg('check',13)}保存渠道</button>
+    </div>`);
+  renderModelRows();
+  $('#f-proto').onchange=e=>{
+    const p=e.target.value, m=PROTO_META[p];
+    const cur=$('#f-base').value.trim();
+    const isDefault=!cur||Object.values(PROTO_META).some(x=>x.base===cur);
+    if(m.base&&isDefault)$('#f-base').value=m.base;
+    $('#f-base').previousElementSibling.querySelector('.help').textContent=m.base?'默认 '+m.base:'按上游填写';
+    $('#f-key-help').textContent=m.key;
+    renderModelRows();
+  };
+}
+function renderModelRows(){
+  const box=$('#modelsEditor'); if(!box)return;
+  const upLabel=$('#f-proto').value==='notion-agent'?'上游智能体名称':'上游真实模型';
+  box.innerHTML=modalModels.length
+    ? `<div class="model-row head"><div>对外名称 alias</div><div>${upLabel}</div><div></div><div></div></div>`+modalModels.map((r,i)=>`<div class="model-row" data-i="${i}">
+        <input data-k="alias" value="${esc(r.alias)}" placeholder="alias">
+        <input data-k="upstream" value="${esc(r.upstream)}" placeholder="upstream model">
+        <button class="tst" title="测试此模型" onclick="testRowModel(${i})">测</button>
+        <button class="del" title="删除" onclick="delModelRow(${i})">×</button>
+      </div>`).join('')
+    : '<div class="model-empty">还没有模型<br><span class="help">点「添加一行」手动加，或「从上游探测更多」批量拉取</span></div>';
+  $('#modelsCount').textContent=modalModels.length+' 个';
+  $$('#modelsEditor .model-row:not(.head)').forEach(row=>{
+    const i=Number(row.dataset.i);
+    $$('input',row).forEach(inp=>inp.oninput=()=>{modalModels[i][inp.dataset.k]=inp.value});
+  });
+}
+function addModelRow(){
+  modalModels.push({alias:'',upstream:''});
+  renderModelRows();
+  const rows=$$('#modelsEditor .model-row:not(.head)');
+  rows[rows.length-1]?.querySelector('input')?.focus();
+}
+function delModelRow(i){modalModels.splice(i,1);renderModelRows();if(probeShown())renderProbeList()}
+let probeFound=[],probeSel=new Set(),probeQ='';
+const probeShown=()=>$('#probePanel')?.style.display!=='none';
+async function probeUpstream(){
+  const base=$('#f-base').value.trim(), key=$('#f-key').value;
+  const st=$('#probeStatus'), btn=$('#f-probe');
+  if(!base)return setStatus(st,'先填 Base URL','bad');
+  if(!key)return setStatus(st,'先填 API Key','bad');
+  btn.disabled=true; btn.innerHTML=svg('test',13)+'探测中…';
+  setStatus(st,'请求 /v1/models …','wait');
+  await sleep(800+Math.random()*700);
+  const n=16+Math.floor(Math.random()*14);
+  probeFound=[...PROBE_POOL].sort(()=>Math.random()-.5).slice(0,n);
+  probeSel=new Set(); probeQ='';
+  setStatus(st,`✓ ${probeFound.length} 个 · ${Math.round(420+Math.random()*2300)} ms`,'ok');
+  btn.disabled=false; btn.innerHTML=svg('test',13)+'重新探测';
+  renderProbeList();
+  $('#probePanel')?.scrollIntoView({block:'nearest'});
+}
+function renderProbeList(){
+  const box=$('#probePanel'); if(!box)return;
+  const have=new Set(modalModels.flatMap(r=>[r.alias,r.upstream]).filter(Boolean));
+  [...probeSel].forEach(m=>{if(have.has(m))probeSel.delete(m)});
+  box.style.display='';
+  box.innerHTML=`
+    <div class="pp-hd">
+      <span class="t">探测到 ${probeFound.length} 个</span>
+      <div class="pp-search">${svg('filter',12)}<input id="probeQ" value="${esc(probeQ)}" placeholder="搜索模型名…"></div>
+    </div>
+    <div class="pp-list">${probeFound.map(m=>{
+      const has=have.has(m);
+      return `<label class="pp-row${has?' have':''}" data-m="${esc(m)}" title="${esc(m)}">
+        <input type="checkbox" ${probeSel.has(m)?'checked':''} ${has?'disabled':''}>
+        <span class="nm">${esc(m)}</span>${has?'<span class="tag2">已在表中</span>':''}
+      </label>`}).join('')}</div>
+    <div class="pp-ft">
+      <span class="sel" id="probeSelCnt"></span>
+      <button class="btn ghost sm ml-auto" onclick="probeSelectAll()">全选</button>
+      <button class="btn ghost sm" onclick="probeClearSel()">清空</button>
+      <button class="btn primary sm" id="probeAddBtn" onclick="probeAddSelected()">${svg('plus',13)}加入所选</button>
+    </div>`;
+  const qi=$('#probeQ',box);
+  qi.oninput=()=>{probeQ=qi.value;filterProbeRows()};
+  $$('.pp-row',box).forEach(row=>{
+    const cb=$('input',row);
+    cb.onchange=()=>{cb.checked?probeSel.add(row.dataset.m):probeSel.delete(row.dataset.m);updateProbeSel()};
+  });
+  filterProbeRows();
+}
+function filterProbeRows(){
+  const box=$('#probePanel'); if(!box)return;
+  const q=probeQ.trim().toLowerCase();
+  $$('.pp-row',box).forEach(row=>row.style.display=(!q||row.dataset.m.toLowerCase().includes(q))?'':'none');
+  updateProbeSel();
+}
+function updateProbeSel(){
+  const box=$('#probePanel'); if(!box)return;
+  const n=probeSel.size, cnt=$('#probeSelCnt',box), btn=$('#probeAddBtn',box);
+  if(cnt)cnt.textContent=n?`已选 ${n} 个`:'勾选要加入的模型';
+  if(btn)btn.disabled=!n;
+}
+function probeSelectAll(){
+  const box=$('#probePanel'); if(!box)return;
+  $$('.pp-row',box).forEach(row=>{
+    if(row.style.display==='none')return;
+    const cb=$('input',row); if(cb.disabled)return;
+    cb.checked=true; probeSel.add(row.dataset.m);
+  });
+  updateProbeSel();
+}
+function probeClearSel(){
+  const box=$('#probePanel'); if(!box)return;
+  $$('.pp-row',box).forEach(row=>{$('input',row).checked=false});
+  probeSel.clear(); updateProbeSel();
+}
+function probeAddSelected(){
+  const names=[...probeSel]; if(!names.length)return;
+  const existing=new Set(modalModels.flatMap(r=>[r.alias,r.upstream]).filter(Boolean));
+  let n=0;
+  for(const m of names){if(existing.has(m))continue;modalModels.push({alias:m,upstream:m});existing.add(m);n++}
+  probeSel.clear();
+  renderModelRows(); renderProbeList();
+  toast(n?`已加入 ${n} 个模型`:'所选模型都已在表中',n?'ok':'');
+}
+function testRowModel(i){
+  const row=modalModels[i]; if(!row)return;
+  if(!modalChId)return toast('先保存渠道再测试该模型');
+  if(!row.upstream)return toast('上游模型名为空');
+  closeModal();
+  openTestModels({channelId:modalChId,only:row.alias||row.upstream});
+}
+function toggleKeyField(){
+  const inp=$('#f-key'), btn=$('#f-key-btn');
+  const show=inp.type==='password';
+  inp.type=show?'text':'password';
+  btn.innerHTML=svg(show?'eyeOff':'eye',13)+(show?'隐藏':'明文');
+}
+function saveChannel(){
+  const id=($('#f-id').value||'').trim();
+  const base=$('#f-base').value.trim();
+  const key=$('#f-key').value.trim();
+  if(!id)return toast('渠道 ID 必填');
+  if(!/^[A-Za-z0-9_-]+$/.test(id))return toast('渠道 ID 只能用英文 / 数字 / _ / -');
+  if(!modalChId&&DATA.channels.some(c=>c.id===id))return toast('渠道 ID「'+id+'」已存在');
+  if(!base)return toast('Base URL 必填');
+  if(!key)return toast('API Key 必填');
+  const seen=new Set();
+  for(const r of modalModels){
+    const alias=(r.alias||'').trim(), up=(r.upstream||'').trim();
+    if(!alias&&!up)continue;
+    if(!up)return toast('alias「'+alias+'」缺上游模型名');
+    const a=alias||up;
+    if(seen.has(a))return toast('重复 alias：'+a);
+    seen.add(a);
+  }
+  const on=$('#f-on').value==='1';
+  const patch={name:($('#f-name').value.trim()||id),proto:$('#f-proto').value,pri:Number($('#f-pri').value)||0,on,models:seen.size};
+  const cur=DATA.channels.find(c=>c.id===id);
+  if(cur)Object.assign(cur,patch);
+  else DATA.channels.unshift({id,...patch,status:'unknown',ms:-1,req:0,err:0});
+  closeModal();
+  drawChTable();
+  toast(`✓ 已保存渠道 ${id}（原型演示，未写入 config.json）`,'ok');
+}
+
+/* ═══════════════════════════ 弹窗：导入（Codex RT / Codex JSON / Genspark） ═══════════════════════════ */
+const IMPORT_META={
+  'codex-rt':{ico:'zap',title:'导入 Codex RT',mode:'paste',label:'Refresh Token',ph:'rt.1.…',
+    hint:'rt.1. 开头，与 sub2api「手动导入 RT」同款。',
+    steps:'粘贴后自动完成：换令牌 → 拿账号 → 拉订阅模型列表 → 建渠道。',
+    warn:'RT 一次性轮转：导入后这份字符串即作废。同一个号别同时挂 sub2api 和这里，谁刷新谁活。',
+    bad:v=>/^rt\.1\./.test(v)?'':'Refresh Token 应以 rt.1. 开头'},
+  'codex-json':{ico:'file',title:'导入 Codex JSON',mode:'file',accept:'.json,application/json',
+    hint:'选择 sub2api 导出的 codex JSON（含 access_token / refresh_token），支持多选批量导入。',
+    warn:'兼容三种结构：扁平 {refresh_token} · {credentials:{…}} · {accounts:[{credentials:{…}}]}。'},
+  'gs-session':{ico:'cookie',title:'导入 Genspark 会话',mode:'paste',label:'会话 JSON / session_id',ph:'{"sessionId":"xxxxxxxx-…:hex…"}',
+    hint:'Claw session.enc 内容、整段 cookie、或裸 session_id 均可。',
+    steps:'自动提取 sessionId 换成渠道 key，并免费验证登录（is_login，不耗积分）。',
+    warn:'只用 sessionId，JSON 里的 gsk- apiKey 不需要。session 约 20 天过期，过期后重新登录再导一份。',
+    bad:v=>parseGsSessionId(v)?'':'没找到 sessionId（uuid:hex 格式）'},
+  'gs-json':{ico:'file',title:'导入 Genspark JSON',mode:'file',accept:'.json,.txt,application/json,text/plain',
+    hint:'选择 genspark 会话 JSON 文件，支持多选批量：每个新会话自动建一个新渠道（多号 = 多份每日积分）。',
+    warn:'同一 key 视为刷新会话，不会重复建渠道。'}
+};
+function parseCodexUnits(j){
+  const has=o=>o&&(o.access_token||o.refresh_token);
+  const list=Array.isArray(j.accounts)?j.accounts:(Array.isArray(j.data)?j.data:null);
+  if(has(j))return [j];
+  if(has(j.credentials))return [j.credentials];
+  if(list)return list.map(a=>(a&&a.credentials)||a).filter(has);
+  return [];
+}
+function parseGsSessionId(raw){
+  const s=String(raw);
+  const m=s.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?::[0-9a-f]{8,})?/i);
+  if(m)return m[0];
+  const m2=s.match(/"sessionId"\s*:\s*"([^"]+)"/i)||s.match(/session_id\s*[:=]\s*"?([A-Za-z0-9:\-_.]+)/i);
+  return m2?m2[1]:null;
+}
+function openImport(kind){
+  const m=IMPORT_META[kind];
+  const body=m.mode==='paste'
+    ? `<div class="field"><label>${m.label} <span class="help">${m.hint}</span></label>
+         <textarea class="input" id="impText" rows="3" placeholder="${esc(m.ph)}"></textarea></div>
+       ${m.steps?`<div class="field"><span class="help">${m.steps}</span></div>`:''}
+       <div class="field"><span class="help">⚠ ${m.warn}</span></div>
+       <div class="field"><span class="status-line" id="impStatus"></span></div>`
+    : `<label class="drop" for="impFile">
+         <span class="d-ico">${svg('upload',16)}</span>
+         <span>点击选择文件（可多选批量导入）</span>
+         <span class="d-sub">${esc(m.accept)}</span>
+       </label>
+       <input type="file" id="impFile" class="hide" accept="${m.accept}" multiple onchange="importFiles('${kind}',this)">
+       <div class="field"><span class="help">${m.hint}</span></div>
+       <div class="field"><span class="help">⚠ ${m.warn}</span></div>
+       <div class="field"><span class="status-line" id="impStatus"></span></div>
+       <div class="field" id="impFilesWrap" style="display:none"><label>处理结果</label><div class="test-out" id="impFiles"></div></div>`;
+  modal(`
+    <div class="m-hd">
+      <span class="m-ico">${svg(m.ico,14)}</span>
+      <h2>${m.title}</h2>
+      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+    </div>
+    <div class="m-bd">${body}</div>
+    <div class="m-ft">
+      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
+      ${m.mode==='paste'
+        ? `<button class="btn primary" id="impGo" onclick="doImport('${kind}')">${svg('upload',13)}导入</button>`
+        : `<button class="btn primary" onclick="document.getElementById('impFile').click()">${svg('upload',13)}选择文件</button>`}
+    </div>`);
+  if(m.mode==='paste')setTimeout(()=>$('#impText')?.focus(),60);
+}
+async function doImport(kind){
+  const m=IMPORT_META[kind];
+  const raw=($('#impText').value||'').trim();
+  const st=$('#impStatus'), btn=$('#impGo');
+  if(!raw)return setStatus(st,'先粘贴内容','bad');
+  const bad=m.bad&&m.bad(raw);
+  if(bad)return setStatus(st,'✗ '+bad,'bad');
+  btn.disabled=true; const old=btn.innerHTML; btn.innerHTML=svg('upload',13)+'导入中…';
+  const isGs=kind==='gs-session';
+  const steps=isGs?['提取 sessionId …','换取渠道 key …','免费验证登录（不耗积分）…']:['换取 access_token …','拉取订阅账号 …','拉取模型列表 …','建渠道 …'];
+  for(const s of steps){setStatus(st,'⏳ '+s,'wait');await sleep(520+Math.random()*420)}
+  const tag=isGs?(parseGsSessionId(raw)||'session').slice(0,14):('codex-'+Math.abs(hash(raw)).toString(16).slice(0,4));
+  setStatus(st,`✓ ${isGs?'会话':'RT'}已导入 → 渠道 ${tag} · 6 个模型${isGs?'':' · RT 已轮转存新值'}`,'ok');
+  btn.disabled=false; btn.innerHTML=old;
+  toast(`✓ 已导入 ${tag}（原型演示，未真正建渠道）`,'ok');
+}
+function hash(s){let h=0;for(const c of String(s))h=(h*31+c.charCodeAt(0))|0;return h}
+async function importFiles(kind,input){
+  const files=Array.from(input.files||[]);
+  input.value='';
+  if(!files.length)return;
+  const st=$('#impStatus'), out=$('#impFiles'), wrap=$('#impFilesWrap');
+  const isGs=kind==='gs-json';
+  wrap.style.display=''; out.innerHTML='';
+  let ok=0,bad=0;
+  for(let i=0;i<files.length;i++){
+    const f=files[i];
+    setStatus(st,`⏳ ${i+1}/${files.length} ${f.name}`,'wait');
+    let row;
+    try{
+      const text=await f.text();
+      if(isGs){
+        const sid=parseGsSessionId(text);
+        if(!sid)throw new Error('没找到 sessionId');
+        ok++; row=`<div class="r ok"><span>${svg('check',12)}</span><span>${esc(f.name)}</span><span class="e">session ${esc(sid.slice(0,16))}… · 已建/刷新渠道</span></div>`;
+      }else{
+        const j=JSON.parse(text);
+        const units=parseCodexUnits(j);
+        if(!units.length)throw new Error('文件里找不到 access_token / refresh_token');
+        const withRt=units.filter(u=>u.refresh_token).length;
+        if(!withRt)throw new Error(units.length+' 个账号均缺少 refresh_token');
+        ok+=withRt; row=`<div class="r ok"><span>${svg('check',12)}</span><span>${esc(f.name)}</span><span class="e">解析到 ${withRt} 个账号 · 已导入 ${withRt} 个渠道</span></div>`;
+      }
+    }catch(e){
+      bad++; row=`<div class="r fail"><span>${svg('warn',12)}</span><span>${esc(f.name)}</span><span class="e">${esc(e.message||e)}</span></div>`;
+    }
+    out.insertAdjacentHTML('beforeend',row);
+    await sleep(240);
+  }
+  setStatus(st,`✓ 成功 ${ok} · 失败 ${bad}`.replace('失败 0','全部成功'),bad?'bad':'ok');
+  toast(bad?`⚠ 导入完成：成功 ${ok}，失败 ${bad}`:`✓ 已导入 ${ok} 个渠道（原型演示）`,bad?'':'ok');
+}
+
+/* ═══════════════════════════ 弹窗：测试模型 ═══════════════════════════ */
+const REPLIES=['收到，链路正常。','pong','这是一条测试回复。','网关转发成功，模型响应正常。','hi，我在这里。'];
+function simTest(chanId){
+  const c=DATA.channels.find(x=>x.id===chanId);
+  const dead=!c||!c.on||c.status==='down';
+  const failRate=c&&c.req?(c.err/c.req):0;
+  if(dead||failRate>=0.5){
+    const err=dead
+      ? (c&&c.status==='down'?'upstream connection timeout after 5000ms':'channel disabled：该渠道已停用')
+      : 'upstream_error：上游近期失败率 '+Math.round(failRate*100)+'%，已自动降权';
+    return {ok:false,status:dead?502:429,ms:Math.round(4200+Math.random()*1600),error:err};
+  }
+  const ms=c.status==='degraded'?Math.round(1800+Math.random()*2200):Math.round(320+Math.random()*1600);
+  return {ok:true,ms,i:Math.round(8+Math.random()*90),o:Math.round(4+Math.random()*40),reply:REPLIES[Math.floor(Math.random()*REPLIES.length)]};
+}
+function openTestModels(opts){
+  opts=opts||{};
+  const chId=opts.channelId||null, only=opts.only||null;
+  const groups=[];
+  for(const c of DATA.channels){
+    if(chId&&c.id!==chId)continue;
+    if(!c.on)continue;
+    let items=chAliases(c).map(r=>r.alias);
+    if(only)items=items.filter(a=>a===only);
+    if(items.length)groups.push({c,items});
+  }
+  const total=groups.reduce((s,g)=>s+g.items.length,0);
+  modal(`
+    <div class="m-hd">
+      <span class="m-ico">${svg('test',14)}</span>
+      <h2>测试模型</h2>
+      <span class="help">${chId?'· 渠道 '+esc(chId):'· 完整调度'}</span>
+      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+    </div>
+    <div class="m-bd">
+      <div class="probe-bar">
+        <span class="status-line wait" id="testSummary">${total} 个模型</span>
+        <label class="toggle ml-auto"><input type="checkbox" id="testAll" checked> 全选</label>
+      </div>
+      <div class="test-list" id="testList">${total
+        ? groups.map(g=>`<div class="g">${esc(g.c.name||g.c.id)}<span class="n">${g.items.length} 个</span></div>`+
+            g.items.map(a=>`<label><input type="checkbox" data-m="${esc(a)}" data-c="${esc(g.c.id)}" checked><span>${esc(a)}</span></label>`).join('')
+          ).join('')
+        : '<div class="model-empty">暂无可测试模型 — 先在渠道里配置别名</div>'}</div>
+      <div class="field"><label>提示词 <span class="help">默认 hi</span></label>
+        <input class="input" id="testPrompt" value="hi"></div>
+      <div class="field" id="testOutWrap" style="display:none"><label>测试结果</label>
+        <div class="test-out" id="testOut"></div></div>
+    </div>
+    <div class="m-ft">
+      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
+      <button class="btn primary" id="testRun" onclick="runTests()" ${total?'':'disabled'}>${svg('send',13)}运行测试</button>
+    </div>`,true);
+  const all=$('#testAll');
+  all.onchange=()=>$$('#testList input[type=checkbox]').forEach(c=>c.checked=all.checked);
+  $$('#testList input[type=checkbox]').forEach(c=>c.onchange=()=>{
+    const boxes=$$('#testList input[type=checkbox]');
+    all.checked=boxes.every(x=>x.checked);
+    all.indeterminate=!all.checked&&boxes.some(x=>x.checked);
+  });
+}
+async function runTests(){
+  const picks=$$('#testList input:checked').map(i=>({model:i.dataset.m,chan:i.dataset.c}));
+  if(!picks.length)return toast('至少勾选一个模型');
+  const prompt=($('#testPrompt').value||'').trim()||'hi';
+  const btn=$('#testRun'), old=btn.innerHTML;
+  btn.disabled=true; btn.innerHTML=svg('send',13)+'运行中…';
+  const wrap=$('#testOutWrap'), out=$('#testOut');
+  wrap.style.display=''; out.innerHTML='';
+  let okN=0;
+  for(const p of picks){
+    out.insertAdjacentHTML('beforeend',`<div class="r wait" id="testPending">${svg('clock',12)} 测试 ${esc(p.model)} @ ${esc(p.chan)} …</div>`);
+    out.scrollTop=out.scrollHeight;
+    await sleep(300+Math.random()*420);
+    $('#testPending')?.remove();
+    const r=simTest(p.chan);
+    if(r.ok)okN++;
+    out.insertAdjacentHTML('beforeend',r.ok
+      ? `<div class="r ok"><span>${svg('check',12)}</span><span><b>${esc(p.chan)}</b> · ${r.ms} ms · ${r.i}+${r.o} tok</span><span class="e">"${esc(r.reply)}"</span></div>`
+      : `<div class="r fail"><span>${svg('warn',12)}</span><span><b>${esc(p.chan)}</b> · ${r.ms} ms · HTTP ${r.status}</span><span class="e">${esc(r.error)}</span></div>`);
+    out.scrollTop=out.scrollHeight;
+  }
+  btn.disabled=false; btn.innerHTML=old;
+  setStatus($('#testSummary'),`${okN}/${picks.length} 通过 · 提示词「${prompt}」`,okN===picks.length?'ok':okN?'wait':'bad');
+  toast(okN===picks.length?`✓ 全部通过（${okN}/${picks.length}）`:okN===0?`✗ 全部失败（0/${picks.length}）`:`⚠ ${okN}/${picks.length} 通过`,okN===picks.length?'ok':'');
+}
+
+/* ═══════════════════════════ 抽屉 / 主题 / 全局 ═══════════════════════════ */
+function drawer(html){
+  $('#drawer').innerHTML=html;
+  $('#drawer').classList.add('on'); $('#scrim').classList.add('on');
+}
+function closeDrawer(){$('#drawer').classList.remove('on');$('#scrim').classList.remove('on')}
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    if($('#mask').classList.contains('on'))closeModal();
+    else closeDrawer();
+  }
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('#globalSearch').focus()}
+});
+function setTheme(t){
+  document.documentElement.dataset.theme=t;
+  try{localStorage.setItem('zzcs-theme',t)}catch(e){}
+  $('#themeBtn').innerHTML=svg(t==='dark'?'sun':'moon',15);
+  $('#themeBtn').title=t==='dark'?'切换到浅色':'切换到深色';
+}
+$('#themeBtn').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+$('#globalSearch').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){const q=e.target.value.trim();if(!q)return;chQ=q;go('channels');toast('已在渠道中搜索：'+q,'ok')}
+});
+(function init(){
+  let t='dark'; try{t=localStorage.getItem('zzcs-theme')||'dark'}catch(e){}
+  setTheme(t);
+  go('overview');
+})();
+</script>
+
+
+</body></html>

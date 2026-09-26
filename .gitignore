@@ -1,0 +1,31 @@
+node_modules/
+config.json
+*.log
+.DS_Store
+arena-data/
+_*.js
+# 改造过程的中间产物（提取的 head/CSS、diff 转储、改造前备份），不提交
+_*.txt
+_*.css
+_*.html
+_*.jsonl
+_tmp_*
+*.bak-*
+# server.js 每次持久化前会把 config.json 复制成 config.json.bak（含全部渠道明文 apiKey），绝不入仓库
+*.bak
+.trae-html-share-packages/
+
+# Prism 研究凭据（活令牌，禁止提交）
+_prism_cookies.json
+_prism_*.txt
+_prism_state.json
+
+# 视觉工具工作区（控制台截图/粘贴的图片，可能拍到真实渠道与密钥）与离线归档包
+.dsh-vision-toolkit/
+*.zip
+
+# 运行时持久化数据：docker-compose 把它挂载回宿主机，每次请求都会改写，不入版本控制
+usage.json
+
+# 本机部署密钥（compose 注入用，绝不入仓库）
+.env

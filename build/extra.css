@@ -1,0 +1,8 @@
+/* ═══════════════════════════ 生产补充（设计稿未覆盖的部分） ═══════════════════════════ */
+/* 全部复用设计令牌，不引入新颜色，保证与设计稿同源 */
+
+/* Codex 协议 chip（设计稿快照里没有 codex 渠道，故缺这条） */
+.chip.codex{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
+
+/* 渠道抽屉里的密钥行需要能换行 */
+.kv dd.mono{font-family:var(--f-mono)}
