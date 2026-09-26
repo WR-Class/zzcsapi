@@ -5,7 +5,7 @@
 <title>ZZCSAPI · 控制台原型 v0.1</title>
 <!-- 全站字体：MiSans（小米开源，可商用）· 官方 CDN，按 unicode-range 分片按需加载 -->
 <link rel="preconnect" href="https://font.sec.miui.com" crossorigin="">
-<link rel="preconnect" href="https://cdn-file.演示中转 B（OpenAI）os.mi.com" crossorigin="">
+<link rel="preconnect" href="https://cdn-file.hyperos.mi.com" crossorigin="">
 <link href="https://font.sec.miui.com/font/css?family=MiSans:400,500,600,700:MiSans" rel="stylesheet">
 <style>
 /* ═══════════════════════════ tokens ═══════════════════════════ */
@@ -229,7 +229,7 @@ textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-si
 .chip.gemini{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 32%,transparent);background:var(--violet-soft)}
 .chip.notion{color:var(--tx-2);border-color:var(--line-2);background:var(--panel-3)}
 .chip.notion-agent{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
-.chip.演示 WorkBuddy 逆向{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+.chip.workbuddy{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 .chip.genspark{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 30%,transparent);background:var(--violet-soft)}
 .chip.accent{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 
@@ -583,7 +583,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
     <div class="viewport" id="viewport">
   <div class="page-hd page">
     <div><h1 class="page-title">渠道管理</h1>
-      <div class="page-sub">30 个渠道 · 已启用 19 · 支持 openai / anthropic / gemini / notion / 演示 WorkBuddy 逆向 / genspark 协议</div></div>
+      <div class="page-sub">30 个渠道 · 已启用 19 · 支持 openai / anthropic / gemini / notion / workbuddy / genspark 协议</div></div>
     <div class="page-actions">
       <div class="menu-wrap">
         <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z"></path></svg>导入<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></button>
@@ -636,9 +636,9 @@ table.tbl tbody tr:last-child td{border-bottom:0}
           <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-c')">详情</button>
         </div></td>
       </tr><tr class="clickable">
-        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('演示中转 A（OpenAI）')" title="停用"></button></td>
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-a')" title="停用"></button></td>
         <td><div class="cell-main"><span class="avatar">演A</span>
-          <div style="min-width:0"><div class="cell-name">演示中转 A（OpenAI）</div><div class="cell-sub">演示中转 A（OpenAI）</div></div></div></td>
+          <div style="min-width:0"><div class="cell-name">演示中转 A（OpenAI）</div><div class="cell-sub">demo-openai-a</div></div></div></td>
         <td><span class="chip openai">OpenAI</span></td>
         <td><span class="pill down"><span class="dot down"></span>不可用</span></td>
         <td class="t-r mono">5.30 s</td>
@@ -647,9 +647,9 @@ table.tbl tbody tr:last-child td{border-bottom:0}
         <td class="t-r mono">2,812 <span class="muted">/ <span style="color:var(--err)">49</span></span></td>
         <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:98.2574679943101%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">98%</span></div></td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'演示中转 A（OpenAI）'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('演示中转 A（OpenAI）')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('演示中转 A（OpenAI）')">详情</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-a'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-a')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-a')">详情</button>
         </div></td>
       </tr><tr class="clickable">
         <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-a')" title="停用"></button></td>
@@ -668,10 +668,10 @@ table.tbl tbody tr:last-child td{border-bottom:0}
           <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-a')">详情</button>
         </div></td>
       </tr><tr class="clickable">
-        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('演示 WorkBuddy 逆向')" title="停用"></button></td>
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-workbuddy')" title="停用"></button></td>
         <td><div class="cell-main"><span class="avatar">演W</span>
-          <div style="min-width:0"><div class="cell-name">演示 WorkBuddy 逆向</div><div class="cell-sub">演示 WorkBuddy 逆向</div></div></div></td>
-        <td><span class="chip 演示 WorkBuddy 逆向">WorkBuddy</span></td>
+          <div style="min-width:0"><div class="cell-name">演示 WorkBuddy 逆向</div><div class="cell-sub">demo-workbuddy</div></div></div></td>
+        <td><span class="chip workbuddy">WorkBuddy</span></td>
         <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
         <td class="t-r mono">1.40 s</td>
         <td class="t-r mono">1</td>
@@ -679,13 +679,13 @@ table.tbl tbody tr:last-child td{border-bottom:0}
         <td class="t-r mono">1,211 <span class="muted">/ <span style="color:var(--err)">16</span></span></td>
         <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:98.67877786952931%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">99%</span></div></td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'演示 WorkBuddy 逆向'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('演示 WorkBuddy 逆向')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('演示 WorkBuddy 逆向')">详情</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-workbuddy'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-workbuddy')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-workbuddy')">详情</button>
         </div></td>
       </tr><tr class="clickable">
         <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-b')" title="停用"></button></td>
-        <td><div class="cell-main"><span class="avatar">演示中转 B（OpenAI）</span>
+        <td><div class="cell-main"><span class="avatar">演B</span>
           <div style="min-width:0"><div class="cell-name">演示中转 B（OpenAI）</div><div class="cell-sub">demo-openai-b</div></div></div></td>
         <td><span class="chip openai">OpenAI</span></td>
         <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
@@ -700,9 +700,9 @@ table.tbl tbody tr:last-child td{border-bottom:0}
           <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-b')">详情</button>
         </div></td>
       </tr><tr class="clickable">
-        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('演示 Notion 逆向')" title="停用"></button></td>
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-notion')" title="停用"></button></td>
         <td><div class="cell-main"><span class="avatar">演N</span>
-          <div style="min-width:0"><div class="cell-name">演示 Notion 逆向</div><div class="cell-sub">演示 Notion 逆向</div></div></div></td>
+          <div style="min-width:0"><div class="cell-name">演示 Notion 逆向</div><div class="cell-sub">demo-notion</div></div></div></td>
         <td><span class="chip notion">Notion 逆向</span></td>
         <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
         <td class="t-r mono">2.46 s</td>
@@ -711,14 +711,14 @@ table.tbl tbody tr:last-child td{border-bottom:0}
         <td class="t-r mono">246 <span class="muted">/ <span style="color:var(--err)">95</span></span></td>
         <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:61.382113821138205%;background:var(--err)"></i></div><span class="mono" style="font-size:11px">61%</span></div></td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'演示 Notion 逆向'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('演示 Notion 逆向')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('演示 Notion 逆向')">详情</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-notion'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-notion')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-notion')">详情</button>
         </div></td>
       </tr><tr class="clickable">
-        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('演示中转 C（OpenAI）')" title="停用"></button></td>
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-c')" title="停用"></button></td>
         <td><div class="cell-main"><span class="avatar">演C</span>
-          <div style="min-width:0"><div class="cell-name">演示中转 C（OpenAI）</div><div class="cell-sub">演示中转 C（OpenAI）</div></div></div></td>
+          <div style="min-width:0"><div class="cell-name">演示中转 C（OpenAI）</div><div class="cell-sub">demo-openai-c</div></div></div></td>
         <td><span class="chip openai">OpenAI</span></td>
         <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
         <td class="t-r mono">415 ms</td>
@@ -727,14 +727,14 @@ table.tbl tbody tr:last-child td{border-bottom:0}
         <td class="t-r mono">127 <span class="muted">/ <span style="color:var(--err)">64</span></span></td>
         <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:49.60629921259843%;background:var(--err)"></i></div><span class="mono" style="font-size:11px">50%</span></div></td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'演示中转 C（OpenAI）'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('演示中转 C（OpenAI）')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('演示中转 C（OpenAI）')">详情</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-c'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-c')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-c')">详情</button>
         </div></td>
       </tr><tr class="clickable">
-        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('演示中转 B（OpenAI）')" title="停用"></button></td>
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-openai-b')" title="停用"></button></td>
         <td><div class="cell-main"><span class="avatar">演B</span>
-          <div style="min-width:0"><div class="cell-name">演示中转 B（OpenAI）</div><div class="cell-sub">演示中转 B（OpenAI）</div></div></div></td>
+          <div style="min-width:0"><div class="cell-name">演示中转 B（OpenAI）</div><div class="cell-sub">demo-openai-b</div></div></div></td>
         <td><span class="chip openai">OpenAI</span></td>
         <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
         <td class="t-r mono">1.53 s</td>
@@ -743,14 +743,14 @@ table.tbl tbody tr:last-child td{border-bottom:0}
         <td class="t-r mono">57 <span class="muted">/ <span style="color:var(--err)">29</span></span></td>
         <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:49.122807017543856%;background:var(--err)"></i></div><span class="mono" style="font-size:11px">49%</span></div></td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'演示中转 B（OpenAI）'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('演示中转 B（OpenAI）')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('演示中转 B（OpenAI）')">详情</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-openai-b'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-openai-b')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-openai-b')">详情</button>
         </div></td>
       </tr><tr class="clickable">
-        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('演示 Notion Agent')" title="停用"></button></td>
+        <td><button class="switch on" onclick="event.stopPropagation();toggleCh('demo-notion-agent')" title="停用"></button></td>
         <td><div class="cell-main"><span class="avatar">演N</span>
-          <div style="min-width:0"><div class="cell-name">演示 Notion Agent</div><div class="cell-sub">演示 Notion Agent</div></div></div></td>
+          <div style="min-width:0"><div class="cell-name">演示 Notion Agent</div><div class="cell-sub">demo-notion-agent</div></div></div></td>
         <td><span class="chip notion-agent">Notion Agent</span></td>
         <td><span class="pill ok"><span class="dot ok"></span>正常</span></td>
         <td class="t-r mono">872 ms</td>
@@ -759,9 +759,9 @@ table.tbl tbody tr:last-child td{border-bottom:0}
         <td class="t-r mono">23 <span class="muted">/ <span style="color:var(--err)">2</span></span></td>
         <td><div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:91.30434782608695%;background:var(--ok)"></i></div><span class="mono" style="font-size:11px">91%</span></div></td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'演示 Notion Agent'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('演示 Notion Agent')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('演示 Notion Agent')">详情</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'demo-notion-agent'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('demo-notion-agent')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('demo-notion-agent')">详情</button>
         </div></td>
       </tr><tr class="clickable">
         <td><button class="switch on" onclick="event.stopPropagation();toggleCh('genspark')" title="停用"></button></td>
@@ -923,11 +923,11 @@ const DATA = {
     {t:'09-25 04:18:31',m:'demo-gpt-4o',c:'demo-openai-a',p:'openai',ok:true,ms:1741,i:931,o:2,id:'req_8f3a91c2'},
     {t:'09-24 20:25:44',m:'demo-deepseek-chat',c:'demo-openai-b',p:'openai',ok:true,ms:13731,i:71419,o:493,id:'req_2c77b0e4'},
     {t:'09-24 20:25:12',m:'demo-deepseek-chat',c:'demo-openai-b',p:'openai',ok:true,ms:30266,i:71390,o:288,id:'req_9a10ff35'},
-    {t:'09-24 20:24:38',m:'demo-deepseek-chat',c:'demo-workbuddy',p:'演示 WorkBuddy 逆向',ok:true,ms:55218,i:71204,o:611,id:'req_40d8b17a'},
+    {t:'09-24 20:24:38',m:'demo-deepseek-chat',c:'demo-workbuddy',p:'workbuddy',ok:true,ms:55218,i:71204,o:611,id:'req_40d8b17a'},
     {t:'09-24 20:23:57',m:'demo-claude-sonnet',c:'demo-anthropic',p:'anthropic',ok:false,ms:8842,i:0,o:0,id:'req_5b2e6c90'},
     {t:'09-24 20:23:02',m:'demo-gpt-4o',c:'demo-openai-c',p:'openai',ok:false,ms:5300,i:0,o:0,id:'req_71fa3d08'},
     {t:'09-24 20:22:19',m:'demo-notion-gpt',c:'demo-notion',p:'notion',ok:true,ms:1820,i:1204,o:356,id:'req_c31e77ab'},
-    {t:'09-24 20:21:05',m:'demo-deepseek-chat',c:'demo-workbuddy',p:'演示 WorkBuddy 逆向',ok:true,ms:1404,i:892,o:214,id:'req_e0b45d19'}
+    {t:'09-24 20:21:05',m:'demo-deepseek-chat',c:'demo-workbuddy',p:'workbuddy',ok:true,ms:1404,i:892,o:214,id:'req_e0b45d19'}
   ],
   donut:[{k:'正常',v:5,c:'var(--ok)'},{k:'降级',v:1,c:'var(--warn)'},{k:'不可用',v:3,c:'var(--err)'}]
 };
@@ -1180,7 +1180,7 @@ function vChannels(v){
   v.innerHTML=`
   <div class="page-hd">
     <div><h1 class="page-title">渠道管理</h1>
-      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 openai / anthropic / gemini / notion / 演示 WorkBuddy 逆向 / genspark 协议</div></div>
+      <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 openai / anthropic / gemini / notion / workbuddy / genspark 协议</div></div>
     <div class="page-actions">
       <div class="menu-wrap">
         <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')">${svg('zap',14)}导入${svg('chev',12)}</button>
@@ -1387,7 +1387,7 @@ function drawMTable(){
   const q=($('#mQ')?.value||'').trim().toLowerCase();
   const p=$('#mTabs .tab.on')?.dataset.p||'all';
   let rows=DATA.models.filter(m=>m.name.toLowerCase().includes(q));
-  if(p!=='all') rows=rows.filter(m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&(c.proto===p||(p==='openai'&&c.proto!=='notion'&&c.proto!=='演示 WorkBuddy 逆向'&&c.proto!=='genspark'&&c.proto!=='notion-agent'))}));
+  if(p!=='all') rows=rows.filter(m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&(c.proto===p||(p==='openai'&&c.proto!=='notion'&&c.proto!=='workbuddy'&&c.proto!=='genspark'&&c.proto!=='notion-agent'))}));
   // 仍有启用渠道的模型排前面，仅剩停用渠道的往后排；同组内按错误数升序、请求量降序
   const live=m=>m.chans.some(cid=>{const c=DATA.channels.find(x=>x.id===cid);return c&&c.on});
   rows=[...rows].sort((a,b)=>(live(b)?1:0)-(live(a)?1:0)||(a.err-b.err)||(b.req-a.req));
@@ -1595,7 +1595,7 @@ function vPlayground(v){
           <div class="legend-row"><span class="muted">首块延迟</span><span class="v mono">312 ms</span></div>
           <div class="legend-row"><span class="muted">总耗时</span><span class="v mono">1.74 s</span></div>
           <div class="divider" style="margin:4px 0"></div>
-          <div class="row wrap" style="gap:6px">${['demo-openai-c','演示中转 C（OpenAI）','demo-openai-b','demo-openai-a'].map((c,i)=>`<span class="chip ${i===0?'accent':''}">${i+1}. ${c}</span>`).join('')}</div>
+          <div class="row wrap" style="gap:6px">${['demo-openai-c','demo-anthropic','demo-openai-b','demo-openai-a'].map((c,i)=>`<span class="chip ${i===0?'accent':''}">${i+1}. ${c}</span>`).join('')}</div>
         </div>
       </div>
     </div>
@@ -1846,7 +1846,7 @@ function openChannelForm(id){
       </div>
       <div class="field"><label>Base URL <span class="help">${pm.base?'默认 '+pm.base:'按上游填写'}</span></label>
         <input class="input" id="f-base" value="${esc(c?chBaseUrl(c):'')}" placeholder="https://api.example.com/v1"></div>
-      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / 演示 WorkBuddy 逆向 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
+      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / workbuddy 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
         <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
       <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
         <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
