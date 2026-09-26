@@ -107,8 +107,50 @@
 - 最小回归：base64 源 mime 原样保留、url 源成直链、空 source 不产图片块，且该形态能被「图片能力门」正确识别（`test/gemini-multimodal.test.js` §5）。
 - **处置（v1.1）**：按最小修复落地。
 
-## 已验证的非问题（记录在此，避免后人重查）
+### PT26 高：流式首块字节被吞 —— 快上游下发时三条客户端协议全部返回空响应体 —— ✅ v1.2 已整改
 
+- 来源：做 v1.2（Anthropic tool_use 完整转换）时，端到端脚本里"流式工具回合"一条断言都过不了，
+  顺着空响应体查到了通用读循环。
+- 证据（`server.js` `tryChannel` 通用流式分支，整改前）：
+  ```js
+  let buf = firstVal ? decoder.decode(firstVal, { stream: true }) : '';   // ← 首块只进了 buf
+  while (true) { const { done, value } = await reader.read(); if (done) break; ... 按行分发 ... }
+  // 收尾：只有存在 onStreamChunk 时才处理 buf
+  ```
+  首块字节**从未经过按行分发**；上游若把整个流一次送达（快线路 / 小回答），下一次 `read()` 直接 `done`，
+  透传路由（`/v1/chat/completions` 不传 `onStreamChunk`）**一个字节都不写** ⇒ 客户端拿到
+  `HTTP 200 + text/event-stream` 却**空响应体**；带 `onStreamChunk` 的路由则把多行糊成一坨丢给
+  逐行解析器（`JSON.parse` 失败 → 同样什么都没写出）。
+- 实测证据：临时假上游"一次写完 4 个 chunk + end"时，`/v1/chat/completions`、`/anthropic/v1/messages`、
+  `/gemini/...:streamGenerateContent` 三条路由**全部** `len=0`。
+- 最小修复：首块字节走同一条 `drain()` 按行分发；循环结束后 `decoder.decode()` 冲残留并做 `drain(true)`；
+  收尾分支对**两种**路由都生效（透传也补回分隔空行）。
+- 最小回归：`test/streaming-e2e.test.js` §1/§2（快/慢两种节奏 × 字节级透传）。
+
+### PT27 高：Anthropic 流式转换器无状态 —— 流式工具调用必然碎、`message_start` 重复 —— ✅ v1.2 已整改
+
+- 证据（`server.js` Anthropic 路由，整改前）：`onStreamChunk` 每收到**一行**上游数据就
+  `openAIStreamToAnthropicSSE([j], requested)` 新建一次生成器 ⇒ 每个 chunk 重发 `message_start`；
+  `tool_calls` 的参数分片（`{"city"` 与 `:"上海"}`）落在**两个不同的 `tool_use` 块**里，客户端拼出来是碎的。
+  同时 `dispatchRequest` 组装 `tryChannel` 参数时**漏传 `streamPrelude`**（这正是该选项一直无人使用的死因），
+  于是连 `message_start` 都发不出来。
+- 最小修复：抽出 `createAnthropicStreamConverter(model)`（`start()/push(c)/end()` 三态、`end()` 幂等），
+  `openAIStreamToAnthropicSSE` 保留为一次性兼容入口；路由每请求一个转换器实例，
+  `streamPrelude`/`streamEpilogue` 由 `dispatchRequest` 转发给 `tryChannel`（上游不发 `[DONE]` 也能收尾）。
+- 最小回归：`test/anthropic-tools.test.js` §6B（逐行喂：块只开一次、分片累积、`end()` 幂等、并行工具两块）+
+  `test/streaming-e2e.test.js` §3/§4/§5。
+
+### PT28 中：Gemini 流式动作没给出站带 `stream` —— 上游回非流式整包 —— ✅ v1.2 已整改
+
+- 证据（`server.js` Gemini 路由，整改前）：`isStream` 来自 URL 动作（`:streamGenerateContent`），
+  但 `geminiToOpenAI(body, model)` 只复制 Gemini body 的 `stream` 字段（Gemini 协议根本没有这个字段）
+  ⇒ 出站 `stream: undefined`，上游回**非流式整包 JSON**，而网关按 SSE 往外写（假上游实测日志 `stream=false`）。
+- 最小修复：`oaiBody.stream = isStream;`（非流式动作仍为 `false`）。
+- 最小回归：`test/streaming-e2e.test.js` §6。
+
+> **整改记录（2026-09-27，v1.2）**：做「Anthropic tool_use 完整转换」时，端到端脚本先把**三个流式缺陷**顶了出来（PT26 首块字节被吞 ⇒ 快上游下三条协议流式全空；PT27 Anthropic 流式转换无状态 + prelude 未转发 ⇒ 流式工具调用必碎、`message_start` 缺失；PT28 Gemini 流式没带 `stream` ⇒ 上游回非流式整包），三个都先修才可能让"流式工具调用"真的可用。同批落地工具转换补全：`tool_choice` 的 `none`、`disable_parallel_tool_use` → `parallel_tool_calls`、`is_error` → `[tool_error]` 标记、**工具结果里的图片改挂紧随的 user 消息**（OpenAI 的 `tool` 消息只允许文本部件）、`tool_use.id` 走 `sanitizeToolId` 保证往返配对、`finish_reason`/`cache_read_input_tokens` 映射。新增零依赖回归 `test/anthropic-tools.test.js`（60 项）、`test/anthropic-tools-e2e.test.js`（30 项，两轮工具回合）、`test/streaming-e2e.test.js`（19 项）。真机验证：流式工具调用收到 `stop_reason=tool_use` 且参数分片拼回 `{"city":"上海"}`；回传 `tool_result` 后模型用工具结果作答；**工具结果里带一张上红下蓝的图，模型答出 "red blue"**（侧门打通）。明细见 §PT26 / §PT27 / §PT28 与 README「工具调用」「流式（SSE）」。
+
+## 已验证的非问题（记录在此，避免后人重查）
 - **usage.json 无增长问题**（曾疑 byDay/hourly 无界）：recent 封顶 800、byDay 每日仅 1 条、hourly 固定 24 桶（server.js:1471），实测文件 ~8.7K 行且大体平稳；4 秒防抖全量重写在 ~300KB 规模合理。
 - **arena-cookie 的 CORS 预检不会被鉴权拦死**（曾疑 OPTIONS 带不上 key）：`?key=` 在预检 URL 里随行，checkAuth 读得到（server.js:202）；1MB 读缓冲（server.js:1514）也有上界。
 - **`/admin/status`、`/admin/recheck` 不是死代码**：README:261 明确登记为旧版兼容路径。
