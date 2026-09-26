@@ -7,7 +7,7 @@
 > **整改记录（2026-09-27，v0.7）**：PT01 / PT03 / PT05 / PT06 / PT07 已全部完成整改（PT03 取方案 (c) 彻底撤 arena，含 chromium 全家桶移除、镜像 1.31GB→203MB，`docs/arena-protocol.md` 留档）；前端独立审查的清理类发现 PT08/PT10/PT11/PT13/PT14/PT15/PT16/PT17/PT18/PT20/PT21 同批落地，详见 §前端独立审查 各条状态。处置明细见 [frontend-console-detailed.md §8.7](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v0.8）**：**PT02 已取方案 (b) 完成整改**——proxy 对全部 openai 系协议真实生效（探测/测试/聊天经 curl `-x` 转发），实测含死端口拒绝、Clash 探测、流式 SSE 完整回放；PT09/PT12/PT19 登记进 detailed §9 后续可做；**PT04（探测双路径）仍待下次动探测逻辑时顺带收敛**。处置明细见 [frontend-console-detailed.md §8.8](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v1.0）**：PT01 同主题的**分发场景加固**——原 compose 里写死的固定默认密钥（`ADMIN_KEY`/`GATEWAY_KEY` 都给了公共字符串）等于把每个部署的管理密钥公开在仓库里（谁拿到项目谁就知道），且 `checkAuth` 存在"空 key 就放行"。现改为：默认留空 → **首启自动生成 48 位随机密钥**（打印到容器日志并写回 config.json）+ 控制台「输入管理密钥」登录门（壳页面放行、管理 API 仍每次校验、密钥记忆由 sessionStorage 升为 localStorage）。明细见 [frontend-console-detailed.md §8.10](./frontend-console-detailed.md)。
-> **整改记录（2026-09-27，v1.1）**：做「Gemini 多模态（图片）适配」时**顺带实测出 PT23 与 PT24**——前者让 Gemini / Anthropic 两条客户端协议的**非流式请求从来就是 502**，后者让**原生 Gemini / Anthropic SDK 直连一律 401**；两个都与会话本次目标无关，但同批修复（各一行到数行）并各自加了回归。同批落地：Gemini `inlineData`/`fileData` 图片入站转换 + 三条客户端协议共用的「图片能力门」（`IMAGE_CAPABLE_PROTOCOLS`，防止静默丢图）；新增零依赖回归 `test/gemini-multimodal.test.js`（36 项断言）。明细见 §PT23 / §PT24 与 README「含图请求的候选裁剪」。
+> **整改记录（2026-09-27，v1.1）**：做「Gemini 多模态（图片）适配」时**顺带实测出 PT23 / PT24 / PT25**——PT23 让 Gemini / Anthropic 两条客户端协议的**非流式请求从来就是 502**，PT24 让**原生 Gemini / Anthropic SDK 直连一律 401**，PT25 让 **Anthropic 的 url 型图片源变成一张空图**（静默丢图的第三种写法）；三个都与会话本次目标无关，但同批修复并各自加了回归。同批落地：Gemini `inlineData`/`fileData` + Anthropic `image`(base64/url) 图片入站转换 + 三条客户端协议共用的「图片能力门」（`IMAGE_CAPABLE_PROTOCOLS`，防止静默丢图）；新增零依赖回归 `test/gemini-multimodal.test.js`（40 项断言）与 `test/gemini-multimodal-e2e.test.js`（22 项断言，真起假上游 + 临时网关）。明细见 §PT23 / §PT24 / §PT25 与 README「含图请求的候选裁剪」。
 
 ## 结论
 
@@ -95,7 +95,17 @@
 - 最小修复：`checkAuth` 在 **gateway 侧**追加两个头判定；管理面**刻意不接受**这两个头，避免把客户端密钥语义混进管理面。
 - 最小回归：只带 `x-goog-api-key` / `x-api-key` 调 `/gemini/*` `/anthropic/*` → 200；错误值 → 401；
   管理面带这两个头 → 仍 401、Bearer 仍 200（**无提权**）；`NOAUTH=1` 行为不变。
-- **处置（v1.1）**：按最小修复落地，3 项头判定 + 1 处管理面隔离；回归进 `test/gemini-multimodal.test.js` §5（8 项断言，含管理面无提权）。
+- **处置（v1.1）**：按最小修复落地，3 项头判定 + 1 处管理面隔离；回归进 `test/gemini-multimodal.test.js` §6（8 项断言，含管理面无提权）。
+
+### PT25 低：Anthropic `source.type='url'` 的图片被拼成空图 —— ✅ v1.1 已整改
+
+- 来源：用户追问"图片到底能不能用"时复核三种协议的图片源，发现 `anthropicToOpenAI` 只处理 base64 形态。
+- 证据（`server.js`，整改前）：`imageParts.push({ image_url: { url: 'data:' + (b.source?.media_type || 'image/png') + ';base64,' + (b.source?.data || '') } })`——
+  Anthropic 的 `{type:'url', url}` 源没有 `data` 字段 ⇒ 拼出 `data:image/png;base64,`（**一张空图**），
+  比直接报错更隐蔽：上游收到空图后照样回答，用户以为图片发送成功了。
+- 最小修复：按 `source.type` 分流——`url` 型透传直链；`base64` 型拼 data URL；两种都没有（空 source）则**不产出任何 block**。
+- 最小回归：base64 源 mime 原样保留、url 源成直链、空 source 不产图片块，且该形态能被「图片能力门」正确识别（`test/gemini-multimodal.test.js` §5）。
+- **处置（v1.1）**：按最小修复落地。
 
 ## 已验证的非问题（记录在此，避免后人重查）
 

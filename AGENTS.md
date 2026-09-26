@@ -101,5 +101,5 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/PONYTAIL_REVIEW.md` | Ponytail 全项目审查：整改项 PT 清单（file:line 证据 + 最小修复 + 最小回归）、已验证非问题、前端独立审查 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |
 | `test/console-state.test.js` | 前端自动化回归（`node test/console-state.test.js`，零依赖）：**视口内输入控件的值必须跨轮询重绘保留**；从 `build/app.js` 现抠真实渲染函数在最小 DOM 桩里跑。新增带输入框的页面时补用例 |
-| `test/gemini-multimodal.test.js` | 后端自动化回归（`node test/gemini-multimodal.test.js`，零依赖）：**图片不得在协议翻译层被静默丢掉**；从 `server.js` 现抠 `geminiToOpenAI` / `bodyHasImages` / `filterCandidatesForImages` / `checkAuth` 跑断言（含图只留 openai 渠道、纯文本零改动、原生 SDK 鉴权头）。新增可转图协议时同步 `IMAGE_CAPABLE_PROTOCOLS` 与本用例 |
+| `test/gemini-multimodal.test.js` | 后端自动化回归（`node test/gemini-multimodal.test.js`，零依赖）：**图片不得在协议翻译层被静默丢掉**；从 `server.js` 现抠 `geminiToOpenAI` / `anthropicToOpenAI` / `bodyHasImages` / `filterCandidatesForImages` / `checkAuth` 跑断言（含图只留 openai 渠道、纯文本零改动、原生 SDK 鉴权头）。新增可转图协议时同步 `IMAGE_CAPABLE_PROTOCOLS` 与本用例 |
 | `test/gemini-multimodal-e2e.test.js` | 后端端到端回归（`node test/gemini-multimodal-e2e.test.js`，零依赖）：真起「假上游 + 临时网关实例」走完整 HTTP 链路（**动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json`/`usage.json`**）。改 `tryChannel` / 出站构造 / 鉴权 / 路由候选链时必跑——PT23（非流式 shim 缺 `json()`）就是它抓到的 |

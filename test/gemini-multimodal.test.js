@@ -52,9 +52,10 @@ try {
   const body = [
     constLine,
     extract('geminiToOpenAI'),
+    extract('anthropicToOpenAI'),
     extract('bodyHasImages'),
     extract('filterCandidatesForImages'),
-    'return { geminiToOpenAI, bodyHasImages, filterCandidatesForImages, IMAGE_CAPABLE_PROTOCOLS };',
+    'return { geminiToOpenAI, anthropicToOpenAI, bodyHasImages, filterCandidatesForImages, IMAGE_CAPABLE_PROTOCOLS };',
   ].join('\n');
   api = new Function(body)();
 } catch (e) {
@@ -168,9 +169,31 @@ function testImageGate() {
   check('渠道未写 protocol 时按 openai 处理（配置默认值一致）', noProto.length === 1);
 }
 
-/* ═══════ 5. 原生 SDK 鉴权头（Gemini x-goog-api-key / Anthropic x-api-key） ═══════ */
+/* ═══════ 5. Anthropic 客户端的图片源（base64 / url 两种） ═══════ */
+function testAnthropicImages() {
+  G('5. Anthropic image block → OpenAI image_url');
+  const mk = (source) => api.anthropicToOpenAI({
+    model: 'm', max_tokens: 16,
+    messages: [{ role: 'user', content: [{ type: 'text', text: '看图' }, { type: 'image', source }] }],
+  }).messages[0].content;
+
+  const b64 = mk({ type: 'base64', media_type: 'image/webp', data: 'AAAA' });
+  check('base64 源 → data URL（mime 原样保留）',
+    Array.isArray(b64) && b64[1] && b64[1].image_url.url === 'data:image/webp;base64,AAAA', b64);
+  const url = mk({ type: 'url', url: 'https://example.com/a.png' });
+  check('url 源 → 直链（不再拼出空 data URL）',
+    Array.isArray(url) && url[1] && url[1].image_url.url === 'https://example.com/a.png', url);
+  const empty = mk({});
+  check('空 source → 不产出图片块（宁可少一块，也不产一张空图）',
+    Array.isArray(empty) && empty.filter((b) => b.type === 'image_url').length === 0, empty);
+  const guard = api.filterCandidatesForImages([{ channelId: 'a', protocol: 'openai' }, { channelId: 'b', protocol: 'notion' }],
+    { messages: [{ role: 'user', content: b64 }] });
+  check('该形态能被能力门识别（含图只剩 openai 渠道）', guard.length === 1 && guard[0].protocol === 'openai');
+}
+
+/* ═══════ 6. 原生 SDK 鉴权头（Gemini x-goog-api-key / Anthropic x-api-key） ═══════ */
 function testAuthHeaders() {
-  G('5. 原生 SDK 鉴权头（checkAuth）');
+  G('6. 原生 SDK 鉴权头（checkAuth）');
   const fn = extract('checkAuth');
   const mk = (NOAUTH, GATEWAY_KEY, ADMIN_KEY) => new Function('NOAUTH', 'GATEWAY_KEY', 'ADMIN_KEY', fn + '\nreturn checkAuth;')(NOAUTH, GATEWAY_KEY, ADMIN_KEY);
   const ck = mk(false, 'GW', 'AD');
@@ -219,6 +242,7 @@ testInline();
 testVariants();
 testBackCompat();
 testImageGate();
+testAnthropicImages();
 testAuthHeaders();
 testWiring();
 testControl();

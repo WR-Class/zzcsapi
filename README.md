@@ -154,7 +154,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 
 ```bash
 node test/console-state.test.js           # 27 项断言，退出码非 0 = 有回归
-node test/gemini-multimodal.test.js       # 36 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
+node test/gemini-multimodal.test.js       # 40 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 ```
 
@@ -340,7 +340,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai']      # server.js
 - **4xx 重试规则**：`400/422` 等明确请求本身错的不再切渠道，原样透传；`401/402/403/404/408/429` 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底。404 进兜底名单的动机：渠道「声明有此模型」但上游实际没有（别名表过期）时，下一个声明者很可能真的有。
 - **流式失败**：已经开始向客户端写 200 + 任意 chunk 后，上游断开不会再换渠道（避免半截回复）。
 - **协议转换**：OpenAI ↔ Anthropic ↔ Gemini 三边都走内部 OpenAI 协议中转；Anthropic 渠道里跑的是 OpenAI 也能用。
-- **图片（多模态）**：三条客户端协议统一把图片转成内部 `image_url` block —— Gemini 的 `inlineData`（base64，`mimeType` 缺省 `image/png`）与 `fileData`（`fileUri` 直链）、Anthropic 的 `image`（base64/url）都会被识别；**部件顺序保留**（先图后问 vs 先问后图对视觉模型有语义）。带图请求只走 `openai` 协议渠道，见「含图请求的候选裁剪」。
+- **图片（多模态）**：三条客户端协议统一把图片转成内部 `image_url` block —— Gemini 的 `inlineData`（base64，`mimeType` 缺省 `image/png`）与 `fileData`（`fileUri` 直链）、Anthropic 的 `image`（`source.type='base64'` 与 `source.type='url'` 两种都认）都会被识别；**部件顺序保留**（先图后问 vs 先问后图对视觉模型有语义）。带图请求只走 `openai` 协议渠道，见「含图请求的候选裁剪」。
 - **冷启动**：第一次请求时 `status=unknown` 仍然会被选中（health 探测在后台进行）。
 - **鉴权写法**：网关密钥接受 `Authorization: Bearer <key>`、`?key=<key>`，以及**原生 SDK 的默认头**——Gemini 的 `x-goog-api-key`、Anthropic 的 `x-api-key`（仅对 `/v1/*` `/anthropic/*` `/gemini/*`；**管理面只认 Bearer / `?key=`**，客户端密钥语义不得混进管理面）。OpenAI SDK 走 Bearer，本来就通。
 - **别名区分大小写不敏感**，upstream 透传原样。

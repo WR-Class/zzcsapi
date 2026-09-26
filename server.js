@@ -946,7 +946,12 @@ function anthropicToOpenAI(body) {
     for (const b of m.content) {
       if (b.type === 'text') textParts.push({ type: 'text', text: b.text });
       else if (b.type === 'image') {
-        imageParts.push({ type: 'image_url', image_url: { url: `data:${b.source?.media_type || 'image/png'};base64,${b.source?.data || ''}` } });
+        // Anthropic 的图片源有两种：{type:'base64', media_type, data} 与 {type:'url', url}。
+        // 以前只拼 base64 形态，遇到 url 型会把 undefined 拼进 data URL（变成一张空图）——那是静默丢图的另一种写法。
+        const src = b.source || {};
+        if (src.type === 'url' && src.url) imageParts.push({ type: 'image_url', image_url: { url: src.url } });
+        else if (src.data) imageParts.push({ type: 'image_url', image_url: { url: `data:${src.media_type || 'image/png'};base64,${src.data}` } });
+        // 两种都没有（空 source）→ 不产出任何 block，胜过产出一张空图
       } else if (b.type === 'tool_use') {
         toolUses.push({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } });
       } else if (b.type === 'tool_result') {
