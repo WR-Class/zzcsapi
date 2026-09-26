@@ -523,6 +523,28 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 ---
 
+### 8.8 v0.8 PT02 整改：渠道 proxy 字段对全部 openai 系协议生效（2026-09-27，对象 `server.js` + `build/app.js` 帮助文案 + 产物 `console.html`）
+
+问题（PONYTAIL_REVIEW PT02）：渠道表单的「代理」字段所有协议都能填，但代码里只有 genspark/codex 走的 `wbCurlRequest` 真用它；
+openai/anthropic/gemini/workbuddy 的探测、测试、聊天全部直连——填了代理被**静默忽略**，上游被墙时排查成本极高（表单帮助只写「codex / genspark 必填」）。
+
+| # | 触点 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | `tryChannel`（聊天出站，openai/anthropic/gemini/images 共用） | undici fetch 无代理支持；CF 回退的 `psHttpRequest` 也没有 | `ch.def.proxy` 存在时整条请求改走 `wbCurlRequest`（curl `-x`，现成实现），包装成 fetch-like resp + `usedFallback=true`——**复用既有缓冲回放管道**：流式走 CF 回退同款整体重放，非流式走 `resp.text()`；CF 403 回退分支加 `!ch.def.proxy` 防护（避免无代理重试），错误消息区分 `(via proxy)` |
+| 2 | `probeChannel` / `probeDef` 两个 generic 探测尾巴 | 同上 | 代理分支直接 `wbCurlRequest GET /v1/models`；探测失败写 `proxy:` 前缀错误，进冷却（代理挂了=诚实失败，不静默直连） |
+| 3 | `/admin/api/test` 的 openai/anthropic/gemini 迷你聊天 | 同上 | 代理分支同款处理，测试按钮对代理渠道不再直连 |
+| 4 | workbuddy 三处（探测/测试/聊天） | 用的就是 `wbCurlRequest`，只是三处都没传第 6 参 | 补传 `def.proxy`，workbuddy 免费获得代理能力 |
+| 5 | 表单帮助文案（原型 2020 / 生产 1378，同行改写零锚点漂移） | 只写「codex / genspark 必填」，掩盖其他协议的静默忽略 | 改为「openai / anthropic / gemini / workbuddy 填了即生效（流式整体缓冲后一次性回放）；notion 系不支持」；README 配置示例补 `proxy` 字段 + 字段说明段 |
+
+> **测试中抓到并修掉一个真 bug**：首版代理分支只包了 `resp.text()`、漏设 `respBody`，而 usedFallback 流式回放写的恰是
+> `respBody` → 流式经代理返回空 body（7 块 SSE 全丢）。补 `respBody = out.body` 一行后修复。
+> 实机验证六项：死端口代理探测被拒（`proxy: curl exit 7`）✓、Clash 7897 探测 ok + `via:"proxy"`（42 模型）✓、
+> 代理渠道流式聊天 200 + SSE 7 块 + `[DONE]` 完整回放 ✓、非流式 200 正常 completion ✓、直连回归 200 ✓、
+> genspark 原代理链路无回归 ✓。已知语义（帮助文案已注明）：流式经代理为整体缓冲回放，首字节延迟≈上游总耗时；
+> 上游对 stream 请求回 JSON 时（个别中转站行为），网关按 SSE 头原样转发该 JSON——与既有 CF 回退行为一致。
+
+---
+
 ## 9. 后续可做（未实现）
 
 - 渠道列表分页 / 虚拟滚动（真实 30+ 渠道，模型探测可能上百）

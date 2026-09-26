@@ -12,6 +12,7 @@
       "priority": 10,
       "enabled": true,
       "autoAlias": true,
+      "proxy": "",
       "models": {}
     },
     {

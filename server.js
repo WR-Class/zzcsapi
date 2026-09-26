@@ -504,13 +504,23 @@ async function probeChannel(ch) {
   const t0 = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), HEALTH.timeoutMs || 8000);
-  const probeUrl = probeUrlFor(ch);
+  const probeUrl = probeUrlForDef(ch.def);
   let resp;
   let usedFallback = false;
   try {
+    if (ch.def.proxy) {
+      // PT02：渠道配了代理 → 探测同样必须走代理（undici fetch 无代理支持），curl -x
+      const out = await wbCurlRequest('GET', probeUrl, probeHeadersForDef(ch.def), null, HEALTH.timeoutMs || 8000, ch.def.proxy);
+      if (out.status > 0) {
+        usedFallback = true;
+        resp = { ok: out.status >= 200 && out.status < 300, status: out.status, text: async () => out.body };
+      } else {
+        throw new Error('proxy: ' + (out.error || 'empty'));
+      }
+    } else {
     resp = await fetch(probeUrl, {
-      method: probeMethodFor(ch),
-      headers: probeHeadersFor(ch),
+      method: 'GET',
+      headers: probeHeadersForDef(ch.def),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -519,12 +529,13 @@ async function probeChannel(ch) {
       let body = '';
       try { body = await resp.text(); } catch {}
       if (isCloudflareBlock(403, body)) {
-        const ps = await psHttpRequest(probeMethodFor(ch), probeUrl, probeHeadersFor(ch), null, HEALTH.timeoutMs || 8000);
+        const ps = await psHttpRequest('GET', probeUrl, probeHeadersForDef(ch.def), null, HEALTH.timeoutMs || 8000);
         if (ps.status > 0) {
           usedFallback = true;
           resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status, text: async () => ps.body };
         }
       }
+    }
     }
     const ms = Date.now() - t0;
     if (!resp.ok) {
@@ -666,14 +677,23 @@ async function probeDef(def, timeoutMs) {
     if (/notion\.(so|com)/.test(host)) {
       return { ok: false, status: 0, error: '检测到 notion 域名但协议不是 notion——请把「协议」下拉框改成 notion（openai 协议的 /models 探测对 notion 无效）', latencyMs: 0 };
     }
-    if (/arena\.ai/.test(host) && (def.protocol || 'openai') === 'openai') {
-      return { ok: false, status: 0, error: '检测到 arena.ai 域名但协议是 openai——arena 渠道请把「协议」下拉框改成 arena', latencyMs: 0 };
-    }
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs || HEALTH.timeoutMs || 8000);
   const t0 = Date.now();
   try {
+    if (def.proxy) {
+      // PT02：渠道配了代理 → 表单探测也走代理（undici fetch 无代理支持），curl -x
+      const out = await wbCurlRequest('GET', probeUrlForDef(def), probeHeadersForDef(def), null, timeoutMs || 12000, def.proxy);
+      const ms = Date.now() - t0;
+      if (!(out.status > 0)) return { ok: false, status: 0, error: 'proxy: ' + (out.error || 'empty'), latencyMs: ms, via: 'proxy' };
+      if (out.status >= 200 && out.status < 300) {
+        const j = safeJson(out.body);
+        const models = extractModelIds(j, def.protocol || 'openai');
+        return { ok: true, models, latencyMs: ms, status: out.status, via: 'proxy' };
+      }
+      return { ok: false, status: out.status, error: `HTTP ${out.status}: ${String(out.body).slice(0, 150)}`, latencyMs: ms, via: 'proxy' };
+    }
     const resp = await fetch(probeUrlForDef(def), { method: 'GET', headers: probeHeadersForDef(def), signal: ctrl.signal });
     clearTimeout(timer);
     const ms = Date.now() - t0;
@@ -819,7 +839,7 @@ async function workbuddyChatProbe(def, timeoutMs) {
   });
   const out = await wbCurlRequest('POST', joinUrl(def.baseUrl, 'chat/completions'), {
     'Content-Type': 'application/json', 'Authorization': `Bearer ${def.apiKey}`,
-  }, bodyStr, timeoutMs || 15000);
+  }, bodyStr, timeoutMs || 15000, def.proxy);
   if (out.error || !out.body) {
     return { ok: false, error: out.error || 'empty body', latencyMs: Date.now() - t0, status: out.status || 0 };
   }
@@ -1885,7 +1905,7 @@ async function handleAdminApi(req, res, url) {
             messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: prompt }],
             stream: true,
           });
-          const out = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'chat/completions'), { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }, wbBody, tmo);
+          const out = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'chat/completions'), { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }, wbBody, tmo, ch.def.proxy);
           ttfb = Date.now() - t0;
           let reply = '', wbErr = '';
           const wbStatus = out.status || 0;
@@ -1990,8 +2010,15 @@ async function handleAdminApi(req, res, url) {
         } else {
           bodyOut = { model: c.upstream, max_tokens: 16, messages: [{ role: 'user', content: prompt }] };
         }
+        let text;
+        if (ch.def.proxy) {
+          // PT02：配了代理的渠道，测试请求同样走 curl -x
+          const out = await wbCurlRequest('POST', target, headers, JSON.stringify(bodyOut), Math.min(60000, Number(body.timeoutMs) || 30000), ch.def.proxy);
+          text = out.body || '';
+          resp = { ok: out.status >= 200 && out.status < 300, status: out.status };
+        } else {
         resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(bodyOut), signal: ctrl.signal });
-        let text = await resp.text();
+        text = await resp.text();
         // Cloudflare 拦截 → PS Schannel 回退
         if (!resp.ok && isCloudflareBlock(resp.status, text)) {
           const ps = await psHttpRequest('POST', target, headers, JSON.stringify(bodyOut), Math.min(60000, Number(body.timeoutMs) || 30000));
@@ -1999,6 +2026,7 @@ async function handleAdminApi(req, res, url) {
             text = ps.body;
             resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status };
           }
+        }
         }
         ttfb = Date.now() - t0;
         let parsed = null;
@@ -2403,8 +2431,25 @@ async function tryChannel(opts) {
   let usedFallback = false;
   let respBody = null;
 
-  // 第一次尝试：Node fetch (undici)
-  try {
+  if (ch.def.proxy) {
+    // PT02：渠道配了代理 → 全程 curl -x（undici fetch 不支持代理）。响应全量缓冲，
+    // 流式请求走下方 usedFallback 分支整体重放（与 CF 回退同款语义，首字节延迟=上游总耗时）
+    const out = await wbCurlRequest('POST', target, headers, bodyStr, timeoutMs, ch.def.proxy);
+    if (out.error || !out.body) {
+      recordFailure(ch, 'proxy: ' + (out.error || 'empty body'));
+      return `proxy: ${out.error || 'empty body'}`;
+    }
+    usedFallback = true;
+    respBody = out.body;
+    resp = {
+      status: out.status,
+      ok: out.status >= 200 && out.status < 300,
+      headers: { get: () => 'application/json' },
+      text: async () => out.body,
+      json: async () => safeJson(out.body) || {},
+      body: null,
+    };
+  } else try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
@@ -2416,7 +2461,8 @@ async function tryChannel(opts) {
   }
 
   // 如果 fetch 被 Cloudflare 拦了（403 + HTML），且是非流请求，回退到 PowerShell (.NET Schannel)
-  if (resp.status === 403 && !isStream) {
+  // （代理路径不走这条：它本身已是 curl 指纹，403 就是真 403，无代理重试没有意义）
+  if (resp.status === 403 && !isStream && !ch.def.proxy) {
     let cfBody = '';
     try { cfBody = await resp.text(); } catch {}
     if (isCloudflareBlock(403, cfBody)) {
@@ -2665,7 +2711,7 @@ async function tryWorkbuddyChannel(opts) {
   // 请求必须走 curl 子进程：该上游对 Node/undici 的 TLS 指纹直接 ECONNRESET（实测），
   // curl（Win Schannel / Linux OpenSSL）可过。代价是 SSE 全量缓冲后再分发——
   // workbuddy 的 deepseek-v4.1-flash 回复快（秒级），可接受。
-  const out = await wbCurlRequest('POST', target, headers, bodyStr, timeoutMs);
+  const out = await wbCurlRequest('POST', target, headers, bodyStr, timeoutMs, ch.def.proxy);
   if (out.error || !out.body) {
     recordFailure(ch, 'workbuddy curl: ' + (out.error || 'empty body'));
     return 'workbuddy curl: ' + (out.error || 'empty body');

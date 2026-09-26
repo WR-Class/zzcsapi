@@ -74,7 +74,6 @@ function adapt() {
       proxy:c.proxy || '', headers:c.headers || '',
       autoAlias:c.autoAlias !== false,
       lastError:c.lastError || '', lastCheck:c.lastCheck || 0,
-      codexQuota:c.codexQuota || null, notionUsage:c.notionUsage || null,
     };
   });
   /* 模型：别名 → 提供方集合（同一 alias 可被多个渠道提供，按渠道顺序即调度候选顺序） */
@@ -1376,7 +1375,7 @@ function openChannelForm(id){
       </div>
       <div class="field"><label>Base URL <span class="help">${pm.base?'默认 '+pm.base:'按上游填写'}</span></label>
         <input class="input" id="f-base" value="${esc(c?chBaseUrl(c):'')}" placeholder="https://api.example.com/v1"></div>
-      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填，如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
+      <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / workbuddy 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
         <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
       <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
         <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>

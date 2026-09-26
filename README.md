@@ -145,6 +145,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
       "protocol": "openai",                  // openai | anthropic | gemini
       "priority": 10,
       "enabled": true,
+      "proxy": "http://host.docker.internal:7897",  // 可选：HTTP 代理（见下方说明），留空/删掉 = 直连
       "models": {                            // alias -> upstream
         "gpt-4o": "gpt-4o",
         "gpt-4o-mini": "gpt-4o-mini"
@@ -175,6 +176,11 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
   ]
 }
 ```
+
+> **渠道字段 `proxy`（可选）**：HTTP 代理地址（如 `http://host.docker.internal:7897`，容器经宿主机代理出网）。
+> 对 `openai / anthropic / gemini / workbuddy / codex / genspark` 协议生效——**探测、测试、聊天全部经代理转发**（curl `-x` 子进程，undici fetch 不走代理）。
+> 注意两点：流式响应经代理会**整体缓冲后一次性回放**（首字节延迟 ≈ 上游总耗时，与 CF 回退同款语义）；代理挂了渠道探测即失败、进冷却（诚实失败，不静默直连）。
+> `notion` / `notion-agent` 不支持代理（官方 API 直连）。
 
 ### 协议说明
 
