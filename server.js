@@ -2489,16 +2489,18 @@ async function tryChannel(opts) {
   if (!resp.ok) {
     const text = usedFallback ? (respBody || '') : (await resp.text().catch(() => ''));
     recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
-    // 401/402/403 是我们渠道侧的鉴权/余额问题（不是客户端的错）→ 切下一候选兜底；
-    // 其余 4xx（400 参数 / 404 模型不存在等）是客户端错误 → 原样透传给调用方
-    if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 408, 429].includes(resp.status)) {
+    // 401/402/403/404/408/429 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底；
+    // 其余 4xx（400 参数错等）换渠道也一样错，是客户端错误 → 原样透传给调用方。
+    // 404 进兜底名单的动机：渠道「声明有此模型」但上游实际没有（别名表过期，如 apmix 的 deepseek-v4.1-flash-free）
+    // ——下一个声明者（如 bqgy）很可能真的有，不该把渠道的过期声明当成客户端的错。
+    if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 404, 408, 429].includes(resp.status)) {
       // 客户端错误：直接把上游响应转发
       const ct = (resp.headers && resp.headers.get('content-type')) || '';
       res.writeHead(resp.status, { 'Content-Type': ct || 'application/json' });
       res.end(text);
       return 'fatal_client';
     }
-    return `upstream ${resp.status}${usedFallback ? ' (via ps-fallback)' : ''}`;
+    return `upstream ${resp.status}${usedFallback ? (ch.def.proxy ? ' (via proxy)' : ' (via ps-fallback)') : ''}`;
   }
 
   // 成功
@@ -2723,7 +2725,7 @@ async function tryWorkbuddyChannel(opts) {
     const j = safeJson(sseText);
     const msg = (j && (j.msg || (j.error && j.error.message))) || sseText.slice(0, 160);
     recordFailure(ch, `workbuddy ${out.status}: ` + msg);
-    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 408, 429].includes(out.status)) {
+    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 404, 408, 429].includes(out.status)) {
       res.writeHead(out.status, { 'Content-Type': 'application/json' });
       res.end(sseText);
       return 'fatal_client';
@@ -2936,8 +2938,8 @@ async function tryGensparkChannel(opts) {
     const j = safeJson(raw);
     const msg = (j && (j.message || (j.error && j.error.message))) || raw.slice(0, 160);
     recordFailure(ch, `genspark HTTP ${out.status}: ${String(msg).slice(0, 160)}`);
-    // 400/422 等明确请求错误透传；401/403 会话或出口问题 → 切下一候选
-    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 408, 429].includes(out.status)) {
+    // 400/422 等明确请求错误透传；401/403 会话或出口问题、404 该渠道没有此内容 → 切下一候选
+    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 404, 408, 429].includes(out.status)) {
       res.writeHead(out.status, { 'Content-Type': 'application/json' });
       res.end(raw);
       return 'fatal_client';
@@ -3267,7 +3269,7 @@ async function tryCodexChannel(opts) {
   }
   if (!call.ok) {
     recordFailure(ch, 'codex ' + call.status + ': ' + call.error);
-    if (call.raw && call.status >= 400 && call.status < 500 && ![401, 402, 403, 408, 429].includes(call.status)) {
+    if (call.raw && call.status >= 400 && call.status < 500 && ![401, 402, 403, 404, 408, 429].includes(call.status)) {
       res.writeHead(call.status, { 'Content-Type': 'application/json' });
       res.end(call.raw);
       return 'fatal_client';
@@ -3388,7 +3390,7 @@ async function tryNotionChannel(opts) {
       else {
         const errText = await resp.text().catch(() => '');
         recordFailure(ch, `notion HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-        if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 408, 429].includes(resp.status)) {
+        if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 404, 408, 429].includes(resp.status)) {
           res.writeHead(resp.status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
           return 'fatal_client';
