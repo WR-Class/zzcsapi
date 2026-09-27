@@ -341,7 +341,16 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ### 5.6 调用日志 `vLogs`（1450）
 
-请求列表（时间 / 模型 / 渠道 / 协议 / 状态 / 耗时 / token）+ 详情抽屉 `openLog`（1494）。
+请求列表（时间 / **请求 ID → 渠道名 → 模型名** / 协议 / 状态 / 耗时 / token）+ 详情抽屉 `openLog`（1494）。
+
+- **渠道列显示显示名，不显示 id**：表格与详情抽屉都渲染渠道显示名（"霸气公益 / 乐子 / AgentRouter"，而不是 `bqgy / lezi`）。
+  原型在模板里就地查名（`(DATA.channels.find(c=>c.id===l.c)||{}).name||l.c`）；
+  生产在 `adapt()` 里把显示名解析进每条日志的 `n` 字段（`n:(chans.find(c=>c.id===r.channelId)||{}).name||r.channelId||'—'`），
+  渲染层直接用 `esc(l.n)`。**渠道 id 仍保留在 `l.c`**，供筛选、导出与排障。
+- **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1011）。
+- **搜索**：搜索框同时匹配模型名 / 渠道名 / 渠道 ID / 请求 ID（`logRows()` 判据 `l.m + l.n + l.c + l.id`，生产锚点 999）——
+  按名字搜比按 id 自然，老习惯按 id 也仍然命中。
+- **CSV 导出** `exportLogs`（生产锚点 440）：渠道列同样写显示名（`l.n`），与页面所见一致。
 
 ### 5.7 Playground `vPlayground`（1539）
 
@@ -1098,6 +1107,34 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 含"缺 `ok` 字段不当作成功"；在 DOM 桩里**真跑 `runTests`**（桩 HTTP + 桩 `document`）断言 3 行结果各自带模型名、
 渠道显示名、中文结论、三种样式、空回复的原因文案、失败行带 HTTP 码与上游原文、成功行带回复与 token、
 汇总分三档；并含"旧写法 `<b>huchan</b>` 已消失"的对照与 `esc` 结构守卫）。
+
+### 8.20 v1.13.2 调用日志：渠道列改显示渠道名，并挪到请求 ID 之后（2026-09-29，对象 `build/app.js` + `console-redesign.html` + 产物 `console.html` + 两份前端文档 + `AGENTS.md` + `README.md` + `test/console-state.test.js`）
+
+**问题**（用户原话）："调用日志 里面在请求 ID 后面增加渠道名称，显示霸气公益、乐子、AgentRouter 这些名字不要显示 bqgy、lezi 这些名字。"
+
+**根因**（两条，都在日志表的渲染与数据层）：
+
+| # | 现象 | 根因 |
+| --- | --- | --- |
+| 1 | 渠道列显示 `bqgy` / `lezi` 这类 id，认不出是哪家 | `adapt()` 只把 `r.channelId` 原样塞进 `l.c`，模板直接渲染 `l.c`（`<td class="mono">${l.c}</td>`）；渠道**显示名**从未进入日志条目 |
+| 2 | 渠道列排在模型列之后，不在请求 ID 旁边 | 表头写死 `<th>请求 ID</th><th>模型</th><th>渠道</th>`，行渲染顺序同此 |
+
+**处置**：
+
+| # | 问题 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 只认得出 id | 日志条目没有显示名 | `adapt()` 新增 `n` 字段：`n:(chans.find(c=>c.id===r.channelId)||{}).name||r.channelId||'—'`；表格与详情抽屉改渲染 `esc(l.n)`，**保留 `l.c`** 供筛选/导出/排障 |
+| 2 | 渠道不在请求 ID 后面 | 表头与行写死顺序 | 表头改 `<th>请求 ID</th><th>渠道</th><th>模型</th>`，行渲染改为 请求 ID → 渠道名 → 模型名（一行 `cell-name` 换一行，行数不变） |
+| 3 | 搜索按名字搜不到 | 判据只含 `l.m + l.c + l.id` | `logRows()` 判据补 `l.n`：`(l.m+' '+l.n+' '+l.c+' '+l.id)`，名字/ id 都能命中；搜索框 placeholder 改「模型名 / 渠道名 / 渠道 ID / 请求 ID…」 |
+| 4 | 导出 CSV 还是 id，与页面不一致 | `exportLogs` 写 `l.c` | 改写 `l.n`（渠道列 = 显示名，与页面所见一致） |
+| 5 | 设计稿与生产会各说各话 | 原型 `vLogs` 同款旧写法 | `console-redesign.html` 的 `vLogs` 表格/抽屉同步改：列序与显示名（就地查 `DATA.channels`），保证设计源与产物一致 |
+
+**样式零新增**：只改模板文本与一个数据字段，**没有改 `extra.css` 与设计稿 CSS**；`build/app.js`、`console-redesign.html` 行数均**未变**
+⇒ 行号偏移仍是 CSS **+13** / JS **+666**，不必重算偏移（`app.js` 2066 行 / `console-redesign.html` 2272 行 / 产物 `console.html` 2736 行，均与 §8.19 一致）。
+
+**验证**：`test/console-state.test.js` **103 项全绿**（新增 §7：断言表头「渠道」紧跟「请求 ID」、渠道格显示"霸气公益 / 乐子"且不出现 `>bqgy<`/`>lezi<`、
+一格顺序为 请求 ID → 渠道名 → 模型名、按名字搜索命中、按 id 搜索仍命中、`adapt()` 把显示名解析进 `n` 且 `c` 保留；
+并含"旧写法（渠道格写 id、排在模型后面）下看不到渠道名"的对照组，证明用例抓得住）。
 
 ---
 

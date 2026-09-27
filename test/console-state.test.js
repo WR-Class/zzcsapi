@@ -543,9 +543,62 @@ async function testRunTests() {
     rt.includes('testRowVerdict(row)') && !/if\(row\.ok\)okN\+\+/.test(rt));
 }
 
-/* ═══════ 7. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
+/* ═══════ 7. 调用日志：渠道列显示渠道名（不是 id），且紧跟请求 ID ═══════ */
+function testLogs() {
+  G('7. 调用日志：渠道列显示**渠道名**（不是 bqgy 这类 id），且紧跟请求 ID 之后');
+  const fMs = ms => ms < 0 ? '—' : ms + ' ms';
+  const protoLabel = { openai: 'OpenAI' };
+  const logs = [
+    { t:'2026-09-28 10:00:00', ts:1, id:'req_1', m:'demo-model-a', c:'bqgy', n:'霸气公益', p:'openai', ok:true, ms:120, i:10, o:20, note:'' },
+    { t:'2026-09-28 10:00:01', ts:2, id:'req_2', m:'demo-model-b', c:'lezi', n:'乐子', p:'openai', ok:false, ms:300, i:5, o:0, note:'' },
+  ];
+  const render = (drawSrc) => {
+    const dom = makeDom();
+    const api = new Function('$', '$$', 'DATA', 'esc', 'svg', 'nf', 'fMs', 'protoLabel', 'openLog',
+      "let lgRange='all', lgCh='', lgOk='all', lgQ='';\n" + extract('logRows') + '\n' + drawSrc + '\n' +
+      'return { drawLogTable, logRows, setQ:(q)=>{lgQ=q}, get rows(){return logRows()} };'
+    )(dom.$, dom.$$, { logs }, esc, svg, nf, fMs, protoLabel, () => {});
+    api.drawLogTable();
+    return { html: dom.$('#lgTable').innerHTML, api };
+  };
+  const cur = render(extract('drawLogTable'));
+  check('★ 表头里「渠道」紧跟「请求 ID」（不再排在模型后面）',
+    cur.html.indexOf('<th>请求 ID</th><th>渠道</th><th>模型</th>') >= 0);
+  check('★ 渠道格显示渠道名（霸气公益 / 乐子），不是 id',
+    cur.html.indexOf('霸气公益') >= 0 && cur.html.indexOf('乐子') >= 0
+    && cur.html.indexOf('>bqgy<') < 0 && cur.html.indexOf('>lezi<') < 0);
+  check('★ 一格顺序就是 请求 ID → 渠道名 → 模型名（用户要的"在请求 ID 后面"）',
+    /req_1<\/td>\s*<td class="cell-name">霸气公益<\/td>\s*<td class="cell-name">demo-model-a<\/td>/.test(cur.html));
+  check('搜索按渠道名能命中（按名字搜比按 id 自然）',
+    (() => { cur.api.setQ('霸气公益'); return cur.api.rows.length === 1 && cur.api.rows[0].c === 'bqgy'; })());
+  check('搜索按 id 仍能命中（老习惯不破）',
+    (() => { cur.api.setQ('lezi'); return cur.api.rows.length === 1; })());
+
+  /* adapt() 必须把渠道名解析进每条日志，否则渲染层根本没有 n 可用 */
+  const RAW = {
+    channels: [{ id:'bqgy', name:'霸气公益', protocol:'openai', enabled:true, aliases:[] }],
+    usage: { recent: [{ ts:1700000000000, model:'demo-model-a', channelId:'bqgy', ok:true, ms:120, in:10, out:20 }] },
+    config: null,
+  };
+  const a = new Function('RAW', 'DATA', 'esc', 'svg', 'nf', '$', 'fmtTs', 'reqIdOf', 'protoOfChannel',
+    'let CFG=null, loaded=false;\n' + extract('adapt') + '\nreturn { adapt, get DATA(){return DATA} };'
+  )(RAW, { channels:[], models:[], meta:{} }, esc, svg, nf, makeDom().$,
+    (t) => String(t), (t) => 'req_' + Number(t || 0).toString(36), () => 'openai');
+  a.adapt();
+  check('★ adapt() 把渠道名解析进日志条目（n=霸气公益），id 仍保留（c=bqgy，筛选/导出仍可用）',
+    a.DATA.logs[0].n === '霸气公益' && a.DATA.logs[0].c === 'bqgy');
+
+  /* 对照组：按整改前「渠道格写 id、且排在模型后面」的写法，必须失败 */
+  const legacy = render(extract('drawLogTable')
+    .replace('<th>请求 ID</th><th>渠道</th><th>模型</th>', '<th>请求 ID</th><th>模型</th><th>渠道</th>')
+    .replace('<td class="cell-name">${esc(l.n)}</td>', '<td class="mono" style="font-size:12px">${l.c}</td>'));
+  check('对照组：旧写法（渠道格写 id）下看不到渠道名 → 本用例抓得住',
+    legacy.html.indexOf('>bqgy<') >= 0 && legacy.html.indexOf('霸气公益') < 0);
+}
+
+/* ═══════ 8. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
 function testControl() {
-  G('7. 对照组（用整改前的写法跑同样断言，必须失败）');
+  G('8. 对照组（用整改前的写法跑同样断言，必须失败）');
   const v = mkEl('viewport');
   v.innerHTML = '<div class="search"><input id="mQ" placeholder="搜索模型名…"></div>';   /* 整改前的模板 */
   const rendered = (v.innerHTML.match(/id="mQ"[^>]*value="([^"]*)"/) || [])[1];
@@ -572,6 +625,7 @@ try {
   testAutoWeight();
   testDisabledTest();
   await testRunTests();
+  testLogs();
   testControl();
 
   console.log('\n' + '─'.repeat(58));

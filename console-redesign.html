@@ -1468,19 +1468,19 @@ function vLogs(v){
       <div class="field" style="min-width:150px"><label>状态</label>
         <select class="select"><option>全部</option><option>仅成功</option><option>仅失败</option></select></div>
       <div class="field" style="flex:1;min-width:200px"><label>搜索</label>
-        <input class="input" placeholder="模型名 / 渠道 ID / 请求 ID…"></div>
+        <input class="input" placeholder="模型名 / 渠道名 / 渠道 ID / 请求 ID…"></div>
       <button class="btn" style="align-self:flex-end" onclick="toast('已应用筛选（原型演示）','ok')">${svg('filter',14)}应用筛选</button>
     </div>
   </div></div>
 
   <div class="card"><div class="card-bd tight tbl-wrap">
     <table class="tbl">
-      <thead><tr><th>时间</th><th>请求 ID</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
+      <thead><tr><th>时间</th><th>请求 ID</th><th>渠道</th><th>模型</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
       <tbody>${rows.map(l=>`<tr class="clickable" onclick="openLog('${l.id}')">
         <td class="mono" style="font-size:12px;white-space:nowrap">${l.t}</td>
         <td class="mono muted" style="font-size:11.5px">${l.id}</td>
+        <td class="cell-name">${(DATA.channels.find(c=>c.id===l.c)||{}).name||l.c}</td>
         <td class="cell-name">${l.m}</td>
-        <td class="mono" style="font-size:12px">${l.c}</td>
         <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
         <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
         <td class="t-r mono">${fMs(l.ms)}</td>
@@ -1504,7 +1504,7 @@ function openLog(id){
     <div class="drawer-bd">
       <dl class="kv">
         <dt>模型</dt><dd class="mono">${l.m}</dd>
-        <dt>渠道</dt><dd class="mono">${l.c}</dd>
+        <dt>渠道</dt><dd>${(DATA.channels.find(c=>c.id===l.c)||{}).name||l.c}</dd>
         <dt>协议</dt><dd><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></dd>
         <dt>耗时</dt><dd class="mono">${fMs(l.ms)}</dd>
         <dt>Token</dt><dd class="mono">输入 ${nf(l.i)} · 输出 ${nf(l.o)}</dd>

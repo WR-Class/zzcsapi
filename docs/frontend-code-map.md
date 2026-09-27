@@ -131,7 +131,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 626 / 634 | **`vAutoWeight()`** / **`autoWeightCard()`** | **自动权重页**（v1.9，资源 → 自动权重）：`vAutoWeight` 只出页头 + 挂卡；`autoWeightCard` 把 `/admin/api/status` 的 `autoWeight.models[]` 画成"若启用会怎么分"（**只算不生效**）。份额改成**一候选一列**（`.aw-col`，列宽 = 份额，色带段与名字/百分比同列，见 `build/extra.css` 10–57），份额为 0 的候选不进列、单独一行 `未参与分流：`。列标签**只留渠道显示名**（v1.9.1 起不再拼 id 小片） |
 | 812–849 | `toggleDrawerKey` `reprobe` `delChannel` | 抽屉密钥切换 / 重探测 / 删除 |
 | 849–963 | `mTab` `mQ` `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
-| 963–1087 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填） |
+| 963–1087 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填）。**v1.13.2 起渠道列显示渠道显示名（`adapt()` 解析进 `n`，id 留在 `c`），列序为 请求 ID → 渠道 → 模型，搜索判据含 `l.n`** |
 | 1087–1307 | `pgDraft` 等 `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
 | 1307–1435 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
 | 1435–1444 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
@@ -319,7 +319,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 总览 | `vOverview` 1069 | `kpiCard` 1055、`areaChart`、`donut`；页签 `#rangeTabs` 仅切样式不切数据 |
 | 渠道 | `vChannels` 1179 | **`drawChTable` 1219**（筛选/排序/渲染）、`toggleCh` 1254、**`openChannel` 1260**（详情抽屉）、`toggleDrawerKey` 1316、`reprobe` 1324、`delChannel` 1331 |
 | 模型 | `vModels` 1340 | **`drawMTable` 1385**（含**启用优先排序** 1393）、`openModel` 1414（模型来源抽屉，按 config 渠道序非调度序） |
-| 日志 | `vLogs` 1450 | `openLog` 1494（请求详情抽屉） |
+| 日志 | `vLogs` 1450 | `openLog` 1494（请求详情抽屉）；表格列序 **请求 ID → 渠道（显示名）→ 模型**，渠道名就地查 `DATA.channels` |
 | Playground | `vPlayground` 1539 | `drawPG` 1607、`pgSend` 1623（模拟流式输出） |
 | 接入 | `vAccess` 1680 | 三协议端点卡 + 代码片段页签（1750） |
 
@@ -442,6 +442,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 406 + `ovSeries` 409 + `vOverview` 463 |
 | 渠道权重（输入框 / 表格列 / 抽屉角标） | **v1.5**：生产 `openChannelForm` 1468（`f-weight`）+ `saveChannel` 1666（提交 `weight`）+ `drawChTable` 698（「权重 / 分流」列）+ `openChannel` 744（抽屉角标）+ `adapt()` 58（映射 `w`/`wHits`/`wShare`）；后端 `weight` 语义见 README「加权轮询」。**原型未同步**（生产独有能力，原型不必追平） |
 | 自动权重观测页 | **v1.9**：生产 `NAV` 325（资源 → 自动权重）+ `vAutoWeight` 626 + `autoWeightCard` 634 + `build/extra.css` 的 `.aw-*`（10–57）；数据来自 `/admin/api/status` 的顶层 `autoWeight`。**原型未同步**（v1.9.1：份额列标签只留渠道显示名） |
+| 调用日志列（渠道名 / 列序 / 搜索 / 导出） | **v1.13.2**：生产 `adapt()` 58（日志条目新增 `n` = 渠道显示名，`c` 仍保留 id）+ `logRows` 999（搜索判据 `l.m+l.n+l.c+l.id`）+ `drawLogTable` 1011（表头 请求 ID → 渠道 → 模型，渠道格 `esc(l.n)`）+ `openLog` 1036（抽屉渠道显示名）+ `exportLogs` 440（CSV 渠道列写显示名）。**原型已同步**（`console-redesign.html` 的 `vLogs` 1478 表头 / 1482 渠道格 / 1507 抽屉，就地查 `DATA.channels`） |
 | 测试模型弹窗（停用渠道可测 + 结果可读） | **v1.13**：生产 `openTestModels` 1853（不再按 `!c.on` 跳过停用渠道；停用渠道带「已停用」标记 + 说明文案，全局模式启用渠道排前）+ `testRowVerdict` 1910（结果三档：通过 / **空回复** / 失败；判定为纯函数，`test/console-state.test.js` §6 跑真值表）+ `chName` 1904（结果行写渠道显示名）+ `runTests` 1917（逐条带 `channelId`，不走调度；每行带模型名与中文结论，汇总分开数三档）。后端：`/admin/api/test` 带 `channelId` 时不看 `enabled`；自动探测 `probeAll` 默认跳过停用渠道、手动「全部重探测」显式 `includeDisabled:true`（见 README「自动 vs 手动的边界」）。`test/console-state.test.js` §5/§6 真跑该弹窗与结果渲染做回归。**原型未同步**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`（设计稿演示逻辑，不随生产走；原型有 3 个 demo 停用渠道，点它们仍会看到空列表） |
 
 ---
