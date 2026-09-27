@@ -170,7 +170,17 @@ reset();
 
 console.log('\n9. 装配守卫（改 server.js 时这些必须一起改）');
 {
-  check('channelsServing 末尾调用了 applyWeightedPick', /out\.sort\(\(a, b\)[\s\S]{0,400}?return applyWeightedPick\(out\);/.test(SRC));
+  // 结构判据（别用"两个 token 之间不超过 N 个字符"那种写法：server.js 在中间补几行注释就会假报警，
+  // v1.10 加熔断分层注释时就踩过一次）。这里取 channelsServing 的函数体，只断言"先排序、后加权挑首位"。
+  const csBody = (() => {
+    const i = SRC.indexOf('function channelsServing');
+    if (i < 0) return '';
+    const end = SRC.indexOf('\n}', i);
+    return end < 0 ? SRC.slice(i) : SRC.slice(i, end);
+  })();
+  check('channelsServing 末尾调用了 applyWeightedPick',
+    /out\.sort\(/.test(csBody) && /return applyWeightedPick\(out\);/.test(csBody)
+    && csBody.indexOf('out.sort(') < csBody.indexOf('return applyWeightedPick(out);'));
   check('三处候选对象都写了 weight 字段', (SRC.match(/weight: Number\(ch\.def\.weight\) > 0/g) || []).length >= 4, (SRC.match(/weight: Number\(ch\.def\.weight\) > 0/g) || []).length);
   check('persistConfig 持久化 weight（否则控制台保存会抹掉权重）', /persistConfig[\s\S]{0,1400}?weight: ch\.def\.weight \?\? undefined/.test(SRC));
   check('upsert 未传 weight 时保留旧值', /prevDef[\s\S]{0,400}?body\.weight !== undefined/.test(SRC));
