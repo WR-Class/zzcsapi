@@ -49,6 +49,8 @@ try {
   api = new Function([
     extract('sanitizeToolId'),
     extract('mapFinishReason'),
+    // 工具结果图片的内部锚点：server.js 里是模块级 const，抠函数时要一起带上（否则 ReferenceError）
+    (src.match(/^const TOOL_RESULT_IMAGE_MARK = .*$/m) || [''])[0],
     extract('anthropicToOpenAI'),
     extract('openAIToAnthropicResponse'),
     extract('createAnthropicStreamConverter'),

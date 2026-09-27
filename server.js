@@ -420,7 +420,11 @@ function channelsServing(model, protocol) {
   for (const ch of channels.values()) {
     if (!ch.def.enabled) continue;
     const chProto = ch.def.protocol || 'openai';
-    if (protocol && chProto !== protocol) continue;
+    // protocol 支持单个字符串（老用法不变）或数组（用于"这几套协议都能互通"的候选收集）
+    if (protocol) {
+      if (Array.isArray(protocol)) { if (!protocol.includes(chProto)) continue; }
+      else if (chProto !== protocol) continue;
+    }
     // 关闭 autoAlias 时跳过自动 alias
     const autoAlias = ch.def.autoAlias !== false;
     if (ch.aliasMap.has(want)) {
@@ -953,6 +957,9 @@ async function workbuddyChatProbe(def, timeoutMs) {
 //   Anthropic Request -> OpenAI Chat Request
 //   OpenAI Chat Response -> Anthropic Response (non-stream)
 //   OpenAI Chat Stream chunks -> Anthropic SSE events
+// 内部约定：工具结果里的图片没法塞进 OpenAI 的 tool 消息（只允许文本部件），
+// 于是紧跟一条以该标记打头的 user 消息承载图片；转到原生 Anthropic 出站时会被并回 tool_result 块。
+const TOOL_RESULT_IMAGE_MARK = '[tool_result image]';
 function anthropicToOpenAI(body) {
   const out = {
     model: body.model,
@@ -1058,7 +1065,7 @@ function anthropicToOpenAI(body) {
       // 所以紧跟在本轮 tool 消息之后补一条 user 消息把这（几）张图带上——视觉模型照样看得到，
       // 且顺序上紧挨着对应的工具结果，语义不散。
       if (toolResultImages.length) {
-        out.messages.push({ role: 'user', content: [{ type: 'text', text: '[tool_result image]' }, ...toolResultImages] });
+        out.messages.push({ role: 'user', content: [{ type: 'text', text: TOOL_RESULT_IMAGE_MARK }, ...toolResultImages] });
       }
     }
   }
@@ -1277,8 +1284,485 @@ function openAIStreamToGeminiSSE(chunks) {
     if (text) {
       out.push({ candidates: [{ content: { role: 'model', parts: [{ text }] }, index: 0 }] });
     }
+    // 结束分片必须带上 finishReason —— 否则 Gemini 流式客户端永远等不到"回答结束"，
+    // 只能靠连接断开猜（此前这里只转发 text，结束帧被整帧丢弃）。
+    if (choice?.finish_reason) {
+      const fr = choice.finish_reason === 'length' ? 'MAX_TOKENS'
+        : choice.finish_reason === 'content_filter' ? 'SAFETY' : 'STOP';
+      const g = { candidates: [{ content: { role: 'model', parts: [] }, finishReason: fr, index: 0 }] };
+      if (c.usage) {
+        g.usageMetadata = {
+          promptTokenCount: c.usage.prompt_tokens || 0,
+          candidatesTokenCount: c.usage.completion_tokens || 0,
+          totalTokenCount: c.usage.total_tokens || ((c.usage.prompt_tokens || 0) + (c.usage.completion_tokens || 0)),
+        };
+      }
+      out.push(g);
+    }
   }
   return out;
+}
+
+// ═══════════════════ 原生出站：内部 OpenAI ⇄ Anthropic / Gemini ═══════════════════
+// 背景：过去 `protocol` 只决定**探活方式**与对外路由，出站一律 OpenAI 格式（chat/completions + Bearer）
+// ⇒ 声明成 anthropic / gemini 协议的渠道**根本无法用于聊天**（拿 OpenAI 格式去敲 /v1/messages 必 400）。
+// 这一节补齐出站：内部统一格式(OpenAI) → 上游原生格式，回来再把原生响应转回 OpenAI，
+// 于是"客户端说哪套协议"与"渠道讲哪套协议"彻底解耦：三条客户端路由 × 两种原生渠道都能通。
+//
+// 架构落点（刻意只动两处）：
+//   · dispatchRequest：按候选渠道的 protocol 覆盖 encodeOutgoing / buildOutgoingUrl / buildOutgoingHeaders，
+//     并挂上响应翻译钩子 —— 单点注入，路由侧代码一行不用改；
+//   · tryChannel：非流式把翻译后的文本交给既有回调，流式把原生 SSE 逐行翻译成 OpenAI SSE 后再喂给既有 onStreamChunk。
+// 信息损失（诚实记录）：跨到 OpenAI 内部格式时，Anthropic 的 cache_control / metadata / top_k、
+// thinking 块的签名无法携带；tool_use.id 会经 sanitizeToolId 清洗。原生渠道与客户端同为 Anthropic 时
+// 也会走这一遍（当前不做"同协议直通"，两条路径维护成本更高）。
+
+function oaiContentBlocks(content) {
+  // 内部 content（字符串 or blocks）→ [{text}|{image_url}]，供两种原生协议各自取用
+  if (typeof content === 'string') return content ? [{ type: 'text', text: content }] : [];
+  if (!Array.isArray(content)) return [];
+  const out = [];
+  for (const b of content) {
+    if (!b || typeof b !== 'object') continue;
+    if (b.type === 'text' && typeof b.text === 'string') out.push({ type: 'text', text: b.text });
+    else if (b.type === 'image_url' && b.image_url) out.push({ type: 'image_url', url: typeof b.image_url === 'string' ? b.image_url : b.image_url.url });
+  }
+  return out;
+}
+function oaiTextOf(content) {
+  return oaiContentBlocks(content).filter((b) => b.type === 'text').map((b) => b.text).join('');
+}
+function parseDataUrl(url) {
+  // data:image/png;base64,AAAA → {mediaType, data}
+  const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(String(url || ''));
+  if (!m) return null;
+  return { mediaType: m[1] || 'image/png', base64: !!m[2], data: m[3] };
+}
+
+// ── OpenAI 请求 → Anthropic /v1/messages 请求体 ──
+function oaiRequestToAnthropic(oai, candidate) {
+  const out = {
+    model: candidate.upstream,
+    // Anthropic 强制要求 max_tokens（OpenAI 可省略）——缺省给 4096，否则上游直接 400
+    max_tokens: Number(oai.max_tokens) > 0 ? Math.floor(Number(oai.max_tokens)) : 4096,
+  };
+  if (oai.temperature !== undefined) out.temperature = oai.temperature;
+  if (oai.top_p !== undefined) out.top_p = oai.top_p;
+  if (oai.stop) out.stop_sequences = Array.isArray(oai.stop) ? oai.stop : [oai.stop];
+  if (oai.stream) out.stream = true;
+
+  const sys = [];
+  const msgs = [];
+  const seenIds = new Map();
+  const pushMsg = (role, blocks) => {
+    // Anthropic 要求角色交替：连续的同类角色必须合并
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === role) last.content.push(...blocks);
+    else msgs.push({ role, content: blocks });
+  };
+
+  for (const m of Array.isArray(oai.messages) ? oai.messages : []) {
+    if (!m) continue;
+    if (m.role === 'system' || m.role === 'developer') { const t = oaiTextOf(m.content); if (t) sys.push(t); continue; }
+
+    if (m.role === 'tool') {
+      // OpenAI 的 tool 消息 → Anthropic 的 user + tool_result（原生就支持图片块）
+      const blocks = [];
+      const text = oaiTextOf(m.content);
+      if (text) blocks.push({ type: 'text', text });
+      for (const b of oaiContentBlocks(m.content)) {
+        if (b.type !== 'image_url') continue;
+        const img = anthropicImageSource(b.url);
+        if (img) blocks.push({ type: 'image', source: img });
+      }
+      pushMsg('user', [{ type: 'tool_result', tool_use_id: m.tool_call_id || 'tool', content: blocks.length ? blocks : '' }]);
+      continue;
+    }
+
+    if (m.role === 'assistant') {
+      const blocks = [];
+      const t = oaiTextOf(m.content);
+      if (t) blocks.push({ type: 'text', text: t });
+      for (const tc of m.tool_calls || []) {
+        const fn = tc && tc.function ? tc.function : {};
+        if (!fn.name) continue;
+        let input = {};
+        try { input = JSON.parse(fn.arguments || '{}'); } catch { input = { _raw_arguments: String(fn.arguments || '') }; }
+        blocks.push({ type: 'tool_use', id: sanitizeToolId(tc.id, seenIds), name: fn.name, input });
+      }
+      if (blocks.length) pushMsg('assistant', blocks);
+      continue;
+    }
+
+    // user：注意"工具结果图片"的内部约定 —— 工具结果后面那条 user 消息以 [tool_result image] 打头，
+    // 这里把图**并回前一条 tool_result 的 content 里**，并丢掉锚点文本（原生上游看不到我们的内部约定）
+    const blocks = oaiContentBlocks(m.content);
+    const isImageAnchor = blocks.length > 1 && blocks[0].type === 'text' && blocks[0].text === TOOL_RESULT_IMAGE_MARK;
+    const prev = msgs[msgs.length - 1];
+    if (isImageAnchor && prev && prev.role === 'user') {
+      const tr = prev.content.find((b) => b.type === 'tool_result');
+      if (tr) {
+        if (typeof tr.content === 'string') tr.content = tr.content ? [{ type: 'text', text: tr.content }] : [];
+        for (const b of blocks.slice(1)) {
+          const img = anthropicImageSource(b.url);
+          if (img) tr.content.push({ type: 'image', source: img });
+        }
+        continue;
+      }
+    }
+    const ub = [];
+    for (const b of blocks) {
+      if (b.type === 'text') ub.push({ type: 'text', text: b.text });
+      else if (b.type === 'image_url') { const img = anthropicImageSource(b.url); if (img) ub.push({ type: 'image', source: img }); }
+    }
+    if (ub.length) pushMsg('user', ub);
+  }
+  if (sys.length) out.system = sys.join('\n\n');
+  out.messages = msgs;
+
+  // tools / tool_choice：Anthropic 没有 "none" 语义（保留 tools 就等于 auto），所以 none 时直接去掉 tools
+  if (Array.isArray(oai.tools) && oai.tools.length && oai.tool_choice !== 'none') {
+    out.tools = oai.tools
+      .filter((t) => t && t.function && t.function.name)
+      .map((t) => ({ name: t.function.name, description: t.function.description || undefined, input_schema: t.function.parameters || { type: 'object', properties: {} } }));
+    const tc = oai.tool_choice;
+    if (tc === 'required') out.tool_choice = { type: 'any' };
+    else if (tc && typeof tc === 'object' && tc.function && tc.function.name) out.tool_choice = { type: 'tool', name: tc.function.name };
+    else out.tool_choice = { type: 'auto' };
+    if (oai.parallel_tool_calls === false) out.disable_parallel_tool_use = true;
+  }
+  return out;
+}
+function anthropicImageSource(url) {
+  const d = parseDataUrl(url);
+  if (d) return d.base64 ? { type: 'base64', media_type: d.mediaType, data: d.data } : null; // 非 base64 的 data: 无法表达
+  if (/^https?:\/\//i.test(String(url || ''))) return { type: 'url', url };                 // Anthropic 支持 url 型 source
+  return null;
+}
+
+// ── Anthropic 响应 → OpenAI 响应 ──
+function anthropicStopToFinish(sr) {
+  return { end_turn: 'stop', max_tokens: 'length', tool_use: 'tool_calls', stop_sequence: 'stop', refusal: 'content_filter', pause_turn: 'stop' }[sr] || 'stop';
+}
+function anthropicToOaiResponse(ant, model) {
+  const texts = [];
+  const toolCalls = [];
+  let reasoning = '';
+  const seenIds = new Map();
+  for (const b of (ant && ant.content) || []) {
+    if (!b || typeof b !== 'object') continue;
+    if (b.type === 'text') texts.push(b.text || '');
+    else if (b.type === 'thinking') reasoning += b.thinking || '';
+    else if (b.type === 'tool_use') {
+      toolCalls.push({
+        id: sanitizeToolId(b.id, seenIds), type: 'function',
+        function: { name: b.name || 'tool', arguments: JSON.stringify(b.input === undefined ? {} : b.input) },
+      });
+    }
+  }
+  const text = texts.join('');
+  const message = { role: 'assistant', content: text || (toolCalls.length ? null : '') };
+  if (reasoning) message.reasoning_content = reasoning;
+  if (toolCalls.length) message.tool_calls = toolCalls;
+  const inp = (ant && ant.usage && ant.usage.input_tokens) || 0;
+  const outp = (ant && ant.usage && ant.usage.output_tokens) || 0;
+  const cached = ant && ant.usage && ant.usage.cache_read_input_tokens;
+  const usage = { prompt_tokens: inp, completion_tokens: outp, total_tokens: inp + outp };
+  if (cached) usage.prompt_tokens_details = { cached_tokens: cached };
+  return {
+    id: (ant && ant.id) || 'chatcmpl-native',
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: model || (ant && ant.model) || undefined,
+    choices: [{ index: 0, message, finish_reason: anthropicStopToFinish(ant && ant.stop_reason) }],
+    usage,
+  };
+}
+function oaiChunkLine(id, model, delta, finish, usage) {
+  const c = { id, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta, finish_reason: finish === undefined ? null : finish }] };
+  if (usage) c.usage = usage;
+  return `data: ${JSON.stringify(c)}\n\n`;
+}
+const OAI_SSE_DONE = 'data: [DONE]\n\n';
+
+// ── 有状态：Anthropic SSE → OpenAI SSE（跨 chunk 状态：块序号、工具序号、是否已收尾）──
+function createAnthropicToOaiStream(model) {
+  let id = 'chatcmpl-native', mdl = model, roleSent = false, done = false, finishSent = false;
+  const toolIndexByBlock = new Map();
+  let nextToolIdx = 0, usage = null;
+  const out = [];
+  const push = (raw) => {
+    out.length = 0;
+    if (done) return out;
+    const line = String(raw || '').trim();
+    if (!line.startsWith('data:')) return out;              // event: 行 / 空行直接忽略
+    let ev = null;
+    try { ev = JSON.parse(line.slice(5).trim()); } catch { return out; }
+    if (!ev || typeof ev !== 'object') return out;
+    if (ev.type === 'message_start') {
+      const msg = ev.message || {};
+      if (msg.id) id = msg.id;
+      if (msg.model) mdl = model || msg.model;
+      if (msg.usage) usage = { prompt_tokens: msg.usage.input_tokens || 0, completion_tokens: 0, total_tokens: msg.usage.input_tokens || 0 };
+      roleSent = true;
+      out.push(oaiChunkLine(id, mdl, { role: 'assistant', content: '' }, null));
+    } else if (ev.type === 'content_block_start') {
+      const cb = ev.content_block || {};
+      if (cb.type === 'tool_use') {
+        const idx = nextToolIdx++;
+        toolIndexByBlock.set(ev.index, idx);
+        out.push(oaiChunkLine(id, mdl, { tool_calls: [{ index: idx, id: sanitizeToolId(cb.id), type: 'function', function: { name: cb.name || 'tool', arguments: '' } }] }, null));
+      } else if (!roleSent) {
+        roleSent = true;
+        out.push(oaiChunkLine(id, mdl, { role: 'assistant', content: '' }, null));
+      }
+    } else if (ev.type === 'content_block_delta') {
+      const d = ev.delta || {};
+      if (d.type === 'text_delta' && d.text) out.push(oaiChunkLine(id, mdl, { content: d.text }, null));
+      else if (d.type === 'thinking_delta' && d.thinking) out.push(oaiChunkLine(id, mdl, { reasoning_content: d.thinking }, null));
+      else if (d.type === 'input_json_delta') {
+        const idx = toolIndexByBlock.has(ev.index) ? toolIndexByBlock.get(ev.index) : 0;
+        out.push(oaiChunkLine(id, mdl, { tool_calls: [{ index: idx, function: { arguments: d.partial_json || '' } }] }, null));
+      }
+    } else if (ev.type === 'message_delta') {
+      const d = ev.delta || {};
+      if (ev.usage && ev.usage.output_tokens) {
+        usage = usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+        usage.completion_tokens = ev.usage.output_tokens;
+        usage.total_tokens = (usage.prompt_tokens || 0) + (ev.usage.output_tokens || 0);
+      }
+      out.push(oaiChunkLine(id, mdl, {}, anthropicStopToFinish(d.stop_reason), null));
+      finishSent = true;
+    } else if (ev.type === 'message_stop') {
+      if (!finishSent) { out.push(oaiChunkLine(id, mdl, {}, 'stop', null)); finishSent = true; }
+      out.push(OAI_SSE_DONE);
+      done = true;
+    }
+    return out;
+  };
+  // 幂等收尾：上游没发 message_stop（异常断流）时也必须给客户端一个完整结束
+  const end = () => {
+    out.length = 0;
+    if (done) return out;
+    if (!finishSent) out.push(oaiChunkLine(id, mdl, {}, 'stop', usage || null));
+    out.push(OAI_SSE_DONE);
+    done = true;
+    return out;
+  };
+  return { push, end };
+}
+
+// ── OpenAI 请求 → Gemini generateContent 请求体 ──
+function oaiRequestToGemini(oai) {
+  const contents = [];
+  const sys = [];
+  const toolNameById = new Map();
+  const pushPart = (role, part) => {
+    const last = contents[contents.length - 1];
+    if (last && last.role === role) last.parts.push(part);
+    else contents.push({ role, parts: [part] });
+  };
+  for (const m of Array.isArray(oai.messages) ? oai.messages : []) {
+    if (!m) continue;
+    if (m.role === 'system' || m.role === 'developer') { const t = oaiTextOf(m.content); if (t) sys.push(t); continue; }
+    if (m.role === 'tool') {
+      // Gemini 的 functionResponse 认**函数名**不认 id → 从上游 assistant 的 tool_calls 里查名字
+      const name = toolNameById.get(m.tool_call_id) || m.tool_call_id || 'tool';
+      const text = oaiTextOf(m.content);
+      let response = {};
+      try { const p = JSON.parse(text); response = p && typeof p === 'object' ? p : { result: text }; } catch { response = { result: text }; }
+      pushPart('user', { functionResponse: { name, response } });
+      continue;
+    }
+    if (m.role === 'assistant') {
+      const t = oaiTextOf(m.content);
+      if (t) pushPart('model', { text: t });
+      for (const tc of m.tool_calls || []) {
+        const fn = tc && tc.function ? tc.function : {};
+        if (!fn.name) continue;
+        if (tc.id) toolNameById.set(tc.id, fn.name);
+        let args = {};
+        try { const a = JSON.parse(fn.arguments || '{}'); args = a && typeof a === 'object' ? a : { value: a }; } catch { args = { _raw_arguments: String(fn.arguments || '') }; }
+        pushPart('model', { functionCall: { name: fn.name, args } });
+      }
+      continue;
+    }
+    for (const part of oaiContentToGeminiParts(m.content)) pushPart('user', part);
+  }
+  const out = { contents };
+  if (sys.length) out.systemInstruction = { parts: [{ text: sys.join('\n\n') }] };
+  const gc = {};
+  if (Number(oai.max_tokens) > 0) gc.maxOutputTokens = Math.floor(Number(oai.max_tokens));
+  if (oai.temperature !== undefined) gc.temperature = oai.temperature;
+  if (oai.top_p !== undefined) gc.topP = oai.top_p;
+  if (oai.stop) gc.stopSequences = Array.isArray(oai.stop) ? oai.stop : [oai.stop];
+  if (Object.keys(gc).length) out.generationConfig = gc;
+  if (Array.isArray(oai.tools) && oai.tools.length) {
+    const decls = oai.tools.filter((t) => t && t.function && t.function.name)
+      .map((t) => ({ name: t.function.name, description: t.function.description || undefined, parameters: t.function.parameters || { type: 'object', properties: {} } }));
+    if (decls.length) {
+      out.tools = [{ functionDeclarations: decls }];
+      const tc = oai.tool_choice;
+      // 好消息：Gemini 有 NONE（Anthropic 没有），所以三态能完整映射
+      const fcc = { mode: tc === 'required' ? 'ANY' : tc === 'none' ? 'NONE' : 'AUTO' };
+      if (tc && typeof tc === 'object' && tc.function && tc.function.name) fcc.allowedFunctionNames = [tc.function.name];
+      out.toolConfig = { functionCallingConfig: fcc };
+    }
+  }
+  return out;
+}
+function oaiContentToGeminiParts(content) {
+  const parts = [];
+  for (const b of oaiContentBlocks(content)) {
+    if (b.type === 'text') parts.push({ text: b.text });
+    else if (b.type === 'image_url') {
+      const d = parseDataUrl(b.url);
+      if (d && d.base64) parts.push({ inlineData: { mimeType: d.mediaType, data: d.data } });
+      else if (/^https?:\/\//i.test(String(b.url || ''))) parts.push({ fileData: { fileUri: b.url } });
+    }
+  }
+  return parts;
+}
+
+// ── Gemini 响应 → OpenAI 响应 ──
+function geminiStopToFinish(fr) {
+  if (fr === 'MAX_TOKENS') return 'length';
+  if (fr === 'SAFETY' || fr === 'RECITATION' || fr === 'BLOCKLIST' || fr === 'PROHIBITED_CONTENT' || fr === 'SPII') return 'content_filter';
+  return 'stop';
+}
+function geminiPartsToOai(parts) {
+  const texts = [];
+  const toolCalls = [];
+  let n = 0;
+  for (const p of parts || []) {
+    if (!p || typeof p !== 'object') continue;
+    if (typeof p.text === 'string') texts.push(p.text);
+    else if (p.functionCall && p.functionCall.name) {
+      toolCalls.push({
+        id: `call_g${n++}_${p.functionCall.name}`, type: 'function',
+        function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args === undefined ? {} : p.functionCall.args) },
+      });
+    }
+  }
+  return { text: texts.join(''), toolCalls };
+}
+function geminiToOaiResponse(gem, model) {
+  const cand = (gem && gem.candidates && gem.candidates[0]) || {};
+  const { text, toolCalls } = geminiPartsToOai(cand.content && cand.content.parts);
+  const message = { role: 'assistant', content: text || (toolCalls.length ? null : '') };
+  if (toolCalls.length) message.tool_calls = toolCalls;
+  const um = (gem && gem.usageMetadata) || {};
+  return {
+    id: (gem && gem.responseId) || 'chatcmpl-native',
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: model || (gem && gem.modelVersion) || undefined,
+    choices: [{ index: 0, message, finish_reason: toolCalls.length ? 'tool_calls' : geminiStopToFinish(cand.finishReason) }],
+    usage: {
+      prompt_tokens: um.promptTokenCount || 0,
+      completion_tokens: um.candidatesTokenCount || 0,
+      total_tokens: um.totalTokenCount || ((um.promptTokenCount || 0) + (um.candidatesTokenCount || 0)),
+    },
+  };
+}
+
+// ── 有状态：Gemini SSE → OpenAI SSE ──
+// alt=sse 的每个 chunk 带增量 text；functionCall 可能整块到达（也可能被切分），
+// 所以把 functionCall 缓冲到收尾再发 —— 宁可晚一点，也不能发半个参数给客户端。
+function createGeminiToOaiStream(model) {
+  let id = 'chatcmpl-native', mdl = model, roleSent = false, finishSent = false, usage = null;
+  const pendingCalls = [];
+  const out = [];
+  const emitCalls = (finish) => {
+    if (!pendingCalls.length) return false;
+    out.push(oaiChunkLine(id, mdl, { tool_calls: pendingCalls.map((c, i) => ({ index: i, id: c.id, type: 'function', function: { name: c.name, arguments: '' } })) }, null));
+    out.push(oaiChunkLine(id, mdl, { tool_calls: pendingCalls.map((c, i) => ({ index: i, function: { arguments: c.args } })) }, finish || null));
+    pendingCalls.length = 0;
+    return true;
+  };
+  const push = (raw) => {
+    out.length = 0;
+    if (finishSent) return out;
+    const line = String(raw || '').trim();
+    if (!line.startsWith('data:')) return out;
+    let ev = null;
+    try { ev = JSON.parse(line.slice(5).trim()); } catch { return out; }
+    if (!ev || typeof ev !== 'object') return out;
+    if (!roleSent) { roleSent = true; out.push(oaiChunkLine(id, mdl, { role: 'assistant', content: '' }, null)); }
+    if (ev.modelVersion) mdl = model || ev.modelVersion;
+    if (ev.responseId) id = ev.responseId;
+    const cand = (ev.candidates && ev.candidates[0]) || {};
+    const { text, toolCalls } = geminiPartsToOai(cand.content && cand.content.parts);
+    if (text) out.push(oaiChunkLine(id, mdl, { content: text }, null));
+    for (const tc of toolCalls) pendingCalls.push({ id: tc.id, name: tc.function.name, args: tc.function.arguments });
+    if (ev.usageMetadata) {
+      usage = {
+        prompt_tokens: ev.usageMetadata.promptTokenCount || 0,
+        completion_tokens: ev.usageMetadata.candidatesTokenCount || 0,
+        total_tokens: ev.usageMetadata.totalTokenCount || 0,
+      };
+    }
+    if (cand.finishReason) {
+      const finish = geminiStopToFinish(cand.finishReason);
+      if (!emitCalls(finish)) out.push(oaiChunkLine(id, mdl, {}, finish, usage));
+      else if (usage) out.push(oaiChunkLine(id, mdl, {}, null, usage));
+      finishSent = true;
+      out.push(OAI_SSE_DONE);
+    }
+    return out;
+  };
+  const end = () => {
+    out.length = 0;
+    if (finishSent) return out;
+    if (!emitCalls('tool_calls')) out.push(oaiChunkLine(id, mdl, {}, 'stop', usage));
+    finishSent = true;
+    out.push(OAI_SSE_DONE);
+    return out;
+  };
+  return { push, end };
+}
+
+// ── 原生渠道的出站 URL / 请求头（与探活保持同一套约定）──
+function nativeOutgoingUrl(proto, ch, candidate, isStream) {
+  const base = String(ch.def.baseUrl || '').replace(/\/+$/, '');
+  if (proto === 'anthropic') {
+    // baseUrl 写 https://api.anthropic.com 或 .../v1 都认
+    return /\/v1$/.test(base) ? base + '/messages' : joinUrl(base, 'v1/messages');
+  }
+  // Gemini：模型名在 URL 路径里（请求体里没有 model），流式是 :streamGenerateContent?alt=sse
+  const root = /\/v1beta$/.test(base) ? base : (/\/v1$/.test(base) ? base.replace(/\/v1$/, '/v1beta') : joinUrl(base, 'v1beta'));
+  const action = isStream ? 'streamGenerateContent?alt=sse' : 'generateContent';
+  return `${root}/models/${encodeURIComponent(candidate.upstream)}:${action}`;
+}
+function nativeOutgoingHeaders(proto, ch) {
+  if (proto === 'anthropic') return { 'Content-Type': 'application/json', 'x-api-key': ch.def.apiKey, 'anthropic-version': '2023-06-01' };
+  return { 'Content-Type': 'application/json', 'x-goog-api-key': ch.def.apiKey };
+}
+// 原生响应是"成功体"才翻译；错误体（{error:...}）原样返回，否则 4xx 判定与客户端拿到的错误就失真了
+function nativeResponseTranslator(proto, requestedModel) {
+  return (raw) => {
+    const j = safeJson(raw);
+    if (!j || typeof j !== 'object') return raw;
+    if (proto === 'anthropic') {
+      if (!Array.isArray(j.content)) return raw;
+      return JSON.stringify(anthropicToOaiResponse(j, requestedModel));
+    }
+    if (!Array.isArray(j.candidates)) return raw;
+    return JSON.stringify(geminiToOaiResponse(j, requestedModel));
+  };
+}
+function nativeStreamTranslator(proto, requestedModel) {
+  return () => (proto === 'anthropic' ? createAnthropicToOaiStream(requestedModel) : createGeminiToOaiStream(requestedModel));
+}
+// dispatchRequest 单点注入：只有 anthropic / gemini 协议渠道会覆盖这几件事
+function nativeChannelOpts(proto, requestedModel) {
+  return {
+    encodeOutgoing: (b, c) => (proto === 'anthropic' ? oaiRequestToAnthropic(b, c) : oaiRequestToGemini(b, c)),
+    buildOutgoingUrl: (ch, c, isStream) => nativeOutgoingUrl(proto, ch, c, isStream),
+    buildOutgoingHeaders: (ch) => nativeOutgoingHeaders(proto, ch),
+    translateResponse: nativeResponseTranslator(proto, requestedModel),
+    makeStreamTranslator: nativeStreamTranslator(proto, requestedModel),
+  };
 }
 
 // 从协议原生响应里抽 reply 文本
@@ -2312,10 +2796,14 @@ function sanitizeOpenAIToolIds(body) {
 
 // ─────────────────── 图片（多模态）能力门 ───────────────────
 // 内部统一格式是 OpenAI：图片表示为 messages[].content 数组里的 image_url block。
-// 目前只有 openai 协议渠道会把请求体原样转发（含 image_url）；notion / notion-agent / workbuddy /
-// genspark / codex 这些逆向与文本链只把 content 当字符串用 —— 把带图请求丢给它们＝**静默丢图后照样回答**，
-// 那比直接失败更糟（用户以为模型看过图）。所以含图请求只保留能转发图片的渠道，一个都没有就明确报错。
-const IMAGE_CAPABLE_PROTOCOLS = ['openai'];
+// 目前只有 openai / anthropic / gemini 三种协议能带图出站：
+//   · openai    —— 请求体原样转发（image_url 原样过去）；
+//   · anthropic —— 出站转成 image 块（base64 或 url 两种 source）；
+//   · gemini    —— 出站转成 inlineData / fileData。
+// notion / notion-agent / workbuddy / genspark / codex 这些逆向与文本链只把 content 当字符串用 ——
+// 把带图请求丢给它们＝**静默丢图后照样回答**，那比直接失败更糟（用户以为模型看过图）。
+// 所以含图请求只保留能转发图片的渠道，一个都没有就明确报错。
+const IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini'];
 
 function bodyHasImages(body) {
   const msgs = Array.isArray(body && body.messages) ? body.messages : [];
@@ -2332,7 +2820,7 @@ function filterCandidatesForImages(candidates, body) {
 }
 
 // 含图但裁剪后没有候选 → 统一的 400 文案（避免"无渠道"的 404 误导成模型名写错）
-const NO_IMAGE_CHANNEL_MSG = 'this request contains images, but no channel can forward them: only openai-protocol channels pass image_url through as-is';
+const NO_IMAGE_CHANNEL_MSG = 'this request contains images, but no channel can forward them: only openai / anthropic / gemini protocol channels can carry images (openai 原样转发 image_url；anthropic 转 image 块；gemini 转 inlineData/fileData)';
 
 async function handleOpenAIRequest(req, res, url) {
   const raw = await readBody(req);
@@ -2343,6 +2831,9 @@ async function handleOpenAIRequest(req, res, url) {
   const requested = body.model;
   if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
   let candidates = channelsServing(requested, 'openai');
+  // 原生 anthropic / gemini 协议渠道兜底：出站会被自动转成原生报文（见 nativeChannelOpts），
+  // 所以它们同样能服务 OpenAI 客户端 —— 作为候选链尾部一层，不改动原有 openai 渠道的先后顺序。
+  for (const nc of channelsServing(requested, ['anthropic', 'gemini'])) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
   // notion 渠道兜底：openai 渠道全挂/限频时接住（作为候选链尾部，不抢优先级）
   const notionCands = channelsServing(requested, 'notion');
   for (const nc of notionCands) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
@@ -2473,9 +2964,10 @@ async function handleAnthropicRequest(req, res, url) {
     catch { return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON' } }); }
     const requested = body.model;
     if (!requested) return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'missing model' } });
-    // 优先 anthropic 协议渠道；没有则回落 openai 协议（网关做 Anthropic↔OpenAI 转换）；notion 始终作为兜底候选
+    // 优先 anthropic 协议渠道；没有则回落 openai / gemini 协议（网关做双向转换）；notion 始终作为兜底候选
     let candidates = channelsServing(requested, 'anthropic');
-    if (candidates.length === 0) candidates = channelsServing(requested, 'openai');
+    if (candidates.length === 0) candidates = channelsServing(requested, ['openai', 'gemini']);
+    for (const gc of channelsServing(requested, ['openai', 'gemini'])) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
     for (const nc of channelsServing(requested, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
     for (const gc of channelsServing(requested, 'notion-agent')) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
     for (const xc of channelsServing(requested, 'codex')) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
@@ -2542,8 +3034,10 @@ async function handleGeminiRequest(req, res, url) {
   try { body = JSON.parse(raw.toString('utf8') || '{}'); }
   catch { return sendJson(res, 400, { error: { code: 400, message: 'invalid JSON' } }); }
 
+  // 优先 gemini 协议渠道；没有则回落 openai / anthropic 协议（网关做双向转换）
   let candidates = channelsServing(model, 'gemini');
-  if (candidates.length === 0) candidates = channelsServing(model, 'openai');
+  if (candidates.length === 0) candidates = channelsServing(model, ['openai', 'anthropic']);
+  for (const gc of channelsServing(model, ['openai', 'anthropic'])) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
   for (const nc of channelsServing(model, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
   for (const gc of channelsServing(model, 'notion-agent')) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
   if (candidates.length === 0) {
@@ -2608,9 +3102,15 @@ async function dispatchRequest(opts) {
     // 还有后续候选 → 守门可以掐得早（快速切兜底）；已是最后候选 → 守门放宽到 300s（对齐
     // 客户端 idle 超时：上游"慢但能成"的请求留给客户端自身的重试机制，而不是被网关提前掐死）
     const hasMoreCandidates = i < Math.min(candidates.length, RETRIES.maxModelFallbacks || 99) - 1;
+    // ★ 原生出站单点注入：候选渠道声明 anthropic / gemini 协议时，覆盖出站编码/URL/请求头，
+    //   并挂上"原生响应 → 内部 OpenAI"的翻译钩子。路由侧回调一行都不用改。
+    const chDef = channels.get(c.channelId) && channels.get(c.channelId).def;
+    const chProto = (chDef && chDef.protocol) || 'openai';
+    const native = (chProto === 'anthropic' || chProto === 'gemini') ? nativeChannelOpts(chProto, requestedModel) : null;
     const result = await tryChannel({
       res, url, body, candidate: c, isStream: stream,
       encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
+      ...(native || {}),
       // 流式的"开场/收尾"钩子也必须转发：漏掉它们时 message_start 与收尾事件就不会发出
       // （历史上这里漏了 streamPrelude，导致 Anthropic 流式一直没有 message_start）
       streamPrelude: opts.streamPrelude, streamEpilogue: opts.streamEpilogue,
@@ -2654,7 +3154,7 @@ async function tryChannel(opts) {
       return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
     }
   const outgoing = encodeOutgoing(body, candidate);
-  const target = buildOutgoingUrl(ch);
+  const target = buildOutgoingUrl(ch, candidate, isStream);
   const headers = applyCustomHeaders(buildOutgoingHeaders(ch), ch.def);
   const bodyStr = JSON.stringify(outgoing);
   const timeoutMs = ch.def.timeoutMs || 120_000;
@@ -2798,8 +3298,28 @@ async function tryChannel(opts) {
     const decoder = new TextDecoder();
     let buf = '';
     let streamOutText = ''; // 累计输出（用于 token 估算）
+    // ★ 原生渠道：把上游的原生 SSE 逐行翻译成 OpenAI SSE，再喂给路由既有的 onStreamChunk。
+    //   路由没有 onStreamChunk 时（OpenAI 路由是原样透传）就直接写翻译结果 —— 否则客户端会把
+    //   Anthropic/Gemini 的事件当 OpenAI 分片解析，一个字段都读不出来。
+    let nativeStream = null;
+    if (typeof opts.makeStreamTranslator === 'function') nativeStream = opts.makeStreamTranslator(candidate);
+    const emitNative = (lines) => {
+      let outText = '';
+      for (const l of lines) {
+        if (!l) continue;
+        outText += onStreamChunk ? (onStreamChunk(l, candidate) || '') : l;
+      }
+      return outText;
+    };
     // 按行分发：有 onStreamChunk 就逐行转换，否则原样透传（补回被切掉的分隔空行）
     const handleLine = (line) => {
+      if (nativeStream) {
+        // 原生：raw 行没有 OpenAI 的 delta 字段，逐个统计没有意义 → 按翻译后的输出估算
+        const out = emitNative(nativeStream.push(line + '\n'));
+        streamOutText += sseDeltaText(out);
+        if (out) res.write(out);
+        return;
+      }
       streamOutText += sseDeltaText(line);
       if (onStreamChunk) {
         const out = onStreamChunk(line + '\n', candidate);
@@ -2835,6 +3355,12 @@ async function tryChannel(opts) {
       buf += decoder.decode(); // 冲掉解码器里残留的多字节字符
       drain(true);
     } catch (err) { /* 上游已断 */ }
+    // 原生流式收尾：上游没发结束标记（异常断流）时也要把 finish_reason + [DONE] 补上，
+    // 否则客户端的流式解析器会一直等（与 Anthropic 路由的 streamEpilogue 是同一类兜底）
+    if (nativeStream) {
+      const tail = emitNative(nativeStream.end());
+      if (tail) res.write(tail);
+    }
     if (typeof opts.streamEpilogue === 'function') {
       const post = opts.streamEpilogue();
       if (post) res.write(post);
@@ -2848,7 +3374,10 @@ async function tryChannel(opts) {
     return 'success';
   } else {
     // 非流式：先读全文（统计 + 转发），shim 给 handler 避免 double-read
-    const text = await resp.text();
+    const rawText = await resp.text();
+    // ★ 原生渠道：响应体是 Anthropic / Gemini 格式 → 先翻译成内部 OpenAI 再交给路由回调。
+    //   只有 resp.ok 才翻译：错误体原样透传（4xx 判定与客户端看到的错误必须是真的）。
+    const text = (resp.ok && typeof opts.translateResponse === 'function') ? opts.translateResponse(rawText) : rawText;
     let realUsage = null;
     let replyText = '';
     try {

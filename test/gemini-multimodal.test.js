@@ -224,8 +224,10 @@ function testWiring() {
   // 1 处常量声明 + 3 处使用
   const msgs = (src.match(/NO_IMAGE_CHANNEL_MSG/g) || []).length;
   check('常量 1 处声明 + 3 处使用（不静默降级）', msgs === 4, msgs);
-  check('能力门白名单目前只有 openai（新增可转图协议要同时改文档）',
-    JSON.stringify(api.IMAGE_CAPABLE_PROTOCOLS) === '["openai"]', api.IMAGE_CAPABLE_PROTOCOLS);
+  check('能力门白名单 = openai + anthropic + gemini（原生出站能带图后扩到三种；新增可转图协议要同时改文档）',
+    JSON.stringify(api.IMAGE_CAPABLE_PROTOCOLS) === '["openai","anthropic","gemini"]', api.IMAGE_CAPABLE_PROTOCOLS);
+  check('★ 三种协议各自的转图方式都写在常量旁边（出站 image 块 / inlineData）',
+    /anthropic —— 出站转成 image 块/.test(src) && /gemini {4}—— 出站转成 inlineData/.test(src));
   check('非流式 shim 同时提供 text() 与 json()（PT23 的回归防线）',
     /const shim = \{[\s\S]{0,240}?json: async \(\) => JSON\.parse\(text\)/.test(src));
 }
