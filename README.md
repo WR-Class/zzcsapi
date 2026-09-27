@@ -171,6 +171,8 @@ node test/auto-weight-e2e.test.js         # 37 项断言：真流量下预测与
 node test/upstream-4xx-fallback-e2e.test.js  # 32 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）
 node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5）
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
+node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
+node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -271,6 +273,20 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 | Gemini（`/gemini/v1beta/...`） | 转 OpenAI 出站 | 转原生 Anthropic 出站 | 转原生 `:streamGenerateContent?alt=sse` |
 
 - **怎么配**：`"protocol": "anthropic"` + `baseUrl`（如 `https://api.anthropic.com`，写不写 `/v1` 都认）+ `apiKey`；Gemini 填 `https://generativelanguage.googleapis.com`（`/v1`、`/v1beta` 都认）。模型行照旧：alias 是**客户端请求的名字**，上游是**真实模型名**（Gemini 会拼进 URL 路径）。
+- **客户端路由的四个往返方向都完整支持工具调用**（v1.12 补齐 Gemini 这条入站方向，见 PT33）：
+  | 客户端路由 | 工具调用（出站/入站） | `tool_choice` 三态 | 工具结果的配对方式 |
+  | --- | --- | --- | --- |
+  | `/v1/chat/completions` | OpenAI `tool_calls` ⇄ 原样 | 完整 | `tool_call_id` |
+  | `/anthropic/v1/messages` | `tool_use` ⇄ `tool_calls` | `none` 表达不了（去掉 tools） | `tool_use_id` |
+  | `/gemini/v1beta/...` | `functionCall` ⇄ `tool_calls` | `AUTO`/`ANY`/`NONE` 全支持 | **按函数名配对**（id 由网关合成，见下） |
+
+  Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）：
+  - `functionCall` / `functionResponse` 进站后转成真的 `assistant.tool_calls` / `role:"tool"` 报文，网关替它合成
+    `call_g<n>_<name>` 形状的 id，并用**同名 FIFO 队列**把 `functionResponse` 配回正确的调用（同一轮里同一函数调两次也对得上）；
+  - 客户端若**只回结果、不带上文的 functionCall**（无状态用法），网关**不会**硬造 `tool_call_id` —— 那会让上游因
+    "有 tool 消息却没有配对的 `assistant.tool_calls`"直接 400。这种情况退回为一段可读文本，结果照样进上下文。
+  - 有损点：`ANY` + 多个 `allowedFunctionNames` 在 OpenAI 侧只有"强制某一个"，因此会**同时把工具集收窄到白名单**、
+    `tool_choice` 退化为 `required`（方向一致，但不是逐字等价）。
 - **转发什么**：`system/developer` → 顶层 `system`（Anthropic）/ `systemInstruction`（Gemini）；`tool_calls` ⇄ `tool_use`（Anthropic）/ `functionCall`（Gemini）；工具结果 → `tool_result` / `functionResponse`（Gemini 按**函数名**配对，自动从上一轮工具调用里查）；图片 → `image` 块（base64/url）/ `inlineData`、`fileData`；`max_tokens`→`max_output_tokens`/`maxOutputTokens`；`stop`→`stop_sequences`/`stopSequences`；流式 → Anthropic 事件 / `alt=sse`。
 - **上游报错照样原样返回**：错误体（如 `{"type":"error",...}`）不做翻译 —— 否则 400 会被伪装成"成功但空"的 200，最难查。
 - **有损的地方（诚实说明）**：`tool_choice: "none"` 在 Anthropic 侧表达不了（保留 tools 就等于 auto，因此**直接去掉 tools**）；Anthropic 的 `cache_control`、`top_k`、thinking 签名在跨到内部 OpenAI 格式时会丢；`tool_use.id` 会被清洗成合法字符。原生渠道与客户端同为 Anthropic 时也走这一遍转换（不做同协议直通）。
@@ -580,5 +596,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
   下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
   "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题
-- Gemini **客户端路由**的工具调用透传：`/gemini/...` 目前只映射文本，`tools` / `functionCall` / `functionResponse` 会被丢掉（OpenAI 与 Anthropic 两条路由不受影响，见 docs/PONYTAIL_REVIEW.md PT33）
+- ~~Gemini **客户端路由**的工具调用透传~~ —— ✅ **v1.12 已完成**：`tools` / `toolConfig` 三态 /
+  `functionCall` / `functionResponse` 全部打通（非流式与流式），配不上 id 的无状态用法有安全退路。
+  回归见 `test/gemini-tools.test.js`（单元 44 项）与 `test/gemini-tools-e2e.test.js`（端到端 29 项）。
 - 同协议直通（Anthropic 客户端 → Anthropic 渠道不做转换，省一层且有损点更少）

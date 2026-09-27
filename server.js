@@ -1259,12 +1259,20 @@ function geminiToOpenAI(body, model) {
   let sysText = body.systemInstruction?.parts?.map((p) => p.text).join('\n') || '';
   if (body.system_instruction?.parts) sysText = body.system_instruction.parts.map((p) => p.text).join('\n');
   if (sysText) messages.push({ role: 'system', content: sysText });
+  // functionCall / functionResponse 的配对：Gemini **认函数名不认 id**，而 OpenAI 内部格式要求
+  // assistant.tool_calls[].id 与 role:'tool'.tool_call_id 严格配对（上游不配对就 400）。
+  // 所以在入站这一层替它合成 id（沿用出站方向 geminiPartsToOai 的 `call_g<n>_<name>` 命名），
+  // 用"同名 FIFO 队列"配对 —— 同一轮里同一函数被调多次也能按出现顺序对上。
+  const idQueues = new Map(); // name → [id, ...]
+  let callSeq = 0;
   for (const c of contents) {
     const role = c.role === 'model' ? 'assistant' : 'user';
     // Gemini 部件 → OpenAI content blocks。**顺序必须保留**：图片与文本的相对位置对视觉模型有语义
     // （先图后问 vs 先问后图，回答会不一样）。text 原样转文本；inlineData（base64）与 fileData（fileUri）
-    // 转 image_url；functionCall / functionResponse 仍降级为文本（只有工具仿真链用得上，图片链用不到）。
+    // 转 image_url；functionCall / functionResponse 走**真工具报文**（见下）。
     const blocks = [];
+    const calls = [];      // 本条目里的 functionCall → 挂到 assistant 消息的 tool_calls
+    const toolMsgs = [];   // 本条目里的 functionResponse → 各成一条 role:'tool'
     for (const p of (c.parts || [])) {
       const inline = p.inlineData || p.inline_data;
       const file = p.fileData || p.file_data;
@@ -1273,24 +1281,65 @@ function geminiToOpenAI(body, model) {
         blocks.push({ type: 'image_url', image_url: { url: `data:${inline.mimeType || inline.mime_type || 'image/png'};base64,${inline.data}` } });
       } else if (file && (file.fileUri || file.file_uri)) {
         blocks.push({ type: 'image_url', image_url: { url: file.fileUri || file.file_uri } });
-      } else if (p.functionCall) blocks.push({ type: 'text', text: '```json\n{"tool_calls": [{"name": ' + JSON.stringify(p.functionCall.name || '') + ', "arguments": ' + JSON.stringify(p.functionCall.args || {}) + '}]}\n```' });
-      else if (p.functionResponse) blocks.push({ type: 'text', text: '[工具 ' + (p.functionResponse.name || '') + ' 的执行结果如下]\n' + JSON.stringify(p.functionResponse.response || {}) + '\n[请根据以上工具结果继续]' });
+      } else if (p.functionCall) {
+        // 工具调用（PT33）：以前这里降级成一段 `{"tool_calls": [...]}` JSON 文本 —— 那是给"没有工具能力的
+        // 渠道"看的仿真文本，而 tool-emu.renderEmulatedMessages 本来就会把**真的** assistant.tool_calls
+        // 渲染回同样的文本，所以改成真报文后，notion/genspark 这些仿真链一路上什么也没少。
+        const name = p.functionCall.name || 'tool';
+        const id = `call_g${callSeq++}_${name}`;
+        if (!idQueues.has(name)) idQueues.set(name, []);
+        idQueues.get(name).push(id);
+        const args = p.functionCall.args;
+        calls.push({ id, type: 'function', function: { name, arguments: JSON.stringify(args === undefined ? {} : args) } });
+      } else if (p.functionResponse) {
+        const name = p.functionResponse.name || 'tool';
+        const resp = p.functionResponse.response === undefined ? {} : p.functionResponse.response;
+        const content = typeof resp === 'string' ? resp : JSON.stringify(resp);
+        const q = idQueues.get(name);
+        if (q && q.length) {
+          toolMsgs.push({ role: 'tool', tool_call_id: q.shift(), content });
+        } else {
+          // 配不上（客户端无状态：只回结果、不带上文的 functionCall）：**不能**硬造 tool_call_id ——
+          // OpenAI 上游看到"有 tool 消息却没有配对的 assistant.tool_calls"会直接 400。
+          // 退回文本形态（与旧行为一致），结果照样进得了上下文，且不会把请求弄坏。
+          blocks.push({ type: 'text', text: '[工具 ' + name + ' 的执行结果如下]\n' + content + '\n[请根据以上工具结果继续]' });
+        }
+      }
     }
     const hasImage = blocks.some((b) => b.type === 'image_url');
-    if (hasImage) {
-      messages.push({ role, content: blocks });
+    const textOfBlocks = () => blocks.map((b) => b.text).filter(Boolean).join('\n');
+    if (role === 'assistant') {
+      if (!blocks.length && !calls.length) { /* 空条目：跳过，别塞空消息惹上游 400 */ }
+      else {
+        const msg = { role: 'assistant', content: hasImage ? blocks : (textOfBlocks() || null) };
+        if (calls.length) msg.tool_calls = calls;
+        messages.push(msg);
+      }
+    } else if (hasImage) {
+      messages.push({ role: 'user', content: blocks });
     } else {
       // 纯文本仍用字符串形态：上游与各回退渠道普遍只认 string（数组形态只有 OpenAI 官方语义能接受）
-      const text = blocks.map((b) => b.text).filter(Boolean).join('\n');
-      if (text) messages.push({ role, content: text });
+      const text = textOfBlocks();
+      if (text) messages.push({ role: 'user', content: text });
     }
+    for (const t of toolMsgs) messages.push(t);
   }
   const gen = body.generationConfig || {};
-  // Gemini functionDeclarations → OpenAI tools（回退 notion 时启用工具仿真）
+  // Gemini functionDeclarations → OpenAI tools
   const tools = [];
   const decls = (body.tools && body.tools[0] && body.tools[0].functionDeclarations)
     || (body.tools && body.tools[0] && body.tools[0].function_declarations) || [];
+  // toolConfig.functionCallingConfig 三态（AUTO / ANY / NONE）。
+  // 注意以前这里读的是 `body.tool_choice` —— 那是 **OpenAI 的字段名**，真正的 Gemini 客户端从来不发它，
+  // 所以"声明了 tools 的 Gemini 客户端"拿到的永远是 auto，`NONE`/`ANY` 形同虚设（PT33 的一部分）。
+  const fcc = (body.toolConfig && body.toolConfig.functionCallingConfig)
+    || (body.tool_config && body.tool_config.function_calling_config) || {};
+  const fccMode = String(fcc.mode || '').toUpperCase();
+  const allowed = fcc.allowedFunctionNames || fcc.allowed_function_names || [];
+  // ANY + 白名单 = "只准调这几个"：OpenAI 只有"强制某一个"这一种表达能力，
+  // 于是把工具集**也跟着收窄**（比只写 required 更接近原意），多于一个时退化成 required（有损，README 已记）。
   for (const d of decls) {
+    if (fccMode === 'ANY' && allowed.length && !allowed.includes(d.name)) continue;
     tools.push({
       type: 'function',
       function: {
@@ -1300,6 +1349,10 @@ function geminiToOpenAI(body, model) {
       },
     });
   }
+  let toolChoice;
+  if (fccMode === 'ANY') toolChoice = allowed.length === 1 ? { type: 'function', function: { name: allowed[0] } } : 'required';
+  else if (fccMode === 'NONE') toolChoice = 'none';
+  else toolChoice = body.tool_choice || 'auto';   // 兼顾"用 OpenAI 字段名硬塞进来"的客户端
   return {
     model,
     messages,
@@ -1307,17 +1360,34 @@ function geminiToOpenAI(body, model) {
     temperature: gen.temperature,
     top_p: gen.topP,
     stream: !!body.stream,
-    ...(tools.length ? { tools, tool_choice: body.tool_choice || 'auto' } : {}),
+    ...(tools.length ? { tools, tool_choice: toolChoice } : {}),
   };
 }
 
 function openAIToGeminiResponse(oai) {
   const choice = oai.choices?.[0];
-  const text = choice?.message?.content || '';
+  const msg = choice?.message || {};
+  const text = oaiTextOf(msg.content);   // 用 oaiTextOf：content 是数组（跨协议带图）时也能取到文本
+  const calls = (msg.tool_calls || []).filter((tc) => tc && tc.function && tc.function.name);
+  const parts = [];
+  if (text) parts.push({ text });
+  // 工具调用 → Gemini 的 functionCall（PT33：以前只取 content，客户端拿不到任何 functionCall）。
+  // Gemini 的 args 必须是**对象**，所以这里把 OpenAI 的 JSON 字符串解析回来；解析不了就原样塞进
+  // _raw_arguments（宁可让模型看到半截字符串，也不静默丢件）。
+  for (const tc of calls) {
+    let args = {};
+    try { const a = JSON.parse(tc.function.arguments || '{}'); args = a && typeof a === 'object' ? a : { value: a }; }
+    catch { args = { _raw_arguments: String(tc.function.arguments || '') }; }
+    parts.push({ functionCall: { name: tc.function.name, args } });
+  }
+  // Gemini 没有 "tool_calls" 这个 finishReason：有工具调用时按 STOP 结束（与 geminiStopToFinish 互逆）
+  const fr = choice?.finish_reason === 'length' ? 'MAX_TOKENS'
+    : (choice?.finish_reason === 'content_filter' || choice?.finish_reason === 'refusal') ? 'SAFETY'
+      : 'STOP';
   return {
     candidates: [{
-      content: { role: 'model', parts: [{ text }] },
-      finishReason: choice?.finish_reason === 'length' ? 'MAX_TOKENS' : 'STOP',
+      content: { role: 'model', parts },
+      finishReason: fr,
       index: 0,
     }],
     usageMetadata: {
@@ -1329,19 +1399,50 @@ function openAIToGeminiResponse(oai) {
   };
 }
 
-function openAIStreamToGeminiSSE(chunks) {
+// canonical OpenAI SSE → Gemini 客户端 SSE。
+// state（可选）：同一路流式请求内复用，用来攒 functionCall 的参数分片。
+// 为什么必须有状态：OpenAI 的 tool_calls 是**按 index 拆片**发的（先给 name，再一片片给 arguments），
+// 而 Gemini 的 functionCall.args 必须是**一个完整对象** —— 所以缓冲到收尾再发。
+// 这个取舍与反方向（createGeminiToOaiStream 也是把 functionCall 攒到收尾）完全对称：
+// 宁可晚一点，也不能把半个参数交给客户端。
+function openAIStreamToGeminiSSE(chunks, state) {
+  const st = state || {};
+  if (!st.calls) st.calls = new Map();
   const out = [];
   for (const c of chunks) {
     const choice = c.choices?.[0];
-    const text = choice?.delta?.content || '';
+    const d = choice?.delta || {};
+    const text = d.content || '';
     if (text) {
       out.push({ candidates: [{ content: { role: 'model', parts: [{ text }] }, index: 0 }] });
+    }
+    for (const tc of d.tool_calls || []) {
+      const idx = tc.index == null ? 0 : tc.index;
+      const cur = st.calls.get(idx) || { name: '', args: '' };
+      if (tc.function && tc.function.name) cur.name = tc.function.name;
+      if (tc.function && tc.function.arguments) cur.args += tc.function.arguments;
+      if (cur.name) st.calls.set(idx, cur);
     }
     // 结束分片必须带上 finishReason —— 否则 Gemini 流式客户端永远等不到"回答结束"，
     // 只能靠连接断开猜（此前这里只转发 text，结束帧被整帧丢弃）。
     if (choice?.finish_reason) {
       const fr = choice.finish_reason === 'length' ? 'MAX_TOKENS'
-        : choice.finish_reason === 'content_filter' ? 'SAFETY' : 'STOP';
+        : (choice.finish_reason === 'content_filter' || choice.finish_reason === 'refusal') ? 'SAFETY' : 'STOP';
+      // 攒好的 functionCall 先单独发一帧（这正是真实 Gemini 的形状：functionCall 一帧、finishReason 一帧），
+      // 免得客户端在读到 finishReason 时就停手、把工具调用漏掉。
+      const callParts = [];
+      for (const idx of [...st.calls.keys()].sort((a, b) => a - b)) {
+        const cur = st.calls.get(idx);
+        if (!cur || !cur.name) continue;
+        let args = {};
+        try { const a = JSON.parse(cur.args || '{}'); args = a && typeof a === 'object' ? a : { value: a }; }
+        catch { args = { _raw_arguments: String(cur.args || '') }; }
+        callParts.push({ functionCall: { name: cur.name, args } });
+      }
+      st.calls.clear();
+      if (callParts.length) {
+        out.push({ candidates: [{ content: { role: 'model', parts: callParts }, index: 0 }] });
+      }
       const g = { candidates: [{ content: { role: 'model', parts: [] }, finishReason: fr, index: 0 }] };
       if (c.usage) {
         g.usageMetadata = {
@@ -3352,6 +3453,8 @@ async function handleGeminiRequest(req, res, url) {
   if (candidates.length === 0 && beforeImgFilter > 0) {
     return sendJson(res, 400, { error: { code: 400, message: NO_IMAGE_CHANNEL_MSG, status: 'INVALID_ARGUMENT' } });
   }
+  // 流式工具调用的累积状态（见 openAIStreamToGeminiSSE）：整个请求共用一份，跨 chunk 攒参数分片
+  const geminiStreamState = {};
   return dispatchRequest({
     kind: 'gemini',
     res,
@@ -3376,7 +3479,7 @@ async function handleGeminiRequest(req, res, url) {
       if (data === '[DONE]') return null;
       try {
         const j = JSON.parse(data);
-        const gems = openAIStreamToGeminiSSE([j]);
+        const gems = openAIStreamToGeminiSSE([j], geminiStreamState);
         return gems.map((g) => `data: ${JSON.stringify(g)}\n\n`).join('');
       } catch { return null; }
     },
