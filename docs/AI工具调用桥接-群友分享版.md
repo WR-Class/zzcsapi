@@ -2,6 +2,9 @@
 
 > 适用场景：任何**没有原生 function calling** 的 AI（网页版聊天、逆向接口、免费渠道）。
 > 效果：AI 可以"指挥"外部程序读文件、改文件、跑命令——所有执行都在你本机发生。
+>
+> 本文是**文本协议仿真**（实现见 `tool-emu.js`）；若你要的是**原生工具调用**（Claude/OpenAI 客户端的
+> `tools` / `tool_use` / `tool_calls` 协议互转），看 `README.md`「行为细节 → 工具调用（Anthropic tool_use ↔ OpenAI tool_calls）」。两者互不影响。
 
 ---
 

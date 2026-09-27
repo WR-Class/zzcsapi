@@ -75,11 +75,18 @@ apiKey  = <GATEWAY_KEY>
 model   = <alias>
 ```
 
+> 鉴权三种写法都认：`Authorization: Bearer <GATEWAY_KEY>`、`x-api-key: <GATEWAY_KEY>`（**Anthropic SDK 的默认头**）、`?key=<GATEWAY_KEY>`。
+
 ### Gemini 协议
 ```
 baseURL = http://127.0.0.1:8787/gemini/v1beta
 apiKey  = <GATEWAY_KEY>
 ```
+
+> **鉴权**：`x-goog-api-key: <GATEWAY_KEY>`（**Gemini SDK 的默认头**）、`?key=<GATEWAY_KEY>`、`Authorization: Bearer` 都行。
+> **支持图片**：`parts` 里的 `inlineData`（base64）与 `fileData`（`fileUri` 直链）都会转成上游的图片块转发，
+> 部件顺序保留。带图请求只走 `openai` 协议渠道（其余协议链会静默丢图，故被「图片能力门」裁掉）——
+> 详见 [含图请求的候选裁剪](#含图请求的候选裁剪图片能力门)。
 
 ## Web 控制台
 
@@ -146,7 +153,12 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js      # 27 项断言，退出码非 0 = 有回归
+node test/console-state.test.js           # 27 项断言，退出码非 0 = 有回归
+node test/gemini-multimodal.test.js       # 40 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
+node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
+node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
+node test/anthropic-tools-e2e.test.js     # 30 项断言：两轮工具回合（要工具 → 回传结果）真 HTTP 链路
+node test/streaming-e2e.test.js           # 19 项断言：三协议流式（首块不丢字节 / 事件序列 / 收尾兜底）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -154,6 +166,15 @@ node test/console-state.test.js      # 27 项断言，退出码非 0 = 有回归
 （表现：搜索词/草稿"一会儿自己没了"，PT22 / detailed §8.11）。
 做法是从 `build/app.js` 现抠真实的渲染函数源码，在最小 DOM 桩里跑「输入 → 再渲染」并断言值仍在；
 **新增带输入框的页面时请顺手补一条用例**（改名 `vModels` 等函数会让它报错，这是刻意的提醒）。
+
+`test/gemini-multimodal.test.js` 守的是**「图片不能在翻译层被静默丢掉」**：它从 `server.js` 现抠
+`geminiToOpenAI` / `bodyHasImages` / `filterCandidatesForImages` / `checkAuth` 的真实源码跑断言（也是零依赖，
+两个协议命名变体、部件顺序、纯文本回退形态、能力门裁剪、原生 SDK 鉴权头与"管理面无提权"都在内）。
+
+`test/gemini-multimodal-e2e.test.js` 是它的**端到端姊妹**：真起一个假上游 + 临时网关实例（**动态空闲端口**，
+配置与用量写在系统临时目录，**绝不碰仓库里的 `config.json` / `usage.json`**，不出网、不烧额度），
+验证客户端协议 → 网关 → 上游的实际字节与响应形态。单元级测试覆盖不到「函数都在、就是接头不对」的缺陷——
+PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 
 
 ## 配置示例 (`config.example.json`)
@@ -255,7 +276,8 @@ node test/console-state.test.js      # 27 项断言，退出码非 0 = 有回归
 1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias
 2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
 3. 排序：冷却中 → 末位；`down` → 倒数；同状态按**有效优先级**降序，再看 latency
-4. 依次尝试直到成功；全部失败返回 502 + 错误详情
+4. **含图请求**先按「图片能力门」裁剪候选（见下）；纯文本请求不受影响
+5. 依次尝试直到成功；全部失败返回 502 + 错误详情
 
 ### 有效优先级（失败率自动降权）
 
@@ -270,6 +292,20 @@ effPriority = priority − 失败率 × 3
 - 失败率回升时被新成功样本稀释，优先级**自动恢复**，不需要人工干预；配置值本身不被改写
 - 失败计入点：主调度失败、探测失败都走 `recordUsage` → `bumpRoll`
 - 控制台「渠道管理」在渠道被降权时显示 `→ 有效 X（失败率 Y%）` 角标（数据来自 `/admin/api/status` 的 `effectivePriority` / `rollFailRate` 字段）
+
+### 含图请求的候选裁剪（图片能力门）
+
+请求体里带图片时（内部统一格式 = OpenAI，即 `messages[].content` 数组里的 `image_url` block），候选链**只保留能原样转发图片的渠道**：
+
+```
+IMAGE_CAPABLE_PROTOCOLS = ['openai']      # server.js
+```
+
+- **为什么必须裁剪**：`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex` 这几条链只把 `content` 当字符串用。把带图请求丢过去，图会被**静默丢掉、模型照样自信作答**——用户以为它看过图。这比直接失败更糟，所以宁可明确报错。
+- **裁干净了怎么办**：返回 400 + `this request contains images, but no channel can forward them: only openai-protocol channels pass image_url through as-is`（不是 404、不是降级重试、不是静默丢图）。
+- **纯文本零影响**：`bodyHasImages()` 为假时函数原样返回同一个候选数组，排序与老行为逐字节一致。
+- 三条客户端协议共用这道门：`/v1/chat/completions`、`/anthropic/v1/messages`、`/gemini/v1beta/...`（Anthropic 的 `image` block 与 Gemini 的 `inlineData`/`fileData` 都先转成内部 `image_url`，因此判定点统一）。
+- 回归：`node test/gemini-multimodal.test.js`（含"含图 → 只留 openai 渠道 / 纯文本 → 候选链原样"两组断言）。
 
 ## 端点
 
@@ -299,19 +335,32 @@ effPriority = priority − 失败率 × 3
 | `/v1/responses` / `/v1/completions` | POST | gateway     | 透传                                  |
 | `/anthropic/v1/models`              | GET  | gateway     | Anthropic 聚合模型                    |
 | `/anthropic/v1/messages`            | POST | gateway     | Anthropic Messages（支持 stream）     |
-| `/gemini/v1beta/models/{m}:generateContent`        | POST | gateway | Gemini 非流式        |
+| `/gemini/v1beta/models/{m}:generateContent`        | POST | gateway | Gemini 非流式（支持 `inlineData`/`fileData` 图片） |
 | `/gemini/v1beta/models/{m}:streamGenerateContent`  | POST | gateway | Gemini 流式          |
 
 ## 行为细节
 
 - **4xx 重试规则**：`400/422` 等明确请求本身错的不再切渠道，原样透传；`401/402/403/404/408/429` 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底。404 进兜底名单的动机：渠道「声明有此模型」但上游实际没有（别名表过期）时，下一个声明者很可能真的有。
 - **流式失败**：已经开始向客户端写 200 + 任意 chunk 后，上游断开不会再换渠道（避免半截回复）。
-- **协议转换**：OpenAI ↔ Anthropic 走内部 OpenAI 协议中转；Anthropic 渠道里跑的是 OpenAI 也能用。
+- **协议转换**：OpenAI ↔ Anthropic ↔ Gemini 三边都走内部 OpenAI 协议中转；Anthropic 渠道里跑的是 OpenAI 也能用。
+- **工具调用（Anthropic tool_use ↔ OpenAI tool_calls）**：双向全字段映射，客户端可混用两套说法——
+  · 请求侧：`tools[].input_schema` → `function.parameters`；`tool_choice` 的 `auto/any/tool/none` → `auto/required/{function}/none`；`disable_parallel_tool_use` → `parallel_tool_calls:false`；`stop_sequences` → `stop`；`system`（字符串或 block 数组）→ `system` 消息。
+  · 会话侧：`tool_use` 块 → `assistant.tool_calls`（`input` 对象 ↔ `arguments` JSON 串）；`tool_result` → `role:"tool"`（`tool_call_id` 配对）。`is_error:true` 无对应字段，前缀 `[tool_error]` 显式告诉模型"这个工具失败了"（否则它会把失败信息当正常结果继续编）。
+  · **工具结果里的图片**：OpenAI 的 `tool` 消息只允许文本部件，塞 `image_url` 会被上游 400 —— 网关把图**取出来补在紧随其后的 `user` 消息**里（带 `[tool_result image]` 锚点），视觉模型照样看得到；这种形态同样受「图片能力门」约束。
+  · 响应侧：`tool_calls` → `tool_use` 块（id 走 `sanitizeToolId` 清洗，保证客户端回传 `tool_use_id` 时配对不裂）；`finish_reason` → `stop_reason`（`tool_calls`→`tool_use`、`length`→`max_tokens`、`stop`→`end_turn`、`content_filter`→`refusal`）；`usage.cached_tokens` → `cache_read_input_tokens`。
+  · 刻意**丢弃**：`thinking` / `redacted_thinking`（OpenAI 格式上游无签名校验需求，把思维链塞回上下文反而有害）、`server_tool_use` / `web_search_tool_result` / `document`（无法在中转链复现）、`cache_control` / `metadata` / `top_k`。丢弃不影响结构完整性。
+  · 上游限制会被原样透传：例如 thinking 类模型对"强制指定某个工具"会回 400（`Thinking mode does not support this tool_choice`），网关不吞不猜。
+- **流式（SSE）**：三条客户端协议的流式都可用，且**首块字节与后续字节走同一条按行分发路径**（上游把整个流一次送到时不得丢字节，见 PT26）。
+  · Anthropic 路由的流式转换是**有状态**的：`message_start` 每个请求只发一次，文本块只开一次，`tool_calls` 的 JSON 参数分片跨 chunk 累积后作为 `input_json_delta` 发出（否则流式工具调用必然碎）。
+  · 上游不发 `[DONE]` 时，由收尾钩子补上关块 + `message_delta` + `message_stop`（客户端不会一直等）。
+  · Gemini 的流式体现在 URL 动作（`:streamGenerateContent`），出站会显式带上 `stream:true`。
+  · 流式失败细节见上文「流式失败」。
+- **图片（多模态）**：三条客户端协议统一把图片转成内部 `image_url` block —— Gemini 的 `inlineData`（base64，`mimeType` 缺省 `image/png`）与 `fileData`（`fileUri` 直链）、Anthropic 的 `image`（`source.type='base64'` 与 `source.type='url'` 两种都认）都会被识别；**部件顺序保留**（先图后问 vs 先问后图对视觉模型有语义）。带图请求只走 `openai` 协议渠道，见「含图请求的候选裁剪」。
 - **冷启动**：第一次请求时 `status=unknown` 仍然会被选中（health 探测在后台进行）。
+- **鉴权写法**：网关密钥接受 `Authorization: Bearer <key>`、`?key=<key>`，以及**原生 SDK 的默认头**——Gemini 的 `x-goog-api-key`、Anthropic 的 `x-api-key`（仅对 `/v1/*` `/anthropic/*` `/gemini/*`；**管理面只认 Bearer / `?key=`**，客户端密钥语义不得混进管理面）。OpenAI SDK 走 Bearer，本来就通。
 - **别名区分大小写不敏感**，upstream 透传原样。
 
 ## 计划中
 
 - 真正的加权轮询（按权重比例分流，当前只是失败率降权 + priority 排序）
-- Anthropic tool_use 完整转换
-- Gemini 多模态（图片）适配
+- 原生 anthropic / gemini 协议渠道的**出站**（当前 `protocol` 只决定探活方式与对外路由，出站一律 OpenAI 格式）

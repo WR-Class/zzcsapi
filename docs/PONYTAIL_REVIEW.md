@@ -7,6 +7,7 @@
 > **整改记录（2026-09-27，v0.7）**：PT01 / PT03 / PT05 / PT06 / PT07 已全部完成整改（PT03 取方案 (c) 彻底撤 arena，含 chromium 全家桶移除、镜像 1.31GB→203MB，`docs/arena-protocol.md` 留档）；前端独立审查的清理类发现 PT08/PT10/PT11/PT13/PT14/PT15/PT16/PT17/PT18/PT20/PT21 同批落地，详见 §前端独立审查 各条状态。处置明细见 [frontend-console-detailed.md §8.7](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v0.8）**：**PT02 已取方案 (b) 完成整改**——proxy 对全部 openai 系协议真实生效（探测/测试/聊天经 curl `-x` 转发），实测含死端口拒绝、Clash 探测、流式 SSE 完整回放；PT09/PT12/PT19 登记进 detailed §9 后续可做；**PT04（探测双路径）仍待下次动探测逻辑时顺带收敛**。处置明细见 [frontend-console-detailed.md §8.8](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v1.0）**：PT01 同主题的**分发场景加固**——原 compose 里写死的固定默认密钥（`ADMIN_KEY`/`GATEWAY_KEY` 都给了公共字符串）等于把每个部署的管理密钥公开在仓库里（谁拿到项目谁就知道），且 `checkAuth` 存在"空 key 就放行"。现改为：默认留空 → **首启自动生成 48 位随机密钥**（打印到容器日志并写回 config.json）+ 控制台「输入管理密钥」登录门（壳页面放行、管理 API 仍每次校验、密钥记忆由 sessionStorage 升为 localStorage）。明细见 [frontend-console-detailed.md §8.10](./frontend-console-detailed.md)。
+> **整改记录（2026-09-27，v1.1）**：做「Gemini 多模态（图片）适配」时**顺带实测出 PT23 / PT24 / PT25**——PT23 让 Gemini / Anthropic 两条客户端协议的**非流式请求从来就是 502**，PT24 让**原生 Gemini / Anthropic SDK 直连一律 401**，PT25 让 **Anthropic 的 url 型图片源变成一张空图**（静默丢图的第三种写法）；三个都与会话本次目标无关，但同批修复并各自加了回归。同批落地：Gemini `inlineData`/`fileData` + Anthropic `image`(base64/url) 图片入站转换 + 三条客户端协议共用的「图片能力门」（`IMAGE_CAPABLE_PROTOCOLS`，防止静默丢图）；新增零依赖回归 `test/gemini-multimodal.test.js`（40 项断言）与 `test/gemini-multimodal-e2e.test.js`（22 项断言，真起假上游 + 临时网关）。明细见 §PT23 / §PT24 / §PT25 与 README「含图请求的候选裁剪」。
 
 ## 结论
 
@@ -64,8 +65,92 @@
 - 最小修复：各加一行注释——`// ponytail: 内存态重启清零，跨重启记忆写 usage.json byChannel`；`// ponytail: 探测治愈重置熔断，坏渠道靠滚动失败率兜底（≥5 样本降 3 级）`。
 - 最小回归：无行为变化。
 
-## 已验证的非问题（记录在此，避免后人重查）
+### PT23 中：非流式路径交给 handler 的 shim 缺 `json()` —— ✅ v1.1 已整改（一行）
 
+- 来源：做「Gemini 多模态」的端到端验证时实测撞到（**不是静态推断**：假上游 + 临时网关实例复现，与图片改动无关的既有 bug）。
+- 证据（`server.js`，整改前）：`tryChannel` 非流式成功分支先 `await resp.text()` 读全文（统计用量），
+  然后构造 `const shim = { ok, status, headers, text: async () => text }` 交给 `onSuccessNonStream(shim, candidate)`——
+  **没有 `json()`**；而 `/anthropic/v1/messages` 与 `/gemini/v1beta/...` 两条路由的 `onSuccessNonStream` 实现里都是
+  `const oaiBody = await oai.json()`。于是调用即抛 `TypeError: oai.json is not a function`，被同函数的 `catch` 兜成
+  `internal: …` → 记一次渠道失败 + 502 `all channels failed`（**还会把健康渠道推进冷却**）。
+- 观察：**流式反而正常**（流式走 `onStreamChunk`，不碰 shim），OpenAI 路由也正常（它只用 `shim.text()`）。
+  所以症状是「Gemini/Anthropic 协议 + 非流式（多数客户端的默认模式）= 一律 502，流式却好用」，
+  报错文案又只有 `internal: oai.json is not a function`，从客户端看不到根因；极易被当成「上游不支持」。
+  本仓库 30 条渠道全是 openai/notion 系（无人用 gemini/anthropic 客户端协议），因此长期未被发现。
+- 最小修复：给 shim 补 `json: async () => JSON.parse(text)`（shim 是 fetch `Response` 的替身，就该同时具备两个读法）。
+- 最小回归：临时实例 + 假 OpenAI 上游，`POST /gemini/v1beta/models/{m}:generateContent` 与
+  `POST /anthropic/v1/messages`（均非流式）→ 200 且响应被正确转成各自协议形态；流式路径与 OpenAI 路由行为不变。
+- **处置（v1.1）**：按最小修复落地（`server.js` 非流式 shim 一行），并由 `test/gemini-multimodal.test.js`
+  的端到端姊妹脚本（临时实例 + 假上游，一次性验证、不入库）实测 17 项断言全绿。
+
+### PT24 中：`checkAuth` 不认原生 SDK 的鉴权头 —— ✅ v1.1 已整改（数行）
+
+- 来源：真机验证「Gemini 协议能不能带图」时，用 Gemini 原生头 `x-goog-api-key` 打活体网关 → **401 `gateway key required`**（实测，不是推断）。
+- 证据（`server.js`，整改前）：`checkAuth` 只匹配 `Authorization: Bearer <key>` 与 `?key=<key>` 两条路径；
+  而**官方 SDK 的默认鉴权头各不相同**——Gemini SDK 发 `x-goog-api-key`（另一模式才是 URL 里的 `key=`），
+  Anthropic SDK 发 `x-api-key`，只有 OpenAI SDK 恰好是 Bearer。
+- 观察：症状是「README 让你把 baseURL 指向网关，但官方 Gemini/Anthropic SDK 复制过去直接 401」，
+  而从客户端看只是"密钥不对"，很容易被误判成密钥配置问题。`?key=` 那条路能过，所以"用 curl 拼 URL"的
+  自测全绿、掩盖了 SDK 的真实行为（**自测方式与被测对象不一致**的典型）。
+- 最小修复：`checkAuth` 在 **gateway 侧**追加两个头判定；管理面**刻意不接受**这两个头，避免把客户端密钥语义混进管理面。
+- 最小回归：只带 `x-goog-api-key` / `x-api-key` 调 `/gemini/*` `/anthropic/*` → 200；错误值 → 401；
+  管理面带这两个头 → 仍 401、Bearer 仍 200（**无提权**）；`NOAUTH=1` 行为不变。
+- **处置（v1.1）**：按最小修复落地，3 项头判定 + 1 处管理面隔离；回归进 `test/gemini-multimodal.test.js` §6（8 项断言，含管理面无提权）。
+
+### PT25 低：Anthropic `source.type='url'` 的图片被拼成空图 —— ✅ v1.1 已整改
+
+- 来源：用户追问"图片到底能不能用"时复核三种协议的图片源，发现 `anthropicToOpenAI` 只处理 base64 形态。
+- 证据（`server.js`，整改前）：`imageParts.push({ image_url: { url: 'data:' + (b.source?.media_type || 'image/png') + ';base64,' + (b.source?.data || '') } })`——
+  Anthropic 的 `{type:'url', url}` 源没有 `data` 字段 ⇒ 拼出 `data:image/png;base64,`（**一张空图**），
+  比直接报错更隐蔽：上游收到空图后照样回答，用户以为图片发送成功了。
+- 最小修复：按 `source.type` 分流——`url` 型透传直链；`base64` 型拼 data URL；两种都没有（空 source）则**不产出任何 block**。
+- 最小回归：base64 源 mime 原样保留、url 源成直链、空 source 不产图片块，且该形态能被「图片能力门」正确识别（`test/gemini-multimodal.test.js` §5）。
+- **处置（v1.1）**：按最小修复落地。
+
+### PT26 高：流式首块字节被吞 —— 快上游下发时三条客户端协议全部返回空响应体 —— ✅ v1.2 已整改
+
+- 来源：做 v1.2（Anthropic tool_use 完整转换）时，端到端脚本里"流式工具回合"一条断言都过不了，
+  顺着空响应体查到了通用读循环。
+- 证据（`server.js` `tryChannel` 通用流式分支，整改前）：
+  ```js
+  let buf = firstVal ? decoder.decode(firstVal, { stream: true }) : '';   // ← 首块只进了 buf
+  while (true) { const { done, value } = await reader.read(); if (done) break; ... 按行分发 ... }
+  // 收尾：只有存在 onStreamChunk 时才处理 buf
+  ```
+  首块字节**从未经过按行分发**；上游若把整个流一次送达（快线路 / 小回答），下一次 `read()` 直接 `done`，
+  透传路由（`/v1/chat/completions` 不传 `onStreamChunk`）**一个字节都不写** ⇒ 客户端拿到
+  `HTTP 200 + text/event-stream` 却**空响应体**；带 `onStreamChunk` 的路由则把多行糊成一坨丢给
+  逐行解析器（`JSON.parse` 失败 → 同样什么都没写出）。
+- 实测证据：临时假上游"一次写完 4 个 chunk + end"时，`/v1/chat/completions`、`/anthropic/v1/messages`、
+  `/gemini/...:streamGenerateContent` 三条路由**全部** `len=0`。
+- 最小修复：首块字节走同一条 `drain()` 按行分发；循环结束后 `decoder.decode()` 冲残留并做 `drain(true)`；
+  收尾分支对**两种**路由都生效（透传也补回分隔空行）。
+- 最小回归：`test/streaming-e2e.test.js` §1/§2（快/慢两种节奏 × 字节级透传）。
+
+### PT27 高：Anthropic 流式转换器无状态 —— 流式工具调用必然碎、`message_start` 重复 —— ✅ v1.2 已整改
+
+- 证据（`server.js` Anthropic 路由，整改前）：`onStreamChunk` 每收到**一行**上游数据就
+  `openAIStreamToAnthropicSSE([j], requested)` 新建一次生成器 ⇒ 每个 chunk 重发 `message_start`；
+  `tool_calls` 的参数分片（`{"city"` 与 `:"上海"}`）落在**两个不同的 `tool_use` 块**里，客户端拼出来是碎的。
+  同时 `dispatchRequest` 组装 `tryChannel` 参数时**漏传 `streamPrelude`**（这正是该选项一直无人使用的死因），
+  于是连 `message_start` 都发不出来。
+- 最小修复：抽出 `createAnthropicStreamConverter(model)`（`start()/push(c)/end()` 三态、`end()` 幂等），
+  `openAIStreamToAnthropicSSE` 保留为一次性兼容入口；路由每请求一个转换器实例，
+  `streamPrelude`/`streamEpilogue` 由 `dispatchRequest` 转发给 `tryChannel`（上游不发 `[DONE]` 也能收尾）。
+- 最小回归：`test/anthropic-tools.test.js` §6B（逐行喂：块只开一次、分片累积、`end()` 幂等、并行工具两块）+
+  `test/streaming-e2e.test.js` §3/§4/§5。
+
+### PT28 中：Gemini 流式动作没给出站带 `stream` —— 上游回非流式整包 —— ✅ v1.2 已整改
+
+- 证据（`server.js` Gemini 路由，整改前）：`isStream` 来自 URL 动作（`:streamGenerateContent`），
+  但 `geminiToOpenAI(body, model)` 只复制 Gemini body 的 `stream` 字段（Gemini 协议根本没有这个字段）
+  ⇒ 出站 `stream: undefined`，上游回**非流式整包 JSON**，而网关按 SSE 往外写（假上游实测日志 `stream=false`）。
+- 最小修复：`oaiBody.stream = isStream;`（非流式动作仍为 `false`）。
+- 最小回归：`test/streaming-e2e.test.js` §6。
+
+> **整改记录（2026-09-27，v1.2）**：做「Anthropic tool_use 完整转换」时，端到端脚本先把**三个流式缺陷**顶了出来（PT26 首块字节被吞 ⇒ 快上游下三条协议流式全空；PT27 Anthropic 流式转换无状态 + prelude 未转发 ⇒ 流式工具调用必碎、`message_start` 缺失；PT28 Gemini 流式没带 `stream` ⇒ 上游回非流式整包），三个都先修才可能让"流式工具调用"真的可用。同批落地工具转换补全：`tool_choice` 的 `none`、`disable_parallel_tool_use` → `parallel_tool_calls`、`is_error` → `[tool_error]` 标记、**工具结果里的图片改挂紧随的 user 消息**（OpenAI 的 `tool` 消息只允许文本部件）、`tool_use.id` 走 `sanitizeToolId` 保证往返配对、`finish_reason`/`cache_read_input_tokens` 映射。新增零依赖回归 `test/anthropic-tools.test.js`（60 项）、`test/anthropic-tools-e2e.test.js`（30 项，两轮工具回合）、`test/streaming-e2e.test.js`（19 项）。真机验证：流式工具调用收到 `stop_reason=tool_use` 且参数分片拼回 `{"city":"上海"}`；回传 `tool_result` 后模型用工具结果作答；**工具结果里带一张上红下蓝的图，模型答出 "red blue"**（侧门打通）。明细见 §PT26 / §PT27 / §PT28 与 README「工具调用」「流式（SSE）」。
+
+## 已验证的非问题（记录在此，避免后人重查）
 - **usage.json 无增长问题**（曾疑 byDay/hourly 无界）：recent 封顶 800、byDay 每日仅 1 条、hourly 固定 24 桶（server.js:1471），实测文件 ~8.7K 行且大体平稳；4 秒防抖全量重写在 ~300KB 规模合理。
 - **arena-cookie 的 CORS 预检不会被鉴权拦死**（曾疑 OPTIONS 带不上 key）：`?key=` 在预检 URL 里随行，checkAuth 读得到（server.js:202）；1MB 读缓冲（server.js:1514）也有上界。
 - **`/admin/status`、`/admin/recheck` 不是死代码**：README:261 明确登记为旧版兼容路径。

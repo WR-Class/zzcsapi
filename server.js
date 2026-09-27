@@ -199,6 +199,13 @@ function checkAuth(req, kind) {
   const h = req.headers['authorization'] || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   if (m && m[1] === need) return true;
+  // 原生 SDK 兼容（仅 gateway 侧）：Gemini SDK 发 x-goog-api-key（其默认鉴权头，另一模式是 ?key=），
+  // Anthropic SDK 发 x-api-key。不认这两个头 → 官方 SDK 直连一律 401（OpenAI SDK 走 Bearer 本来就通）。
+  // 管理面不接受它们：admin 只能 Bearer / ?key=，避免把客户端密钥语义混进管理面。
+  if (kind !== 'admin') {
+    if (req.headers['x-goog-api-key'] === need) return true;
+    if (req.headers['x-api-key'] === need) return true;
+  }
   // 兼容 ?key=...
   const u = new URL(req.url, 'http://127.0.0.1');
   if (u.searchParams.get('key') === need) return true;
@@ -918,6 +925,9 @@ function anthropicToOpenAI(body) {
     if (tc.type === 'auto') out.tool_choice = 'auto';
     else if (tc.type === 'any') out.tool_choice = 'required';
     else if (tc.type === 'tool') out.tool_choice = { type: 'function', function: { name: tc.name } };
+    else if (tc.type === 'none') out.tool_choice = 'none';
+    // Anthropic 的 disable_parallel_tool_use（一次只准调一个工具）↔ OpenAI 的 parallel_tool_calls:false
+    if (tc.disable_parallel_tool_use) out.parallel_tool_calls = false;
   }
   if (body.system) {
     const sys = Array.isArray(body.system)
@@ -936,21 +946,45 @@ function anthropicToOpenAI(body) {
     const imageParts = [];
     const toolUses = [];   // assistant 的 tool_use
     const toolResults = []; // user 的 tool_result
+    const toolResultImages = []; // 工具结果里带的图片（不能塞进 tool 消息，见下）
     for (const b of m.content) {
       if (b.type === 'text') textParts.push({ type: 'text', text: b.text });
       else if (b.type === 'image') {
-        imageParts.push({ type: 'image_url', image_url: { url: `data:${b.source?.media_type || 'image/png'};base64,${b.source?.data || ''}` } });
+        // Anthropic 的图片源有两种：{type:'base64', media_type, data} 与 {type:'url', url}。
+        // 以前只拼 base64 形态，遇到 url 型会把 undefined 拼进 data URL（变成一张空图）——那是静默丢图的另一种写法。
+        const src = b.source || {};
+        if (src.type === 'url' && src.url) imageParts.push({ type: 'image_url', image_url: { url: src.url } });
+        else if (src.data) imageParts.push({ type: 'image_url', image_url: { url: `data:${src.media_type || 'image/png'};base64,${src.data}` } });
+        // 两种都没有（空 source）→ 不产出任何 block，胜过产出一张空图
       } else if (b.type === 'tool_use') {
         toolUses.push({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } });
       } else if (b.type === 'tool_result') {
-        // tool_result 内容可能是 string 或 blocks
-        let contentText = '';
-        if (typeof b.content === 'string') contentText = b.content;
-        else if (Array.isArray(b.content)) {
-          contentText = b.content.map((c) => (c.type === 'text' ? c.text : '')).join('\n');
+        // tool_result 的 content 可能是 string，也可能是 blocks（text / image 混排，例如"截图"类工具）。
+        const parts = Array.isArray(b.content)
+          ? b.content
+          : [{ type: 'text', text: typeof b.content === 'string' ? b.content : '' }];
+        const texts = [];
+        for (const c of parts) {
+          if (c.type === 'text') texts.push(c.text);
+          else if (c.type === 'image') {
+            const src = c.source || {};
+            if (src.type === 'url' && src.url) toolResultImages.push({ type: 'image_url', image_url: { url: src.url } });
+            else if (src.data) toolResultImages.push({ type: 'image_url', image_url: { url: `data:${src.media_type || 'image/png'};base64,${src.data}` } });
+          }
         }
-        toolResults.push({ tool_call_id: b.tool_use_id, content: contentText || '(ok)' });
+        let text = texts.filter(Boolean).join('\n').trim();
+        // Anthropic 的 is_error 语义是"这个工具执行失败了"。OpenAI 协议没有等价字段，
+        // 只能带一个显式标记——否则模型会把失败信息当成正常结果，接着往下编。
+        if (b.is_error) text = ('[tool_error] ' + text).trim();
+        toolResults.push({ tool_call_id: b.tool_use_id, content: text || '(ok)' });
       }
+      // 刻意丢弃的块（不是漏了）：
+      //   · thinking / redacted_thinking —— OpenAI 格式的上游没有签名校验需求，把思维链塞回 content 反而会
+      //     污染上下文（DeepSeek 一类还明确要求不要把 reasoning_content 回传）；结构上也不会因此缺件，
+      //     因为紧随其后的 tool_use 已经被转成 tool_calls。
+      //   · server_tool_use / web_search_tool_result / document 等服务端块 —— 无法在"转成 OpenAI 格式再发给
+      //     第三方渠道"的链路上复现。
+      //   · cache_control / metadata / top_k —— 无对应字段，转发也是噪音。
     }
     if (m.role === 'assistant') {
       // assistant：文本 + tool_calls 合并
@@ -965,6 +999,12 @@ function anthropicToOpenAI(body) {
       }
       for (const tr of toolResults) {
         out.messages.push({ role: 'tool', tool_call_id: tr.tool_call_id, content: tr.content });
+      }
+      // 工具结果里的图片：OpenAI 的 tool 消息只允许文本部件（塞 image_url 会被上游 400），
+      // 所以紧跟在本轮 tool 消息之后补一条 user 消息把这（几）张图带上——视觉模型照样看得到，
+      // 且顺序上紧挨着对应的工具结果，语义不散。
+      if (toolResultImages.length) {
+        out.messages.push({ role: 'user', content: [{ type: 'text', text: '[tool_result image]' }, ...toolResultImages] });
       }
     }
   }
@@ -982,7 +1022,9 @@ function openAIToAnthropicResponse(oai, modelAlias) {
     for (const tc of msg.tool_calls) {
       let input = {};
       try { input = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-      content.push({ type: 'tool_use', id: tc.id || `toolu_${Date.now()}`, name: tc.function?.name || '', input });
+      // id 必须与客户端回传 tool_result.tool_use_id 一致：走 sanitizeToolId 保证它是 Anthropic 允许的字符集
+      // （非法字符会被上游或被客户端 SDK 拒），且与请求侧 sanitizeOpenAIToolIds 的做法保持一致
+      content.push({ type: 'tool_use', id: sanitizeToolId(tc.id), name: tc.function?.name || '', input });
     }
   }
   return {
@@ -996,6 +1038,10 @@ function openAIToAnthropicResponse(oai, modelAlias) {
     usage: {
       input_tokens: oai.usage?.prompt_tokens || 0,
       output_tokens: oai.usage?.completion_tokens || 0,
+      // OpenAI 的 cached_tokens ↔ Anthropic 的 cache_read_input_tokens（Claude 客户端拿它算成本/命中率）
+      ...(oai.usage?.prompt_tokens_details?.cached_tokens != null
+        ? { cache_read_input_tokens: oai.usage.prompt_tokens_details.cached_tokens }
+        : {}),
     },
   };
 }
@@ -1010,65 +1056,82 @@ function mapFinishReason(r) {
   }
 }
 
-// 把 OpenAI 流式 chunk 转 Anthropic SSE
-function* openAIStreamToAnthropicSSE(chunks, modelAlias) {
-  let msgId = `msg_${Date.now()}`;
-  yield { event: 'message_start', data: { type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: modelAlias, content: [], stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } } } };
+// 把 OpenAI 流式 chunk 转 Anthropic SSE —— ★ 必须**有状态**。
+// block 索引、tool_calls 的参数分片累积、usage 与 stop_reason 都要跨 chunk 保持；
+// 早期实现是"上游每来一行就新建一个生成器转一次"，于是每个 chunk 都重发一次 message_start，
+// 工具参数的 JSON 分片也各转各的（`{"city"` 与 `:"上海"}` 落在两个不同的 tool_use 块里），
+// 客户端拼出来必然是碎的 —— 流式工具调用因此完全不可用。改为转换器实例 + start/push/end。
+function createAnthropicStreamConverter(modelAlias) {
+  const msgId = `msg_${Date.now()}`;
   let nextIndex = 0;
   let textIndex = -1;
   let finishReason = null;
   let usage = { input_tokens: 0, output_tokens: 0 };
-  // tool_calls 增量：OpenAI 按 index 分流，每个 index 一个 tool_use block
-  const toolBlock = new Map(); // deltaIndex → { index: anthropicIndex, id, name, argsBuf }
-  for (const c of chunks) {
-    const choice = c.choices?.[0];
-    const delta = choice?.delta?.content;
-    if (delta) {
-      if (textIndex < 0) {
-        textIndex = nextIndex++;
-        yield { event: 'content_block_start', data: { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } } };
-      }
-      yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: delta } } };
-    }
-    // tool_calls 增量
-    if (Array.isArray(choice?.delta?.tool_calls)) {
-      for (const tc of choice.delta.tool_calls) {
-        const di = tc.index ?? 0;
-        let blk = toolBlock.get(di);
-        if (!blk) {
-          const idx = nextIndex++;
-          blk = { index: idx, id: tc.id || '', name: '', argsBuf: '', started: false };
-          toolBlock.set(di, blk);
+  const toolBlock = new Map(); // deltaIndex → { index, id, name, argsBuf, started }
+  let ended = false;
+  return {
+    start() {
+      return [{ event: 'message_start', data: { type: 'message_start', message: { id: msgId, type: 'message', role: 'assistant', model: modelAlias, content: [], stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } } } }];
+    },
+    push(c) {
+      const out = [];
+      const choice = c.choices?.[0];
+      const delta = choice?.delta?.content;
+      if (delta) {
+        if (textIndex < 0) {
+          textIndex = nextIndex++;
+          out.push({ event: 'content_block_start', data: { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } } });
         }
-        if (tc.id && !blk.id) blk.id = tc.id;
-        if (tc.function?.name && !blk.name) blk.name = tc.function.name;
-        if (tc.function?.arguments) blk.argsBuf += tc.function.arguments;
-        if (!blk.started && (blk.name || blk.id)) {
-          blk.started = true;
-          yield { event: 'content_block_start', data: { type: 'content_block_start', index: blk.index, content_block: { type: 'tool_use', id: blk.id || `toolu_${Date.now()}`, name: blk.name } } };
-          yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: blk.index, delta: { type: 'input_json_delta', partial_json: '' } } };
+        out.push({ event: 'content_block_delta', data: { type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: delta } } });
+      }
+      // tool_calls 增量：OpenAI 按 index 分流，每个 index 一个 tool_use block
+      if (Array.isArray(choice?.delta?.tool_calls)) {
+        for (const tc of choice.delta.tool_calls) {
+          const di = tc.index ?? 0;
+          let blk = toolBlock.get(di);
+          if (!blk) { blk = { index: nextIndex++, id: '', name: '', argsBuf: '', started: false }; toolBlock.set(di, blk); }
+          if (tc.id && !blk.id) blk.id = tc.id;
+          if (tc.function?.name && !blk.name) blk.name = tc.function.name;
+          if (tc.function?.arguments) blk.argsBuf += tc.function.arguments;
+          if (!blk.started && (blk.name || blk.id)) {
+            blk.started = true;
+            // tool_use block 起始要带 input:{}（官方 SDK 以它为累积 base，再叠 input_json_delta）
+            out.push({ event: 'content_block_start', data: { type: 'content_block_start', index: blk.index, content_block: { type: 'tool_use', id: sanitizeToolId(blk.id), name: blk.name, input: {} } } });
+          }
         }
       }
-    }
-    if (choice?.finish_reason) finishReason = choice.finish_reason;
-    if (c.usage) usage = { input_tokens: c.usage.prompt_tokens || 0, output_tokens: c.usage.completion_tokens || 0 };
-  }
-  // 关闭 text block
-  if (textIndex >= 0) {
-    yield { event: 'content_block_stop', data: { type: 'content_block_stop', index: textIndex } };
-  }
-  // 关闭 tool blocks（把累计的参数 JSON 一次性作为 partial_json 发完）
-  for (const [, blk] of toolBlock) {
-    if (blk.started) {
-      // 前面已发空 partial_json；这里补发完整参数
-      const args = blk.argsBuf || '{}';
-      try { JSON.parse(args); } catch { /* 保留原样 */ }
-      yield { event: 'content_block_delta', data: { type: 'content_block_delta', index: blk.index, delta: { type: 'input_json_delta', partial_json: args } } };
-      yield { event: 'content_block_stop', data: { type: 'content_block_stop', index: blk.index } };
-    }
-  }
-  yield { event: 'message_delta', data: { type: 'message_delta', delta: { stop_reason: mapFinishReason(finishReason), stop_sequence: null }, usage } };
-  yield { event: 'message_stop', data: { type: 'message_stop' } };
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (c.usage) usage = { input_tokens: c.usage.prompt_tokens || 0, output_tokens: c.usage.completion_tokens || 0 };
+      return out;
+    },
+    end() {
+      if (ended) return []; // 幂等：上游既发了 [DONE] 又走收尾钩子时不重复发
+      ended = true;
+      const out = [];
+      if (textIndex >= 0) out.push({ event: 'content_block_stop', data: { type: 'content_block_stop', index: textIndex } });
+      for (const [, blk] of toolBlock) {
+        if (!blk.started) continue;
+        out.push({ event: 'content_block_delta', data: { type: 'content_block_delta', index: blk.index, delta: { type: 'input_json_delta', partial_json: blk.argsBuf || '{}' } } });
+        out.push({ event: 'content_block_stop', data: { type: 'content_block_stop', index: blk.index } });
+      }
+      out.push({ event: 'message_delta', data: { type: 'message_delta', delta: { stop_reason: mapFinishReason(finishReason), stop_sequence: null }, usage } });
+      out.push({ event: 'message_stop', data: { type: 'message_stop' } });
+      return out;
+    },
+  };
+}
+
+// 兼容入口：把一批 chunk 一次性转成事件序列（单元测试与一次性调用点用）
+function* openAIStreamToAnthropicSSE(chunks, modelAlias) {
+  const conv = createAnthropicStreamConverter(modelAlias);
+  yield* conv.start();
+  for (const c of chunks) yield* conv.push(c);
+  yield* conv.end();
+}
+
+// 事件数组 → Anthropic SSE 文本（路由逐行转换时用）
+function anthropicEventsToSSE(events) {
+  return events.map((e) => sseEncode(e.event, e.data)).join('');
 }
 
 function sseEncode(eventName, data) {
@@ -1084,15 +1147,29 @@ function geminiToOpenAI(body, model) {
   if (sysText) messages.push({ role: 'system', content: sysText });
   for (const c of contents) {
     const role = c.role === 'model' ? 'assistant' : 'user';
-    // functionCall / functionResponse 部件 → 工具仿真可读的文本（回退渠道时才生效）
-    const parts = [];
+    // Gemini 部件 → OpenAI content blocks。**顺序必须保留**：图片与文本的相对位置对视觉模型有语义
+    // （先图后问 vs 先问后图，回答会不一样）。text 原样转文本；inlineData（base64）与 fileData（fileUri）
+    // 转 image_url；functionCall / functionResponse 仍降级为文本（只有工具仿真链用得上，图片链用不到）。
+    const blocks = [];
     for (const p of (c.parts || [])) {
-      if (p.text) parts.push(p.text);
-      else if (p.functionCall) parts.push('```json\n{"tool_calls": [{"name": ' + JSON.stringify(p.functionCall.name || '') + ', "arguments": ' + JSON.stringify(p.functionCall.args || {}) + '}]}\n```');
-      else if (p.functionResponse) parts.push('[工具 ' + (p.functionResponse.name || '') + ' 的执行结果如下]\n' + JSON.stringify(p.functionResponse.response || {}) + '\n[请根据以上工具结果继续]');
+      const inline = p.inlineData || p.inline_data;
+      const file = p.fileData || p.file_data;
+      if (p.text) blocks.push({ type: 'text', text: p.text });
+      else if (inline && inline.data) {
+        blocks.push({ type: 'image_url', image_url: { url: `data:${inline.mimeType || inline.mime_type || 'image/png'};base64,${inline.data}` } });
+      } else if (file && (file.fileUri || file.file_uri)) {
+        blocks.push({ type: 'image_url', image_url: { url: file.fileUri || file.file_uri } });
+      } else if (p.functionCall) blocks.push({ type: 'text', text: '```json\n{"tool_calls": [{"name": ' + JSON.stringify(p.functionCall.name || '') + ', "arguments": ' + JSON.stringify(p.functionCall.args || {}) + '}]}\n```' });
+      else if (p.functionResponse) blocks.push({ type: 'text', text: '[工具 ' + (p.functionResponse.name || '') + ' 的执行结果如下]\n' + JSON.stringify(p.functionResponse.response || {}) + '\n[请根据以上工具结果继续]' });
     }
-    const text = parts.join('\n');
-    if (text) messages.push({ role, content: text });
+    const hasImage = blocks.some((b) => b.type === 'image_url');
+    if (hasImage) {
+      messages.push({ role, content: blocks });
+    } else {
+      // 纯文本仍用字符串形态：上游与各回退渠道普遍只认 string（数组形态只有 OpenAI 官方语义能接受）
+      const text = blocks.map((b) => b.text).filter(Boolean).join('\n');
+      if (text) messages.push({ role, content: text });
+    }
   }
   const gen = body.generationConfig || {};
   // Gemini functionDeclarations → OpenAI tools（回退 notion 时启用工具仿真）
@@ -2156,6 +2233,30 @@ function sanitizeOpenAIToolIds(body) {
   return body;
 }
 
+// ─────────────────── 图片（多模态）能力门 ───────────────────
+// 内部统一格式是 OpenAI：图片表示为 messages[].content 数组里的 image_url block。
+// 目前只有 openai 协议渠道会把请求体原样转发（含 image_url）；notion / notion-agent / workbuddy /
+// genspark / codex 这些逆向与文本链只把 content 当字符串用 —— 把带图请求丢给它们＝**静默丢图后照样回答**，
+// 那比直接失败更糟（用户以为模型看过图）。所以含图请求只保留能转发图片的渠道，一个都没有就明确报错。
+const IMAGE_CAPABLE_PROTOCOLS = ['openai'];
+
+function bodyHasImages(body) {
+  const msgs = Array.isArray(body && body.messages) ? body.messages : [];
+  for (const m of msgs) {
+    if (Array.isArray(m && m.content) && m.content.some((b) => b && (b.type === 'image_url' || b.type === 'image' || b.image_url))) return true;
+  }
+  return false;
+}
+
+// 含图请求裁剪候选链；未命中图片时原样返回（零开销、零行为变化）
+function filterCandidatesForImages(candidates, body) {
+  if (!bodyHasImages(body)) return candidates;
+  return candidates.filter((c) => IMAGE_CAPABLE_PROTOCOLS.includes(c.protocol || 'openai'));
+}
+
+// 含图但裁剪后没有候选 → 统一的 400 文案（避免"无渠道"的 404 误导成模型名写错）
+const NO_IMAGE_CHANNEL_MSG = 'this request contains images, but no channel can forward them: only openai-protocol channels pass image_url through as-is';
+
 async function handleOpenAIRequest(req, res, url) {
   const raw = await readBody(req);
   let body;
@@ -2180,6 +2281,12 @@ async function handleOpenAIRequest(req, res, url) {
   // codex（ChatGPT 官方订阅反代）兜底
   const cxCands = channelsServing(requested, 'codex');
   for (const xc of cxCands) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
+  // 含图请求：只留能转发 image_url 的渠道（见 IMAGE_CAPABLE_PROTOCOLS）
+  const beforeImgFilter = candidates.length;
+  candidates = filterCandidatesForImages(candidates, body);
+  if (candidates.length === 0 && beforeImgFilter > 0) {
+    return sendJson(res, 400, upstreamErrorPayload(400, NO_IMAGE_CHANNEL_MSG));
+  }
   if (candidates.length === 0) {
     const sug = suggestAliases(requested);
     const hint = sug.length ? `；你是不是想调：${sug.join(' / ')}` : '；调 GET /v1/models 可查看当前所有可用模型名';
@@ -2298,6 +2405,13 @@ async function handleAnthropicRequest(req, res, url) {
     }
     const isStream = !!body.stream;
     const oaiBody = sanitizeOpenAIToolIds(anthropicToOpenAI(body)); // 转换 + 清洗工具 id
+    // 流式转换器必须**每个请求一个实例**（要跨 chunk 记住 block 索引与工具参数分片）
+    const antStream = isStream ? createAnthropicStreamConverter(requested) : null;
+    const beforeImgFilter = candidates.length;
+    candidates = filterCandidatesForImages(candidates, oaiBody);
+    if (candidates.length === 0 && beforeImgFilter > 0) {
+      return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: NO_IMAGE_CHANNEL_MSG } });
+    }
     return dispatchRequest({
       kind: 'anthropic',
       res,
@@ -2316,27 +2430,19 @@ async function handleAnthropicRequest(req, res, url) {
         res.end(JSON.stringify(ant));
       },
       onStreamChunk: (oaiChunk, candidate) => {
-        // oaiChunk 是 OpenAI SSE 的一行（data: {...}）
+        // oaiChunk 是 OpenAI SSE 的一行（data: {...}）；逐行喂给**有状态**的转换器
         const line = oaiChunk.trim();
         if (!line.startsWith('data:')) return null;
         const data = line.slice(5).trim();
-        if (data === '[DONE]') {
-          return sseEncode('message_stop', { type: 'message_stop' });
-        }
-        try {
-          const j = JSON.parse(data);
-          // 解析为单 chunk 然后转 SSE
-          const fakeChunks = [j];
-          let out = '';
-          for (const ev of openAIStreamToAnthropicSSE(fakeChunks, requested)) {
-            out += sseEncode(ev.event, ev.data);
-          }
-          return out;
-        } catch {
-          return null;
-        }
+        if (data === '[DONE]') return anthropicEventsToSSE(antStream.end());
+        let j;
+        try { j = JSON.parse(data); } catch { return null; }
+        return anthropicEventsToSSE(antStream.push(j));
       },
-      streamPrelude: () => '',
+      // message_start 在响应头之后立刻发；收尾（关块 + message_delta + message_stop）在流结束时兜底，
+      // 这样上游不发 [DONE] 也能给出完整事件序列（end() 幂等，不会与 [DONE] 重复）。
+      streamPrelude: () => anthropicEventsToSSE(antStream.start()),
+      streamEpilogue: () => anthropicEventsToSSE(antStream.end()),
     });
   }
   return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: 'not found' } });
@@ -2365,7 +2471,16 @@ async function handleGeminiRequest(req, res, url) {
     return sendJson(res, 404, { error: { code: 404, message: `no channel for model "${model}"`, status: 'NOT_FOUND' } });
   }
 
+  // 注意：Gemini 的"流式"体现在 URL 动作（:streamGenerateContent）而不是 body 字段，
+  // 所以出站必须显式带上 stream —— 否则上游返回的是**非流式整包 JSON**，而网关按 SSE 往外写，
+  // 客户端拿到的是空/垃圾（Gemini 流式一直不可用的根因之一）。
   const oaiBody = geminiToOpenAI(body, model);
+  oaiBody.stream = isStream;
+  const beforeImgFilter = candidates.length;
+  candidates = filterCandidatesForImages(candidates, oaiBody);
+  if (candidates.length === 0 && beforeImgFilter > 0) {
+    return sendJson(res, 400, { error: { code: 400, message: NO_IMAGE_CHANNEL_MSG, status: 'INVALID_ARGUMENT' } });
+  }
   return dispatchRequest({
     kind: 'gemini',
     res,
@@ -2417,6 +2532,9 @@ async function dispatchRequest(opts) {
     const result = await tryChannel({
       res, url, body, candidate: c, isStream: stream,
       encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
+      // 流式的"开场/收尾"钩子也必须转发：漏掉它们时 message_start 与收尾事件就不会发出
+      // （历史上这里漏了 streamPrelude，导致 Anthropic 流式一直没有 message_start）
+      streamPrelude: opts.streamPrelude, streamEpilogue: opts.streamEpilogue,
       hasMoreCandidates,
     });
     if (result === 'success') return;
@@ -2594,33 +2712,54 @@ async function tryChannel(opts) {
       'X-Accel-Buffering': 'no',
       'X-ZZCSAPI-Channel': candidate.channelId,
     });
+    if (typeof opts.streamPrelude === 'function') {
+      const pre = opts.streamPrelude();
+      if (pre) res.write(pre);
+    }
     const decoder = new TextDecoder();
-    let buf = firstVal ? decoder.decode(firstVal, { stream: true }) : '';
+    let buf = '';
     let streamOutText = ''; // 累计输出（用于 token 估算）
+    // 按行分发：有 onStreamChunk 就逐行转换，否则原样透传（补回被切掉的分隔空行）
+    const handleLine = (line) => {
+      streamOutText += sseDeltaText(line);
+      if (onStreamChunk) {
+        const out = onStreamChunk(line + '\n', candidate);
+        if (out) res.write(out);
+      } else {
+        res.write(line + '\n');
+      }
+    };
+    const drain = (final) => {
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        handleLine(line);
+      }
+      if (final && buf.length) { handleLine(buf); buf = ''; }
+    };
     try {
+      // ★ 首块字节必须和后续字节走同一条按行分发路径。早期实现只把它塞进 buf 就进 read 循环，
+      //   于是"上游把整个流一次送到（快线路 / 小回答）"时下一次 read 直接 done，
+      //   透传分支（OpenAI 路由没有 onStreamChunk）一个字节都没写出去 ——
+      //   表现是 HTTP 200 + text/event-stream 却是**空响应体**，三种客户端协议全中招。
+      if (firstVal && firstVal.length) {
+        buf += decoder.decode(firstVal, { stream: true });
+        drain(false);
+      }
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
-          streamOutText += sseDeltaText(line);
-          if (onStreamChunk) {
-            const out = onStreamChunk(line + '\n', candidate);
-            if (out) res.write(out);
-          } else {
-            res.write(line + '\n');
-          }
-        }
+        drain(false);
       }
-      // 收尾
-      if (buf.length && onStreamChunk) {
-        streamOutText += sseDeltaText(buf);
-        const out = onStreamChunk(buf + '\n', candidate);
-        if (out) res.write(out);
-      }
+      buf += decoder.decode(); // 冲掉解码器里残留的多字节字符
+      drain(true);
     } catch (err) { /* 上游已断 */ }
+    if (typeof opts.streamEpilogue === 'function') {
+      const post = opts.streamEpilogue();
+      if (post) res.write(post);
+    }
     res.end();
     recordUsage({
       model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
@@ -2644,7 +2783,15 @@ async function tryChannel(opts) {
       outputTokens: estimateTokens(replyText),
       ok: true, latencyMs: Date.now() - t0, realUsage,
     });
-    const shim = { ok: resp.ok, status: resp.status, headers: resp.headers, text: async () => text };
+    // shim 必须像 fetch Response 一样同时提供 text() 与 json()：Anthropic / Gemini 两条路由的
+    // 响应转换都调 oai.json()，缺了它非流式请求会一律 502（internal: oai.json is not a function）
+    const shim = {
+      ok: resp.ok,
+      status: resp.status,
+      headers: resp.headers,
+      text: async () => text,
+      json: async () => JSON.parse(text),
+    };
     await onSuccessNonStream(shim, candidate);
     return 'success';
   }
