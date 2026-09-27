@@ -4070,7 +4070,12 @@ async function tryWorkbuddyChannel(opts) {
 // 端点：POST {baseUrl}/api/agent/ask_proxy（SSE：message_field_delta 增量 /
 //       message_field 全量快照 / message_result 终态，内含 _llm_usage 真实 token）
 // 额度：免费号 1 credit/请求、100/天、6 req/min、60/小时 → 建议低 priority 链尾兜底
-// 局限：上游忽略 OpenAI tools 参数（genspark2api 实测静默忽略），本渠道暂不做工具仿真；
+// 局限（v1.14 已整改「工具调用不可用」）：上游**忽略**原生 tools 参数（genspark2api 实测静默忽略），
+//       所以工具走**文本仿真**（与 notion / notion-agent 同套路）：
+//         ① 请求侧：toolEmu.emulateRequest 把 tools 协议注入消息、把历史 tool_calls / tool 结果渲染成文本；
+//            ⚠ 网页会话只认 user/assistant 两种角色 → gensparkMessagesFor 把 system 折进第一条 user
+//            （否则客户端与仿真注入的 system 都会被上游丢掉，工具协议根本到不了模型）；
+//         ② 响应侧：回复文本里的 [TOOL_CALL]{…}[/TOOL_CALL] 解析回真 tool_calls（流式与非流式都发）。
 //       仅挂 OpenAI 入口（/v1/chat/completions），anthropic/gemini 入口不挂（流转换不支持）
 // （GENSPARK_UA / GENSPARK_REFERER / crypto 声明在文件顶部，防 TDZ）
 
@@ -4095,6 +4100,27 @@ function gensparkHeaders(def) {
     'traceparent': `00-${n1}-${n2}-01`,
     'Cookie': gensparkCookie(def),
   };
+}
+
+// 网页会话只认 user/assistant：把 system 折进第一条 user（Web 端没有 system 概念，
+// 原样传 system 会被忽略 → 工具协议、角色设定都到不了模型）。找不到 user 就补一条。
+function gensparkMessagesFor(messages) {
+  const src = Array.isArray(messages) ? messages : [];
+  const out = [];
+  const sysTexts = [];
+  const textOf = (c) => (typeof c === 'string' ? c
+    : Array.isArray(c) ? c.map((p) => (p && (typeof p === 'string' ? p : p.text)) || '').filter(Boolean).join('\n') : '');
+  for (const m of src) {
+    if (!m) continue;
+    if (m.role === 'system') { const t = textOf(m.content).trim(); if (t) sysTexts.push(t); continue; }
+    out.push(m);
+  }
+  if (!sysTexts.length) return out;
+  const merged = sysTexts.join('\n\n');
+  const i = out.findIndex((m) => m.role === 'user');
+  if (i >= 0) out[i] = { ...out[i], content: merged + '\n\n' + textOf(out[i].content) };
+  else out.unshift({ role: 'user', content: merged });
+  return out;
 }
 
 function gensparkBuildPayload(upstreamModel, messages) {
@@ -4173,7 +4199,11 @@ async function tryGensparkChannel(opts) {
   const timeoutMs = ch.def.timeoutMs || 180_000;
   const displayModel = requestedModel || candidate.upstream;
 
-  const payload = gensparkBuildPayload(candidate.upstream, body.messages);
+  // 工具仿真（请求侧）：上游忽略原生 tools → 协议注入消息 + 历史工具消息渲染成文本，
+  // 并统一折掉 system 角色（网页会话只认 user/assistant，见 gensparkMessagesFor）
+  const toolEmuReq = toolEmu.emulateRequest(body);
+  const outMessages = gensparkMessagesFor(toolEmuReq ? toolEmuReq.messages : (body.messages || []));
+  const payload = gensparkBuildPayload(candidate.upstream, outMessages);
   const out = await gensparkAsk(ch.def, JSON.stringify(payload), timeoutMs);
   if (out.error || !out.body) {
     recordFailure(ch, 'genspark curl: ' + (out.error || 'empty body'));
@@ -4221,6 +4251,14 @@ async function tryGensparkChannel(opts) {
     return st.placeholder ? 'genspark: upstream placeholder reply' : 'genspark: empty reply';
   }
 
+  // 工具仿真（响应侧）：模型按注入的协议回了 [TOOL_CALL] 标记 → 解析回真 tool_calls。
+  // 解析不出就照旧当纯文本（绝不因为"有 tools"就把普通回复吃掉）。
+  let replyTools = null, replyOut = replyText;
+  if (toolEmuReq) {
+    const parsed = toolEmu.parseEmulatedToolCalls(replyText);
+    if (parsed && parsed.calls.length) { replyTools = parsed.calls; replyOut = parsed.text || ''; }
+  }
+
   // 成功
   ch.consecutiveFail = 0;
   ch.probation = false;
@@ -4231,7 +4269,7 @@ async function tryGensparkChannel(opts) {
 
   const respId = 'chatcmpl-gs-' + Date.now().toString(36);
   const inTok = st.usage ? st.usage.prompt_tokens : estimateTokens(messagesText(body && body.messages));
-  const outTok = st.usage ? st.usage.completion_tokens : estimateTokens(replyText);
+  const outTok = st.usage ? st.usage.completion_tokens : estimateTokens(replyOut || replyText);
 
   if (isStream) {
     // curl 已全量缓冲 → 把聚合文本按 OpenAI SSE 重新吐出（与 workbuddy 同思路）
@@ -4243,13 +4281,37 @@ async function tryGensparkChannel(opts) {
       'X-ZZCSAPI-Channel': candidate.channelId,
     });
     const chunk = (delta, finish) => `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta, finish_reason: finish || null }] })}\n\n`;
-    res.write(chunk({ role: 'assistant', content: '' }));
-    res.write(chunk({ content: replyText }));
-    if (st.usage) res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: st.usage })}\n\n`);
-    else res.write(chunk({}, 'stop'));
+    if (replyTools) {
+      // 工具调用：delta.tool_calls + finish_reason=tool_calls（客户端据此进入工具回合）
+      res.write(chunk({
+        role: 'assistant', content: replyOut ? replyOut : null,
+        tool_calls: replyTools.map((c, i) => ({
+          index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
+          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+        })),
+      }));
+      if (st.usage) res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: st.usage })}\n\n`);
+      else res.write(chunk({}, 'tool_calls'));
+    } else {
+      res.write(chunk({ role: 'assistant', content: '' }));
+      res.write(chunk({ content: replyText }));
+      if (st.usage) res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: st.usage })}\n\n`);
+      else res.write(chunk({}, 'stop'));
+    }
     res.write('data: [DONE]\n\n');
     res.end();
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage });
+    return 'success';
+  }
+
+  // 非流式：有工具调用就回 tool_calls 报文（usage 一并带上，积分/用量照实记）
+  if (replyTools) {
+    const usage = st.usage || { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok };
+    const payloadOut = toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyOut || null);
+    payloadOut.usage = usage;
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+    res.end(JSON.stringify(payloadOut));
     return 'success';
   }
 

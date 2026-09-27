@@ -104,7 +104,7 @@ function adapt() {
   const trend = days.map((d) => [String(d.day).slice(5), d.requests || 0]);
   const logs = ((us && us.recent) || []).map((r) => ({
     t:fmtTs(r.ts), ts:r.ts, id:reqIdOf(r.ts),
-    m:r.model || '—', c:r.channelId || '—', p:protoOfChannel(r.channelId),
+    m:r.model || '—', c:r.channelId || '—', n:(chans.find(c=>c.id===r.channelId)||{}).name || r.channelId || '—', p:protoOfChannel(r.channelId),
     kind:r.kind || 'chat', ok:r.ok !== false, ms:r.ms || 0,
     i:r.in || 0, o:r.out || 0, note:r.note || '',
   }));
@@ -439,7 +439,7 @@ function exportUsage(){
 /* 导出最近 200 条调用明细 */
 function exportLogs(){
   const rows=[['时间','请求ID','模型','渠道','协议','状态','耗时ms','输入Token','输出Token','备注']];
-  for(const l of DATA.logs)rows.push([l.t,l.id,l.m,l.c,l.p,l.ok?'成功':'失败',l.ms,l.i,l.o,l.note]);
+  for(const l of DATA.logs)rows.push([l.t,l.id,l.m,l.n,l.p,l.ok?'成功':'失败',l.ms,l.i,l.o,l.note]);
   downloadCsv('zzcsapi-logs-'+new Date().toISOString().slice(0,10)+'.csv',rows);
   toast('✓ 已导出日志 CSV','ok');
 }
@@ -982,7 +982,7 @@ function vLogs(v){
       <div class="field" style="min-width:150px"><label>状态</label>
         <select class="select" id="lgOk"><option value="all">全部</option><option value="ok">仅成功</option><option value="bad">仅失败</option></select></div>
       <div class="field" style="flex:1;min-width:200px"><label>搜索</label>
-        <input class="input" id="lgQ" placeholder="模型名 / 渠道 ID / 请求 ID…"></div>
+        <input class="input" id="lgQ" placeholder="模型名 / 渠道名 / 渠道 ID / 请求 ID…"></div>
       <button class="btn" style="align-self:flex-end" onclick="drawLogTable()">${svg('filter',14)}应用筛选</button>
     </div>
   </div></div>
@@ -1004,7 +1004,7 @@ function logRows(){
     if(lgCh&&l.c!==lgCh)return false;
     if(lgOk==='ok'&&!l.ok)return false;
     if(lgOk==='bad'&&l.ok)return false;
-    if(q&&!((l.m+' '+l.c+' '+l.id).toLowerCase().includes(q)))return false;
+    if(q&&!((l.m+' '+l.n+' '+l.c+' '+l.id).toLowerCase().includes(q)))return false;
     return true;
   });
 }
@@ -1013,12 +1013,12 @@ function drawLogTable(){
   const rows=logRows();
   if(!rows.length){box.innerHTML='<div class="empty">没有匹配的调用记录</div>';return}
   box.innerHTML=`<table class="tbl">
-    <thead><tr><th>时间</th><th>请求 ID</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
+    <thead><tr><th>时间</th><th>请求 ID</th><th>渠道</th><th>模型</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
     <tbody>${rows.map(l=>`<tr class="clickable">
       <td class="mono" style="font-size:12px;white-space:nowrap">${l.t}</td>
       <td class="mono muted" style="font-size:11.5px">${l.id}</td>
+      <td class="cell-name">${esc(l.n)}</td>
       <td class="cell-name">${l.m}</td>
-      <td class="mono" style="font-size:12px">${l.c}</td>
       <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
       <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
       <td class="t-r mono">${fMs(l.ms)}</td>
@@ -1046,7 +1046,7 @@ function openLog(id){
     <div class="drawer-bd">
       <dl class="kv">
         <dt>模型</dt><dd class="mono">${l.m}</dd>
-        <dt>渠道</dt><dd class="mono">${l.c}</dd>
+        <dt>渠道</dt><dd>${esc(l.n)}</dd>
         <dt>协议</dt><dd><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></dd>
         <dt>耗时</dt><dd class="mono">${fMs(l.ms)}</dd>
         <dt>Token</dt><dd class="mono">输入 ${nf(l.i)} · 输出 ${nf(l.o)}</dd>

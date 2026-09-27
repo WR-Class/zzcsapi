@@ -168,7 +168,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 96 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档）
+node test/console-state.test.js           # 103 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -186,6 +186,7 @@ node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
+node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 ```
 
@@ -272,7 +273,7 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 | `arena`        | —                        | —                    | **已撤**：Arena.ai 逆向已整体移除（见 docs/arena-protocol.md 留档）  | **已撤**：Arena.ai 逆向已整体移除（见 docs/arena-protocol.md 留档）  |
 | `workbuddy`    | 自检 `chat/completions`   | `Authorization: Bearer ...` | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET） | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET） |
 | `codex`        | 一次令牌刷新             | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） |
-| `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
+| `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期；**工具调用靠文本仿真**，上游会忽略原生 `tools`） | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
 
 #### 原生出站：`anthropic` / `gemini` 协议渠道可以直接聊天了
 
@@ -332,6 +333,20 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
   - `mode:'add'`：**一个会话建一个渠道**（多号 = 多份每日积分）；key 已存在则视为刷新
 - ⚠️ **session 约 20 天过期**，过期后网页端重新登录、再导一份即可
 - 请求头伪装：`User-Agent` / `Origin` / `Referer` / `request-id` / `traceparent`，SSE 聚合后再分发
+- **工具调用（v1.14 起可用，走文本仿真）**：该上游**静默忽略**原生 `tools` 参数（genspark2api 实测），
+  所以网关自己把工具协议"写进对话"：
+  1. 请求侧把 `tools` 定义 + 调用格式注入消息（`toolEmu`），历史里的 `tool_calls` / 工具结果渲染成文本；
+     网页会话只认 `user` / `assistant` 两种角色，因此 `system`（包括仿真协议本身）会**折进第一条 user** ——
+     否则协议根本到不了模型；
+  2. 响应侧把回复里的 `[TOOL_CALL]{…}[/TOOL_CALL]` 解析回**真的** `tool_calls`（`finish_reason: "tool_calls"`），
+     流式与非流式都发；解析不出来就照旧当纯文本，不会把普通回复吃掉。
+  - 有损点（诚实说明）：这是**提示词级仿真**，靠模型自觉按格式输出 —— 模型不听话时不产生工具调用（但也不会报错，
+    文字照常返回）；`tool_choice: "none"` 不会注入协议；上游侧看不到原生 `tools` 字段（塞了也是噪音，不塞）。
+  - 同套路还用在 `notion` / `notion-agent` 两条链上（它们的上游同样不认原生 `tools`）。
+  - **真机实测（v1.14 部署后）**：真实 Genspark 会话（渠道别名指向 Genspark 网页版模型），
+    `tool_choice:"required"` 非流式 → 客户端收到 `tool_calls`（`get_weather` + `{"city":"北京"}`，`finish_reason:"tool_calls"`）；
+    `tool_choice:"auto"` 流式 → SSE 里也是 `tool_calls` 分片 + `finish_reason:"tool_calls"`。
+    也有过"模型先反问城市、没吐标记"的样本（`auto` 下偶发）——这正是上面那条有损点，多试一次或改用 `required` 即可。
 
 ## 调度顺序
 
