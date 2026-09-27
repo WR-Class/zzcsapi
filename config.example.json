@@ -2,6 +2,16 @@
   "port": 8787,
   "health": { "intervalSec": 300, "timeoutMs": 8000 },
   "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
+  "autoWeight": {
+    "enabled": false,
+    "minSamples": 10,
+    "floor": 0.2,
+    "latencyPenalty": 0.5,
+    "maxShare": 70,
+    "updateMs": 30000,
+    "ewma": 0.5,
+    "deadband": 0.1
+  },
   "channels": [
     {
       "id": "vendor-a-openai",

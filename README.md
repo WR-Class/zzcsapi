@@ -153,7 +153,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 38 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示）
+node test/console-state.test.js           # 57 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测卡渲染）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -164,6 +164,8 @@ node test/weighted-rr-e2e.test.js         # 12 项断言：真 HTTP 数落点，
 node test/native-channels.test.js         # 78 项断言：原生出站双向转换（请求/响应/流式状态机/URL 鉴权头/错误体不翻译）
 node test/native-channels-e2e.test.js     # 33 项断言：原生假上游 × 三条客户端路由，验证上游真的收到原生报文
 node test/console-weight-e2e.test.js      # 18 项断言：控制台表单报文 → 真网关落库 → 真流量分流 → 表格那一格显示出来
+node test/auto-weight.test.js             # 61 项断言：自动权重算法（健康系数/地板/死区平滑/份额封顶）＋**静默不变式**（观测不许改分流）
+node test/auto-weight-e2e.test.js         # 29 项断言：真流量下预测会变、分流一字未动、配置往返旋钮不丢
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -337,6 +339,60 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 - 权重接受任意非负数字（整数最好懂：`3:1` 就是 75/25；小数同样按比例算）。负数、非数字在控制台表单里
   就被挡下（不会发请求），绕过前端直接调接口也会被后端拒（400）——两边校验规则一致。
 
+### 自动权重（观测版：只算不生效）
+
+想让"同一个模型有很多渠道都提供、有的能用有的不能用、有的快有的慢"这件事**自动**按实测表现分流，
+不用手填 `weight`。v1.6 先上**观测版**：后端按真实数据算出"若启用会怎么分"，控制台看得见，
+但**一行都不碰真实路由**——手工 `weight` 仍是唯一生效的份额依据，不填就是零影响。
+
+> **为什么不直接生效**：自动权重天然有反馈回路（份额改流量 → 流量改统计 → 统计改份额），
+> 先让人对着真机数据确认它算得对，再打开开关，是成本最低的顺序。
+> 所以配置里的 `"enabled": true` 目前**也只是把观测数据标成"已启用"**，不会改变分流；
+> 真正的生效版本会在 README 与 `effective` 字段上同时声明。
+
+**健康系数 `h`（0.2 ~ 1）** 由两个**已有**信号合成，不引入新统计：
+
+| 信号 | 来源 | 作用 |
+| --- | --- | --- |
+| 成功率 | 滚动窗口 `ch.roll`（与「有效优先级」同一个窗口） | **主力**：`h = 1 − 失败率` |
+| 速度 | 该渠道最近成功请求的延迟指数平均（EWMA） | **温和**惩罚：慢 2 倍只打到 `0.75`（默认 `latencyPenalty: 0.5`） |
+
+**抗振荡三件套**（自动调权最怕的就是抖）：低频重算（`updateMs` 默认 30 秒）+ 指数平滑（`ewma` 0.5）+
+死区（变化小于 `deadband` 10% 就不动）。另有四条护栏：
+
+- **失败率样本不足不动**（`minSamples` 默认 10 条）：新渠道不被几次随机失败打死；
+  注意**只管失败率这一项**——样本不足时该项按"满分 1"算，但**速度项仍独立生效**
+  （所以一个刚上线、样本为 0 但延迟很慢的渠道，`h` 仍可能 < 1；这是刻意的，实测延迟不需要攒样本就够可信）；
+- **地板**（`floor` 默认 0.2）：慢/差也不给 0——"慢"常常是长上下文模型在思考，饿死它反而丢质量；
+- **单渠道上限**（`maxShare` 默认 70%）：防赢家通吃（最快的被打爆后反而更慢）。
+  上限**只兜自动算出来的份额**；用户手填的 `weight` 永不封顶（手填是硬意图，护栏不该反过来压制它）；
+- **冷却 / `down` 的渠道直接排除**（本来就进不了池），其份额分给健康成员。
+
+配置项（`config.json` 顶层，全部可选，`config.example.json` 里有全量示例）：
+
+| 键 | 默认 | 含义 |
+| --- | --- | --- |
+| `enabled` | `false` | 预留开关：本版置 `true` 也只影响观测数据的标注，不改变分流 |
+| `minSamples` | `10` | 滚动窗口样本少于它就**不按失败率扣分**（速度项不受此门槛约束） |
+| `floor` | `0.2` | 健康系数地板 |
+| `latencyPenalty` | `0.5` | 速度惩罚强度；`0` = 完全不看速度 |
+| `maxShare` | `70` | 自动份额的单渠道上限（%）；手填权重不受限 |
+| `updateMs` | `30000` | 健康系数重算间隔（毫秒，最小 1000） |
+| `ewma` | `0.5` | 新值权重（指数平滑） |
+| `deadband` | `0.1` | 死区（相对变化小于它就不动） |
+
+可观测与界面：
+
+- `/admin/api/status` 新增顶层 `autoWeight`：`enabled` / **`effective`（恒 `false`，一眼看出没生效）** /
+  `knobs` / `at` / `models[]`。每个 `models` 条目 = 一个"被多个渠道提供的模型"：
+  `candidates[]` 里给出预测份额 `share`、健康系数 `h`、基础权重 `base`、是否手填 `manual`、
+  当前手工份额对照 `nowShare`、以及**判断依据**（`failRate` / `samples` / `latMs` / `speedRatio`）；
+  `excluded[]` 是冷却或 down 而没参与分份额的候选；`manualOff` 表示当前压根没开加权轮询。
+- 每个渠道新增 `autoH` / `autoFailRate` / `autoSamples` / `autoLatMs` / `autoSpeedRatio`。
+- **控制台**：渠道页顶部有「自动权重 · 观测」卡，按模型列出预测份额（含"当前 x%"对照与被打折的原因）；
+  渠道详情抽屉里有「自动权重（观测 · 只算不生效）」一节，把健康系数、样本数、失败率、延迟摊开。
+  单候选模型不进卡（一个提供方谈不上分流，显示了只会是"100%"噪音）。
+
 ### 有效优先级（失败率自动降权）
 
 同状态渠道不是死板按配置的 `priority` 排，而是按**有效优先级** `effPriority`：
@@ -372,7 +428,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | ----------------------------------- | ---- | ----------- | ------------------------------------- |
 | `/healthz`                          | GET  | 无          | 网关自身存活探针                      |
 | `/console`                          | GET  | admin       | Web 控制台 HTML                       |
-| `/admin/api/status`                 | GET  | admin       | 渠道详细状态（控制台用）              |
+| `/admin/api/status`                 | GET  | admin       | 渠道详细状态（控制台用；含 `weight`/`weightedHits`/`weightedShare` 与自动权重观测 `autoWeight`、`autoH` 等字段） |
 | `/admin/api/usage`                  | GET  | admin       | 用量统计（总量 / 按模型 / 按渠道 / 按天 / 近 200 条 / 24h 分布） |
 | `/admin/api/usage/clear`            | POST | admin       | 清零用量统计                          |
 | `/admin/api/recheck`                | POST | admin       | 立即重探测（body 可传 `{id}`）        |
@@ -425,5 +481,8 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 
 ## 计划中
 
+- **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
+  下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
+  "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题
 - Gemini **客户端路由**的工具调用透传：`/gemini/...` 目前只映射文本，`tools` / `functionCall` / `functionResponse` 会被丢掉（OpenAI 与 Anthropic 两条路由不受影响，见 docs/PONYTAIL_REVIEW.md PT33）
 - 同协议直通（Anthropic 客户端 → Anthropic 渠道不做转换，省一层且有损点更少）
