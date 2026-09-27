@@ -26,13 +26,13 @@
 
 | 文件 | 行数 | 职责 | 本文件涉及 |
 | --- | --- | --- | --- |
-| `console-redesign.html` | ~2273 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
+| `console-redesign.html` | ~2272 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
-| `build/extra.css` | 8 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字） | ✅ §0.2 |
-| `build/app.js` | ~1933 | **生产逻辑主体**：数据层 + 动作层 + 6 个页面渲染 + 首启密钥登录门，真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/extra.css` | 68 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**） | ✅ §0.2 |
+| `build/app.js` | 2023 | **生产逻辑主体**：数据层 + 动作层 + 6 个页面渲染 + 首启密钥登录门，真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 52 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
-| `console.html` | ~2554 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
+| `console.html` | ~2704 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~4520 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import` 等；含首启密钥生成与双层鉴权 | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
@@ -73,10 +73,15 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 | 目标 | 公式 | 校验点 |
 | --- | --- | --- |
-| `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24 |
-| `console.html` 的 JS 行号 | `build/app.js` 行号 **+617** | `const IC`：app.js 3 → 产物 620；`tick()`：app.js 1902 → 产物 2519 |
+| `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24；`--tx:#1b1710`：原型 46 → 产物 59 |
+| `console.html` 的 JS 行号 | `build/app.js` 行号 **+666** | `const IC`：app.js 3 → 产物 669；`autoWeightCard()`：app.js 634 → 产物 1300；`tick()`：app.js 2005 → 产物 2671 |
 
-> 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（8 行）增删行影响（head/shell 已有构建期行数守卫，extra.css 改动需人工重算并同步本文档与 AGENTS.md §1.2）。
+> 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（57 行）/ 设计稿 `<style>` 的行数增删影响（head/shell 已有构建期行数守卫；extra.css 与设计稿 CSS 改行数需人工重算并同步本文档、AGENTS.md §1.2 与 `build/build.js` 注释）。
+> **历史教训（v1.8 重核）**：这条公式曾长期停在 **+617**（`build/build.js` 注释里又写着 +648），而实测是 **+673** —— 三个地方对不上，且漂移量在各函数间不等（+1 ~ +26），说明是历次改动累积的局部插入。
+> **v1.8.1（图例对齐修复）**：`build/extra.css` 的 `.aw-*` 注释块 +4 行 → 偏移 **+673 → +677**，CSS 偏移仍 +13。
+> **v1.9（自动权重独立成页 + 份额列对齐）**：`.aw-*` 由「堆叠带 + `auto-fit` 图例」重写成「一候选一列（`.aw-split`/`.aw-col`/`.aw-seg`）」，`build/extra.css` 68 → **58 行** → 偏移 **+677 → +667**（CSS 偏移仍 +13）。注意本轮是**双向变化**：`extra.css` 减 10 行（偏移 −10）+ `app.js` 在 `vAutoWeight()` 处净增行（app.js 行号 +）——所以产物行号在插入点**前后表现不同**：`autoWeightCard()` 之前的函数产物行号整体 −10（如 `const IC` 680 → 670），之后的函数因两个方向抵消而基本不动（`autoWeightCard()` 恰好 1301 → 1301）。
+> **v1.9.1（份额列只留显示名）**：列标签不再拼 id 小片，`.aw-nm .id` 这条样式随即失去唯一引用 → 删除，`build/extra.css` 58 → **57 行** → 偏移 **+667 → +666**（CSS 偏移仍 +13）。
+> **教训**：extra.css 在拼接序里位于 app.js **之前**，所以它每增删 1 行，JS 偏移就整体 ±1，而 CSS 偏移不动 —— 改 extra.css 前先想清楚要不要多这一行。改完 `build/*` 一定要用 AGENTS.md §1.2 的命令重新导一遍，不要按估算改数字。
 
 ### 三条硬规则
 
@@ -109,34 +114,35 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 行号 | 名称 | 说明 |
 | --- | --- | --- |
 | 3 | `IC` | 内联 SVG path 字典 |
-| 57 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构（含渠道的 `weight`/`weightedHits`/`weightedShare` → `w`/`wHits`/`wShare`） |
-| 137 | `loadAll()` | 并发拉取 status / usage / config，写 `RAW` → `adapt()` |
-| 154 / 174 | `render()` / `reload()` | 重绘当前页（**保留滚动位置 + 焦点/光标**；筛选状态由各页 JS 变量回填，见下方「状态回填」约定）/ 重新拉数并重绘 |
-| 177 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
-| 207 | `api(path,opts)` | **统一请求封装**：自动带 `Authorization: Bearer <ADMIN_KEY>`、错误 toast；**401 → 清掉已存密钥并弹回登录门**（密钥被轮换时自动重新要 key） |
-| 219–251 | `downloadCsv` `toast` `copyText` | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
-| 317 | `NAV` | 侧栏导航定义 |
-| 329 / 337 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`） |
-| 350 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
-| 370–404 | `winStats` `avgLatency` `avgLatencyDelta` `OV_RANGE` | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ **时间范围配置** |
-| 407 / 415 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
-| 426–452 | `exportUsage` `exportLogs` `exportModels` `copyModels` | 导出与复制 |
-| 461 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
-| 579 / 623 / 660 / 697 / 706 | `vChannels` / **`autoWeightCard()`** / `drawChTable` / `toggleCh` / `openChannel` | 渠道页（顶部挂**自动权重观测卡**）/ 观测卡：把 `/admin/api/status` 的 `autoWeight.models[]` 画成"若启用会怎么分"（**只算不生效**，卡头写明）/ 排序渲染（含**权重 / 分流**列）/ 启停 / 详情抽屉（含权重与分流占比角标 + 自动权重观测一节） |
-| 774–795 | `toggleDrawerKey` `reprobe` `delChannel` | 抽屉密钥切换 / 重探测 / 删除 |
-| 811–888 | `mTab` `mQ` `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
-| 925–1035 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填） |
-| 1049–1158 | `pgDraft` 等 `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
-| 1269–1363 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
-| 1397–1406 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
-| 1410–1423 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
-| 1430–1677 | `openChannelForm` … `saveChannel` | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存（`weight` 随 `POST /admin/api/channels` 一起提交） |
-| 1677–1776 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
-| 1815–1896 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`** |
-| 1898–1925 | `drawer` `closeDrawer` `setTheme` | 抽屉 / 主题持久化 / 明暗互切 |
-| 1925–1967 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
-| 1967 | `tick()` | 时钟 |
-| 1977–1990 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 58 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构（含渠道的 `weight`/`weightedHits`/`weightedShare` → `w`/`wHits`/`wShare`） |
+| 138 | `loadAll()` | 并发拉取 status / usage / config，写 `RAW` → `adapt()` |
+| 155 / 175 | `render()` / `reload()` | 重绘当前页（**保留滚动位置 + 焦点/光标**；筛选状态由各页 JS 变量回填，见下方「状态回填」约定）/ 重新拉数并重绘 |
+| 178 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
+| 208 | `api(path,opts)` | **统一请求封装**：自动带 `Authorization: Bearer <ADMIN_KEY>`、错误 toast；**401 → 清掉已存密钥并弹回登录门**（密钥被轮换时自动重新要 key） |
+| 220–252 | `downloadCsv` `toast` `copyText` | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
+| 318 | `NAV` | 侧栏导航定义（v1.9 起「资源」组含 **渠道管理 / 聚合模型 / 自动权重**） |
+| 331 / 339 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`；v1.9 的路由表含 `autoweight:vAutoWeight`） |
+| 352 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
+| 372–406 | `winStats` `avgLatency` `avgLatencyDelta` `OV_RANGE` | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ **时间范围配置** |
+| 409 / 417 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
+| 428–454 | `exportUsage` `exportLogs` `exportModels` `copyModels` | 导出与复制 |
+| 463 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
+| 581 / 698 / 735 / 744 | `vChannels` / `drawChTable` / `toggleCh` / `openChannel` | 渠道页（v1.9 起**只剩页签 + 搜索 + 表格**，观测卡已迁出）/ 排序渲染（含**权重 / 分流**列）/ 启停 / 详情抽屉（含权重与分流占比角标 + 自动权重观测一节） |
+| 626 / 634 | **`vAutoWeight()`** / **`autoWeightCard()`** | **自动权重页**（v1.9，资源 → 自动权重）：`vAutoWeight` 只出页头 + 挂卡；`autoWeightCard` 把 `/admin/api/status` 的 `autoWeight.models[]` 画成"若启用会怎么分"（**只算不生效**）。份额改成**一候选一列**（`.aw-col`，列宽 = 份额，色带段与名字/百分比同列，见 `build/extra.css` 10–57），份额为 0 的候选不进列、单独一行 `未参与分流：`。列标签**只留渠道显示名**（v1.9.1 起不再拼 id 小片） |
+| 812–849 | `toggleDrawerKey` `reprobe` `delChannel` | 抽屉密钥切换 / 重探测 / 删除 |
+| 849–963 | `mTab` `mQ` `vModels` `drawMTable` `openModel` | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
+| 963–1087 | `vLogs` `logRows` `drawLogTable` `clearUsage` `openLog` `copyCurl` | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填） |
+| 1087–1307 | `pgDraft` 等 `vPlayground` `drawPG` `drawRoute` `fmtUsage` `pgClear` `pgCopyCurl` `pgSend` | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
+| 1307–1435 | `vAccess` `showKeyHelp` | 接入信息（真实 gatewayKey / 端口 / 模型名）；端点地址与密钥均可复制；`showKeyHelp` 是**只读**步骤清单，每条命令各自可复制 |
+| 1435–1444 | `modal` `closeModal` `setStatus` `toggleMenu` | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
+| 1448–1461 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
+| 1468–1715 | `openChannelForm` … `saveChannel` | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存（`weight` 随 `POST /admin/api/channels` 一起提交） |
+| 1715–1853 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
+| 1853–1936 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`** |
+| 1936–1963 | `drawer` `closeDrawer` `setTheme` | 抽屉 / 主题持久化 / 明暗互切 |
+| 1963–2005 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
+| 2005 | `tick()` | 时钟 |
+| 2015–2035 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
@@ -146,13 +152,26 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 > ⚠️ 原型里的 `simTest` / `REPLIES` / `hash()` / `fakeKey()` **在生产侧已全部删除**，替换为真实请求。
 > 如果你在生产代码里看到它们，说明构建源搞混了。
 
-### `build/extra.css` 区块（8 行）
+### `build/extra.css` 区块（57 行）
 
 | 行号 | 区块 |
 | --- | --- |
 | 1–2 | 说明（复用设计令牌，不引入新颜色） |
 | 5 | `.chip.codex` 协议 chip（设计稿快照无 codex 渠道） |
 | 8 | `.kv dd.mono` 抽屉密钥行等宽字 |
+| 10–14 | `.aw-*` 组件说明（自动权重**页**，生产独有，设计稿不含） |
+| 15 | `.aw-card` 卡容器 |
+| 16–24 | `.aw-meta` / `.aw-note` / `.aw-knobs` 说明 + 旋钮带 |
+| 25–34 | `.aw-model` 模型块 / `.aw-m-hd` 块头 / `.aw-m-name` / `.aw-m-meta` / 状态标签 |
+| 35 | `.tag.warn`（`已排除` 候选的告警标签） |
+| 36–42 | 份额列设计说明注释（为什么不再用「堆叠带 + 独立图例」） |
+| 43–46 | `.aw-split` 份额列容器 / `.aw-col`（列宽 = `flex-grow:var(--w)`）/ `.aw-seg` 色带段 / `.aw-cap` 名字+百分比行 |
+| 47–51 | `.aw-nm` 渠道名（**只留显示名**，v1.9.1 起不再跟 id 小片）/ `.aw-nm .k` `盲试`·`自动匹配` chip |
+| 52–57 | `.aw-sh` 份额数字 / `.aw-sub` 副行 / `.aw-zero` 未参与分流说明 |
+
+> **v1.9 起没有 `.aw-bar` / `.aw-legend` / `.aw-item` / `.aw-sw` / `.aw-more`** —— 那条「堆叠带 + `auto-fit` 图例」
+> 路线已整体删除（图例换行后与色带对不上，用户报的"错位"）。现在是一候选一列，见坑位 17/18。
+> **v1.9.1 起没有 `.aw-nm .id`** —— 列标签只留渠道显示名，id 小片（`.aw-nm .id`）失去唯一引用后一并删除。
 
 > PT03 整改：`.sortable` / `.mini-kv` / `.img-out` / `.art` / `.loading` 五组原型遗留死样式已删（全源零引用）。 |
 
@@ -410,18 +429,19 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 弹窗宽度 | 402–408 `.modal` / `.modal.wide` |
 | 弹窗遮罩点击行为 | 997–1000 `#mask` markup（**当前刻意不绑 onclick**）；生产同规则，见 `build/shell.html` 48 |
 | 新增协议（原型） | `PROTO_META` 1775 + `PROTO_ORDER` 1785 + `.chip.<proto>` 配色 226–233 |
-| 新增协议（生产） | `build/app.js` 的 `PROTO_META` 1410 / `PROTO_ORDER` 1420 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
+| 新增协议（生产） | `build/app.js` 的 `PROTO_META` 1448 / `PROTO_ORDER` 1458 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
 | 新增页面（原型） | `NAV` 1022 + `vXxx()` + `go()` 1042 的分发表 |
-| 新增页面（生产） | `build/app.js` 的 `NAV` 317 + `vXxx()` + `go()` 337 的分发表，然后重新构建 |
-| 新增导入类型 | `IMPORT_META` 2035（原型）/ 1677（生产）+ 工具栏菜单（原型 1186–1196、占位 markup 589 起 / 生产 570–581） |
-| 渠道列表排序 | 1179（渠道页）/ 1385（模型页）；生产 660 / 888 |
-| 探测列表交互 | `renderProbeList` 1928 起整段（原型）/ 1550（生产） |
+| 新增页面（生产） | `build/app.js` 的 `NAV` 318 + `vXxx()` + `go()` 339 的分发表，然后重新构建（**v1.9 的「自动权重」页就是照这条加的**：`NAV` 325 + `vAutoWeight()` 626 + 路由表 `autoweight:vAutoWeight` 345） |
+| 新增导入类型 | `IMPORT_META` 2035（原型）/ 1715（生产）+ 工具栏菜单（原型 1186–1196、占位 markup 589 起 / 生产 587–598） |
+| 渠道列表排序 | 1179（渠道页）/ 1385（模型页）；生产 698 / 897 |
+| 探测列表交互 | `renderProbeList` 1928 起整段（原型）/ 1588（生产） |
 | 图标 | `IC` 861（原型）/ 3（生产），用 `svg('name',size)` 引用 |
-| 主题持久化 key | `zzcs-theme`（原型 `setTheme` 2254 / 生产 `setTheme` 1910） |
+| 主题持久化 key | `zzcs-theme`（原型 `setTheme` 2254 / 生产 `setTheme` 1948） |
 | 生产独有组件样式 | `build/extra.css`（**不要写进设计稿**，设计稿没有这些组件） |
 | 构建逻辑 / 产物结构 | `build/build.js` |
-| 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 404 + `ovSeries` 407 + `vOverview` 461 |
-| 渠道权重（输入框 / 表格列 / 抽屉角标） | **v1.5**：生产 `openChannelForm` 1430（`f-weight`）+ `saveChannel` 1628（提交 `weight`）+ `drawChTable` 660（「权重 / 分流」列）+ `openChannel` 706（抽屉角标）+ `adapt()` 57（映射 `w`/`wHits`/`wShare`）；后端 `weight` 语义见 README「加权轮询」。**原型未同步**（生产独有能力，原型不必追平） |
+| 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 406 + `ovSeries` 409 + `vOverview` 463 |
+| 渠道权重（输入框 / 表格列 / 抽屉角标） | **v1.5**：生产 `openChannelForm` 1468（`f-weight`）+ `saveChannel` 1666（提交 `weight`）+ `drawChTable` 698（「权重 / 分流」列）+ `openChannel` 744（抽屉角标）+ `adapt()` 58（映射 `w`/`wHits`/`wShare`）；后端 `weight` 语义见 README「加权轮询」。**原型未同步**（生产独有能力，原型不必追平） |
+| 自动权重观测页 | **v1.9**：生产 `NAV` 325（资源 → 自动权重）+ `vAutoWeight` 626 + `autoWeightCard` 634 + `build/extra.css` 的 `.aw-*`（10–57）；数据来自 `/admin/api/status` 的顶层 `autoWeight`。**原型未同步**（v1.9.1：份额列标签只留渠道显示名） |
 
 ---
 
@@ -462,10 +482,12 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 10. **导入解析要容错**：`parseCodexUnits` 兼容扁平 / `credentials` / `accounts[]` 三种结构；`parseGsSessionId` 用正则从任意文本里捞 `uuid:hex`。改这里务必保留容错。
 11. **`</style>` 是 CSS 里的禁忌字面量**：HTML 解析 `<style>` 是裸文本模式，注释里出现结束标签也会**立刻闭合元素**，后面整段 CSS 会变成页面正文。写构建 banner / CSS 注释时绝不能出现它（`build/build.js` 有自检兜底，但别指望它替你找语义错误）。
 12. **`console.html` 是产物，不是源文件**：直接手改会在下次 `node build/build.js` 时被静默覆盖。改视觉去 `console-redesign.html` 的 `<style>`，改生产逻辑去 `build/app.js`，改完必须重新构建。
-13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 +617（JS）。增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会让 JS 偏移改变（head/shell 已有构建期行数守卫）。
+13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 +666（JS）。增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会让 JS 偏移改变（head/shell 已有构建期行数守卫）；**`extra.css` 在拼接序里位于 `app.js` 之前，它每增删 1 行 JS 偏移就整体 ±1，而 CSS 偏移不受影响**。
 14. **表格表头右对齐要压权重**：`table.tbl thead th{text-align:left}` 权重是 (0,1,3)，高于 `.t-r` 的 (0,1,0)，所以 `th` 上的 `.t-r` **默认不生效**，会出现"表头左对齐、数值右对齐"的错位。必须用 `table.tbl thead th.t-r` 这种更高权重的选择器（原型 300 行与 `.t-r` 并排写在同一行，就是为了不增行数、避免锚点整体漂移）。新增右对齐列时务必肉眼确认表头也对齐了。
 15. **剪贴板只在安全上下文可用**：`navigator.clipboard` 在 `http://` + 局域网 IP 下是 `undefined`，而可选链 `?.` 会把整条链**静默短路**——既不复制也不报错，看起来就是"按钮点了没反应"。`copyText` 因此用 `document.execCommand('copy')` 兜底，别删。
 16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" onclick="copyText(this.dataset.t,this)"`。
+17. **「条 + 独立图例」必然错位，标签必须贴在自己那一段下面**：份额带的段是**单向排列**（左→右按顺序），而图例若用 `auto-fit` 网格则是「左→右、换行再左→右」——候选一多、一换行，读者就没法把图例项对回它的段。更糟的是真机上绝大多数候选健康系数 =1（色块全是同一个绿），连颜色都认不出谁是谁（v1.8.1 只修了行内基线，没修"对不上"这个根本问题）。**v1.9 的处置**：改成一候选一列（`.aw-col`，列宽 = 份额），列内上方 `.aw-seg` 色带段、下方 `.aw-cap` 直接挂名字与百分比 ——"这段是谁的"不用去别处找。**新增任何"带 + 图例"组件前先问：换行后读者还能把图例对回它的段吗？**
+18. **按比例分列宽用 `flex-grow`，别用 `width:calc(x%)`**：`.aw-split` 用 `gap:8px` 给列间真间隙，列上写 `flex-basis:0` + `flex-grow:var(--w)` —— 间隙由布局先让出、余量再按份额分，各列宽度仍**严格成比例**，也不会被 100% 撑破。手写 `width:calc(x% - Npx)` 一旦候选数变化就立刻失准。配套两条：列要 `min-width:0`、列内文字要 `overflow:hidden;text-overflow:ellipsis`，否则长渠道名会把列撑宽、把比例撑歪（全量信息放 `title`）。
 
 ---
 
@@ -473,7 +495,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 **构建与产物**
 
-- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测卡的自动化回归，**57 项断言**；改了任何带输入框的页面都要跑）
+- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页的自动化回归，**62 项断言**；改了任何带输入框的页面都要跑）
 - [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
 - [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）
 - [ ] 产物里 `</style>` 恰好 1 次：`(Select-String -Path console.html -Pattern '</style>' -SimpleMatch).Count`

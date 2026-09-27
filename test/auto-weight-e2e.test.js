@@ -172,20 +172,38 @@ const upstream = http.createServer((req, res) => {
       const st = await status();
       const e = preview(st, 'm1');
       const chA = chOf(st, 'aw-a');
-      // 说明：真失败会被**重试稀释**（每次请求失败后网关还会同渠道重试一次），
-      // 所以"失败率"通常远低于上游的失败比例；攒够了还会触发既有的**冷却**。
-      // 这里只断言由设计保证的稳健事实，具体数量关系交给单元测试去卡死。
+      const chB = chOf(st, 'aw-b');
+      const knobs = (st.autoWeight || {}).knobs || {};
       const a = e.candidates.find((c) => c.id === 'aw-a');
-      const excluded = (e.excluded || []).includes('aw-a');
+      const b = e.candidates.find((c) => c.id === 'aw-b');
+      /* ★ 这一节曾经断言"a 的份额不超过对半"，那是**错的**判据：本夹具里 b 是 /slow（恒定
+         250ms），它的速度惩罚会随样本出现而独立变动，实测 a 的份额反而会因为 b 被扣分而涨到
+         ~58-64%。失败项本身的可测契约是下面两条：
+           · 失败率低于死区 → h 按设计冻在 1（抗振荡，不是没读到失败）；
+           · 失败率高于死区 → h 必须真的被扣（单元测试卡死数量关系）。
+         另外真失败会被"重试 + 冷却"双重稀释：失败的渠道一进冷却就不再接流量、也就不再攒失败，
+         所以观测到的失败率通常远低于上游的真实失败比例——这是既有机制的产物，不是观测的漏洞。 */
+      const deadband = knobs.deadband;
       check('★ 真实失败被记进观测（a 的失败率 > 0）', chA.autoFailRate > 0, { failRate: chA.autoFailRate, samples: chA.autoSamples });
-      check('★ 预测对失败不乐观：a 份额不超过健康时的对半，或干脆被冷却排除',
-        excluded || (a && a.share <= 50), { a: a && a.share, excluded });
+      check('★ 失败率没推过死区 → h 按设计冻着；推过了就得真扣（抗振荡契约）',
+        deadband === undefined ? chA.autoH <= 1
+          : (chA.autoFailRate >= deadband ? chA.autoH < 1 : chA.autoH === 1),
+        { h: chA.autoH, failRate: chA.autoFailRate, deadband, samples: chA.autoSamples });
       check('★ 样本不足时观测选择"看不清就不动"（h = 1），而不是凭两三次失败就砍份额',
         chA.autoSamples < 10 ? chA.autoH === 1 : chA.autoH <= 1,
         { samples: chA.autoSamples, h: chA.autoH });
+      /* 预测不是凭空来的：份额就是 h 归一化的结果（两家都没触发单渠道封顶时应当严格自洽）。
+         这条把"观测真的按健康系数算份额"端到端钉住，且不依赖 b 的速度项怎么动。 */
+      if (a && b && a.share < knobs.maxShare && b.share < knobs.maxShare) {
+        const implied = Math.round((a.h / (a.h + b.h)) * 1000) / 10;
+        check('★ 预测份额与健康系数自洽：share = h_a / (h_a + h_b)（含 b 的速度惩罚）',
+          Math.abs(a.share - implied) <= 0.2, { share: a.share, implied, ha: a.h, hb: b.h, fastRateB: chB.autoFailRate });
+      } else {
+        check('★ 有候选触发了单渠道封顶或已被排除 → 份额不自洽属预期（跳过自洽比对）', true, { a: a && a.share, b: b && b.share, maxShare: knobs.maxShare });
+      }
       check('★ 与此同时 weightedHits 仍然是 0（坏消息没有变成"偷偷改分流"）',
-        chOf(st, 'aw-a').weightedHits === 0 && chOf(st, 'aw-b').weightedHits === 0,
-        { a: chOf(st, 'aw-a').weightedHits, b: chOf(st, 'aw-b').weightedHits });
+        chA.weightedHits === 0 && chB.weightedHits === 0,
+        { a: chA.weightedHits, b: chB.weightedHits });
       check('渠道的 weight 字段仍是 0（没有谁被写进配置）',
         chOf(st, 'aw-a').weight === 0 && chOf(st, 'aw-b').weight === 0);
       check('落点变化完全由既有机制（失败重试 / 冷却兜底）解释：b 只是在 a 不健康时分到流量',

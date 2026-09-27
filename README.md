@@ -6,7 +6,7 @@
 ## 特性
 
 - 🚦 **多协议、多渠道自动调度**：同一模型在多个渠道之间按 priority + 健康状态排序调用
-- 🔁 **失败自动切换**：4xx 客户端错误之外，遇到 5xx / 超时 / 网络错误立刻试下一个渠道
+- 🔁 **失败自动切换**：只要还有能上场的候选，5xx / 超时 / 网络错误，以及上游 4xx（含"渠道声明了早已下架的模型"这类 404）都立刻试下一个渠道；客户端的 400 只在没有候选可切时原样透传
 - 🛡 **熔断冷却**：连续失败的渠道进入指数退避冷却期（1s, 2s, 4s ... 上限 60s）
 - 🔍 **后台健康探测**：定时 GET 渠道的 models 端点，聚合 latency / 状态 / 真实模型清单
 - 🌊 **流式透传**：SSE 全程转发；上游响应是 OpenAI 协议时自动转成 Anthropic/Gemini 流
@@ -153,7 +153,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 57 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测卡渲染）
+node test/console-state.test.js           # 62 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -165,7 +165,8 @@ node test/native-channels.test.js         # 78 项断言：原生出站双向转
 node test/native-channels-e2e.test.js     # 33 项断言：原生假上游 × 三条客户端路由，验证上游真的收到原生报文
 node test/console-weight-e2e.test.js      # 18 项断言：控制台表单报文 → 真网关落库 → 真流量分流 → 表格那一格显示出来
 node test/auto-weight.test.js             # 61 项断言：自动权重算法（健康系数/地板/死区平滑/份额封顶）＋**静默不变式**（观测不许改分流）
-node test/auto-weight-e2e.test.js         # 29 项断言：真流量下预测会变、分流一字未动、配置往返旋钮不丢
+node test/auto-weight-e2e.test.js         # 30 项断言：真流量下预测与健康系数自洽、分流一字未动、配置往返旋钮不丢
+node test/upstream-4xx-fallback-e2e.test.js  # 32 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -190,7 +191,8 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 {
   "port": 8787,
   "health": { "intervalSec": 300, "timeoutMs": 8000 },
-  "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
+  "retries": { "perChannel": 1, "maxModelFallbacks": 99 },   // ⚠ perChannel 目前是**未接线**的配置项（读进来后没有引用，改它不生效）；
+                                                             //    真正生效的链长上限是 maxModelFallbacks
   "channels": [
     {
       "id": "vendor-a-openai",
@@ -389,7 +391,8 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
   当前手工份额对照 `nowShare`、以及**判断依据**（`failRate` / `samples` / `latMs` / `speedRatio`）；
   `excluded[]` 是冷却或 down 而没参与分份额的候选；`manualOff` 表示当前压根没开加权轮询。
 - 每个渠道新增 `autoH` / `autoFailRate` / `autoSamples` / `autoLatMs` / `autoSpeedRatio`。
-- **控制台**：渠道页顶部有「自动权重 · 观测」卡，按模型列出预测份额（含"当前 x%"对照与被打折的原因）；
+- **控制台**：**「资源 → 自动权重」独立页**（v1.9 起从渠道页迁出）有份额预测卡，按模型列出预测份额
+  （每个候选一列，列宽即份额，色带段下方直接挂渠道名与百分比；含"当前 x%"对照与被打折的原因）；
   渠道详情抽屉里有「自动权重（观测 · 只算不生效）」一节，把健康系数、样本数、失败率、延迟摊开。
   单候选模型不进卡（一个提供方谈不上分流，显示了只会是"100%"噪音）。
 
@@ -455,7 +458,11 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 
 ## 行为细节
 
-- **4xx 重试规则**：`400/422` 等明确请求本身错的不再切渠道，原样透传；`401/402/403/404/408/429` 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底。404 进兜底名单的动机：渠道「声明有此模型」但上游实际没有（别名表过期）时，下一个声明者很可能真的有。
+- **4xx 重试规则（v1.9.2 起收敛为一个判据）**：`401/402/403/404/408/429` 属于渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 一律切下一候选兜底；其余 4xx（`400` 参数错、`422` 等）**只在后面已经没有能上场的候选时**才原样透传给客户端，前面还有候选就照样当"这家不行"继续切。
+  · 动机：渠道「声明有此模型」但上游实际没有（别名表过期 → 上游 404），或中转参数方言不同（不认 `stream_options` 等）——这类 4xx 换一家往往就能成。而网关此前**已经**给这家记了失败并置冷却，却把上游 4xx 甩给客户端并就此停手：自己认定是渠道的错，却对客户端说是客户端的错，还不兜底，逻辑自相矛盾（现象：该模型明明另有能用的候选，客户端却拿到 404）。
+  · 「还有候选」只看**这轮真能上场的**（冷却中的候选不算：它这一轮不会被尝试，把它算成后手会让兜底切进空池、最后兜出个 502，把客户端本该看到的 400 弄丢）。
+  · 代价：真·客户端的错（参数写错）现在会把候选链走完才回 4xx，请求更慢、上游多挨几下；相比之下"明明有能用的渠道却给客户端报错"更糟。链长仍受 `retries.maxModelFallbacks` 约束。
+  · 透传时用的是**最后一家**上游的错误体与状态码，客户端看到的仍是上游真实答复（不是网关伪造的 502）。
 - **流式失败**：已经开始向客户端写 200 + 任意 chunk 后，上游断开不会再换渠道（避免半截回复）。
 - **协议转换**：OpenAI ↔ Anthropic ↔ Gemini 三边都走内部 OpenAI 协议中转；**出站方向也按渠道的 `protocol` 走原生格式**（见「原生出站」），所以任一客户端协议都能打到任一协议的渠道上。
 - **原生出站（`protocol: anthropic` / `gemini`）**：请求侧 `system`→顶层 `system`/`systemInstruction`、`tool_calls`→`tool_use`/`functionCall`、工具结果→`tool_result`/`functionResponse`（Gemini 按函数名配对）、图片→`image` 块/`inlineData`・`fileData`、`max_tokens`→`max_output_tokens`/`maxOutputTokens`、`stop`→`stop_sequences`/`stopSequences`；响应侧反向映射（`stop_reason`→`finish_reason`、`usageMetadata`→`usage`、`thinking`→`reasoning_content`）。

@@ -59,10 +59,11 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 
 > **换算捷径**（构建是纯拼接，偏移恒定，改完源文件后可用它自查文档里的 `console.html` 行号）：
 > - `console.html` 的 CSS 行号 = `console-redesign.html` 行号 **+13**
-> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+617**
+> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+666**
 >
-> 偏移只受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（8 行）增删行影响
-> （head/shell 已由 build.js 构建期行数守卫把住，extra.css 改动仍需人工重算偏移并同步此处）。
+> 偏移只受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（57 行）/ 设计稿 `<style>` 行数增删影响
+> （head/shell 已由 build.js 构建期行数守卫把住；**extra.css 与设计稿 CSS 一旦增删行，JS 偏移必须人工重算**，并同步此处、`build/build.js` 注释与 `docs/frontend-code-map.md` §行号换算）。
+> `extra.css` 在拼接序里位于 `app.js` 之前，所以它每增删 1 行，JS 偏移整体 ±1（CSS 偏移不动）——改它的注释前先想清楚要不要多这一行。
 
 若偏移量是整体平移，可以按差值批量修正；若只是局部插入，务必逐个核对，不要凭估算改数字。
 
@@ -112,4 +113,5 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `test/native-channels-e2e.test.js` | 后端端到端回归（`node test/native-channels-e2e.test.js`，零依赖）：真起「原生 Anthropic 假上游 + 原生 Gemini 假上游 + 临时网关」，**断言上游收到的是原生 URL/鉴权头/报文字段**（不是 OpenAI 格式硬塞），三条客户端路由 × 两种原生渠道（含流式与双重转换）、图片与工具调用跨协议、上游 400 原样透传、openai 渠道行为不变的对照。改 `nativeChannelOpts` 注入 / 候选链协议分层 / 图片能力门时必跑 |
 | `test/console-weight-e2e.test.js` | 前端+后端端到端回归（`node test/console-weight-e2e.test.js`，零依赖）：把控制台**权重**那条链路串起来——`saveChannel` 真实报文 → 真网关 `POST /admin/api/channels` 落库 → `/admin/api/status` → 控制台 `adapt()`+`drawChTable()` 渲染出的那一格 → 真发 24 次请求让占比动起来（含"权重改 0 后立刻退出池、hits 不再增长"与"负数前端挡下、绕过前端后端也 400"）。改权重语义 / 控制台渠道表格或表单字段时必跑 |
 | `test/auto-weight.test.js` | 后端自动化回归（`node test/auto-weight.test.js`，零依赖）：**自动权重（观测版）**；从 `server.js` 现抠 `normAutoWeight` / `capShares` / `pureCandidatesFor` / `autoRawFor` / `autoWeightObserve` 跑断言（旋钮归一化与钳制、样本不足不动、失败率是主力、速度温和惩罚 + 地板、低频/指数平滑/死区抗振荡、份额归一化与单渠道封顶、**手填权重不被上限压制**）。含**静默不变式**：观测跑 100 遍 `SWRR_*` 状态逐字节不变、`pickWeighted` 落点序列一致、不改 `ch.def.weight`；并有装配守卫（`persistConfig` 白名单必须含 `autoWeight`、观测函数体里不许出现 `SWRR_`）。改观测算法 / 健康系数语义时必跑 |
-| `test/auto-weight-e2e.test.js` | 后端端到端回归（`node test/auto-weight-e2e.test.js`，零依赖）：真起「假上游 + 临时网关」验证自动权重观测**静默不生效**——预测给出 50/50 时真发 40 次请求仍全部落在候选链第一位、`weightedHits` 恒为 0；真实失败/真实延迟只改预测不改分流；配置往返后 `autoWeight` 旋钮不被 `persistConfig` 抹掉。改观测接线或调度路径时必跑 |
+| `test/auto-weight-e2e.test.js` | 后端端到端回归（`node test/auto-weight-e2e.test.js`，零依赖）：真起「假上游 + 临时网关」验证自动权重观测**静默不生效**——预测给出 50/50 时真发 40 次请求仍全部落在候选链第一位、`weightedHits` 恒为 0；真实失败/真实延迟只改预测不改分流（含"失败率没推过死区 → h 按设计冻着"这条抗振荡契约，以及 `share = h_a/(h_a+h_b)` 的自洽比对）；配置往返后 `autoWeight` 旋钮不被 `persistConfig` 抹掉。改观测接线或调度路径时必跑 |
+| `test/upstream-4xx-fallback-e2e.test.js` | 后端端到端回归（`node test/upstream-4xx-fallback-e2e.test.js`，零依赖）：**上游 4xx 不许短路兜底**；从 `server.js` 现抠 `shouldPassThrough4xx` 跑真值表（含装配守卫：5 处判据共用同一函数、渠道侧名单只出现一次、"还有候选"必须排除冷却中的候选），再真起「三个假上游 + 临时网关」验证：404/400 都继续切、连吃两个 400 仍切到第三家、全链 400 时原样透传 400（**不是 502**）、单候选 400 语义不变、401/429 必切。改候选链 / 兜底判据 / `hasMoreCandidates` 语义时必跑 |

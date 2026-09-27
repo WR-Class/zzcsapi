@@ -343,7 +343,23 @@ function testAutoWeight() {
     });
     check('卡里出现模型名与两个候选的预测份额', html.includes('m1') && html.includes('38%') && html.includes('62%'));
     check('★ 用渠道**名字**而不是 id 展示（否则用户对不上是哪家）', html.includes('甲渠道') && html.includes('乙渠道'));
+    check('★ 份额列只留显示名，不再跟一个 id 小片（列窄时省地方，名字不被 id 挤走）',
+      html.includes('甲渠道') && !html.includes('class="id"'));
     check('★ 不合格的候选给出可解释的原因（失败率 / 速度倍数）', html.includes('失败率 30%') && html.includes('2.4 倍'));
+    check('★ 份额带与标签同列：每个候选一列（列宽 = 份额），标签就在自己那一段正下方',
+      html.includes('class="aw-col"') && html.includes('class="aw-seg"') && html.includes('class="aw-cap"'));
+    check('份额为 0 的候选不进列（列宽 0 画出来看不见），单独一行交代理由',
+      (() => {
+        const z = mk({
+          enabled: true, effective: false, knobs: {}, at: 0,
+          models: [{ model: 'm4', requests: 9, manualOff: true, excluded: [], candidates: [
+            { id: 'a', share: 100, h: 1, failRate: 0, samples: 40, latMs: 100, speedRatio: 1, nowShare: null },
+            { id: 'b', share: 0, h: 0, failRate: 0.6, samples: 30, latMs: 500, speedRatio: 4, nowShare: null },
+          ] }],
+        });
+        return z.includes('未参与分流：') && z.includes('失败率 60%')
+          && z.split('class="aw-col"').length - 1 === 1;
+      })());
     check('★ 卡头明示「当前分流一字未动」（不许让人误以为已经生效）', html.includes('当前分流一字未动'));
     check('旋钮值也写出来（速度权重 / 地板 / 上限 / 样本门槛）',
       html.includes('速度权重 0.5') && html.includes('地板 0.2') && html.includes('单渠道上限 70%') && html.includes('失败率样本 <10 条不扣分'));
@@ -386,7 +402,10 @@ function testAutoWeight() {
     check('★ 抽屉里把判断依据摊开（健康系数 / 样本 / 失败率 / 延迟）',
       oc.includes('健康系数') && oc.includes('样本 ') && oc.includes('失败率 ') && oc.includes('延迟 '));
     check('抽屉里也写明"系数不会被执行"', oc.includes('上面的系数不会被执行'));
-    check('vChannels 真的挂上了观测卡（否则写了没人用）', extract('vChannels').includes('autoWeightCard()'));
+    check('★ 观测页真的挂上了观测卡（否则写了没人用）', extract('vAutoWeight').includes('autoWeightCard()'));
+    check('★ 观测卡不再挤在渠道管理页（渠道页只剩页签 + 表格）', !extract('vChannels').includes('autoWeightCard()'));
+    check('★ 自动权重是「资源」下的独立页（NAV 有入口、go() 有路由）',
+      src.includes("id:'autoweight'") && src.includes('autoweight:vAutoWeight'));
   }
 }
 
@@ -402,7 +421,7 @@ function testControl() {
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
-   'autoWeightCard', 'openChannel', 'vChannels'].forEach(extract);
+   'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels'].forEach(extract);
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"'].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });

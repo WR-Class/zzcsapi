@@ -29,7 +29,8 @@ const IC = {
   edit:'<path d="M4 20h4L20 8l-4-4L4 16v4z"/><path d="m14 6 4 4"/>',
   trash:'<path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/>',
   chev:'<path d="m6 9 6 6 6-6"/>',
-  upload:'<path d="M12 17V5M7 10l5-5 5 5M4 21h16"/>'
+  upload:'<path d="M12 17V5M7 10l5-5 5 5M4 21h16"/>',
+  scale:'<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>'
 };
 const svg=(n,s=15)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[n]||''}</svg>`;
 
@@ -321,6 +322,7 @@ const NAV=[
   {sec:'资源'},
   {id:'channels',label:'渠道管理',icon:'plug',cnt:()=>DATA.meta.channels},
   {id:'models',label:'聚合模型',icon:'layers',cnt:()=>DATA.meta.models},
+  {id:'autoweight',label:'自动权重',icon:'scale'},
   {sec:'工具'},
   {id:'playground',label:'Playground',icon:'terminal'},
   {id:'access',label:'接入信息',icon:'book'}
@@ -340,7 +342,7 @@ function go(p){
   renderRail();
   const v=$('#viewport');
   v.innerHTML='';
-  ({overview:vOverview,channels:vChannels,models:vModels,logs:vLogs,playground:vPlayground,access:vAccess}[p]||vOverview)(v);
+  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,playground:vPlayground,access:vAccess}[p]||vOverview)(v);
   v.firstElementChild?.classList.add('page');
   // 现在滚动容器是 .viewport 自己，scrollIntoView 不会生效，必须直接归零
   v.scrollTop=0;
@@ -611,51 +613,87 @@ function vChannels(v){
     <button class="btn ml-auto" onclick="recheckAll(this)">${svg('test',14)}全部重探测</button>
   </div>
 
-  ${autoWeightCard()}
   <div class="card"><div class="card-bd tight tbl-wrap" id="chTable"></div></div>`;
   $$('#chTabs .tab',v).forEach(t=>t.onclick=()=>{chTab=t.dataset.t;$$('#chTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawChTable()});
   $('#chQ',v).oninput=e=>{chQ=e.target.value;drawChTable()};
   drawChTable();
 }
-/* 自动权重观测卡（v1.6 静默版）：回答"如果开了自动权重，同一个模型的候选会怎么分"。
-   只读展示——后端这一版也只算不生效，所以这里的数字与实际分流无关（卡头写明了）。
-   刻意只用行内样式：不新增 CSS 就不会动 extra.css，也就不会让代码地图里的行号偏移失效。 */
+/* 自动权重页（v1.9）：回答"如果开了自动权重，同一个模型的候选会怎么分"。
+   独立页（资源 → 自动权重），不再挤在渠道管理顶部——那里是本页的入口，不是它的家。
+   只读展示——后端这一版也只算不生效，所以页面上用 .aw-note 自证"没生效"，不靠用户猜。
+   标记只产结构，样式全在 build/extra.css 的 .aw-*（生产独有组件，设计稿不含）；
+   本函数只允许依赖 DATA / esc / nf——回归测试按这个签名注入（test/console-state.test.js §4）。 */
+function vAutoWeight(v){
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">自动权重</h1>
+      <div class="page-sub">按失败率 / 延迟 / 样本量预测各候选的分流份额 · 只算不生效，真实路由仍按手工权重与优先级</div></div>
+  </div>
+  ${autoWeightCard()}`;
+}
 function autoWeightCard(){
   const a=DATA.auto; if(!a) return '';
   const nm=(id)=>{const c=DATA.channels.find(x=>x.id===id);return c?c.name:id;};
   const k=a.knobs||{};
+  const hcol=(h)=>h>=0.9?'var(--ok)':h>=0.6?'var(--warn)':'var(--err)';
   const ms=(a.models||[]).filter(m=>(m.candidates||[]).length>1);
-  const expl=`按真实成功率与延迟算 · 速度权重 ${k.latencyPenalty} · 地板 ${k.floor} · 单渠道上限 ${k.maxShare}% · `
-    +`失败率样本 <${k.minSamples} 条不扣分 · <b>当前分流一字未动</b>`;
-  const hd=`<div class="card-hd"><h3>自动权重 · 观测</h3><span class="sub">${expl}</span></div>`;
-  if(!ms.length) return `<div class="card" style="margin-bottom:14px">${hd}
+  const allOff=ms.length>0&&ms.every(m=>m.manualOff);
+  // 旋钮文字必须是**纯文本**：回归测试按整串断言（如"速度权重 0.5"），中间插标签会把串断开
+  const knobs=[
+    k.latencyPenalty!=null?`速度权重 ${k.latencyPenalty}`:'',
+    k.floor!=null?`地板 ${k.floor}`:'',
+    k.maxShare!=null?`单渠道上限 ${k.maxShare}%`:'',
+    k.minSamples!=null?`失败率样本 <${k.minSamples} 条不扣分`:'',
+    k.updateMs!=null?`每 ${Math.round(k.updateMs/1000)}s 重算`:'',
+  ].filter(Boolean).map(t=>`<span class="tag">${t}</span>`).join('');
+  const hd=`<div class="card-hd">
+    <h3>分流预测</h3>
+    <span class="chip${a.effective?' accent':''}">${a.effective?'已生效':'只算不生效'}</span>
+    <span class="sub r">${ms.length} 个多候选模型</span>
+  </div>`;
+  if(!ms.length) return `<div class="card aw-card">${hd}
     <div class="card-bd tight"><div class="empty">当前没有「同一个模型被多个渠道提供」的情况，暂无可观测的分流</div></div></div>`;
-  const rows=ms.slice(0,6).map(m=>{
-    const cands=m.candidates.map(c=>{
-      const col=c.h>=0.9?'var(--ok)':c.h>=0.6?'var(--warn)':'var(--err)';
+  const rows=ms.map(m=>{
+    const list=(m.candidates||[]).map(c=>{
       const why=[c.failRate!=null?`失败率 ${Math.round(c.failRate*100)}%`:`失败率样本只有 ${c.samples} 条（不足 ${k.minSamples}，这一项不扣分）`,
         c.speedRatio!=null?`延迟 ${c.latMs}ms（最快的 ${c.speedRatio} 倍）`:'无延迟数据（不按速度扣分）'].join(' · ');
-      return `<div style="min-width:150px;flex:1">
-        <div class="row" style="gap:6px;align-items:baseline">
-          <span class="mono" style="font-size:11px">${esc(nm(c.id))}</span>
-          <span class="mono" style="font-size:12px;font-weight:600">${c.share}%</span>
-          ${c.h<1?`<span style="font-size:10px;color:${col}" title="${why}">健康 ${c.h.toFixed(2)}</span>`
-                 :`<span class="muted" style="font-size:10px" title="${why}">健康</span>`}
-          ${c.nowShare!=null?`<span class="muted" style="font-size:10px" title="当前手工权重下的真实份额">当前 ${c.nowShare}%</span>`:''}
+      const sub=[c.h<1?`健康 ${c.h.toFixed(2)}`:'', c.nowShare!=null?`当前 ${c.nowShare}%`:''].filter(Boolean).join(' · ');
+      const kind=c.kind==='blind'?'<span class="k">盲试</span>':c.kind==='auto'?'<span class="k">自动匹配</span>':'';
+      return {c, col:hcol(c.h), why, sub, kind};
+    });
+    // 一个候选一列，列宽 = 份额（flex-grow，见 extra.css .aw-split），渠道名与百分比就挂在
+    // 自己那一段色带的正下方 —— 读"这段是谁的"不用去别处找（旧版两列网格图例与色带对不上）。
+    const cols=list.filter(x=>x.c.share>0).map(x=>`<div class="aw-col" style="--w:${Math.min(100,x.c.share)};--c:${x.col}" title="${esc(nm(x.c.id))} · 预测 ${x.c.share}% · ${esc(x.why)}">
+        <i class="aw-seg"></i>
+        <div class="aw-cap">
+          <span class="aw-nm">${esc(nm(x.c.id))}${x.kind}</span>
+          <span class="aw-sh">${x.c.share}%</span>
         </div>
-        <div class="proto-bar" title="${why}"><i style="width:${Math.max(2,Math.min(100,c.share))}%;background:${col}"></i></div>
-      </div>`;
-    }).join('');
-    return `<div style="padding:9px 0;border-top:1px solid var(--line)">
-      <div class="row" style="gap:8px;align-items:baseline;margin-bottom:7px">
-        <span class="mono" style="font-size:12px">${esc(m.model)}</span>
-        <span class="muted" style="font-size:11px">${m.candidates.length} 个候选 · ${nf(m.requests)} 次请求${m.manualOff?' · 当前未开加权轮询':''}${(m.excluded||[]).length?' · 已排除 '+m.excluded.map(nm).join('、'):''}</span>
+        ${x.sub?`<div class="aw-sub">${x.sub}</div>`:''}
+      </div>`).join('');
+    // 份额为 0 的候选列宽就是 0（画出来是看不见的），单独一行说清它为什么没分到
+    const zero=list.filter(x=>!(x.c.share>0));
+    const zrow=zero.length?`<div class="aw-zero">未参与分流：${zero.map(x=>`${esc(nm(x.c.id))}（${esc(x.why)}）`).join('、')}</div>`:'';
+    // 全部模型都没手工权重时，卡头那句「没填就按优先级兜底」已说清，逐块再挂标签纯属噪音
+    const flags=((m.manualOff&&!allOff)?'<span class="tag">当前未开加权轮询</span>':'')
+      +((m.excluded||[]).length?`<span class="tag warn">已排除 ${(m.excluded||[]).map(nm).join('、')}</span>`:'');
+    return `<div class="aw-model">
+      <div class="aw-m-hd">
+        <span class="aw-m-name">${esc(m.model)}</span>
+        <span class="aw-m-meta">${list.length} 个候选 · ${nf(m.requests)} 次请求</span>
+        ${flags}
       </div>
-      <div class="row wrap" style="gap:10px">${cands}</div>
+      <div class="aw-split">${cols}</div>
+      ${zrow}
     </div>`;
   }).join('');
-  return `<div class="card" style="margin-bottom:14px">${hd}
-    <div class="card-bd tight">${rows}${ms.length>6?`<div class="muted" style="font-size:11px;padding-top:8px">还有 ${ms.length-6} 个多候选模型未显示</div>`:''}</div></div>`;
+  return `<div class="card aw-card">${hd}
+    <div class="aw-meta">
+      <div class="aw-note">下面是「若启用自动权重会怎么分」的预测：<b>当前分流一字未动</b>——真实路由仍按你填的权重，没填就按优先级兜底。</div>
+      ${knobs?`<div class="aw-knobs"><span class="lbl">旋钮</span>${knobs}</div>`:''}
+    </div>
+    ${rows}
+  </div>`;
 }
 function drawChTable(){
   const box=$('#chTable'); if(!box) return;
