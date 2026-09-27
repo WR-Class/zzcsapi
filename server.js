@@ -637,14 +637,21 @@ async function probeChannel(ch) {
     const t0 = Date.now();
     try {
       const probe = ch.def.protocol === 'genspark' ? await gensparkIsLogin(ch.def, HEALTH.timeoutMs || 15000) : await workbuddyChatProbe(ch.def, HEALTH.timeoutMs || 15000);
-      if (!probe.ok) throw new Error(probe.error || 'probe failed');
+      if (!probe.ok) {
+        // 把探测的分类带出来：额度/频率用尽要走 rate_limit（并按上游给的重置时刻定冷却），
+        // 不能当作"渠道故障"记一笔瞬时失败
+        const e = new Error(probe.error || 'probe failed');
+        e.status = probe.status; e.rateLimited = probe.rateLimited; e.retryAfterMs = probe.retryAfterMs;
+        throw e;
+      }
       // 无 /models 端点 → 模型列表直接用 def.models 的 upstream 值（用户配置的别名映射）
       ch.models = Object.values(ch.def.models || {}).filter(Boolean);
       ch.latencyMs = Date.now() - t0;
       // 这一支里 workbuddy 的探测本身就是一次真实对话（真凭实据 → 可满血）；genspark 只是验登录态（半愈合）
       healAfterProbe(ch, true, ch.def.protocol !== 'genspark');
     } catch (err) {
-      recordFailure(ch, 'workbuddy: ' + (err.message || err));
+      if (err.rateLimited || err.retryAfterMs) recordFailure(ch, 'workbuddy: ' + (err.message || err), 'rate_limit', err.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {});
+      else recordFailure(ch, 'workbuddy: ' + (err.message || err));
     }
     return;
   }
@@ -979,12 +986,55 @@ function wbCurlRequest(method, url, headers, bodyStr, timeoutMs, proxy) {
   });
 }
 
+// ── WorkBuddy 上游错误的三个判据（v1.14.1）────────────────────────────────────
+// 背景：上游额度耗尽时回 HTTP 429 + {"code":6004,"msg":"usage exceeds frequency limit … your
+// usage will reset at 2026-09-28 10:00:39 UTC+8 …"}。旧代码把这个响应体当成"未知响应"，
+// 探测只抛一句 'non-SSE response'——用户看到的就是「同样复制了 token，却提示 non-SSE」，
+// 完全看不出真实原因是额度用完（而且重置时刻上游已经明说了）。
+
+// 额度/频率已用尽类文案（与普通 429 同义，但要带重置时刻）
+function wbQuotaLimited(text) {
+  return /usage exceeds frequency limit|frequency limit|too many requests|rate limit/i.test(String(text || ''));
+}
+
+// 从上游文案里抠出「重置时刻」→ 距现在的毫秒数（抠不到返回 0）。
+// 有了它，冷却期可以精确对齐到额度回血的那一刻，而不是按曲线瞎猜（默认起步 1 小时，
+// 常常在额度早就恢复之后还继续空等，或反过来提早去撞墙被反复判失败）。
+function wbQuotaResetMs(text, now = Date.now()) {
+  const m = String(text || '').match(/reset at\s+(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})\s*UTC\s*([+-]\d{1,2})?/i);
+  if (!m) return 0;
+  const offH = m[7] ? Number(m[7]) : 0;
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - offH, +m[5], +m[6]);
+  return Number.isFinite(ms) && ms > now ? ms - now : 0;
+}
+
+// 非 SSE、非 JSON 的响应不该只说一句 'non-SSE response'：把 HTTP 码与响应开头带上，
+// 才分得清是 CF 挑战页、代理错误页还是上游改了报文格式。
+function wbOpaqueBodyMsg(status, text) {
+  const snip = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  return `non-SSE response (HTTP ${status || 0}${snip ? '，响应开头: ' + snip : '，响应体为空'})`;
+}
+
+// CodeBuddy 新版把 auth 文件里的 accessToken 加密了（{$wbEncrypted:1, envelope:"{suite,keyId,nonce,authTag,ciphertext}"}）。
+// 粘这个字符串一定失败——它不是 JWT，是 AES-GCM 密文。早点说清楚，别让用户以为是自己复制错了。
+function wbEncryptedKeyHint(apiKey) {
+  const s = String(apiKey || '').trim();
+  if (!s) return '';
+  if (/wbEncrypted|ciphertext|authTag/.test(s) || s.includes('"suite"')) {
+    return 'apiKey 是 CodeBuddy 加密后的 envelope（不是 JWT）——不能直接当 Bearer 用；' +
+      '请用明文 accessToken（JWT，形如 eyJhbG… 三段点分），或从客户端实际请求里取一次新的';
+  }
+  return '';
+}
+
 // WorkBuddy 探测：/v2 下没有 /models 端点（404），只能走一次真实轻量聊天。
 // 用 def.models 里第一个 upstream 模型（通常是 deepseek-v4.1-flash），
 // system+user、max_tokens=1、stream=true，读到首个 SSE chunk 即判活。
 // 注意：必须走 curl 子进程——该上游对 Node/undici 的 TLS 指纹直接 ECONNRESET。
 async function workbuddyChatProbe(def, timeoutMs) {
   const t0 = Date.now();
+  const keyHint = wbEncryptedKeyHint(def.apiKey);
+  if (keyHint) return { ok: false, error: keyHint, latencyMs: 0, status: 0 };   // 密文不用发请求，直接说清楚
   const model = (Object.values(def.models || {})[0]) || 'deepseek-v4.1-flash';
   const bodyStr = JSON.stringify({
     model,
@@ -1002,12 +1052,20 @@ async function workbuddyChatProbe(def, timeoutMs) {
     return { ok: false, error: out.error || 'empty body', latencyMs: Date.now() - t0, status: out.status || 0 };
   }
   const text = out.body;
-  if (text.startsWith('{')) {
-    const j = safeJson(text);
-    return { ok: false, error: (j && (j.msg || (j.error && j.error.message))) || text.slice(0, 120) || 'json error', latencyMs: Date.now() - t0, status: out.status };
+  // 响应体可能以换行/BOM 开头 → 必须 trim 后再判断（旧写法 startsWith('{') 会把 JSON 错误体
+  // 误判成「未知响应」，于是 429 额度提示被吞成一句 non-SSE response）
+  const trimmed = text.replace(/^\uFEFF/, '').trim();
+  if (trimmed.startsWith('{') || wbQuotaLimited(trimmed)) {
+    const j = safeJson(trimmed);
+    const msg = (j && (j.msg || (j.error && j.error.message))) || trimmed.slice(0, 120) || 'json error';
+    const retryAfterMs = wbQuotaResetMs(msg) || wbQuotaResetMs(trimmed);
+    return {
+      ok: false, error: msg, latencyMs: Date.now() - t0, status: out.status,
+      rateLimited: wbQuotaLimited(msg) || out.status === 429, retryAfterMs,
+    };
   }
   if (!/^data:/m.test(text)) {
-    return { ok: false, error: 'non-SSE response', latencyMs: Date.now() - t0, status: out.status };
+    return { ok: false, error: wbOpaqueBodyMsg(out.status, text), latencyMs: Date.now() - t0, status: out.status };
   }
   return { ok: true, latencyMs: Date.now() - t0, status: 200 };
 }
@@ -3533,7 +3591,17 @@ async function dispatchRequest(opts) {
   for (let i = 0; i < maxCand; i++) {
     const c = candidates[i];
     if (c.cooldownUntil > Date.now()) {
-      errors.push({ ch: c.channelId, err: 'in cooldown' });
+      // 冷却跳过也要说明"为什么 + 还有多久"：只说一句 'in cooldown'，用户拿到的 502 里
+      // 就看不出是额度用尽（还要等几小时）还是刚抖了一下（几秒后就恢复）。v1.14.1
+      const st = channels.get(c.channelId);
+      const leftMs = c.cooldownUntil - Date.now();
+      const leftS = leftMs >= 3600e3 ? `${Math.floor(leftMs / 3600e3)}h${Math.round((leftMs % 3600e3) / 60e3)}m`
+        : leftMs >= 60e3 ? `${Math.round(leftMs / 60e3)}m` : `${Math.ceil(leftMs / 1000)}s`;
+      errors.push({
+        ch: c.channelId,
+        err: `in cooldown（约 ${leftS} 后恢复${st && st.lastError ? '：' + String(st.lastError).replace(/\s+/g, ' ').slice(0, 160) : ''}）`,
+        recoverInMs: leftMs,
+      });
       continue;
     }
     attemptedAny = true;
@@ -3573,7 +3641,26 @@ async function dispatchRequest(opts) {
       if (!isRetryableFailure(result) || attempt >= PER_CHANNEL_RETRIES) break;
     }
   }
-  if (!attemptedAny) return sendJson(res, 503, upstreamErrorPayload(503, 'all channels in cooldown'));
+  if (!attemptedAny) {
+    // 全部候选都在冷却：不能只回一句 "all channels in cooldown"——用户没法判断是额度用完、
+    // 凭证失效还是上游抖动。带上每家的最后失败原因与各自还有多久恢复（v1.14.1）。
+    const nowMs = Date.now();
+    const cd = candidates.slice(0, maxCand)
+      .filter((x) => x.cooldownUntil > nowMs)
+      .map((x) => {
+        const secs = Math.ceil((x.cooldownUntil - nowMs) / 1000);
+        const eta = secs >= 3600 ? `${Math.floor(secs / 3600)} 小时 ${Math.round((secs % 3600) / 60)} 分`
+          : secs >= 60 ? `${Math.round(secs / 60)} 分` : `${secs} 秒`;
+        const state = channels.get(x.channelId);
+        const why = state && state.lastError ? String(state.lastError).replace(/\s+/g, ' ').slice(0, 160) : '（无失败详情）';
+        return { channelId: x.channelId, recoverInMs: x.cooldownUntil - nowMs, recoverIn: eta, reason: why };
+      });
+    const soonest = cd.reduce((a, b) => (!a || b.recoverInMs < a.recoverInMs ? b : a), null);
+    const payload = upstreamErrorPayload(503, 'all channels in cooldown' +
+      (soonest ? `（全部候选都在冷却，最近一家 ${soonest.channelId} 约 ${soonest.recoverIn} 后恢复）` : ''));
+    payload.error.cooldown = cd;
+    return sendJson(res, 503, payload);
+  }
   return sendJson(res, 502, { error: { message: `all channels failed`, type: 'gateway_error', attempts: errors } });
 }
 
@@ -3943,6 +4030,13 @@ async function tryWorkbuddyChannel(opts) {
   const timeoutMs = ch.def.timeoutMs || 120_000;
   const displayModel = requestedModel || candidate.upstream;
 
+  // 密文 token 直接判失败：发出去也只会被拒，不如把原因说清楚（省一次往返 + 一次失败计数）
+  const wbKeyHint = wbEncryptedKeyHint(ch.def.apiKey);
+  if (wbKeyHint) {
+    recordFailure(ch, 'workbuddy: ' + wbKeyHint, 'credential');
+    return 'workbuddy: ' + wbKeyHint;
+  }
+
   // 规则 2：首条必须 system（不存在则在头部注入）
   const inMsgs = Array.isArray(body.messages) ? body.messages : [];
   const outMsgs = (inMsgs.length && inMsgs[0].role === 'system')
@@ -3968,7 +4062,12 @@ async function tryWorkbuddyChannel(opts) {
   if (sseText.trim().startsWith('{') || (out.status && out.status >= 400)) {
     const j = safeJson(sseText);
     const msg = (j && (j.msg || (j.error && j.error.message))) || sseText.slice(0, 160);
-    recordFailure(ch, `workbuddy ${out.status}: ` + msg, failureKindFromStatus(out.status));
+    // 额度/频率用尽（429 code 6004）：按 rate_limit 记，并把冷却精确对齐上游给的重置时刻
+    // （文案里就有 "reset at … UTC+8"；照曲线猜会在额度回血后继续空等）
+    const limited = wbQuotaLimited(msg) || out.status === 429;
+    const resetMs = wbQuotaResetMs(msg) || wbQuotaResetMs(sseText);
+    recordFailure(ch, `workbuddy ${out.status}${limited ? '（额度/频率已用尽）' : ''}: ` + msg,
+      limited ? 'rate_limit' : failureKindFromStatus(out.status), resetMs ? { retryAfterMs: resetMs } : {});
     if (shouldPassThrough4xx(out.status, opts.hasMoreCandidates)) {
       res.writeHead(out.status, { 'Content-Type': 'application/json' });
       res.end(sseText);
@@ -3978,8 +4077,9 @@ async function tryWorkbuddyChannel(opts) {
     return `workbuddy ${out.status}: ${msg}`;
   }
   if (!/^data:/m.test(sseText)) {
-    recordFailure(ch, 'workbuddy: non-SSE response');
-    return 'workbuddy: non-SSE response';
+    const opaque = wbOpaqueBodyMsg(out.status, sseText);
+    recordFailure(ch, 'workbuddy: ' + opaque);
+    return 'workbuddy: ' + opaque;
   }
 
   // 成功

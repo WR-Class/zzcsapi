@@ -1136,6 +1136,25 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 一格顺序为 请求 ID → 渠道名 → 模型名、按名字搜索命中、按 id 搜索仍命中、`adapt()` 把显示名解析进 `n` 且 `c` 保留；
 并含"旧写法（渠道格写 id、排在模型后面）下看不到渠道名"的对照组，证明用例抓得住）。
 
+### 8.21 v1.14.1 添加渠道表单：WorkBuddy 的 key 提示补上"已被加密"（2026-09-28，对象 `build/app.js` + `console-redesign.html` + 产物 `console.html` + `README.md` + `AGENTS.md`）
+
+**问题**：用户照表单提示去 `CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` 复制 `auth.accessToken`，填进渠道后拿不到模型。
+
+**根因**（两条，一条在前端提示、一条在后端判据）：
+
+| # | 现象 | 根因 |
+| --- | --- | --- |
+| 1 | 复制出来的"token"根本不是 JWT | 新版 CodeBuddy 把该字段加密了：`{"$wbEncrypted":1,"envelope":{"suite":1,"keyId":…,"ciphertext":…}}`（AES-GCM 密文）；而表单提示仍写「auth 文件里 auth.accessToken 的 JWT」，等于指了一条死路 |
+| 2 | 真实失败原因是额度用尽，界面却说 `non-SSE response` | 后端探测侧用 `text.startsWith('{')`（**没 trim**）判 JSON，响应体以换行/BOM 开头就被当成"未知响应"，上游明说的重置时刻被整段吞掉（后端修复见 README「workbuddy」一节与 `test/workbuddy-quota.test.js`） |
+
+**处置**：`PROTO_META.workbuddy.key` 提示改写（原型 1781 / 生产 1454），明说"该字段已是 envelope、不是 JWT，填了会被当场拒；需从客户端实际请求里取明文 token"。
+
+**样式与行数零变化**：只改一行字符串内容，`build/app.js` **2066 行**、`console-redesign.html` **2272 行**、
+产物 `console.html` **2736 行**均未变 ⇒ 行号偏移仍是 CSS **+13** / JS **+666**，`docs/frontend-code-map.md`
+§1「1775–1784 `PROTO_META`」/ §0.2「1448–1461 `PROTO_META`」两个锚点区间**继续有效，无需重算**。
+
+**验证**：`node build/build.js` 通过（产物含新文案）；`test/console-state.test.js` 103 项、全量 21 个测试文件全绿。
+
 ---
 
 ## 9. 后续可做（未实现）
