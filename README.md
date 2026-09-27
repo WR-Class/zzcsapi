@@ -108,6 +108,16 @@ http://127.0.0.1:8787/console
 - 改 priority、启停某个渠道
 - 触发单渠道或全量重新探测
 - 看每个协议聚合后的模型清单
+- **测试停用渠道里的模型**：停用只是"不参与调度、不参与自动探测"，不代表不能手动打一发验证模型还活着。
+  渠道页每行的「测试」与抽屉里的「测试模型」对停用渠道同样可用（弹窗里会标「已停用」并说明测通也不会启用它）；
+  全量「测试模型」会把停用渠道排在后面一并列出。
+
+> **自动 vs 手动的边界**（v1.13 明确）：
+> - **自动**（启动时 + `health.intervalSec` 定时器）：**只探启用渠道**。停用的渠道一次都不碰——不消耗它的配额，
+>   也不会让探测失败把它的状态越推越烂。
+> - **手动**（控制台点「测试」/「重探测」，以及 `/admin/api/test`、`/admin/api/recheck`）：不受此限。
+>   带 `channelId` 的测试只打那一条渠道；不带 id 的「全部重探测」是手动动作，连停用渠道一起探（结果里带 `enabled:false` 便于区分）。
+> - 代价（诚实说明）：停用渠道的模型清单 / 状态 / 延迟会**停在上次手动探测时的那一刻**，不再自动刷新。
 
 ## 前端代码文档
 
@@ -155,7 +165,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 62 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染）
+node test/console-state.test.js           # 74 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -173,6 +183,7 @@ node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
+node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -539,13 +550,13 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/admin/api/status`                 | GET  | admin       | 渠道详细状态（控制台用；含 `weight`/`weightedHits`/`weightedShare` 与自动权重观测 `autoWeight`、`autoH` 等字段） |
 | `/admin/api/usage`                  | GET  | admin       | 用量统计（总量 / 按模型 / 按渠道 / 按天 / 近 200 条 / 24h 分布） |
 | `/admin/api/usage/clear`            | POST | admin       | 清零用量统计                          |
-| `/admin/api/recheck`                | POST | admin       | 立即重探测（body 可传 `{id}`）        |
+| `/admin/api/recheck`                | POST | admin       | 立即重探测（body 可传 `{id}`）；**不带 id = 全部重探测，含停用渠道**（手动动作） |
 | `/admin/api/channel`                | POST | admin       | 改渠道（`{id, priority?, enabled?, weight?}`，立即生效并持久化） |
 | `/admin/api/channels`               | GET  | admin       | 渠道集合完整列表                      |
 | `/admin/api/channels`               | POST | admin       | 新增 / 覆盖渠道（upsert，落库并立即探测一次） |
 | `/admin/api/channels`               | DELETE | admin     | 删除渠道（body `{id}`）               |
 | `/admin/api/probe`                  | POST | admin       | 临时探测上游模型清单（不落库，控制台「获取模型」用） |
-| `/admin/api/test`                   | POST | admin       | 真发一次最小 chat 请求，返回首字延迟 / 总耗时 / 错误 |
+| `/admin/api/test`                   | POST | admin       | 真发一次最小 chat 请求，返回首字延迟 / 总耗时 / 错误；带 `channelId` 时**只打该渠道且不看 `enabled`**（停用渠道也能手动验证模型） |
 | `/admin/api/codex-import`           | POST | admin       | 导入 codex 凭据（完整 JSON 或裸 `rt.1.` 开头 RT） |
 | `/admin/api/codex-quota`            | GET  | admin       | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import`        | POST | admin       | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |

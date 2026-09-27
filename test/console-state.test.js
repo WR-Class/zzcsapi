@@ -409,9 +409,60 @@ function testAutoWeight() {
   }
 }
 
-/* ═══════ 5. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
+/* ═══════ 5. 停用渠道也要能手动测：测试弹窗不再把停用渠道整个跳过 ═══════
+   需求：「停用的渠道点击测试也可以测试我添加的模型」。整改前 openTestModels 里一句
+   `if(!c.on)continue;` 会让从停用渠道点「测试」弹出空列表、「运行测试」按钮直接是灰的。
+   这里在最小 DOM 桩里真跑那个函数，断言弹窗里到底列出了什么。 */
+function testDisabledTest() {
+  G('5. 停用渠道的手动测试（弹窗里必须列得出它自己的模型）');
+  const dom = makeDom();
+  const chAliasesSrc = (src.match(/const chAliases=[^\n]+/) || [])[0];
+  check('装配：从 build/app.js 现抠到 chAliases 的真实实现（不另写一份）', !!chAliasesSrc);
+  const D2 = {
+    channels: [
+      { id: 'live', name: '启用家', proto: 'openai', on: true, aliases: [{ alias: 'm-on', upstream: 'up-on' }] },
+      { id: 'stopped', name: '停用家', proto: 'openai', on: false, aliases: [{ alias: 'm-dis', upstream: 'up-dis' }] },
+    ],
+  };
+  const run = (opts) => {
+    let html = '';
+    const f = new Function('$', '$$', 'DATA', 'esc', 'svg', 'modal', 'closeModal',
+      chAliasesSrc + '\n' + extract('openTestModels') + '\nreturn { openTestModels };');
+    f(dom.$, dom.$$, D2, esc, svg, (h) => { html = h; }, () => { }).openTestModels(opts);
+    return html;
+  };
+
+  const onlyDis = run({ channelId: 'stopped' });
+  check('★ 指定停用渠道：列得出它的模型（整改前这里是空列表）', onlyDis.includes('m-dis'));
+  check('★ 而且只列这一条渠道（不会把别的渠道混进来）', !onlyDis.includes('m-on'));
+  check('★ 明确标出「已停用」，不让人误以为它在参与调度', onlyDis.includes('已停用'));
+  check('★ 并说明测通也不会启用它、且不参与自动探测', onlyDis.includes('停用渠道不参与自动探测'));
+  check('运行测试按钮不再是灰的（有模型可勾）', /id="testRun"[^>]*>/.test(onlyDis) && !/id="testRun"[^>]*disabled/.test(onlyDis));
+
+  const onlyOn = run({ channelId: 'live' });
+  check('对照：指定启用渠道行为没变（只列它自己、且没有「已停用」标记）',
+    onlyOn.includes('m-on') && !onlyOn.includes('m-dis') && !onlyOn.includes('已停用'));
+
+  const all = run({});
+  check('全局「测试模型」也带上停用渠道的模型（手动测试本来就该能测到全部）',
+    all.includes('m-on') && all.includes('m-dis'));
+  check('★ 但启用渠道排在前面（先看能用的，停用的垫底）', all.indexOf('m-on') < all.indexOf('m-dis'));
+  check('全局模式也有"其中 N 个来自已停用渠道"的提示', all.includes('来自<b>已停用</b>渠道'));
+
+  /* 结构守卫：runTests 必须逐条带 channelId —— 否则停用渠道的模型会被当成"完整调度"去路由，
+     拿回 404 no channel（这正是"测不了"的另一种翻车方式） */
+  check('★ runTests 每条都带 channelId（指定渠道测试，不走调度）', extract('runTests').includes('channelId:p.chan'));
+
+  /* 对照组：按整改前"跳过停用"的写法，停用渠道列得出 0 个模型 → 本用例具备捕捉能力 */
+  const legacy = D2.channels.filter(c => c.id === 'stopped').filter(c => c.on)
+    .map(c => ({ c, items: chAliasesStub(c).map(r => r.alias) })).filter(g => g.items.length);
+  check('对照组：旧写法（!c.on 就跳过）下停用渠道 0 个模型 → 测试抓得住这个 bug', legacy.length === 0);
+}
+function chAliasesStub(c) { return (c.aliases || []).map(r => ({ alias: r.alias, upstream: r.upstream })); }
+
+/* ═══════ 6. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
 function testControl() {
-  G('5. 对照组（用整改前的写法跑同样断言，必须失败）');
+  G('6. 对照组（用整改前的写法跑同样断言，必须失败）');
   const v = mkEl('viewport');
   v.innerHTML = '<div class="search"><input id="mQ" placeholder="搜索模型名…"></div>';   /* 整改前的模板 */
   const rendered = (v.innerHTML.match(/id="mQ"[^>]*value="([^"]*)"/) || [])[1];
@@ -421,7 +472,7 @@ function testControl() {
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
-   'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels'].forEach(extract);
+   'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels', 'openTestModels', 'runTests'].forEach(extract);
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"'].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
@@ -435,6 +486,7 @@ try {
   testPlayground();
   await testWeight();
   testAutoWeight();
+  testDisabledTest();
   testControl();
 
   console.log('\n' + '─'.repeat(58));
