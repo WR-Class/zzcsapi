@@ -2520,14 +2520,17 @@ function openTestModels(opts){
   opts=opts||{};
   const chId=opts.channelId||null, only=opts.only||null;
   const groups=[];
-  for(const c of DATA.channels){
-    if(chId&&c.id!==chId)continue;
-    if(!c.on)continue;
+  /* 停用渠道**也要能测**：停用只是"不参与调度、不自动探测"，不代表不能手动打一发看看模型还活着不。
+     所以这里不再 `if(!c.on)continue`，而是把停用的排到后面并打上「已停用」标签。
+     （测试报文一律带 channelId，上游只会打这一条渠道，不会因为停用渠道入列就改真实分流。） */
+  const list=DATA.channels.filter(c=>!chId||c.id===chId).sort((a,b)=>(b.on?1:0)-(a.on?1:0));
+  for(const c of list){
     let items=chAliases(c).map(r=>r.alias);
     if(only)items=items.filter(a=>a===only);
     if(items.length)groups.push({c,items});
   }
   const total=groups.reduce((s,g)=>s+g.items.length,0);
+  const offN=groups.filter(g=>!g.c.on).reduce((s,g)=>s+g.items.length,0);
   modal(`
     <div class="m-hd">
       <span class="m-ico">${svg('test',14)}</span>
@@ -2540,8 +2543,9 @@ function openTestModels(opts){
         <span class="status-line wait" id="testSummary">${total} 个模型</span>
         <label class="toggle ml-auto"><input type="checkbox" id="testAll" checked> 全选</label>
       </div>
+      ${offN?`<div class="model-empty" style="margin-bottom:8px">其中 ${offN} 个来自<b>已停用</b>渠道：手动测试照打，测通也不会因此启用它，且停用渠道不参与自动探测。</div>`:''}
       <div class="test-list" id="testList">${total
-        ? groups.map(g=>`<div class="g">${esc(g.c.name||g.c.id)}<span class="n">${g.items.length} 个</span></div>`+
+        ? groups.map(g=>`<div class="g">${esc(g.c.name||g.c.id)}${g.c.on?'':'<span class="tag">已停用</span>'}<span class="n">${g.items.length} 个</span></div>`+
             g.items.map(a=>`<label><input type="checkbox" data-m="${esc(a)}" data-c="${esc(g.c.id)}" checked><span>${esc(a)}</span></label>`).join('')
           ).join('')
         : '<div class="model-empty">暂无可测试模型 — 先在渠道里配置别名</div>'}</div>

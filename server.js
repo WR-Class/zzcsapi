@@ -874,7 +874,14 @@ async function probeDef(def, timeoutMs) {
   }
 }
 
-async function probeAll() { await Promise.all(Array.from(channels.values()).map((ch) => probeChannel(ch))); }
+// 健康探测的目标集合。
+// ★ 自动探测（启动时 + 定时器）**跳过停用渠道**：停用就是"别碰它"——不该继续消耗它的配额，
+//   也不该让探测失败把它的状态越推越糟。手动动作不受此限（见下面两处调用）。
+async function probeAll(opts = {}) {
+  const includeDisabled = opts.includeDisabled === true;
+  const targets = Array.from(channels.values()).filter((ch) => includeDisabled || ch.def.enabled !== false);
+  await Promise.all(targets.map((ch) => probeChannel(ch)));
+}
 
 if (HEALTH.intervalSec > 0) {
   probeAll().catch(() => {});
@@ -2570,15 +2577,17 @@ async function handleAdminApi(req, res, url) {
       });
     }
     // 全部：先记下探测前状态，然后逐个探测后产出摘要
+    // 「全部重探测」是**手动**动作 → 连停用渠道一起探（自动探测才会跳过停用的）。
     const before = new Map();
     for (const ch of channels.values()) before.set(ch.def.id, ch.status);
-    await probeAll();
+    await probeAll({ includeDisabled: true });
     const results = Array.from(channels.values()).map((ch) => ({
       id: ch.def.id,
       status: ch.status,
       before: before.get(ch.def.id) || 'unknown',
       latencyMs: ch.latencyMs,
       modelCount: ch.models.length,
+      enabled: ch.def.enabled !== false,
       error: ch.lastError,
     }));
     const summary = { ok: results.filter((r) => r.status === 'ok' || r.status === 'degraded').length, fail: results.filter((r) => r.status === 'down').length, total: results.length };
