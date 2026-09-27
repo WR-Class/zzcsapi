@@ -59,10 +59,11 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 
 > **换算捷径**（构建是纯拼接，偏移恒定，改完源文件后可用它自查文档里的 `console.html` 行号）：
 > - `console.html` 的 CSS 行号 = `console-redesign.html` 行号 **+13**
-> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+617**
+> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+666**
 >
-> 偏移只受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（8 行）增删行影响
-> （head/shell 已由 build.js 构建期行数守卫把住，extra.css 改动仍需人工重算偏移并同步此处）。
+> 偏移只受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（57 行）/ 设计稿 `<style>` 行数增删影响
+> （head/shell 已由 build.js 构建期行数守卫把住；**extra.css 与设计稿 CSS 一旦增删行，JS 偏移必须人工重算**，并同步此处、`build/build.js` 注释与 `docs/frontend-code-map.md` §行号换算）。
+> `extra.css` 在拼接序里位于 `app.js` 之前，所以它每增删 1 行，JS 偏移整体 ±1（CSS 偏移不动）——改它的注释前先想清楚要不要多这一行。
 
 若偏移量是整体平移，可以按差值批量修正；若只是局部插入，务必逐个核对，不要凭估算改数字。
 

@@ -153,7 +153,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 57 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测卡渲染）
+node test/console-state.test.js           # 62 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -389,7 +389,8 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
   当前手工份额对照 `nowShare`、以及**判断依据**（`failRate` / `samples` / `latMs` / `speedRatio`）；
   `excluded[]` 是冷却或 down 而没参与分份额的候选；`manualOff` 表示当前压根没开加权轮询。
 - 每个渠道新增 `autoH` / `autoFailRate` / `autoSamples` / `autoLatMs` / `autoSpeedRatio`。
-- **控制台**：渠道页顶部有「自动权重 · 观测」卡，按模型列出预测份额（含"当前 x%"对照与被打折的原因）；
+- **控制台**：**「资源 → 自动权重」独立页**（v1.9 起从渠道页迁出）有份额预测卡，按模型列出预测份额
+  （每个候选一列，列宽即份额，色带段下方直接挂渠道名与百分比；含"当前 x%"对照与被打折的原因）；
   渠道详情抽屉里有「自动权重（观测 · 只算不生效）」一节，把健康系数、样本数、失败率、延迟摊开。
   单候选模型不进卡（一个提供方谈不上分流，显示了只会是"100%"噪音）。
 

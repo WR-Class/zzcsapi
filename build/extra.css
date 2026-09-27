@@ -6,3 +6,52 @@
 
 /* 渠道抽屉里的密钥行需要能换行 */
 .kv dd.mono{font-family:var(--f-mono)}
+
+/* ── 自动权重页 .aw-*（v1.9 重做：份额带与标签同列） ──────────────────────────────
+   独立页（资源 → 自动权重），生产独有组件（设计稿不含）。
+   这一版只算不生效，所以刻意压低视觉权重：不抢强调色、不用大字、不做动效强调，
+   避免被误读成「已经在分流」——页面用一句 .aw-note 自证，不靠用户猜。
+   健康度沿用全站三档 ok/warn/err（≥0.9 / ≥0.6 / 其余），色值全部走令牌。 */
+.aw-card{margin-bottom:14px}
+/* 说明 + 旋钮合成一条 meta 带：先解释"这是什么"，再列参数，不与模型数据抢层级 */
+.aw-meta{padding:11px 16px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+.aw-note{font-size:12px;line-height:1.6;color:var(--tx-2);margin-bottom:9px}
+.aw-note b{color:var(--tx);font-weight:600}
+.aw-knobs{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.aw-knobs .lbl{
+  font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--tx-3);margin-right:2px;
+}
+/* 模型块：块间一条淡分隔线，块内靠留白分组 */
+.aw-model{padding:14px 16px;border-top:1px solid color-mix(in srgb,var(--line) 62%,transparent)}
+/* 紧跟 meta 带的第一个块不再画上分隔线，否则与 meta 的下边线叠成双线 */
+.aw-meta+.aw-model{border-top:0}
+.aw-m-hd{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 9px;margin-bottom:11px}
+.aw-m-name{font-family:var(--f-mono);font-size:12.5px;font-weight:600;color:var(--tx)}
+.aw-m-meta{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+/* 状态类标签（未开加权轮询 / 已排除）统一靠右，与模型名拉开 */
+.aw-m-hd .tag{margin-left:auto}
+.aw-m-hd .tag+.tag{margin-left:0}
+.tag.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 32%,transparent);background:var(--warn-soft)}
+/* 份额：一个候选一列，列宽 = 它的份额，列内上方是色带段、下方直接挂渠道名与百分比。
+   这样"这一段是谁的"不用去别处找——标签就贴在自己那一段的正下方。
+   旧版是"一条堆叠带 + 一个 auto-fit 两列网格图例"：网格左→右、换行再左→右，与色带的
+   单向排列对不上；且真机上绝大多数候选健康系数 =1（色块全是同一个绿），色块本身也区分
+   不出来 —— 用户报的"错位"就是这么来的。
+   列宽用 flex-grow 按份额分配（basis:0）：间隙由布局先让出，余量再按份额分，各列宽度
+   仍严格成比例；列内文字超宽就截断（title 里有全量信息），不会把比例撑歪。 */
+.aw-split{display:flex;align-items:flex-start;gap:8px}
+.aw-col{flex-grow:var(--w);flex-shrink:0;flex-basis:0;min-width:0;transition:flex-grow .7s var(--ease)}
+.aw-seg{display:block;height:11px;border-radius:3px;background:var(--c)}
+.aw-cap{display:flex;align-items:baseline;gap:5px;min-width:0;margin-top:7px;overflow:hidden}
+.aw-nm{font-size:12px;color:var(--tx-2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aw-nm .k{
+  font-family:var(--f-mono);font-size:10px;color:var(--tx-2);
+  border:1px solid var(--line);border-radius:3px;padding:0 4px;margin-left:5px;
+}
+/* 百分比是这一列的主数值，任何列宽下都要完整可见（截断留给渠道名） */
+.aw-sh{flex:0 0 auto;font-family:var(--f-mono);font-size:12.5px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+/* 副行只在"有话说"时出现（健康系数 <1 / 有手工权重对照），健康的候选不写"健康 1.00"这种噪音 */
+.aw-sub{margin-top:2px;font-family:var(--f-mono);font-size:10px;color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 份额为 0 的候选列宽就是 0，画在列里等于看不见，单独一行交代它为什么没分到 */
+.aw-zero{margin-top:8px;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
