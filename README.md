@@ -186,6 +186,7 @@ node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
+node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）
 node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 ```
@@ -271,7 +272,7 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 | `notion`       | `POST getSpaces`          | `Cookie: token_v2=...` | 逆向 Notion AI（需 token_v2 Cookie） | 逆向 Notion AI（需 token_v2 Cookie） |
 | `notion-agent` | `POST /v1/agents/query`  | `Authorization: Bearer ntn_...` | Notion 官方 Agent API（公开 beta） | Notion 官方 Agent API（公开 beta） |
 | `arena`        | —                        | —                    | **已撤**：Arena.ai 逆向已整体移除（见 docs/arena-protocol.md 留档）  | **已撤**：Arena.ai 逆向已整体移除（见 docs/arena-protocol.md 留档）  |
-| `workbuddy`    | 自检 `chat/completions`   | `Authorization: Bearer ...` | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET） | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET） |
+| `workbuddy`    | 自检 `chat/completions`   | `Authorization: Bearer ...` | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET；token 是 JWT，新版 CodeBuddy 已把它加密，见下） | WorkBuddy 逆向（同上） |
 | `codex`        | 一次令牌刷新             | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） |
 | `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期；**工具调用靠文本仿真**，上游会忽略原生 `tools`） | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
 
@@ -319,6 +320,26 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 - **模型行**：alias 填对外模型名（如 `gpt-6-astra`），上游填**智能体名称**（如 `Magnificent Pioneer`）；一个智能体锁定一个模型，多个模型就建多个代理
 - 会话中智能体的确认门（requires_action）自动批准（最多 5 次）
 - 每次对话消耗工作区 AI credits，因此 notion-agent 渠道排在调度兜底链**最后**，仅当 openai/notion 渠道都失败时才启用
+
+#### workbuddy（WorkBuddy 逆向，CodeBuddy 桌面端）
+
+把 CodeBuddy/WorkBuddy 桌面端登录后的 Bearer JWT 当渠道用（`deepseek-v4.1-flash` 这类免费模型）。
+
+- **Base URL**：`https://www.workbuddy.ai/v2`；**API Key**：`auth.accessToken` 的 **JWT**（`ey` 开头、三段点分；**别填 refreshToken**）
+- **必须走 curl 子进程**：该上游对 Node/undici 的 TLS 指纹直接 `ECONNRESET`（Win Schannel / Linux OpenSSL 可过）
+- **探活**：`/v2` 没有 `/models`（404），探测 = 一次真实轻量聊天（`max_tokens:1`，读到第一个 SSE 分片即判活）——所以成功探测本身就是"真凭实据"，可满血
+- ⚠️ **auth 文件里的 token 已被加密（v1.14.1 起明确提示）**：新版 CodeBuddy 存的是
+  `{"$wbEncrypted":1,"envelope":{"suite":1,"keyId":…,"nonce":…,"authTag":…,"ciphertext":…}}` —— **AES-GCM 密文，不是 JWT**，
+  复制粘贴一定失败。网关会**在发请求前**就拦下并说明原因（不浪费一次往返、也不误记一次失败）。
+  需要明文 JWT 时只能从客户端**实际请求**里取一份（`Authorization: Bearer eyJ…`）。
+- ⚠️ **额度/频率用尽（HTTP 429 `code:6004`）不是渠道故障**：上游文案里直接写了重置时刻
+  （`… your usage will reset at 2026-09-28 10:00:39 UTC+8 …`）。网关会：
+  1. 按 `rate_limit` 记账（不把渠道冤枉成 `down`），并把 **冷却期精确对齐到那个重置时刻**
+     （而不是按曲线猜个 1 小时——那会在额度早已回血后继续空等，或提早去撞墙）；
+  2. 探测/测试的错误信息**原样带出上游文案**——早期版本会把它吞成一句
+     `✗ workbuddy: non-SSE response`（JSON 判定漏了 `trim`，响应体以换行开头就误判），这正是"看不出为什么"的元凶；
+  3. 上游说"可以换别的模型"：多配几个别名（`models` 里多写几条）就能在某个模型被限时切到另一个。
+- 上游返回 HTML（CF 挑战页/代理错误页）时，错误信息会带上 **HTTP 码 + 响应开头**，不再是不可解释的 `non-SSE response`
 
 #### genspark（Genspark 网页会话反代）
 
@@ -399,6 +420,15 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
   要一次**真实对话**成功才会彻底清零、恢复 `ok`。唯一的例外是 workbuddy：它的探测本身就是一次真实对话，
   成功即真凭实据，直接满血。
 - `Retry-After` 目前只在**主路径**（OpenAI 兼容出站）会读到并采纳；curl 回退路径拿不到响应头，按曲线退避。
+- **上游自己说了什么时候恢复就照它说**（v1.14.1）：WorkBuddy 额度用尽时文案里带
+  `… reset at 2026-09-28 10:00:39 UTC+8`，网关把这个时刻解析成 `retryAfterMs`，冷却就精确停在那一刻
+  （`rate_limit` 类，仍受上表封顶约束）。猜一个 1 小时会在额度早已回血后继续空等，反向的误差则是一直去撞墙。
+- **全部候选都在冷却时的 503 会说明原因**（v1.14.1）：不再只回一句 `all channels in cooldown`，
+  而是附上每个候选的 `channelId`、`recoverIn`（还有多久恢复）与 `reason`（最后一条失败原文），
+  例如「最近一家 workbuddy 约 2 小时 0 分后恢复：usage exceeds frequency limit …」。查"为什么今天用不了"时不用再翻日志。
+- **被冷却跳过的候选也带原因**（v1.14.1）：混合场景（另一家真被试过、这家在冷却）走的是 502 那一支，
+  其 `attempts[]` 里冷却项同样给出「还有多久 + 最后一条失败原文」与 `recoverInMs`，而不是一句光秃秃的
+  `in cooldown`——因为"几小时额度恢复"和"刚抖了一下几秒后就好"是完全不同的处置。
 - **观察期（`probation`）**：探测半愈合过的渠道会带这个标记——它排在健康渠道之后、
   不进加权轮询的池子、`/admin/api/status` 每个渠道都返回该字段（控制台/脚本可判读）。一次**真实对话**成功即清除。
 - 调参（写在 `config.json`，缺省即上表）：
