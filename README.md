@@ -159,6 +159,8 @@ node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
 node test/anthropic-tools-e2e.test.js     # 30 项断言：两轮工具回合（要工具 → 回传结果）真 HTTP 链路
 node test/streaming-e2e.test.js           # 19 项断言：三协议流式（首块不丢字节 / 事件序列 / 收尾兜底）
+node test/weighted-rr.test.js             # 31 项断言：加权轮询算法（3:1→75/25、平滑性、老配置零影响对照）
+node test/weighted-rr-e2e.test.js         # 12 项断言：真 HTTP 数落点，验证实际分流比例与降级行为
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -191,7 +193,8 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
       "baseUrl": "https://api.example-a.com/v1",
       "apiKey": "sk-xxx",
       "protocol": "openai",                  // openai | anthropic | gemini
-      "priority": 10,
+      "priority": 10,                        // 顺序：谁先试、谁兜底
+      "weight": 3,                           // 分流：同模型候选里按比例轮询（不填/0 = 不参与，见「加权轮询」）
       "enabled": true,
       "proxy": "http://host.docker.internal:7897",  // 可选：HTTP 代理（见下方说明），留空/删掉 = 直连
       "models": {                            // alias -> upstream
@@ -276,8 +279,33 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias
 2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
 3. 排序：冷却中 → 末位；`down` → 倒数；同状态按**有效优先级**降序，再看 latency
-4. **含图请求**先按「图片能力门」裁剪候选（见下）；纯文本请求不受影响
-5. 依次尝试直到成功；全部失败返回 502 + 错误详情
+4. **加权轮询**：填了 `weight` 的渠道按权重比例决定"谁排第一"（见下）
+5. **含图请求**先按「图片能力门」裁剪候选（见下）；纯文本请求不受影响
+6. 依次尝试直到成功；全部失败返回 502 + 错误详情
+
+### 加权轮询（`weight`，真正的按比例分流）
+
+`priority` 与 `weight` 分工不同，别混：
+
+| 字段 | 管什么 | 语义 |
+| --- | --- | --- |
+| `priority` / `effPriority` | **顺序** | 谁先试、谁兜底（排序语义） |
+| `weight` | **分流** | 同一模型候选里按权重比例决定谁排第一（分流语义） |
+
+- **只有明确填了正数 `weight` 的渠道参与轮询**；不填（缺省 `0`）时行为与从前**完全一致**，老配置零影响。
+  `weight: 0` 与不填等价（只做兜底，不参与分流）。
+- 参与轮询的渠道来自**同一 (模型, 协议) 的候选集**，按权重比例分流：两个渠道 `3:1` ⇒ 长期 ≈ 75% / 25%。
+- 算法是**平滑加权轮询**（nginx upstream 同款 smooth WRR，无随机数）：长期比例精确等于权重比，
+  且**不会突发扎堆**（纯加权随机会连着命中同一个渠道）。
+- 轮询只决定**谁是第一位**；其余候选保持原有「健康度 → 有效优先级 → 延迟」顺序作**兜底链**
+  （如果轮到的那家正好挂了，下一个还是按老规矩顶上来）。图片生成候选（`/v1/images/generations`）同一套规则。
+- 冷却中 / `status=down` / `weight=0` 的渠道**不进池**，其份额自动分给健康成员；
+  它恢复后也不会"补发欠账"（不出现报复性突发）。
+- 状态是内存态（重启清零，无副作用）。改权重两种方式：
+  · 直接改 `config.json` 的 `"weight": 3` 后重启；
+  · `POST /admin/api/channel` 带 `{id, weight}` ⇒ **立即生效并持久化，无需重启**。
+- 可观测：`/admin/api/status` 每个渠道返回 `weight`（配置值）、`weightedHits`（被选中次数）、
+  `weightedShare`（占全部加权轮询命中的百分比）。控制台表单**暂时没有**权重输入框（用上面的两种方式改）。
 
 ### 有效优先级（失败率自动降权）
 
@@ -317,7 +345,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai']      # server.js
 | `/admin/api/usage`                  | GET  | admin       | 用量统计（总量 / 按模型 / 按渠道 / 按天 / 近 200 条 / 24h 分布） |
 | `/admin/api/usage/clear`            | POST | admin       | 清零用量统计                          |
 | `/admin/api/recheck`                | POST | admin       | 立即重探测（body 可传 `{id}`）        |
-| `/admin/api/channel`                | POST | admin       | 改渠道（`{id, priority?, enabled?}`） |
+| `/admin/api/channel`                | POST | admin       | 改渠道（`{id, priority?, enabled?, weight?}`，立即生效并持久化） |
 | `/admin/api/channels`               | GET  | admin       | 渠道集合完整列表                      |
 | `/admin/api/channels`               | POST | admin       | 新增 / 覆盖渠道（upsert，落库并立即探测一次） |
 | `/admin/api/channels`               | DELETE | admin     | 删除渠道（body `{id}`）               |
@@ -362,5 +390,5 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai']      # server.js
 
 ## 计划中
 
-- 真正的加权轮询（按权重比例分流，当前只是失败率降权 + priority 排序）
 - 原生 anthropic / gemini 协议渠道的**出站**（当前 `protocol` 只决定探活方式与对外路由，出站一律 OpenAI 格式）
+- 控制台渠道表单的**权重输入框**（后端已支持 `weight`，目前只能改 `config.json` 或调 `POST /admin/api/channel`）

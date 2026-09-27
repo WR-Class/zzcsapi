@@ -362,6 +362,56 @@ function suggestAliases(model, limit) {
   return scored.slice(0, limit || 3).map((x) => x.a);
 }
 
+// ─────────────────────── 真正的加权轮询（SWRR） ───────────────────────
+// 与「有效优先级」的分工，别混：
+//   · `priority` / `effPriority` 决定**候选链顺序**——谁先试、谁兜底（排序语义）；
+//   · `weight` 决定**同组内按比例分流**——真正的加权轮询（分流语义）。
+// 只有**明确填了正数 `weight`** 的渠道进轮询池；没填（缺省 0）时行为与从前逐字节一致，
+// 老配置零影响。填法：两个渠道 3:1 ⇒ 长期分流≈75%/25%。`weight: 0` 与不填等价（只做兜底）。
+//
+// 算法用平滑加权轮询（nginx upstream 的 smooth WRR，无随机数）：
+//   每轮 pool 内各成员 curr += weight，取 curr 最大者，选中者 curr -= sum(weight)。
+// 好处：长期比例精确等于权重比，且**不会突发扎堆**（加权随机会连着命中同一个）。
+// 状态是内存态（重启清零，无副作用）；渠道处于冷却/down 时不进池，
+// 份额自然分给健康成员 ✓，它恢复后 curr 不会被补上"欠账"（不会出现报复性突发）。
+const SWRR_CUR = new Map();  // channelId → 当前权值
+const SWRR_HITS = new Map(); // channelId → 被选中次数（可观测：/admin/api/status 的 weightedShare）
+let SWRR_TOTAL = 0;
+
+function pickWeighted(candidates) {
+  const now = Date.now();
+  const pool = candidates.filter((c) => Number(c.weight) > 0 && !(c.cooldownUntil > now) && c.status !== 'down');
+  if (!pool.length) return -1;
+  let total = 0;
+  for (const c of pool) {
+    const w = Number(c.weight);
+    total += w;
+    SWRR_CUR.set(c.channelId, (SWRR_CUR.get(c.channelId) || 0) + w);
+  }
+  let best = pool[0];
+  for (const c of pool) {
+    if ((SWRR_CUR.get(c.channelId) || 0) > (SWRR_CUR.get(best.channelId) || 0)) best = c;
+  }
+  SWRR_CUR.set(best.channelId, (SWRR_CUR.get(best.channelId) || 0) - total);
+  SWRR_HITS.set(best.channelId, (SWRR_HITS.get(best.channelId) || 0) + 1);
+  SWRR_TOTAL++;
+  return candidates.indexOf(best);
+}
+
+// 轮询选中者提到**候选链第一位**，其余保持原有（健康度→有效优先级→延迟）顺序作兜底链。
+// 没有任何渠道填 weight 时这里什么都不做 —— 这是"老配置零影响"的关键。
+function applyWeightedPick(list) {
+  const idx = pickWeighted(list);
+  if (idx > 0) list.unshift(list.splice(idx, 1)[0]);
+  return list;
+}
+
+function weightedStats() {
+  const out = {};
+  for (const [id, n] of SWRR_HITS) out[id] = { hits: n, share: SWRR_TOTAL ? Math.round((n / SWRR_TOTAL) * 1000) / 10 : 0 };
+  return { total: SWRR_TOTAL, channels: out };
+}
+
 function channelsServing(model, protocol) {
   const want = String(model || '').toLowerCase().trim();
   if (!want) return [];
@@ -379,6 +429,7 @@ function channelsServing(model, protocol) {
         channelId: ch.def.id,
         upstream: ch.aliasMap.get(want),
         priority: effPriority(ch),
+        weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -392,6 +443,7 @@ function channelsServing(model, protocol) {
         channelId: ch.def.id,
         upstream: want,
         priority: effPriority(ch) - 0.5,
+        weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -415,6 +467,7 @@ function channelsServing(model, protocol) {
         channelId: ch.def.id,
         upstream: want,
         priority: -1e9,
+        weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -434,7 +487,8 @@ function channelsServing(model, protocol) {
     const lb = b.latencyMs < 0 ? 1e9 : b.latencyMs;
     return la - lb;
   });
-  return out;
+  // ★ 加权轮询：只有填了 weight 的渠道才改变"谁是第一位"；没填则原样返回（老配置零影响）
+  return applyWeightedPick(out);
 }
 
 function aggregateModels(protocol) {
@@ -1326,6 +1380,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 function channelStatusAll() {
+  const wstats = weightedStats(); // 轮询命中统计（算一次，避免每个渠道重算）
   return {
     channels: Array.from(channels.values()).map((ch) => ({
       id: ch.def.id,
@@ -1335,6 +1390,9 @@ function channelStatusAll() {
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
       effectivePriority: effPriority(ch),
+      weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
+      weightedHits: wstats.channels[ch.def.id]?.hits || 0,
+      weightedShare: wstats.channels[ch.def.id]?.share || 0,
       rollFailRate: rollFailRate(ch),
       roll: ch.roll || undefined,
       enabled: ch.def.enabled !== false,
@@ -1380,6 +1438,8 @@ function persistConfig() {
       apiKey: ch.def.apiKey,
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
+      // 加权轮询权重：必须随配置持久化，否则控制台保存任一渠道都会把权重从 config.json 里抹掉
+      weight: ch.def.weight ?? undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -1547,6 +1607,11 @@ function validateChannelDef(def) {
   if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
   if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
+  // 加权轮询权重：必须是有限数字且 ≥ 0（0 = 不参与轮询；负数/NaN 会让分流比例失去意义）
+  if (def.weight !== undefined && def.weight !== null && def.weight !== '') {
+    const w = Number(def.weight);
+    if (!Number.isFinite(w) || w < 0) return 'weight must be a finite number >= 0 (0 = 不参与加权轮询)';
+  }
   return null;
 }
 
@@ -1652,10 +1717,16 @@ async function handleAdminApi(req, res, url) {
     const ch = channels.get(body.id);
     if (!ch) return sendJson(res, 404, { error: 'channel not found' });
     if (body.priority !== undefined) ch.def.priority = Number(body.priority);
+    // 加权轮询权重也走这条轻量路径：改完立即生效（无需重启），并持久化
+    if (body.weight !== undefined) {
+      const w = Number(body.weight);
+      if (!Number.isFinite(w) || w < 0) return sendJson(res, 400, { error: 'weight must be a finite number >= 0' });
+      ch.def.weight = w > 0 ? w : undefined;
+    }
     if (body.enabled !== undefined) ch.def.enabled = !!body.enabled;
     // 启停/优先级立即持久化：否则容器重启后状态丢失，"停用的渠道复活"
     persistConfig();
-    return sendJson(res, 200, { ok: true, id: body.id, priority: ch.def.priority, enabled: ch.def.enabled });
+    return sendJson(res, 200, { ok: true, id: body.id, priority: ch.def.priority, weight: ch.def.weight ?? 0, enabled: ch.def.enabled });
   }
 
   // 完整 CRUD：channels 集合
@@ -1667,6 +1738,7 @@ async function handleAdminApi(req, res, url) {
       apiKey: ch.def.apiKey,
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
+      weight: ch.def.weight ?? undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -1682,6 +1754,8 @@ async function handleAdminApi(req, res, url) {
     const body = await safeReadJson(req);
     const err = validateChannelDef(body);
     if (err) return sendJson(res, 400, { error: err });
+    // 已有的 weight 不能被"本次没传这个字段"抹掉（控制台表单暂未提供权重输入框）
+    const prevDef = channels.get(body.id)?.def;
     const def = {
       id: body.id,
       name: body.name || body.id,
@@ -1689,6 +1763,7 @@ async function handleAdminApi(req, res, url) {
       apiKey: body.apiKey,
       protocol: body.protocol || 'openai',
       priority: body.priority !== undefined ? Number(body.priority) : 0,
+      weight: body.weight !== undefined ? (Number(body.weight) > 0 ? Number(body.weight) : undefined) : (prevDef ? prevDef.weight : undefined),
       enabled: body.enabled !== false,
       autoAlias: body.autoAlias === true,
       models: body.models || {},
@@ -2184,6 +2259,8 @@ async function handleAdminApi(req, res, url) {
     if (!body || !body.id) return sendJson(res, 400, { error: 'missing id' });
     if (!channels.has(body.id)) return sendJson(res, 404, { error: 'channel not found' });
     channels.delete(body.id);
+    // 顺手清掉轮询状态：渠道删除后残留会让"同 id 重新加回来"继承旧的当前权值
+    SWRR_CUR.delete(body.id); SWRR_HITS.delete(body.id);
     persistConfig();
     return sendJson(res, 200, { ok: true, id: body.id });
   }
@@ -2340,6 +2417,7 @@ function imageCandidates(model) {
       consecutiveFail: ch.consecutiveFail,
       protocol: 'openai',
       kind: 'explicit',
+      weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
     });
   }
   out.sort((a, b) => {
@@ -2348,7 +2426,8 @@ function imageCandidates(model) {
     if (ha !== hb) return ha - hb;
     return b.priority - a.priority;
   });
-  return out;
+  // 图片生成候选与聊天候选共用同一套加权轮询（同一渠道的权重语义一致）
+  return applyWeightedPick(out);
 }
 
 async function handleImageRequest(req, res, url) {

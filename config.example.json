@@ -10,6 +10,7 @@
       "apiKey": "sk-xxxxxxxx",
       "protocol": "openai",
       "priority": 10,
+      "weight": 0,
       "enabled": true,
       "autoAlias": true,
       "proxy": "",
@@ -22,6 +23,7 @@
       "apiKey": "sk-ant-xxxx",
       "protocol": "anthropic",
       "priority": 10,
+      "weight": 0,
       "enabled": true,
       "autoAlias": true,
       "models": {}
@@ -33,6 +35,7 @@
       "apiKey": "AIza-xxxx",
       "protocol": "gemini",
       "priority": 10,
+      "weight": 0,
       "enabled": true,
       "autoAlias": true,
       "models": {}
