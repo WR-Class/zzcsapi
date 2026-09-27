@@ -53,6 +53,9 @@ function mkEl(id) {
       toggle(c) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); },
     },
     focus() {}, setSelectionRange() {}, scrollIntoView() {}, appendChild() {}, remove() {},
+    /* 测试结果行是 insertAdjacentHTML('beforeend', …) 追加的：桩里累加到 innerHTML，
+       这样测试才能对"到底渲染出了什么"做断言（真实浏览器由解析器完成） */
+    insertAdjacentHTML(pos, html) { this.innerHTML += html; },
     querySelector() { return null },
   };
 }
@@ -460,9 +463,89 @@ function testDisabledTest() {
 }
 function chAliasesStub(c) { return (c.aliases || []).map(r => ({ alias: r.alias, upstream: r.upstream })); }
 
-/* ═══════ 6. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
+/* ═══════ 6. 测试结果要看得懂：每行带模型名 + 明确的通过/空回复/失败 ═══════
+   用户反馈（原话）："我不知道哪个是成功的哪个是失败的。完全不知道测试的是哪个模型。"
+   旧渲染只写渠道名（一个渠道挂多个模型时等于没说测的是谁），且成功/失败只靠颜色区分，
+   而"HTTP 200 但回复为空"被当成成功（绿色）显示成一对空引号 —— 三种结果长得都差不多。 */
+async function testRunTests() {
+  G('6. 测试结果：模型名 + 三档明确结论（通过 / 空回复 / 失败）');
+
+  /* 6.1 判定真值表（纯函数） */
+  const verdict = new Function(extract('testRowVerdict') + '\nreturn testRowVerdict;')();
+  check('有回复 → 通过', verdict({ ok: true, reply: 'Hi' }) === 'ok');
+  check('前后空白也算有回复', verdict({ ok: true, reply: '  Hi  ' }) === 'ok');
+  check('★ 回复为空字符串 → 空回复（不是"通过"）', verdict({ ok: true, reply: '' }) === 'empty');
+  check('★ 只有空白 → 空回复', verdict({ ok: true, reply: '   ' }) === 'empty');
+  check('★ 根本没带 reply 字段 → 空回复', verdict({ ok: true }) === 'empty');
+  check('没通 → 失败', verdict({ ok: false, error: 'x' }) === 'fail');
+  check('HTTP 400 → 失败', verdict({ ok: false, status: 400 }) === 'fail');
+  check('上游没返回结果（null）→ 失败', verdict(null) === 'fail');
+  check('ok 缺失 → 失败（不把"不确定"当成功）', verdict({ reply: 'Hi' }) === 'fail');
+
+  /* 6.2 真跑 runTests（DOM 桩 + 桩 HTTP + 桩 document），看它到底渲染了什么 */
+  const dom = makeDom();
+  const D3 = {
+    channels: [
+      { id: 'huchan', name: '虎哥', proto: 'openai', on: true, aliases: [{ alias: '[free]kimi-k3', upstream: 'kimi-k3' }] },
+      { id: 'other', name: '别家', proto: 'openai', on: true, aliases: [{ alias: 'x', upstream: 'x' }] },
+    ],
+  };
+  const picks = [
+    { dataset: { m: '[free]kimi-k3', c: 'huchan' } },   /* 有回复 */
+    { dataset: { m: '[free]kimi-k3', c: 'huchan' } },   /* 空回复 */
+    { dataset: { m: '[free]kimi-k3', c: 'huchan' } },   /* HTTP 400 */
+  ];
+  const canned = [
+    { ok: true, reply: 'Hi there! How can I help you today?', latencyMs: 11300, promptTokens: 687, completionTokens: 49 },
+    { ok: true, reply: '', latencyMs: 9660, promptTokens: 636, completionTokens: 16 },
+    { ok: false, status: 400, error: 'The provider rejected the request. Check that the request is well-formed.', latencyMs: 15500 },
+  ];
+  let nth = 0;
+  const $$ = (sel) => (sel.indexOf('#testList') === 0 ? picks : []);
+  dom.$('#testPrompt').value = 'hi';
+  const out = dom.$('#testOut');
+  const runTests = new Function('$', '$$', 'DATA', 'esc', 'svg', 'fMs', 'api', 'toast', 'setStatus', 'loadAll', 'document',
+    extract('chName') + '\n' + extract('testRowVerdict') + '\n' + extract('runTests') + '\nreturn runTests;');
+  /* fMs 也是现抠的真实实现（用 nf 那种恒等桩会把 "11.3 s" 断言成 "11300"，是假通过/假失败的来源） */
+  const fMsSrc = (src.match(/const fMs=[^\n]+/) || [])[0];
+  check('装配：从 build/app.js 现抠到 fMs 的真实实现', /ms<1000/.test(fMsSrc));
+  const fMs = new Function(fMsSrc + '\nreturn fMs;')();
+  const summary = dom.$('#testSummary');
+  await runTests(dom.$, $$, D3, esc, svg, fMs, async () => ({ results: [canned[nth++]] }), toast,
+    (el, text) => { el.textContent = text; }, async () => { }, { createElement: () => mkEl('tmp') })();
+
+  const html = out.innerHTML;
+  check('渲出了 3 行结果', (html.match(/class="r /g) || []).length === 3);
+  check('★ 每一行都写了模型名（一个渠道挂多个模型时才认得出测的是谁）',
+    (html.match(/<b>\[free\]kimi-k3<\/b>/g) || []).length === 3);
+  check('★ 也写了渠道显示名（不是拿 id 让人猜）', (html.match(/虎哥/g) || []).length === 3 && !html.includes('@ huchan'));
+  check('★ 三档都有中文结论，不再只靠颜色', html.includes('通过') && html.includes('空回复') && html.includes('失败'));
+  check('★ 三档用三种样式（ok / wait / fail），空回复不再是绿色"成功"',
+    /class="r ok"/.test(html) && /class="r wait"/.test(html) && /class="r fail"/.test(html));
+  check('★ 空回复那行写清楚原因，而不是显示一对空引号',
+    /class="r wait"[\s\S]*?HTTP 200 但回复为空[\s\S]*?模型没说任何话/.test(html) && !html.includes('""'));
+  check('失败那行带 HTTP 状态码与上游错误原文',
+    /class="r fail"[\s\S]*?HTTP 400[\s\S]*?provider rejected the request/.test(html));
+  /* 抓整行来断言（回复在行尾的 .e 里、token 数在中间那格，跨格用顺序正则会假失败） */
+  const rowOf = (cls) => (html.match(new RegExp('<div class="r ' + cls + '">[\\s\\S]*?</div>')) || [''])[0];
+  const okRow = rowOf('ok');
+  check('成功那行带真实回复与 token 数',
+    okRow.includes('Hi there!') && okRow.includes('687+49 tok') && okRow.includes('11.3 s'));
+  check('★ 汇总分开算三档（不是笼统的 x/y 通过）',
+    /通过 1 · 空回复 1 · 失败 1（共 3 个/.test(summary.textContent));
+  check('旧写法（只写渠道名 <b>huchan</b>）已消失 → 本用例抓得住旧渲染',
+    !/<b>huchan<\/b>/.test(html));
+
+  /* 6.3 结构守卫：程序里的模型名与渠道名都必须经过 esc（渲染的是用户可控文本） */
+  const rt = extract('runTests');
+  check('模型名与渠道名都过 esc 再进 HTML', rt.includes('esc(p.model)') && rt.includes('esc(chName(p.chan))'));
+  check('★ 提示词里没有"空回复"时也不谎报（三档由 verdict 决定，不是拿 ok 一刀切）',
+    rt.includes('testRowVerdict(row)') && !/if\(row\.ok\)okN\+\+/.test(rt));
+}
+
+/* ═══════ 7. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
 function testControl() {
-  G('6. 对照组（用整改前的写法跑同样断言，必须失败）');
+  G('7. 对照组（用整改前的写法跑同样断言，必须失败）');
   const v = mkEl('viewport');
   v.innerHTML = '<div class="search"><input id="mQ" placeholder="搜索模型名…"></div>';   /* 整改前的模板 */
   const rendered = (v.innerHTML.match(/id="mQ"[^>]*value="([^"]*)"/) || [])[1];
@@ -472,7 +555,8 @@ function testControl() {
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
-   'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels', 'openTestModels', 'runTests'].forEach(extract);
+   'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels', 'openTestModels', 'runTests',
+   'chName', 'testRowVerdict'].forEach(extract);
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"'].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
@@ -487,6 +571,7 @@ try {
   await testWeight();
   testAutoWeight();
   testDisabledTest();
+  await testRunTests();
   testControl();
 
   console.log('\n' + '─'.repeat(58));
