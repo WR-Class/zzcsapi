@@ -226,7 +226,18 @@ const upstream = http.createServer((req, res) => {
       check('两个渠道都拿到了延迟数据（各至少 1 次成功请求）', a.latMs > 0 && b.latMs > 0, { a: a.latMs, b: b.latMs });
       check('★ 慢的那家速度比 > 1（/slow 拖了 250ms，实测得到）', b.speedRatio > 1.5, { b: b.speedRatio, a: a.speedRatio });
       check('★ 慢的被温和打折（h < 1），但没被打死（h ≥ 地板 0.2）', b.h < 1 && b.h >= 0.2, b.h);
-      check('快的那家 h 保持 1（基准）', a.h === 1, a.h);
+      /* ★ 基准的含义要写准（v1.9.3 起 perChannel 真正接线，这条随之收紧）：
+         §2 造出来的失败还留在 a 的滚动窗口里，而重试会让"每次尝试各记一次失败"——失败率因此可能
+         真的推过死区，a 的 h 就会被**失败项**扣到 1 以下（实测 0.875）。所以基准不能写成 "a.h === 1"，
+         而要写成蕴含式：h 掉了就必须能归因到失败项。这样"速度惩罚漏到快渠道上"照样会被抓住。 */
+      {
+        const knobs = (st.autoWeight || {}).knobs || {};
+        check('★ 快的那家的速度比 ≈ 1（延迟项只往慢的那边扣）',
+          Math.abs(a.speedRatio - 1) < 0.05, { a: a.speedRatio, b: b.speedRatio });
+        check('★ 快的那家 h 若没保持 1，只允许是失败项扣的（h < 1 ⇒ 失败率已过死区）',
+          a.h === 1 || a.failRate >= knobs.deadband,
+          { h: a.h, failRate: a.failRate, deadband: knobs.deadband, samples: a.samples });
+      }
       check('手工权重 1:1 时 nowShare 是 50 / 50（当前真实份额的对照）',
         JSON.stringify(e.candidates.map((c) => c.nowShare)) === '[50,50]', e.candidates.map((c) => c.nowShare));
     }
