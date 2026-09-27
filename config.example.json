@@ -2,6 +2,13 @@
   "port": 8787,
   "health": { "intervalSec": 300, "timeoutMs": 8000 },
   "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
+  "cooldown": {
+    "transientBaseMs": 5000,
+    "transientMaxMs": 600000,
+    "hardBaseMs": 300000,
+    "hardMaxMs": 21600000,
+    "rateLimitBaseMs": 60000
+  },
   "autoWeight": {
     "enabled": false,
     "minSamples": 10,

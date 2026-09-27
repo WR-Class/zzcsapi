@@ -257,6 +257,70 @@ const RETRIES = config.retries || { perChannel: 0, maxModelFallbacks: 99 };
 //   注意默认值：配置里没有这个键时是 **0**（不重试 = 与接线前的行为一致），要重试必须显式写 ≥1。
 const PER_CHANNEL_RETRIES = Math.max(0, Math.min(5, Math.floor(Number(RETRIES.perChannel) || 0)));
 
+// ★ 熔断冷却（v1.10 起分级；此前是"一条公式复制 11 份"）＝ 连续失败后把这个渠道从候选链上挪开的时长。
+//   两类真实世界的失败需要完全不同的耐心，混在一起用同一条 1s→60s 的曲线才是根本问题：
+//     · transient（瞬时）：超时 / 5xx / 网络抖动——下一分钟可能就好了，起步 5s、封顶 10 分钟；
+//     · credential（凭证/额度）：401 / 402 / 403、key 失效、余额耗尽——**一分钟内绝不可能自愈**，
+//       起步 5 分钟、封顶 6 小时，别拿真流量一次次去撞墙（旧代码里手写的 300s 特例就是这个意思）；
+//     · rate_limit（限流）：429——上游说了"别急"，起步 1 分钟；若它给了 Retry-After 就听它的（见主路径）。
+//   曲线都按"连续失败次数"指数增长、各自封顶；次数由 recordFailure 统一维护，成功路径清零。
+const COOLDOWN = (() => {
+  const c = (config && config.cooldown) || {};
+  const pick = (v, lo, hi, dflt) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) && n > 0 ? Math.max(lo, Math.min(hi, n)) : dflt;
+  };
+  return {
+    transientBaseMs: pick(c.transientBaseMs, 1000, 300_000, 5_000),
+    transientMaxMs: pick(c.transientMaxMs, 5_000, 86_400_000, 600_000),
+    hardBaseMs: pick(c.hardBaseMs, 10_000, 86_400_000, 300_000),
+    hardMaxMs: pick(c.hardMaxMs, 60_000, 604_800_000, 6 * 3600_000),
+    rateLimitBaseMs: pick(c.rateLimitBaseMs, 1000, 86_400_000, 60_000),
+  };
+})();
+
+// 从状态码（优先）或错误文案判断失败属于哪一类。文案兜底是为了那些拿不到状态码的路径
+// （原生客户端的异常、success:false 的 JSON 体）不至于全被当瞬时故障。
+function failureKindFromStatus(status, msg) {
+  const s = Number(status) || 0;
+  if (s === 401 || s === 402 || s === 403) return 'credential';
+  if (s === 429) return 'rate_limit';
+  if (!s) {
+    const t = String(msg || '');
+    if (/not\s*login|未登录|登录失效|unauthor|invalid[\s_-]?key|insufficient|credit|exhaust|余额|额度|quota|expired/i.test(t)) return 'credential';
+    if (/rate[\s_-]?limit|too many requests|限流|请求过于频繁/i.test(t)) return 'rate_limit';
+  }
+  return 'transient';
+}
+
+// Retry-After 解析（RFC 9110：秒数或 HTTP 日期两种写法）。拿不准就返回 undefined —— 让曲线说话。
+// 只在 429 那条路径用；上限由 cooldownMsFor 统一钳到 hardMaxMs，坏上游没法用一个大数字把我们钉住。
+function retryAfterMsFromHeaders(headers) {
+  try {
+    const raw = headers && typeof headers.get === 'function' ? headers.get('retry-after') : null;
+    if (!raw) return undefined;
+    const s = String(raw).trim();
+    if (/^\d+(\.\d+)?$/.test(s)) return Math.round(Number(s) * 1000);
+    const at = Date.parse(s);
+    if (!Number.isNaN(at)) return at - Date.now();
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+// 第 n 次连续失败该冷却多久（n = recordFailure 自增后的 consecutiveFail，所以 n≥1）。
+// 用 base * 2^(n-1)：第一次失败就是 base，读起来和配置一致（旧公式是 2^n，所以"第一次"是 2 秒，
+// 而 README 一直写成 1 秒——文档与实现对不上，也是这次收敛的动因之一）。
+function cooldownMsFor(ch, kind, retryAfterMs) {
+  const n = Math.max(1, Number(ch.consecutiveFail) || 1);
+  const cred = kind === 'credential', rate = kind === 'rate_limit';
+  const base = cred ? COOLDOWN.hardBaseMs : rate ? COOLDOWN.rateLimitBaseMs : COOLDOWN.transientBaseMs;
+  const max = cred ? COOLDOWN.hardMaxMs : COOLDOWN.transientMaxMs;
+  // Retry-After 是上游明确的意图，优先于我们的曲线；但仍不许超过硬上限（别被一个坏上游钉住一天）
+  const ra = Number(retryAfterMs);
+  if (Number.isFinite(ra) && ra > 0) return Math.min(COOLDOWN.hardMaxMs, Math.max(1000, ra));
+  return Math.min(max, base * Math.pow(2, n - 1));
+}
+
 // 首启密钥生成（见鉴权块注释的优先级链）。NOAUTH 开着就不生成——那是显式选择的零鉴权开发模式。
 // 独立写回 config.json（而非走 persistConfig）：persistConfig 依赖 channels 初始化顺序，且会重建对象。
 function resolveGeneratedKeys() {
@@ -389,7 +453,9 @@ let SWRR_TOTAL = 0;
 
 function pickWeighted(candidates) {
   const now = Date.now();
-  const pool = candidates.filter((c) => Number(c.weight) > 0 && !(c.cooldownUntil > now) && c.status !== 'down');
+  // 加权轮询的池子：只有填了权重的渠道进来抢"谁排第一"。probation（探测半愈合过）不进池——
+  // 它可以作为兜底被用到，但不该凭权重抢链首；否则"探测一成功就回链首"这个老毛病会从后门回来。
+  const pool = candidates.filter((c) => Number(c.weight) > 0 && !(c.cooldownUntil > now) && c.status !== 'down' && !c.probation);
   if (!pool.length) return -1;
   let total = 0;
   for (const c of pool) {
@@ -447,6 +513,7 @@ function channelsServing(model, protocol) {
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
         consecutiveFail: ch.consecutiveFail,
+        probation: !!ch.probation,
         protocol: chProto,
         kind: 'explicit',
       });
@@ -461,6 +528,7 @@ function channelsServing(model, protocol) {
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
         consecutiveFail: ch.consecutiveFail,
+        probation: !!ch.probation,
         protocol: chProto,
         kind: 'auto',
       });
@@ -485,6 +553,7 @@ function channelsServing(model, protocol) {
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
         consecutiveFail: ch.consecutiveFail,
+        probation: !!ch.probation,
         protocol: chProto,
         kind: 'blind',
       });
@@ -492,7 +561,11 @@ function channelsServing(model, protocol) {
     }
   }
   out.sort((a, b) => {
-    const healthy = (c) => (c.cooldownUntil > Date.now() ? 2 : c.status === 'down' ? 1 : 0);
+    // 分层：冷却中(3) → down(2) → probation(1：探测"半愈合"过、欠账还记着) → 健康(0)
+    // probation 自成一档，就是为了让"探测救回来但对话仍然可疑"的渠道排在健康渠道之后，不去抢链首。
+    // 注意别拿 status==='degraded' 当这个信号：那个状态另有含义（探测拉回了空模型列表），
+    // 混用会把"列表为空但别名可用"的渠道也误降级（weighted-rr/console-weight 的回归就是这么发现的）。
+    const healthy = (c) => (c.cooldownUntil > Date.now() ? 3 : c.status === 'down' ? 2 : c.probation ? 1 : 0);
     const ha = healthy(a), hb = healthy(b);
     if (ha !== hb) return ha - hb;
     if (a.priority !== b.priority) return b.priority - a.priority;
@@ -534,14 +607,9 @@ async function probeChannel(ch) {
       ch.models = agents.map((a) => a.name).filter(Boolean);
       ch.agentModels = agents;
       ch.latencyMs = Date.now() - t0;
-      ch.lastCheck = Date.now();
-      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
-      ch.status = agents.length > 0 ? 'ok' : 'degraded';
+      healAfterProbe(ch, agents.length > 0);
     } catch (err) {
-      ch.status = 'down';
-      ch.consecutiveFail++;
-      ch.lastError = 'notion-agent: ' + (err.message || err);
-      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+      recordFailure(ch, 'notion-agent: ' + (err.message || err));
     }
     return;
   }
@@ -558,14 +626,9 @@ async function probeChannel(ch) {
       } catch { /* 额度查询失败不影响健康状态 */ }
       ch.models = notion.notionListModels();
       ch.latencyMs = Date.now() - t0;
-      ch.lastCheck = Date.now();
-      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
-      ch.status = 'ok';
+      healAfterProbe(ch, true);
     } catch (err) {
-      ch.status = 'down';
-      ch.consecutiveFail++;
-      ch.lastError = 'notion: ' + (err.message || err);
-      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+      recordFailure(ch, 'notion: ' + (err.message || err));
     }
     return;
   }
@@ -578,14 +641,10 @@ async function probeChannel(ch) {
       // 无 /models 端点 → 模型列表直接用 def.models 的 upstream 值（用户配置的别名映射）
       ch.models = Object.values(ch.def.models || {}).filter(Boolean);
       ch.latencyMs = Date.now() - t0;
-      ch.lastCheck = Date.now();
-      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
-      ch.status = 'ok';
+      // 这一支里 workbuddy 的探测本身就是一次真实对话（真凭实据 → 可满血）；genspark 只是验登录态（半愈合）
+      healAfterProbe(ch, true, ch.def.protocol !== 'genspark');
     } catch (err) {
-      ch.status = 'down';
-      ch.consecutiveFail++;
-      ch.lastError = 'workbuddy: ' + (err.message || err);
-      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+      recordFailure(ch, 'workbuddy: ' + (err.message || err));
     }
     return;
   }
@@ -596,15 +655,10 @@ async function probeChannel(ch) {
       await codexEnsureToken(ch);
       ch.models = Object.values(ch.def.models || {}).filter(Boolean);
       ch.latencyMs = Date.now() - t0;
-      ch.lastCheck = Date.now();
-      ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
-      ch.status = 'ok';
+      healAfterProbe(ch, true);   // 令牌刷新只证明凭据活着，不证明对话能成 → 半愈合
     } catch (err) {
-      ch.status = 'down';
-      ch.consecutiveFail++;
-      ch.lastError = String(err.message || err);
-      // RT 失效是致命错误，拉长冷却避免反复打上游（每次失败上游日志都有记录）
-      ch.cooldownUntil = Date.now() + (err.fatal ? 300_000 : Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail)));
+      // RT 失效是致命错误：按凭证类退避（起步 5 分钟、封顶 6 小时），不再只给 300 秒
+      recordFailure(ch, String(err.message || err), err.fatal ? 'credential' : undefined);
     }
     return;
   }
@@ -646,29 +700,19 @@ async function probeChannel(ch) {
     }
     const ms = Date.now() - t0;
     if (!resp.ok) {
-      ch.status = 'down';
-      ch.consecutiveFail++;
-      ch.lastError = `probe ${resp.status}`;
-      ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+      recordFailure(ch, `probe ${resp.status}`, failureKindFromStatus(resp.status));
       return;
     }
     const text = await resp.text();
     const j = safeJson(text);
-    // ponytail: 探测成功即清零熔断计数（治愈回池）——坏渠道在滚动失败率攒满 5 样本前，每个探测周期最多再被真实流量撞 ~3 次，由有效优先级自动降权兜底
     const ids = extractModelIds(j, ch.def.protocol || 'openai');
     ch.models = ids;
     ch.latencyMs = ms;
-    ch.lastCheck = Date.now();
-    ch.consecutiveFail = 0;
-    ch.cooldownUntil = 0;
-    ch.lastError = null;
-    ch.status = ids.length > 0 ? 'ok' : 'degraded';
+    // 列表拉得回来 ≠ 对话能成 → 半愈合（见 healAfterProbe：欠账减半、状态 degraded、排在健康渠道之后）
+    healAfterProbe(ch, ids.length > 0);
   } catch (err) {
     clearTimeout(timer);
-    ch.status = 'down';
-    ch.consecutiveFail++;
-    ch.lastError = String(err && err.message || err);
-    ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+    recordFailure(ch, String(err && err.message || err));
   }
 }
 
@@ -1906,6 +1950,8 @@ function channelStatusAll() {
       latencyMs: ch.latencyMs,
       consecutiveFail: ch.consecutiveFail,
       cooldownUntil: ch.cooldownUntil,
+      // 观察期（探测"半愈合"过、还欠着失败的账）：排序排在健康渠道之后、不进加权池，控制台/回归都靠它判读
+      probation: !!ch.probation,
       lastError: ch.lastError,
       codexQuota: ch.codexQuota || undefined,
       aliases: Array.from(ch.aliasMap.entries()).map(([a, u]) => ({ alias: a, upstream: u })),
@@ -2638,7 +2684,7 @@ async function handleAdminApi(req, res, url) {
       persistConfig();
       const r = await gensparkIsLogin(target.def, 15000).catch(() => null);
       if (r && r.ok) {
-        target.consecutiveFail = 0; target.cooldownUntil = 0; target.lastError = null;
+        target.consecutiveFail = 0; target.probation = false; target.cooldownUntil = 0; target.lastError = null;
         target.status = 'ok'; target.lastCheck = Date.now();
         return sendJson(res, 200, { ok: true, existed: true, created, id: target.def.id, key, email: r.email, login: true });
       }
@@ -2717,13 +2763,12 @@ async function handleAdminApi(req, res, url) {
           const tmo = Math.min(90000, Number(body.timeoutMs) || 60000);
           const r = await notionAgent.quickChat(ch.def.baseUrl, ch.def.apiKey, c.upstream, prompt, fetch, tmo);
           if (r.ok) {
-            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = r.ms; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(r.text), ok: true, latencyMs: r.ms });
           } else {
-            ch.consecutiveFail++; ch.lastError = 'notion-agent: ' + String(r.error).slice(0, 150);
-            ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+            recordFailure(ch, 'notion-agent: ' + String(r.error).slice(0, 150));
           }
           results.push({
             channelId: c.channelId, ok: !!r.ok, status: r.status || 200, latencyMs: r.ms,
@@ -2767,7 +2812,7 @@ async function handleAdminApi(req, res, url) {
           const reply = contentText.trim() || finalText || '';
           const testOk = ok && !!reply && !streamErr;
           if (testOk) {
-            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({
@@ -2815,13 +2860,12 @@ async function handleAdminApi(req, res, url) {
           }
           const wbOk = !wbErr && !!reply.trim();
           if (wbOk) {
-            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
           } else {
-            ch.consecutiveFail++; ch.lastError = 'workbuddy: ' + String(wbErr || 'empty reply').slice(0, 150);
-            ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+            recordFailure(ch, 'workbuddy: ' + String(wbErr || 'empty reply').slice(0, 150));
           }
           results.push({ channelId: c.channelId, ok: wbOk, status: wbStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: wbOk ? undefined : (wbErr || 'empty reply') });
           continue;
@@ -2842,13 +2886,18 @@ async function handleAdminApi(req, res, url) {
           else reply = (parsed.finalContent || parsed.fullText || '').trim();
           const gsOk = !gsErr && !!reply && !parsed.placeholder;
           if (gsOk) {
-            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: parsed.usage ? parsed.usage.prompt_tokens : estimateTokens(prompt), outputTokens: parsed.usage ? parsed.usage.completion_tokens : estimateTokens(reply), ok: true, latencyMs: ttfb, realUsage: parsed.usage || null });
           } else {
-            ch.consecutiveFail++; ch.lastError = 'genspark: ' + String(gsErr || (parsed.placeholder ? '上游占位符回复' : 'empty reply')).slice(0, 150);
-            ch.cooldownUntil = Date.now() + (parsed.notLogin ? 300_000 : parsed.rateLimited ? 3600_000 : Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail)));
+            // 会话失效(notLogin)=凭证类 → 起步 5 分钟；限流(rateLimited) 上游明确说"别急" → 沿用一小时
+            recordFailure(
+              ch,
+              'genspark: ' + String(gsErr || (parsed.placeholder ? '上游占位符回复' : 'empty reply')).slice(0, 150),
+              parsed.notLogin ? 'credential' : parsed.rateLimited ? 'rate_limit' : undefined,
+              parsed.rateLimited ? { retryAfterMs: 3600_000 } : undefined,
+            );
           }
           results.push({ channelId: c.channelId, ok: gsOk, status: gsStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: gsOk ? undefined : (gsErr || 'empty reply') });
           continue;
@@ -2870,13 +2919,12 @@ async function handleAdminApi(req, res, url) {
           ttfb = Date.now() - t0;
           const cxOk = !cxErr && !!reply.trim();
           if (cxOk) {
-            ch.consecutiveFail = 0; ch.cooldownUntil = 0; ch.lastError = null;
+            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
           } else {
-            ch.consecutiveFail++; ch.lastError = 'codex: ' + String(cxErr || 'empty reply').slice(0, 150);
-            ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+            recordFailure(ch, 'codex: ' + String(cxErr || 'empty reply').slice(0, 150));
           }
           results.push({ channelId: c.channelId, ok: cxOk, status: cxStatus, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: cxOk ? undefined : (cxErr || 'empty reply') });
           continue;
@@ -2927,6 +2975,7 @@ async function handleAdminApi(req, res, url) {
         // 测试成功时清零 channel 失败计数并标 ok（与主调度一致）
         if (resp.ok) {
           ch.consecutiveFail = 0;
+          ch.probation = false;
           ch.cooldownUntil = 0;
           ch.lastError = null;
           if (ch.status !== 'ok') ch.status = 'ok';
@@ -3127,13 +3176,18 @@ function imageCandidates(model) {
       latencyMs: ch.latencyMs,
       cooldownUntil: ch.cooldownUntil,
       consecutiveFail: ch.consecutiveFail,
+      probation: !!ch.probation,
       protocol: 'openai',
       kind: 'explicit',
       weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
     });
   }
   out.sort((a, b) => {
-    const healthy = (c) => (c.cooldownUntil > Date.now() ? 2 : c.status === 'down' ? 1 : 0);
+    // 分层：冷却中(3) → down(2) → probation(1：探测"半愈合"过、欠账还记着) → 健康(0)
+    // probation 自成一档，就是为了让"探测救回来但对话仍然可疑"的渠道排在健康渠道之后，不去抢链首。
+    // 注意别拿 status==='degraded' 当这个信号：那个状态另有含义（探测拉回了空模型列表），
+    // 混用会把"列表为空但别名可用"的渠道也误降级（weighted-rr/console-weight 的回归就是这么发现的）。
+    const healthy = (c) => (c.cooldownUntil > Date.now() ? 3 : c.status === 'down' ? 2 : c.probation ? 1 : 0);
     const ha = healthy(a), hb = healthy(b);
     if (ha !== hb) return ha - hb;
     return b.priority - a.priority;
@@ -3480,7 +3534,10 @@ async function tryChannel(opts) {
 
   if (!resp.ok) {
     const text = usedFallback ? (respBody || '') : (await resp.text().catch(() => ''));
-    recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
+    // 429 时若上游给了 Retry-After，就照它说的等（比我们自己拍的曲线更准）；否则按状态码分级退避
+    recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`, failureKindFromStatus(resp.status), {
+      retryAfterMs: retryAfterMsFromHeaders(resp.headers),
+    });
     // 401/402/403/404/408/429 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底；
     // 其余 4xx（400 参数错等）**只在没有后续候选时**才原样透传 ——
     // 详见 shouldPassThrough4xx 的注释（渠道声明过期的模型 / 参数方言不同，换一家往往就能成）。
@@ -3498,6 +3555,7 @@ async function tryChannel(opts) {
 
   // 成功
   ch.consecutiveFail = 0;
+  ch.probation = false;
   ch.cooldownUntil = 0;
   ch.lastError = null;
   if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
@@ -3775,7 +3833,7 @@ async function tryWorkbuddyChannel(opts) {
   if (sseText.trim().startsWith('{') || (out.status && out.status >= 400)) {
     const j = safeJson(sseText);
     const msg = (j && (j.msg || (j.error && j.error.message))) || sseText.slice(0, 160);
-    recordFailure(ch, `workbuddy ${out.status}: ` + msg);
+    recordFailure(ch, `workbuddy ${out.status}: ` + msg, failureKindFromStatus(out.status));
     if (shouldPassThrough4xx(out.status, opts.hasMoreCandidates)) {
       res.writeHead(out.status, { 'Content-Type': 'application/json' });
       res.end(sseText);
@@ -3791,6 +3849,7 @@ async function tryWorkbuddyChannel(opts) {
 
   // 成功
   ch.consecutiveFail = 0;
+  ch.probation = false;
   ch.cooldownUntil = 0;
   ch.lastError = null;
   if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
@@ -3989,7 +4048,9 @@ async function tryGensparkChannel(opts) {
   if (out.status >= 400) {
     const j = safeJson(raw);
     const msg = (j && (j.message || (j.error && j.error.message))) || raw.slice(0, 160);
-    recordFailure(ch, `genspark HTTP ${out.status}: ${String(msg).slice(0, 160)}`);
+    recordFailure(ch, `genspark HTTP ${out.status}: ${String(msg).slice(0, 160)}`, failureKindFromStatus(out.status), {
+      retryAfterMs: retryAfterMsFromHeaders(out.headers),
+    });
     // 400/422 等请求错误：只在没有后续候选时才透传（见 shouldPassThrough4xx）；
     // 401/403 会话或出口问题、404 该渠道没有此内容 → 切下一候选
     if (shouldPassThrough4xx(out.status, opts.hasMoreCandidates)) {
@@ -3997,7 +4058,7 @@ async function tryGensparkChannel(opts) {
       res.end(raw);
       return 'fatal_client';
     }
-    if (out.status === 401 || out.status === 403) ch.cooldownUntil = Date.now() + 300_000; // 会话/出口问题长冷却，避免反复撞墙
+    // 401/403 会话或出口问题由 failureKindFromStatus 归为凭证类（起步 5 分钟），不再手工加 300 秒
     if (out.status >= 400 && out.status < 500) return 'channel_error';   // 4xx：切下家，同渠道不重试
     return `genspark ${out.status}: ${String(msg).slice(0, 120)}`;
   }
@@ -4011,13 +4072,12 @@ async function tryGensparkChannel(opts) {
     return 'genspark stream: ' + st.error;
   }
   if (st.notLogin) {
-    recordFailure(ch, 'genspark: session 失效（not login）');
-    ch.cooldownUntil = Date.now() + 300_000;
+    recordFailure(ch, 'genspark: session 失效（not login）', 'credential');   // 凭证类：起步 5 分钟
     return 'genspark: not login (session expired)';
   }
   if (st.rateLimited) {
-    recordFailure(ch, 'genspark: 限流（rate limit / too quickly / 积分已用完）');
-    ch.cooldownUntil = Date.now() + 3600_000;
+    // 上游明确限流 → 沿用一小时（retryAfterMs 优先于曲线，但受 hardMaxMs 硬上限约束）
+    recordFailure(ch, 'genspark: 限流（rate limit / too quickly / 积分已用完）', 'rate_limit', { retryAfterMs: 3600_000 });
     return 'genspark: rate limited (cooldown 1h)';
   }
   const replyText = (st.finalContent || st.fullText || '').trim();
@@ -4028,6 +4088,7 @@ async function tryGensparkChannel(opts) {
 
   // 成功
   ch.consecutiveFail = 0;
+  ch.probation = false;
   ch.cooldownUntil = 0;
   ch.lastError = null;
   if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
@@ -4313,7 +4374,7 @@ async function tryCodexChannel(opts) {
   try {
     call = await codexCallResponses(ch, candidate.upstream, body.messages, timeoutMs);
   } catch (err) {
-    recordFailure(ch, String(err.message || err));
+    recordFailure(ch, String(err.message || err), err.fatal ? 'credential' : undefined);
     if (err.fatal) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } }));
@@ -4322,7 +4383,7 @@ async function tryCodexChannel(opts) {
     return err.message || 'codex token error';
   }
   if (!call.ok) {
-    recordFailure(ch, 'codex ' + call.status + ': ' + call.error);
+    recordFailure(ch, 'codex ' + call.status + ': ' + call.error, failureKindFromStatus(call.status));
     if (call.raw && shouldPassThrough4xx(call.status, opts.hasMoreCandidates)) {
       res.writeHead(call.status, { 'Content-Type': 'application/json' });
       res.end(call.raw);
@@ -4343,6 +4404,7 @@ async function tryCodexChannel(opts) {
   }
 
   ch.consecutiveFail = 0;
+  ch.probation = false;
   ch.cooldownUntil = 0;
   ch.lastError = null;
   if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
@@ -4444,7 +4506,7 @@ async function tryNotionChannel(opts) {
       if (resp.ok) ndjsonText = await resp.text();
       else {
         const errText = await resp.text().catch(() => '');
-        recordFailure(ch, `notion HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+        recordFailure(ch, `notion HTTP ${resp.status}: ${errText.slice(0, 200)}`, failureKindFromStatus(resp.status));
         if (shouldPassThrough4xx(resp.status, opts.hasMoreCandidates)) {
           res.writeHead(resp.status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
@@ -4474,6 +4536,7 @@ async function tryNotionChannel(opts) {
 
   // 成功
   ch.consecutiveFail = 0;
+  ch.probation = false;
   ch.cooldownUntil = 0;
   ch.lastError = null;
   if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
@@ -4686,12 +4749,13 @@ async function tryNotionAgentChannel(opts) {
       return 'notion-agent credits exhausted (workspace_credits_exhausted)';
     }
     // 401 令牌失效 / 403 其他 / 404 智能体不存在 / 429 限频 → 渠道失败切兜底
-    recordFailure(ch, `notion-agent${turn.status ? ' HTTP ' + turn.status : ''}: ${String(turn.error || '').slice(0, 150)}`);
+    recordFailure(ch, `notion-agent${turn.status ? ' HTTP ' + turn.status : ''}: ${String(turn.error || '').slice(0, 150)}`, failureKindFromStatus(turn.status));
     return `notion-agent ${turn.status || ''}: ${String(turn.error || '').slice(0, 100)}`;
   }
 
   // 4) 成功：清失败状态
   ch.consecutiveFail = 0;
+  ch.probation = false;
   ch.cooldownUntil = 0;
   ch.lastError = null;
   if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
@@ -4759,15 +4823,50 @@ async function tryNotionAgentChannel(opts) {
   return 'success';
 }
 
-function recordFailure(ch, msg) {
+// 失败记账的唯一入口：连败计数 + 分级退避 + 状态降级 + 用量留痕。
+// kind 省略时从 status / 文案推断（见 failureKindFromStatus），拿不准一律当瞬时故障（宁可多给机会）。
+function recordFailure(ch, msg, kind, opts) {
+  const o = opts || {};
+  const k = kind || failureKindFromStatus(o.status, msg);
   ch.consecutiveFail++;
   ch.lastError = msg;
-  ch.cooldownUntil = Date.now() + Math.min(60_000, 1000 * Math.pow(2, ch.consecutiveFail));
+  ch.cooldownUntil = Date.now() + cooldownMsFor(ch, k, o.retryAfterMs);
   if (ch.consecutiveFail >= 3) ch.status = 'down';
   // 失败也进用量统计（ok:false），便于排查"哪个渠道在挂"
   try {
     recordUsage({ model: '—', channelId: ch.def.id, kind: 'error', inputTokens: 0, outputTokens: 0, ok: false, latencyMs: 0, note: String(msg).slice(0, 200) });
   } catch { /* ignore */ }
+}
+
+// ★ 探测成功 ≠ "这家的对话能用"：探测打的是 /models（或登录态、agents 列表），一个渠道完全可能
+//   列表拉得回来、真发对话却必失败（key 余额耗尽、上游下架了那个模型、参数方言不兼容）。
+//   所以探测只做**半愈合**，这是 v1.10 修掉的真正"恢复太快"的来源：
+//     · 失败计数**减半**而不是清零（欠账还记着，下次失败会更快退避回去）；
+//     · 冷却放开（让它有资格被再试，否则凭证类 6 小时冷却会把"用户已经换了 key"的渠道也钉住）；
+//     · 状态降成 degraded —— 排序上排在健康渠道**之后**（见 channelsServing 的 healthy() 分层），
+//       于是它不再抢链首，只作兜底；要一次**真实对话**成功才会彻底清零、恢复 ok。
+//   唯一的例外（第三个参数 realCompletion）：探测**本身就是一次真实对话**的渠道（workbuddy 的
+//   chat 探针），它成功就是真凭实据，可以满血——"探测"和"对话"在这条路径上是同一件事。
+function healAfterProbe(ch, ok, realCompletion) {
+  ch.lastCheck = Date.now();
+  ch.cooldownUntil = 0;
+  if (ok && realCompletion) {          // 真凭实据：彻底清零，恢复 ok
+    ch.consecutiveFail = 0;
+    ch.probation = false;
+    ch.lastError = null;
+    ch.status = 'ok';
+    return;
+  }
+  if (!ch.consecutiveFail) {           // 本来就没欠账：探测说了算（列表空则 degraded）
+    ch.status = ok ? 'ok' : 'degraded';
+    ch.probation = false;
+    if (ok) ch.lastError = null;
+    return;
+  }
+  ch.consecutiveFail = Math.max(1, Math.floor(ch.consecutiveFail / 2));
+  ch.status = ok ? 'degraded' : 'down';
+  ch.probation = !!ok;                 // 探测说"活着"但它还欠着账 → 进观察期（排健康渠道之后、不进权重池）
+  // lastError 保留：控制台上仍能看到上次为什么被罚，别让"半愈合"顺手把证据擦掉
 }
 
 // ─────────────────────────── 启动 ───────────────────────────
