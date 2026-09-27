@@ -227,7 +227,9 @@ function loadConfig() {
   }
   const raw = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
   const cfg = JSON.parse(raw);
-  if (!Array.isArray(cfg.channels) || cfg.channels.length === 0) {
+  // 空数组是**合法**配置：控制台把最后一个渠道删掉后 persistConfig 写回来的就是 `"channels": []`。
+  // 以前这里要求 length > 0，于是"删光渠道 → 重启 → 起不来"（配置错误信息还会误导成文件损坏）。
+  if (!Array.isArray(cfg.channels)) {
     throw new Error('config.json 缺少 channels 数组');
   }
   for (const ch of cfg.channels) {

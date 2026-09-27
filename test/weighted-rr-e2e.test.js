@@ -76,7 +76,15 @@ function makeUpstream(state) {
     env: { ...process.env, ZZCSAPI_CONFIG: cfgPath, ZZCSAPI_USAGE: path.join(TMP, 'usage.json'), GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' },
     stdio: 'ignore',
   });
-  const cleanup = () => {
+  /* 等子进程真正退出再走人：process.exit() 撞上还没关干净的 libuv 句柄，在 Windows 上会
+   以 0xC0000409 崩掉——断言全绿却返回失败退出码，把真回归藏在噪声里。 */
+const stopChild = (cp) => new Promise((res) => {
+  if (!cp || cp.exitCode !== null || cp.signalCode !== null) return res();
+  cp.once('exit', () => res());
+  try { cp.kill(); } catch { }
+  setTimeout(res, 1500);   // 兜底：杀不掉也别把测试挂死
+});
+const cleanup = () => {
     try { gw.kill(); } catch { }
     try { upA.close(); upB.close(); } catch { }
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { }
@@ -163,10 +171,10 @@ function makeUpstream(state) {
     fail++;
     console.log('  ✗ 运行异常: ' + (e && e.message));
   } finally {
-    cleanup();
+    await cleanup();
   }
 
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
-  process.exit(fail ? 1 : 0);
+  process.exitCode = fail ? 1 : 0;   // 不 process.exit()：见 stopChild 注释
 })();

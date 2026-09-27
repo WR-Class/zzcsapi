@@ -200,9 +200,93 @@ function testPlayground() {
   check('★ 重绘后模型选中项仍是 demo-model-b', v.innerHTML.includes('<option selected>demo-model-b</option>'));
 }
 
-/* ═══════ 3. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
+/* ═══════ 3. 渠道表单：权重（weight）能填、能存、能显示分流占比 ═══════ */
+/* 背景：weight 后端早就支持（v1.3 加权轮询），但控制台没有入口 —— 只能改 config.json。
+   这一节守住三件事：/admin/api/status 的三个字段真被 adapt() 接进 DATA、表格真显示占比、
+   表单真把 weight 发出去（并且负数在**前端**就被挡下，不去撞后端 400）。 */
+function testWeight() {
+  G('3. 渠道表单权重：adapt() 接字段 → 表格显示占比 → 保存带上 weight');
+
+  /* 3.1 adapt()：把 /admin/api/status 的 weight / weightedHits / weightedShare 接进 DATA.channels */
+  {
+    const dom = makeDom();
+    const RAW = {
+      channels: [
+        { id: 'w-on', name: '有权重', protocol: 'openai', enabled: true, status: 'ok', priority: 5, weight: 3, weightedHits: 12, weightedShare: 75, aliases: [] },
+        { id: 'w-off', name: '没权重', protocol: 'openai', enabled: true, status: 'ok', priority: 5, aliases: [] },
+      ],
+      usage: null,
+    };
+    /* adapt() 是**整体重赋值** DATA（不是就地改），所以要拿出参回读 */
+    const a = new Function('RAW', 'DATA', 'esc', 'svg', 'nf', '$',
+      'let CFG=null, loaded=false;\n' + extract('adapt') + '\nreturn { adapt, get DATA(){ return DATA } };'
+    )(RAW, { channels: [], models: [], meta: {} }, esc, svg, nf, dom.$);
+    a.adapt();
+    const holder = a.DATA;
+    const on = holder.channels.find((c) => c.id === 'w-on');
+    const off = holder.channels.find((c) => c.id === 'w-off');
+    check('★ status 的 weight / weightedHits / weightedShare 都被接进来',
+      on.w === 3 && on.wHits === 12 && on.wShare === 75);
+    check('没配权重的渠道 → w=0 / wHits=0 / wShare=0（不是 undefined，模板才能直接算）',
+      off.w === 0 && off.wHits === 0 && off.wShare === 0);
+  }
+
+  /* 3.2 drawChTable()：有权重显示「权重 · 占比」，没权重显示「—」（不显示假的 0%） */
+  {
+    const dom = makeDom();
+    const dl = [
+      { id: 'w-on', name: '有权重', proto: 'openai', on: true, status: 'ok', ms: 100, models: 1, pri: 5, eff: 5, fail: 0, req: 10, err: 0, w: 3, wHits: 12, wShare: 75 },
+      { id: 'w-off', name: '没权重', proto: 'openai', on: true, status: 'ok', ms: 100, models: 1, pri: 5, eff: 5, fail: 0, req: 10, err: 0, w: 0, wHits: 0, wShare: 0 },
+    ];
+    const protoLabel = { openai: 'OpenAI' }, stTxt = { ok: '正常' };
+    const fMs = (x) => x + 'ms', pct = (a, b) => Math.round((a / b) * 100);
+    const api = new Function('$', '$$', 'DATA', 'esc', 'svg', 'nf', 'protoLabel', 'stTxt', 'fMs', 'pct',
+      "let chTab='all', chQ='';\n" + extract('drawChTable') + '\nreturn { drawChTable };'
+    )(dom.$, dom.$$, { channels: dl }, esc, svg, nf, protoLabel, stTxt, fMs, pct);
+    api.drawChTable();
+    const html = dom.$('#chTable').innerHTML;
+    check('表头有「权重 / 分流」列', html.includes('权重 / 分流'));
+    check('★ 权重 3 的渠道显示权重 3 与占比 75%', html.includes('>3<span') && html.includes('· 75%'));
+    check('★ 权重 0 的渠道显示「—」，而不是 0%（0% 会被误读成"从没分到流量"）',
+      html.includes('未参与加权轮询（权重 0）') && html.includes('>—</span>'));
+  }
+
+  /* 3.3 saveChannel()：填了权重就发出去；负数/非数字在前端就挡下（不发请求） */
+  {
+    const run = (weightVal) => {
+      const dom = makeDom();
+      const sent = [], toasts = [];
+      const apiStub = async (p, opt) => { sent.push({ p, body: JSON.parse(opt.body) }); return { existed: false }; };
+      const f = new Function('$', '$$', 'DATA', 'esc', 'svg', 'nf', 'toast', 'api', 'closeModal', 'loadAll',
+        'let modalChId=null, modalModels=[];\n' + extract('saveChannel') + '\nreturn { saveChannel };'
+      )(dom.$, dom.$$, { channels: [] }, esc, svg, nf, (m) => toasts.push(m), apiStub, () => { }, async () => { });
+      const v = (id, val) => { dom.$('#' + id).value = val; };
+      v('f-id', 'new-ch'); v('f-name', '新渠道'); v('f-base', 'https://x.test/v1'); v('f-key', 'sk-x');
+      v('f-proto', 'openai'); v('f-pri', '5'); v('f-weight', weightVal); v('f-on', '1'); v('f-proxy', ''); v('f-headers', '');
+      dom.$('#f-autoAlias').checked = true;
+      return f.saveChannel().then(() => ({ sent, toasts }));
+    };
+    return (async () => {
+      let r = await run('3');
+      check('★ 表单里的权重进了请求体', r.sent.length === 1 && r.sent[0].body.weight === 3, r.sent[0] && r.sent[0].body);
+      check('保存走 upsert（/admin/api/channels）', !!r.sent[0] && r.sent[0].p === '/admin/api/channels');
+
+      r = await run('');
+      check('留空 = 0（显式写 0，等于"不参与加权轮询"）', r.sent[0].body.weight === 0);
+
+      r = await run('-2');
+      check('★ 负数在前端就被挡下（一条请求都不发）', r.sent.length === 0);
+      check('并给出可执行的提示文案', /权重/.test(r.toasts.join('')) && /不小于 0/.test(r.toasts.join('')), r.toasts);
+
+      r = await run('abc');
+      check('非数字同样挡下（Number("abc")=NaN 不会静默变成 0）', r.sent.length === 0 && /权重/.test(r.toasts.join('')));
+    })();
+  }
+}
+
+/* ═══════ 4. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
 function testControl() {
-  G('3. 对照组（用整改前的写法跑同样断言，必须失败）');
+  G('4. 对照组（用整改前的写法跑同样断言，必须失败）');
   const v = mkEl('viewport');
   v.innerHTML = '<div class="search"><input id="mQ" placeholder="搜索模型名…"></div>';   /* 整改前的模板 */
   const rendered = (v.innerHTML.match(/id="mQ"[^>]*value="([^"]*)"/) || [])[1];
@@ -211,19 +295,22 @@ function testControl() {
 
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
-  ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute'].forEach(extract);
-  ["let mTab='all', mQ=''", "let pgDraft=''"].forEach(s => {
-    if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 ' + s);
+  ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel'].forEach(extract);
+  ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"'].forEach(s => {
+    if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
 } catch (e) {
   console.error('✗ 装配失败：' + e.message);
   process.exit(1);
 }
 
-testModels();
-testPlayground();
-testControl();
+(async () => {
+  testModels();
+  testPlayground();
+  await testWeight();
+  testControl();
 
-console.log('\n' + '─'.repeat(58));
-console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
-process.exit(fail ? 1 : 0);
+  console.log('\n' + '─'.repeat(58));
+  console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
+  process.exit(fail ? 1 : 0);
+})();

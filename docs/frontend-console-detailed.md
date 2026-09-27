@@ -216,7 +216,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ## 5. 页面详解
 
-### 5.1 总览 `vOverview`（1241）
+### 5.1 总览 `vOverview`（1069）
 
 - 4 张 KPI 卡：累计请求 / 成功率 / 平均延迟 / Token 消耗，各带独立曲线带
 - 请求趋势大图（`areaChart`，20 天）+ 峰值/日均 chip
@@ -224,9 +224,9 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - Top 渠道表、Top 模型条形榜
 - 时间范围页签 `24h / 7d / 30d`
   - **原型**：仅切换选中样式，不切换数据（快照里只有日粒度）
-  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 387）定义三档 → `ovSeries()`（390）按档取序列：
+  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 389）定义三档 → `ovSeries()`（392）按档取序列：
     24 小时走后端 `usage.hourly`（24 桶），7/30 天走 `DATA.trend.slice(-N)`；KPI 环比窗口同步跟着天数走
-- **延迟环比 `avgLatencyDelta()`（375）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
+- **延迟环比 `avgLatencyDelta()`（`build/app.js` 377）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
   **样本 < 40 返回 `null`**——宁可不显示，也不编一个假百分比
 
 ### 5.2 涨跌颜色（中国股票惯例）
@@ -237,53 +237,59 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 ```
 
 > 与欧美惯例相反，**这是需求方明确要求的**。同时移除了原本的 ↑/↓ 箭头——
-> 方向已由 `+/-` 符号和颜色双重表达，再加箭头是三重冗余（`kpiCard` 1234 行有注释留档）。
+> 方向已由 `+/-` 符号和颜色双重表达，再加箭头是三重冗余（`kpiCard`（原型 1055）有注释留档）。
 
 **生产侧零差异**：`build/app.js` 不重定义任何涨跌样式，直接吃设计稿这条规则。
-它只负责算数值与方向：`dChip(v, unit, suffix)`（371）产出带符号的文本，`kpiCard({dir:'up'|'down'})`（320）产出 `.delta.up` / `.delta.down` 类名。
+它只负责算数值与方向：`dChip(v, unit, suffix)`（`build/app.js` 386）产出带符号的文本，`kpiCard({dir:'up'|'down'})`（`build/app.js` 335）产出 `.delta.up` / `.delta.down` 类名。
 （旧版的 `deltaBadge(delta, invert)` 已随重构删除——`invert` 会把"好/坏"折算成颜色，与"方向即颜色"的规则冲突。）
 
 **改这里时别顺手改回欧美惯例**，见 `AGENTS.md` §2。
 
-### 5.3 渠道管理 `vChannels`（1351）
+### 5.3 渠道管理 `vChannels`（1179）
 
 - 工具栏：导入（四项下拉）/ 测试模型 / 添加渠道
 - 筛选：全部 / 已启用 / 已停用 页签 + 名称·ID·协议搜索框
-- 表格列：启用开关 / 渠道 / 协议 / 状态 / 延迟 / 模型数 / 优先级（自动降权时附「→ 有效 X」角标，悬停见失败率与回升说明）/ 请求·错误 / 成功率 / 操作
+- 表格列：启用开关 / 渠道 / 协议 / 状态 / 延迟 / 模型数 / 优先级（自动降权时附「→ 有效 X」角标，悬停见失败率与回升说明）/ **权重 · 分流** / 请求·错误 / 成功率 / 操作
+- **「权重 · 分流」列（v1.5）**：显示 `配置权重 · 加权轮询占比`（如 `3 · 24%`），悬停见命中次数与"重启后重新计数"提示；
+  权重 0（未配）显示 `—` 并提示"未参与加权轮询"，**不显示 `0%`**——`0%` 会被误读成"配了但一次都没分到"。
+  数据来自 `/admin/api/status` 的 `weight` / `weightedHits` / `weightedShare`，经 `adapt()` 映射为 `w` / `wHits` / `wShare`。
 - 操作列：**测试 / 编辑 / 详情**（三个都要 `stopPropagation`）
-- 排序（1397）：「全部」页签下**已启用优先**，同组内按优先级、请求量降序
+- 排序（`drawChTable` 1219）：「全部」页签下**已启用优先**，同组内按优先级、请求量降序
 
-**渠道详情抽屉 `openChannel`（1432）**：
-顶部标签行（状态 / 延迟 / 优先级〔自动降权时显示「→ 有效 X（失败率 Y%）」角标〕/ 启停）→
+**渠道详情抽屉 `openChannel`（1260）**：
+顶部标签行（状态 / 延迟 / 优先级〔自动降权时显示「→ 有效 X（失败率 Y%）」角标〕/ 启停 / **权重角标**）→
 接入配置（Base URL / 密钥掩码+明文切换+复制 / 协议 / 模型数）→ 近 7 天表现三宫格 + 曲线 → 模型别名 chips
 → 底部动作：测试模型 / 重探测 / 编辑 / 启停 / 删除
 
-**启停 `toggleCh`（1426）**：就地改 `DATA`，toast 明确提示"原型演示，不会写入 config.json"。
+> **权重角标（v1.5）**：配了权重的渠道显示 `权重 3 · 分流 24% (12 次)`；没配的显示灰色的
+> `未参与加权轮询 · 点「编辑」可设权重`——抽屉是唯一能同时看到"配置值"和"实际分流结果"的地方。
 
-### 5.4 聚合模型 `vModels`（1512）
+**启停 `toggleCh`（1254）**：就地改 `DATA`，toast 明确提示"原型演示，不会写入 config.json"。
+
+### 5.4 聚合模型 `vModels`（1340）
 
 - 协议筛选页签 + 搜索
-- 排序（1565）：**仍有启用渠道的模型排前面**，仅剩停用渠道的模型整体降透明度（`opacity:.62`）并标"来源已停用"
+- 排序（`drawMTable` 1385）：**仍有启用渠道的模型排前面**，仅剩停用渠道的模型整体降透明度（`opacity:.62`）并标"来源已停用"
 - 状态列：稳定 / 有失败 / 来源已停用
 - 点击行打开模型详情抽屉：按实际选中顺序展示调度优先级
 
-### 5.5 调用日志 `vLogs`（1622）
+### 5.5 调用日志 `vLogs`（1450）
 
-请求列表（时间 / 模型 / 渠道 / 协议 / 状态 / 耗时 / token）+ 详情抽屉 `openLog`（1666）。
+请求列表（时间 / 模型 / 渠道 / 协议 / 状态 / 耗时 / token）+ 详情抽屉 `openLog`（1494）。
 
-### 5.6 Playground `vPlayground`（1711）
+### 5.6 Playground `vPlayground`（1539）
 
 左对话区 + 右参数栏（模型、temperature、top_p 等）。
 
-- **原型**：`pgSend`（1795）模拟流式输出——逐字/逐块插入 → 结束补 usage，**无真实请求**，仅演示交互
+- **原型**：`pgSend`（1623）模拟流式输出——逐字/逐块插入 → 结束补 usage，**无真实请求**，仅演示交互
 - **生产**：`pgSend`（`build/app.js` 1074）**真发 `POST /v1/chat/completions`**，与外部客户端走完全同一条链路：
   - 支持 `stream`：读 `response.body.getReader()` 解析 SSE，逐块追加；记录**首块延迟 TTFB**
   - 从响应头 `X-ZZCSAPI-Channel` 取实际命中渠道 → `drawRoute()` 渲染路由信息（候选渠道 / 命中 / 首块 / 总耗时）
   - 失败时把上游错误原文显示在气泡里，不吞错
 
-### 5.7 接入信息 `vAccess`（1852）
+### 5.7 接入信息 `vAccess`（1680）
 
-三套协议（OpenAI / Anthropic / Gemini）的 baseURL、密钥、示例代码，代码片段用 `.code` + 页签切换（1922）。
+三套协议（OpenAI / Anthropic / Gemini）的 baseURL、密钥、示例代码，代码片段用 `.code` + 页签切换（`vAccess` 1680 内）。
 
 - **原型**：地址与密钥是文件内写死的演示值
 - **生产**：`vAccess`（`build/app.js` 1189）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey`、模型名，
@@ -294,30 +300,40 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ## 6. 交互流程
 
-### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1993）
+### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1820）
 
 ```
-openChannelForm()        新增：清空表单，协议默认 openai
+openChannelForm()        新增：清空表单，协议默认 openai，权重默认 0
 openChannelForm(id)      编辑：回填，id 字段 disabled
-  ├─ 基础信息   渠道ID / 显示名 / 协议 / 优先级 / 启用
+  ├─ 基础信息   渠道ID / 显示名 / 协议 / 优先级 / 权重 / 启用
   ├─ 连接信息   Base URL（随协议切换默认值）/ 代理 / 密钥（掩码↔明文）
   ├─ 模型别名   renderModelRows 渲染 alias→upstream 双列，可增删、可单行测试
   └─ 上游探测   probeUpstream → renderProbeList
 ```
+
+**「权重」输入框（`f-weight`，v1.5）**：
+
+- 与「优先级」并排，`type=number min=0 step=1`，label 旁小字 `0 = 不参与`，`title` 里写明分工：
+  **优先级管"谁先试"，权重管"按比例分"**（3:1 ⇒ ≈75%/25%）——两个概念最容易混，所以说明直接挂在控件上。
+- 保存时 `weight` 显式进 body（留空 = `0`）。这条很关键：upsert 对**缺省字段保留旧值**（PT29），
+  若表单不提交该字段，用户"把权重清空"会被旧值悄悄还原。前端还先挡非数字/负数
+  （`Number.isFinite` + `<0`），不让它去撞后端 400。
+- 抗重绘：渠道表单是**弹窗**（`#mask` 挂 body，在 `#viewport` 之外），不受 8 秒轮询重绘影响，
+  因此不需要像 `chQ`/`pgDraft` 那样存 JS 变量回填（见代码地图 §0.2「状态回填约定」）。
 
 **上游探测列表**（本轮重做，替代原来的 chip 逐个点击）：
 
 - 面板 `.probe-panel`：搜索框 + 可滚动列表（`max-height:212px`）+ 底部计数与批量按钮
 - 已存在的别名行标 `.have`（半透明 + 不可勾选），避免重复添加
 - 支持**搜索过滤** `filterProbeRows`、**全选** `probeSelectAll`、**清空** `probeClearSel`、**批量加入** `probeAddSelected`
-- **原型**：`probeUpstream`（2085）从 `PROBE_POOL`（1961，约 46 个模型）取数，贴近真实中转站规模
-- **生产**：`probeUpstream`（`build/app.js` 1443）真发 `POST /admin/api/probe`，
+- **原型**：`probeUpstream`（1912）从 `PROBE_POOL`（1788，约 46 个模型）取数，贴近真实中转站规模
+- **生产**：`probeUpstream`（`build/app.js` 1459）真发 `POST /admin/api/probe`，
   返回的是**该渠道上游真实的 `/v1/models` 清单**；搜索/全选/批量逻辑与原型同构。
   ⚠️ 注意 `server.js` 的探测协议白名单——曾漏 `workbuddy` 导致误报失败
 
 ### 6.2 导入（四类）
 
-`IMPORT_META`（2208）驱动同一套弹窗骨架，`mode` 决定形态：
+`IMPORT_META`（2035）驱动同一套弹窗骨架，`mode` 决定形态：
 
 | kind | 名称 | 形态 | 要点 |
 | --- | --- | --- | --- |
@@ -328,7 +344,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 - 粘贴式 `doImport`：分步状态动画（换令牌 → 拿账号 → 拉模型 → 建渠道）
 - 文件式 `importFiles`：逐个文件解析，逐行输出成功/失败结果与原因
-- 解析容错集中在 `parseCodexUnits`（2226）与 `parseGsSessionId`（2234），**改动务必保留多结构兼容**
+- 解析容错集中在 `parseCodexUnits`（2053）与 `parseGsSessionId`（2061），**改动务必保留多结构兼容**
 
 **生产侧（`build/app.js`）**：`IMPORT_META` 在 1569，弹窗骨架与原型同构，但**去掉了假步骤动画**，改为真实请求：
 
@@ -341,14 +357,14 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 - 原型的 `hash(s)`（2290，造假渠道 ID）**生产侧已删除**
 - 解析容错逻辑与原型一致（同样的 `parseCodexUnits` / `parseGsSessionId`），改一处要两处同步
 
-### 6.3 测试模型 `openTestModels(opts)`（2342）
+### 6.3 测试模型 `openTestModels(opts)`（2169）
 
 - 支持 `{channelId}` 预筛（从渠道行/抽屉进入时只显示该渠道的模型）
 - 分组多选列表 `.test-list`（分组头 sticky）+ 提示词输入
-- `runTests`（2388）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
+- `runTests`（2215）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
 
-- **原型**：`simTest`（2329）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
-  回复文案取自 `REPLIES`（2328）
+- **原型**：`simTest`（2156）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
+  回复文案取自 `REPLIES`（2155）
 - **生产**：`runTests`（`build/app.js` 1778）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt}`），
   逐条渲染真实 `latencyMs` / `promptTokens` / `completionTokens` / 上游回复或错误原文。
   原型的 `simTest` 与 `REPLIES` **生产侧已删除**；跑完会 `loadAll()` 刷新一次数据
@@ -357,11 +373,11 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 | 交互 | 实现 |
 | --- | --- |
-| `Esc` | 有弹窗先关弹窗，否则关抽屉（2420） |
+| `Esc` | 有弹窗先关弹窗，否则关抽屉（原型 2247–2252） |
 | `Cmd/Ctrl + K` | 聚焦全局搜索框 |
-| 全局搜索回车 | 关键词写入 `chQ` 并跳转渠道页（2434） |
+| 全局搜索回车 | 关键词写入 `chQ` 并跳转渠道页（原型 2261） |
 | 主题切换 | `#themeBtn`，写入 `localStorage['zzcs-theme']`，刷新保持 |
-| 点击菜单外部 | 关闭所有下拉菜单（1944） |
+| 点击菜单外部 | 关闭所有下拉菜单（原型 1772） |
 | 复制按钮 | 统一走 `copyText(t,btn)`（`build/app.js` 221）：安全上下文用 `navigator.clipboard`，否则回落到 `execCommand('copy')`；待复制文本一律经 `data-t="${esc(x)}"` 注入，不要用 `JSON.stringify` 直接拼进属性 |
 
 ---
@@ -373,7 +389,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | 原型 | 生产接口 | 备注 |
 | --- | --- | --- |
 | `DATA` 常量 | `GET /admin/api/status` | 渠道状态、用量、探测时间 |
-| `toggleCh` / `saveChannel` / `delChannel` | `POST /admin/api/channel`（局部改）/ `POST /admin/api/channels`（upsert）/ `DELETE /admin/api/channels` | 启停·优先级·**权重 `weight`** 走前者（立即生效并持久化），增改走 upsert，删除带 `{id}`。⚠ 表单**暂无**权重输入框；upsert 在 body 未带 `weight` 时保留旧值（见 PT29） |
+| `toggleCh` / `saveChannel` / `delChannel` | `POST /admin/api/channel`（局部改）/ `POST /admin/api/channels`（upsert）/ `DELETE /admin/api/channels` | 启停·优先级·**权重 `weight`** 走前者（立即生效并持久化），增改走 upsert，删除带 `{id}`。**v1.5 起渠道表单有「权重」输入框**（`f-weight`，留空 = 0 = 不参与），`weight` 随 upsert body 一起提交；负数/非数字前端先挡下，后端同样拒（400）。⚠ upsert 在 body 未带 `weight` 时保留旧值（见 PT29）——表单始终显式提交该字段，所以"清空权重"是**真的置 0**，不会被旧值悄悄还原 |
 | `reprobe` / 全量重探测 | `POST /admin/api/recheck` | body 可带 `{id}` |
 | `probeUpstream` | `POST /admin/api/probe` | 注意协议白名单（曾漏 `workbuddy` 导致误报） |
 | `simTest` / `runTests` | `POST /admin/api/test` | 需覆盖各协议分支 |
@@ -391,8 +407,8 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 4. `DATA` 就地修改的模式不能沿用——真实环境应改为"请求 → 更新本地 state → 重绘"
 
 > **回填状态（v0.4，v0.5 续修）**：以上四项均已满足。
-> 生产侧用 `chKey(id)`（`build/app.js` 1344）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
-> `DATA` 改由 `adapt()`（58）从 `/admin/api/status` 响应派生，`loadAll()`（120）统一拉取后重绘。
+> 生产侧用 `chKey(id)`（`build/app.js` 1358）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
+> `DATA` 改由 `adapt()`（57）从 `/admin/api/status` 响应派生，`loadAll()`（122）统一拉取后重绘。
 > 生产独有能力（genspark 双导入、渠道级自定义请求头、密钥明文切换、有效优先级角标、
 > 真实 Playground / 测试 / 导入请求、端点地址与密钥一键复制、只读的密钥轮换步骤弹窗）原型里没有，**原型不必追平**。
 > v0.5 补了复制链路的两个坑（属性注入被截断、非安全上下文下 `navigator.clipboard` 静默失效），见 §8.5。
@@ -719,6 +735,54 @@ setInterval(()=>{
 全树泄漏扫描仍**零命中**。
 
 **教训**：脱敏必须"按上下文替换 + 每处断言命中数 + 事后枚举审计"三段式；全局子串替换在 id/名称与标识符重名的项目里必然出事，而**自校验脚本用同一套正则去检查**时会把事故一起遮蔽（本次自校验就因为"先 mask 掉 `class="chip …"` 再检查"而漏掉了 chip 类名被改坏）。
+
+---
+
+### 8.13 v1.5 控制台权重：能填、能存、能看见分流结果（2026-09-27，对象 `build/app.js` + 产物 `console.html` + `server.js` PT34）
+
+v1.3 把加权轮询算法做进了后端（`weight` 真的按比例分流），但**控制台没有入口**：
+README 只能教你"改 `config.json` 或 curl 打 `POST /admin/api/channel`"，而且配完**看不见效果**
+（`weightedHits` / `weightedShare` 只在 `/admin/api/status` 的 JSON 里）。本轮把它补齐。
+
+| # | 问题 | 根因 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 渠道表单没有权重输入框，改权重必须手改配置文件 | v1.3 只做了后端；前端表单字段与 `saveChannel` 的 body 都没有 `weight` | 表单加 `f-weight`（与优先级并排，`0 = 不参与`，`title` 写明"优先级管谁先试、权重管按比例分"）；`saveChannel` 把 `weight` 显式放进 body（留空 = 0） |
+| 2 | **清空权重会被旧值悄悄还原**（潜在） | upsert 的语义是"缺省字段保留旧值"（PT29 的修复），而表单若用 `|| undefined` 拼字段就等于"没提交" | 表单**始终**提交 `weight`（空串 → `0`），于是"清空"是真的置 0；已在 §7 映射表标注这条坑 |
+| 3 | 负数/非数字权重会打到后端才被拒 | 前端无校验 | `Number.isFinite(w) && w >= 0`，不合法直接 toast（`留空 = 0 = 不参与加权轮询`），**一条请求都不发** |
+| 4 | 配了权重看不到分流效果 | `adapt()` 没接 `weight`/`weightedHits`/`weightedShare`，表格没列 | `adapt()` 映射为 `w`/`wHits`/`wShare`；渠道表加「权重 / 分流」列（`3 · 24%`，悬停看命中次数）；详情抽屉加角标（`权重 3 · 分流 24% (12 次)`） |
+| 5 | 未配权重的渠道若显示 `0%` 会被误读 | 直出 `wShare`（0） | 权重 0 显示 `—` + "未参与加权轮询"提示，**不显示百分比** |
+| 6 | 控制台删光渠道后，网关重启起不来（PT34） | `loadConfig` 要求 `channels.length > 0`，而 `persistConfig` 删掉最后一个渠道后写回的就是 `"channels": []`，报错信息还误导成"缺少 channels 数组" | 只校验 `Array.isArray(cfg.channels)`；空数组是合法配置 |
+
+**抗重绘**：渠道表单在**弹窗**里（`#mask` 挂 body，位于 `#viewport` 之外），8 秒轮询只重绘
+`#viewport`，因此不需要把 `f-weight` 存进 JS 变量回填；已在 §6.1 与代码地图 §0.2「状态回填约定」处写明这条边界。
+
+**验证**：
+- `node test/console-state.test.js` 27 → **38 项**（新增第 3 节：`adapt()` 接三个字段、表格显示 `3 · 24%` 与 `—`、
+  `saveChannel` 报文带 `weight`、空值 = 0、负数与非数字**不发请求**）；
+- `node test/console-weight-e2e.test.js` **18 项**（新增，真链路）：控制台报文 → 真网关落库（**含断言权重真的写进
+  `config.json`，未配权重的渠道不会多出一个 `"weight": 0`**）→ `/admin/api/status` →
+  `adapt()`+`drawChTable()` 那一格 → 真发 24 次请求让占比动起来；含"权重改 0 后立刻退出池、hits 不再增长"与
+  "负数绕过前端也被后端 400"；顺带断言零渠道配置能启动（PT34）；
+- 全量回归 **11 文件 / 382 项**全绿（`anthropic-tools` 60 · `anthropic-tools-e2e` 30 · `console-state` 38 ·
+  `console-weight-e2e` 18 · `gemini-multimodal` 41 · `gemini-multimodal-e2e` 22 · `native-channels` 78 ·
+  `native-channels-e2e` 33 · `streaming-e2e` 19 · `weighted-rr` 31 · `weighted-rr-e2e` 12）；
+  `git diff console.html` 与 `build/app.js` 的改动行数一致（构建是纯拼接）。
+
+**顺手修掉的测试基建缺陷（不修会掩盖真回归）**：6 个 e2e 脚本在 `cleanup()` 刚 `kill()` 子进程就
+`process.exit()`，Windows 上会撞到还没关干净的 libuv 句柄，以 `0xC0000409` 崩溃——
+**断言全绿却返回失败退出码**（实测 3 次里崩 2 次，且随机）。改为 `await stopChild(gw)`（等 `exit` 事件，
+1.5 秒兜底）+ 结尾只设 `process.exitCode`，让事件循环自然排空。修补后 6 个脚本 × 3 轮 = 18 次全部退出码 0。
+
+**没做的事（如实记）**：原型 `console-redesign.html` **未同步**这个输入框——按既有约定
+"生产独有能力原型不必追平"（原型是视觉真源，不参与接口对接）。所以原型里仍看不到权重列/输入框，
+想对照视觉请直接看生产控制台。
+
+**顺手修掉的文档腐烂（本轮核对锚点时发现的既有问题，不是本轮引入的）**：本文档 §5 / §6 里的**原型行号锚点**
+整体漂移了 100 行以上——原型在 v0.7 / v0.8 / v1.0.2 删过行，锚点没跟着重算。例如 §5.3 写 `vChannels`（1351），
+实测 1179；§6.1 写 `openChannelForm`（1993），实测 1820；§5.1 写 `vOverview`（1241），实测 1069。
+已用 AGENTS.md §1.2 的导出命令逐条实测并修正 **29 处**（每条都断言"命中恰好 1 次"才写入），
+生产侧的 `dChip` 386 / `kpiCard` 335 / `probeUpstream` 1459 也一并校准；
+`docs/frontend-code-map.md` §5 修改路由表里同一批漂移锚点已修正，并新增「渠道权重」一行。
 
 ---
 

@@ -153,7 +153,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 27 项断言，退出码非 0 = 有回归
+node test/console-state.test.js           # 38 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -163,6 +163,7 @@ node test/weighted-rr.test.js             # 31 项断言：加权轮询算法（
 node test/weighted-rr-e2e.test.js         # 12 项断言：真 HTTP 数落点，验证实际分流比例与降级行为
 node test/native-channels.test.js         # 78 项断言：原生出站双向转换（请求/响应/流式状态机/URL 鉴权头/错误体不翻译）
 node test/native-channels-e2e.test.js     # 33 项断言：原生假上游 × 三条客户端路由，验证上游真的收到原生报文
+node test/console-weight-e2e.test.js      # 18 项断言：控制台表单报文 → 真网关落库 → 真流量分流 → 表格那一格显示出来
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -325,11 +326,16 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
   （如果轮到的那家正好挂了，下一个还是按老规矩顶上来）。图片生成候选（`/v1/images/generations`）同一套规则。
 - 冷却中 / `status=down` / `weight=0` 的渠道**不进池**，其份额自动分给健康成员；
   它恢复后也不会"补发欠账"（不出现报复性突发）。
-- 状态是内存态（重启清零，无副作用）。改权重两种方式：
+- 状态是内存态（重启清零，无副作用）。改权重三种方式，效果一样：
+  · **控制台**：渠道页 → 该渠道「编辑」→ 表单里的「权重」框（留空 = 0 = 不参与），保存即生效并持久化；
   · 直接改 `config.json` 的 `"weight": 3` 后重启；
   · `POST /admin/api/channel` 带 `{id, weight}` ⇒ **立即生效并持久化，无需重启**。
 - 可观测：`/admin/api/status` 每个渠道返回 `weight`（配置值）、`weightedHits`（被选中次数）、
-  `weightedShare`（占全部加权轮询命中的百分比）。控制台表单**暂时没有**权重输入框（用上面的两种方式改）。
+  `weightedShare`（占全部加权轮询命中的百分比）；控制台**渠道表格有「权重 / 分流」列**（`3 · 24%`，
+  悬停看命中次数），**渠道详情抽屉**顶部另有角标。没配权重的渠道显示 `—` 而不是 `0%`
+  ——`0%` 会被误读成"配了但一次都没分到"。
+- 权重接受任意非负数字（整数最好懂：`3:1` 就是 75/25；小数同样按比例算）。负数、非数字在控制台表单里
+  就被挡下（不会发请求），绕过前端直接调接口也会被后端拒（400）——两边校验规则一致。
 
 ### 有效优先级（失败率自动降权）
 
@@ -419,6 +425,5 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 
 ## 计划中
 
-- 控制台渠道表单的**权重输入框**（后端已支持 `weight`，目前只能改 `config.json` 或调 `POST /admin/api/channel`）
 - Gemini **客户端路由**的工具调用透传：`/gemini/...` 目前只映射文本，`tools` / `functionCall` / `functionResponse` 会被丢掉（OpenAI 与 Anthropic 两条路由不受影响，见 docs/PONYTAIL_REVIEW.md PT33）
 - 同协议直通（Anthropic 客户端 → Anthropic 渠道不做转换，省一层且有损点更少）

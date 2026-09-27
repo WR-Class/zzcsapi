@@ -68,6 +68,10 @@ function adapt() {
       ms:lat[c.id] != null ? lat[c.id] : (c.latencyMs == null ? -1 : c.latencyMs),
       models:(c.aliases || []).length, pri:c.priority == null ? 0 : c.priority,
       eff:c.effectivePriority, fail:c.rollFailRate || 0,
+      /* 加权轮询：w = 配置权重（0 = 不参与）；wHits / wShare = 被选中次数与占全部轮询命中的比例 */
+      w:c.weight == null ? 0 : Number(c.weight) || 0,
+      wHits:Number(c.weightedHits) || 0,
+      wShare:Number(c.weightedShare) || 0,
       req:u.requests || 0, err:u.errors || 0,
       aliases:c.aliases || [], upstreamModels:c.upstreamModels || [],
       baseUrl:c.baseUrl || '', apiKey:c.apiKey || '',
@@ -608,7 +612,7 @@ function drawChTable(){
   box.innerHTML=`<table class="tbl">
     <thead><tr>
       <th style="width:38px"></th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">延迟</th>
-      <th class="t-r">模型</th><th class="t-r">优先级</th><th class="t-r">请求 / 错误</th><th>成功率</th><th class="t-r">操作</th>
+      <th class="t-r">模型</th><th class="t-r">优先级</th><th class="t-r">权重 / 分流</th><th class="t-r">请求 / 错误</th><th>成功率</th><th class="t-r">操作</th>
     </tr></thead>
     <tbody>${rows.map(c=>{
       // ponytail: 下面「→ 有效优先级」角标表达式与 openChannel 抽屉处内联重复——为保 code-map 行号锚点刻意不抽 helper，下次动这两处时再抽
@@ -622,6 +626,7 @@ function drawChTable(){
         <td class="t-r mono">${fMs(c.ms)}</td>
         <td class="t-r mono">${c.models}</td>
         <td class="t-r mono">${c.pri}${c.fail>0&&c.eff!=null&&c.eff!==c.pri?`<span style="margin-left:4px;font-size:10px;color:${c.fail>=.5?'var(--err)':'var(--warn)'}" title="近期失败率 ${Math.round(c.fail*100)}% → 自动降权中，恢复后自动回升">→ ${c.eff}</span>`:''}</td>
+        <td class="t-r mono">${c.w>0?`<span title="权重 ${c.w}；加权轮询命中 ${c.wHits} 次，占全部轮询 ${c.wShare.toFixed(1)}%（重启后重新计数）">${c.w}<span class="muted" style="font-size:11px"> · ${c.wShare.toFixed(0)}%</span></span>`:'<span class="muted" title="未参与加权轮询（权重 0）：只按优先级做兜底">—</span>'}</td>
         <td class="t-r mono">${nf(c.req)} <span class="muted">/ ${c.err?`<span style="color:var(--err)">${nf(c.err)}</span>`:0}</span></td>
         <td>${rate===null?'<span class="muted mono">—</span>':`<div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div>`}</td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
@@ -663,6 +668,9 @@ function openChannel(id){
         <span class="tag">延迟 ${fMs(c.ms)}</span>
         <span class="tag">优先级 ${c.pri}${c.fail>0&&c.eff!=null&&c.eff!==c.pri?`<span style="margin-left:4px;font-size:10px;color:${c.fail>=.5?'var(--err)':'var(--warn)'}" title="近期失败率 ${Math.round(c.fail*100)}%（滚动窗口）→ 自动降权中，恢复后自动回升">→ 有效 ${c.eff}（失败率 ${Math.round(c.fail*100)}%）</span>`:''}</span>
         <span class="tag">${c.on?'已启用':'已停用'}</span>
+        ${c.w>0
+          ? `<span class="tag" title="加权轮询：同一模型的候选里按权重比例分流；占比 = 命中次数 ÷ 全部加权轮询命中（重启后重新计数）">权重 ${c.w} · 分流 ${c.wShare.toFixed(0)}%<span class="muted" style="margin-left:4px">(${c.wHits} 次)</span></span>`
+          : `<span class="tag muted" title="权重为 0（或不填）= 不参与加权轮询，只按优先级 / 健康度做兜底">未参与加权轮询<span class="muted" style="margin-left:4px">· 点「编辑」可设权重</span></span>`}
       </div>
 
       <div class="sec-title">接入配置</div>
@@ -1378,6 +1386,8 @@ function openChannelForm(id){
           <select class="select" id="f-proto">${PROTO_ORDER.map(p=>`<option value="${p}" ${p===proto?'selected':''}>${PROTO_META[p].label}（${p}）</option>`).join('')}</select></div>
         <div class="field" style="flex:.7"><label>优先级</label>
           <input class="input" id="f-pri" type="number" value="${c?c.pri:0}"></div>
+        <div class="field" style="flex:.7"><label>权重 <span class="help">0 = 不参与</span></label>
+          <input class="input" id="f-weight" type="number" min="0" step="1" value="${c?(c.w||0):0}" title="加权轮询：同一模型的候选里按权重比例分流（3:1 ⇒ ≈75%/25%）。0 或不填 = 不参与分流，只按优先级做兜底。与优先级分工不同：优先级管「谁先试」，权重管「按比例分」"></div>
         <div class="field" style="flex:.7"><label>启用</label>
           <select class="select" id="f-on"><option value="1" ${(c?c.on:true)?'selected':''}>是</option><option value="0" ${(c?!c.on:false)?'selected':''}>否</option></select></div>
       </div>
@@ -1559,6 +1569,10 @@ async function saveChannel(){
   if(!modalChId&&DATA.channels.some(c=>c.id===id))return toast('渠道 ID「'+id+'」已存在');
   if(!base)return toast('Base URL 必填');
   if(!key)return toast('API Key 必填');
+  // 权重：加权轮询用。空 = 0（不参与）；非数字/负数直接挡在这里，别等后端 400
+  const wRaw=($('#f-weight').value||'').trim();
+  const weight=wRaw===''?0:Number(wRaw);
+  if(!Number.isFinite(weight)||weight<0)return toast('权重必须是不小于 0 的数字（留空 = 0 = 不参与加权轮询）');
   const seen=new Set(), models={};
   for(const r of modalModels){
     const alias=(r.alias||'').trim(), up=(r.upstream||'').trim();
@@ -1575,6 +1589,7 @@ async function saveChannel(){
     apiKey:key,
     protocol:$('#f-proto').value,
     priority:Number($('#f-pri').value)||0,
+    weight,
     enabled:$('#f-on').value==='1',
     autoAlias:$('#f-autoAlias').checked,
     proxy:$('#f-proxy').value.trim()||undefined,
