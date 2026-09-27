@@ -373,7 +373,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | 原型 | 生产接口 | 备注 |
 | --- | --- | --- |
 | `DATA` 常量 | `GET /admin/api/status` | 渠道状态、用量、探测时间 |
-| `toggleCh` / `saveChannel` / `delChannel` | `POST /admin/api/channel`（局部改）/ `POST /admin/api/channels`（upsert）/ `DELETE /admin/api/channels` | 启停·优先级走前者，增改走 upsert，删除带 `{id}` |
+| `toggleCh` / `saveChannel` / `delChannel` | `POST /admin/api/channel`（局部改）/ `POST /admin/api/channels`（upsert）/ `DELETE /admin/api/channels` | 启停·优先级·**权重 `weight`** 走前者（立即生效并持久化），增改走 upsert，删除带 `{id}`。⚠ 表单**暂无**权重输入框；upsert 在 body 未带 `weight` 时保留旧值（见 PT29） |
 | `reprobe` / 全量重探测 | `POST /admin/api/recheck` | body 可带 `{id}` |
 | `probeUpstream` | `POST /admin/api/probe` | 注意协议白名单（曾漏 `workbuddy` 导致误报） |
 | `simTest` / `runTests` | `POST /admin/api/test` | 需覆盖各协议分支 |

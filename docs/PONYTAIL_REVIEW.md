@@ -150,6 +150,26 @@
 
 > **整改记录（2026-09-27，v1.2）**：做「Anthropic tool_use 完整转换」时，端到端脚本先把**三个流式缺陷**顶了出来（PT26 首块字节被吞 ⇒ 快上游下三条协议流式全空；PT27 Anthropic 流式转换无状态 + prelude 未转发 ⇒ 流式工具调用必碎、`message_start` 缺失；PT28 Gemini 流式没带 `stream` ⇒ 上游回非流式整包），三个都先修才可能让"流式工具调用"真的可用。同批落地工具转换补全：`tool_choice` 的 `none`、`disable_parallel_tool_use` → `parallel_tool_calls`、`is_error` → `[tool_error]` 标记、**工具结果里的图片改挂紧随的 user 消息**（OpenAI 的 `tool` 消息只允许文本部件）、`tool_use.id` 走 `sanitizeToolId` 保证往返配对、`finish_reason`/`cache_read_input_tokens` 映射。新增零依赖回归 `test/anthropic-tools.test.js`（60 项）、`test/anthropic-tools-e2e.test.js`（30 项，两轮工具回合）、`test/streaming-e2e.test.js`（19 项）。真机验证：流式工具调用收到 `stop_reason=tool_use` 且参数分片拼回 `{"city":"上海"}`；回传 `tool_result` 后模型用工具结果作答；**工具结果里带一张上红下蓝的图，模型答出 "red blue"**（侧门打通）。明细见 §PT26 / §PT27 / §PT28 与 README「工具调用」「流式（SSE）」。
 
+### PT29 中：渠道保存走白名单重建对象 —— 配置里的新字段会被静默抹掉 —— ✅ v1.3 已整改
+
+- 来源：做加权轮询（新增渠道字段 `weight`）时排查"控制台改一下渠道会不会把权重吃掉"。
+- 证据（`server.js`，整改前）：
+  · `POST /admin/api/channels`（upsert，落库）把 body **重建**成一个固定字段对象
+    （`const def = { id, name, baseUrl, apiKey, protocol, priority, enabled, autoAlias, models, proxy, headers }`）
+    —— body 里任何白名单外的字段**直接丢弃**；
+  · `persistConfig()` 同样按固定字段列表写 `config.json`；
+  · 两者叠加的后果：用户在配置文件里手写的扩展字段（本次是 `weight`），只要从控制台**保存一次该渠道**，
+    就会从 `config.json` 里永久消失，且没有任何提示（静默数据丢失，最难查的那类）。
+- 最小修复：`weight` 进入 4 个位置——`persistConfig()`、`GET /admin/api/channels`、`POST /admin/api/channel`、
+  `POST /admin/api/channels`（upsert）；其中 upsert 在 body **未传** `weight` 时**保留旧值**（`prevDef.weight`），
+  避免"表单没有这个输入框 ⇒ 一保存就清零"。
+- 最小回归：`test/weighted-rr.test.js` §9 装配守卫（`persistConfig` 持久化 weight / upsert 未传时保留旧值 /
+  `validateChannelDef` 校验 weight）——这些断言就是防它复发的。
+- 遗留：`POST /admin/api/channels` 的白名单机制本身没改（仍是"重建对象"），
+  **以后再加渠道字段必须同步这 4 个位置**，否则同样会被抹掉。
+
+> **整改记录（2026-09-27，v1.3）**：落地**真正的加权轮询**（README 里挂了几轮的遗留项）。设计取舍：不动 `priority` 的排序语义，**新增 `weight` 专管分流** —— 只有明确填正数 `weight` 的渠道进轮询池，缺省 0 时行为与从前逐字节一致（老配置零影响，用户正在跑的 30 多个渠道不会被这一版改变选路）。算法选**平滑加权轮询**（SWRR，无随机数）：长期比例 = 权重比，且不扎堆突发；冷却/`down`/`weight=0` 不进池、份额自动归健康成员。轮询只决定"谁是第一位"，其余候选保持原「健康度→有效优先级→延迟」顺序做**兜底链**。实现期发现 PT29（渠道保存的白名单会静默抹掉新字段），一并修掉并把守卫写进回归。新增零依赖回归 `test/weighted-rr.test.js`（31 项，含"老配置零影响"对照组）与 `test/weighted-rr-e2e.test.js`（12 项，真 HTTP 数 40 次落点验证 ≈75/25）。控制台表单暂未加权重输入框（后端已支持，可改配置或调 `POST /admin/api/channel`），已记入 README「计划中」。
+
 ## 已验证的非问题（记录在此，避免后人重查）
 - **usage.json 无增长问题**（曾疑 byDay/hourly 无界）：recent 封顶 800、byDay 每日仅 1 条、hourly 固定 24 桶（server.js:1471），实测文件 ~8.7K 行且大体平稳；4 秒防抖全量重写在 ~300KB 规模合理。
 - **arena-cookie 的 CORS 预检不会被鉴权拦死**（曾疑 OPTIONS 带不上 key）：`?key=` 在预检 URL 里随行，checkAuth 读得到（server.js:202）；1MB 读缓冲（server.js:1514）也有上界。
