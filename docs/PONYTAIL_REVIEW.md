@@ -209,14 +209,46 @@
   并把 `usage` 一并映射成 `usageMetadata`。
 - 最小回归：`test/native-channels-e2e.test.js` §5（"收尾分片带 finishReason"）。
 
-### PT33 中：Gemini **客户端路由**丢掉工具调用（未整改，已登记）
+### PT33 中：Gemini **客户端路由**丢掉工具调用 —— ✅ v1.12 已整改
 
 - 证据：`openAIToGeminiResponse`（非流式）只取 `choices[0].message.content`；`openAIStreamToGeminiSSE` 只取 `delta.content`
   ⇒ 走 `/gemini/...` 的客户端拿不到 `functionCall`，`tools` / `tool_choice` 也在 `geminiToOpenAI` 里无处安放。
-  这与渠道协议无关（`openai` 协议渠道同样如此），是**入站方向**的历史缺口，因此本轮不动（改动面涉及工具转换与两条流式路径）。
+  这与渠道协议无关（`openai` 协议渠道同样如此），是**入站方向**的历史缺口。
 - 影响面：OpenAI 与 Anthropic 两条路由不受影响（工具调用已完整）。
-- 处置：记入 README「计划中」；真要打通时，参照 `openAIStreamToAnthropicSSE` 的有状态写法给 Gemini 侧补
-  `functionCall` 映射与 `toolConfig` 三态（`oaiRequestToGemini` 里已有可复用的映射代码）。
+
+> **整改记录（2026-09-28，v1.12）**：用户点名做这一条。查下去发现比登记时记的还多一处：
+> 入站 `functionCall` / `functionResponse` 虽然"没丢"，却是被**降级成一段可读文本**（给工具仿真链看的），
+> 而且 `tool_choice` 读的是 **OpenAI 的字段名** `body.tool_choice` —— 真正的 Gemini 客户端发的是
+> `toolConfig.functionCallingConfig`，所以"声明了 tools 的 Gemini 客户端"拿到的永远是 `auto`，`NONE`/`ANY` 形同虚设。
+>
+> 处置（入站 / 响应 / 流式三处）：
+> - `functionCall` → 真的 `assistant.tool_calls`；`functionResponse` → `role:"tool"`。Gemini **认函数名不认 id**，
+>   所以在入站这层合成 `call_g<n>_<name>` 形状的 id（沿用出站方向 `geminiPartsToOai` 的命名），
+>   用**同名 FIFO 队列**配对 —— 同一轮里同一函数调两次也能按出现顺序对上。
+> - **不做**的事（有意为之）：客户端只回结果、不带上文的 `functionCall` 时**绝不硬造 `tool_call_id`** ——
+>   OpenAI 上游看到"有 tool 消息却没有配对的 `assistant.tool_calls`"会直接 400。这种情况退回文本形态
+>   （与整改前行为一致），结果照样进上下文。
+> - `toolConfig.functionCallingConfig` 三态：`AUTO`→`auto`、`NONE`→`none`、`ANY`→（单一白名单时强制该函数，
+>   并**同时把工具集收窄到白名单**；多于一个时退化为 `required`，这是有损点，README 已记）。
+> - 响应侧 `tool_calls` → `functionCall` 部件（`arguments` JSON 解析回**对象**，解析失败塞 `_raw_arguments` 而不是静默丢件），
+>   `finishReason` 有工具调用时按 `STOP`（Gemini 没有 `tool_calls` 这个结束原因）；顺带把 `content_filter`/`refusal` → `SAFETY`
+>   与流式侧对齐。
+> - 流式：OpenAI 的 `tool_calls` 是**按 index 拆片**发的，而 Gemini 的 `functionCall.args` 必须是完整对象 ——
+>   所以 `openAIStreamToGeminiSSE(chunks, state)` 加了跨 chunk 状态，攒到 `finishReason` 才发一帧独立的 `functionCall`
+>   （真实 Gemini 的形状就是"functionCall 一帧、finishReason 一帧"），保证客户端在读到结束就停手时也不会漏工具调用。
+>   取舍与反方向 `createGeminiToOaiStream` 完全对称：宁可晚一点，也不发半个参数。
+>
+> **兼容性（这条是本轮最该被证明的）**：旧实现之所以降级成文本，是为了喂给"没有工具能力的渠道"走 `tool-emu` 仿真。
+> 改成真报文后仿真链会不会少东西？——不会：`tool-emu.renderEmulatedMessages` 本来就把 `assistant.tool_calls` 与
+> `role:"tool"` 渲染回**同样的文本**。这一点不靠口头声明，`test/gemini-tools.test.js` §5 直接调 `toolEmu.emulateRequest`
+> 断言"函数名、参数、执行结果都在，且仿真后是纯文本消息"。
+>
+> 回归：`test/gemini-tools.test.js`（单元 **44 项**：真值表 + 装配守卫 + 仿真兼容）与
+> `test/gemini-tools-e2e.test.js`（端到端 **29 项**：真起「OpenAI 假上游 + 临时网关」，走 `/gemini/v1beta/...`
+> 两轮工具回合、流式分片、三种 `toolConfig`、无状态退路、以及"不带 tools 的普通请求一个字没变"的对照）。
+> `test/gemini-multimodal.test.js` 里那条"functionCall 仍降级为可读文本"的旧判据**按设计作废**，
+> 改为断言真 `tool_calls`（兼容性改由上面那条直接调 `tool-emu` 的断言守住）。
+
 
 > **整改记录（2026-09-27，v1.4）**：用户点名「先做原生 anthropic / gemini 渠道」——这是最后一块结构性缺口。落地**原生出站**：
   内部统一格式（OpenAI）⇄ 上游原生格式双向转换，客户端协议与渠道协议彻底解耦（三条客户端路由 × 两种原生渠道全通）。

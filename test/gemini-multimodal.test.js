@@ -138,8 +138,14 @@ function testBackCompat() {
   const tool = api.geminiToOpenAI({
     contents: [{ role: 'model', parts: [{ functionCall: { name: 'get_weather', args: { city: '上海' } } }] }],
   }, 'm');
-  check('functionCall 仍降级为可读文本（工具仿真链未回归）',
-    typeof tool.messages[0].content === 'string' && tool.messages[0].content.includes('get_weather'));
+  /* 旧判据是"functionCall 降级为可读文本"——那是 PT33 未整改时的**权宜之计**，
+     v1.12 起走真的 tool_calls（工具仿真链照样吃得到，因为 tool-emu 本来就会把真 tool_calls
+     渲染回同样的文本；兼容性由 test/gemini-tools.test.js 直接调 tool-emu 证明，不靠这里口头断言）。 */
+  check('functionCall → 真的 assistant.tool_calls（不再是降级文本）',
+    tool.messages[0].role === 'assistant' && !tool.messages[0].content
+    && tool.messages[0].tool_calls && tool.messages[0].tool_calls[0].function.name === 'get_weather'
+    && tool.messages[0].tool_calls[0].function.arguments === '{"city":"上海"}',
+    tool.messages[0]);
 }
 
 /* ═══════ 4. 图片能力门：含图请求不得落到转不了图的渠道 ═══════ */
