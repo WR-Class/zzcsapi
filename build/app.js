@@ -1900,6 +1900,17 @@ function openTestModels(opts){
     all.indeterminate=!all.checked&&boxes.some(x=>x.checked);
   });
 }
+/* 渠道 id → 显示名（测试结果里要让用户一眼认出打的是哪个渠道，而不是看 id 猜） */
+function chName(id){const c=DATA.channels.find(x=>x.id===id);return (c&&c.name)||id;}
+/* 测试结果判定（纯函数，便于回归）：
+   · fail  —— 没通（网络 / HTTP / 上游拒绝）
+   · empty —— 通了（HTTP 2xx）但模型一个字没说。**既不能算"通过"**（会让人以为模型正常），
+               **也不能算"失败"**（会让人去查网络）—— 单列一档，用中性色显示。
+   · ok    —— 通了且有回复。 */
+function testRowVerdict(row){
+  if(!row||row.ok!==true)return 'fail';
+  return String(row.reply==null?'':row.reply).trim()?'ok':'empty';
+}
 /* 逐个模型打真实 /admin/api/test：指定 channelId 时上游只会返回该渠道一行结果。
    提示词与超时都走服务端默认（30s），测试成功会由服务端清零失败计数并回写渠道状态，
    所以跑完要 loadAll() 把最新状态拉回来。 */
@@ -1911,11 +1922,11 @@ async function runTests(){
   btn.disabled=true; btn.innerHTML=svg('send',13)+'运行中…';
   const wrap=$('#testOutWrap'), out=$('#testOut');
   wrap.style.display=''; out.innerHTML='';
-  let okN=0;
+  let okN=0, emptyN=0;
   for(const p of picks){
     const pend=document.createElement('div');
     pend.className='r wait';
-    pend.innerHTML=`${svg('clock',12)} 测试 ${esc(p.model)} @ ${esc(p.chan)} …`;
+    pend.innerHTML=`${svg('clock',12)} <b>${esc(p.model)}</b> <span class="muted">@ ${esc(chName(p.chan))}</span> …`;
     out.appendChild(pend); out.scrollTop=out.scrollHeight;
     let row;
     try{
@@ -1923,16 +1934,32 @@ async function runTests(){
       row=(r.results||[])[0]||{ok:false,error:'上游未返回结果'};
     }catch(e){row={ok:false,error:String((e&&e.message)||e)}}
     pend.remove();
-    if(row.ok)okN++;
+    const v=testRowVerdict(row);
+    if(v==='ok')okN++; else if(v==='empty')emptyN++;
+    /* 三档各自给中文标签 + 图标：只靠颜色区分，用户根本不知道自己看的是"通了"还是"没通" */
+    const meta={ok:['ok','check','通过'],empty:['wait','clock','空回复'],fail:['fail','warn','失败']}[v];
     const tok=(row.promptTokens!=null||row.completionTokens!=null)?` · ${row.promptTokens||0}+${row.completionTokens||0} tok`:'';
-    out.insertAdjacentHTML('beforeend',row.ok
-      ? `<div class="r ok"><span>${svg('check',12)}</span><span><b>${esc(p.chan)}</b> · ${fMs(row.latencyMs)}${tok}</span><span class="e">"${esc(String(row.reply||'').slice(0,160))}"</span></div>`
-      : `<div class="r fail"><span>${svg('warn',12)}</span><span><b>${esc(p.chan)}</b> · ${fMs(row.latencyMs)}${row.status?' · HTTP '+row.status:''}</span><span class="e">${esc(String(row.error||'失败').slice(0,200))}</span></div>`);
+    /* 每一行都带**模型名**（一个渠道挂多个模型时，只写渠道名等于没说测的是谁）+ 渠道显示名 */
+    const where=`<b>${esc(p.model)}</b> <span class="muted">@ ${esc(chName(p.chan))}</span>`;
+    const detail=v==='fail'
+      ? esc(String(row.error||'失败').slice(0,200))
+      : v==='empty'
+        ? '（HTTP 200 但回复为空 —— 模型没说任何话）'
+        : `"${esc(String(row.reply||'').slice(0,160))}"`;
+    out.insertAdjacentHTML('beforeend',
+      `<div class="r ${meta[0]}"><span>${svg(meta[1],12)}</span>`+
+      `<span>${where} · <b>${meta[2]}</b> · ${fMs(row.latencyMs)}${v==='fail'&&row.status?' · HTTP '+row.status:''}${tok}</span>`+
+      `<span class="e">${detail}</span></div>`);
     out.scrollTop=out.scrollHeight;
   }
+  const totalN=picks.length, failN=totalN-okN-emptyN;
   btn.disabled=false; btn.innerHTML=old;
-  setStatus($('#testSummary'),`${okN}/${picks.length} 通过 · 提示词「${prompt}」`,okN===picks.length?'ok':okN?'wait':'bad');
-  toast(okN===picks.length?`✓ 全部通过（${okN}/${picks.length}）`:okN===0?`✗ 全部失败（0/${picks.length}）`:`⚠ ${okN}/${picks.length} 通过`,okN===picks.length?'ok':'');
+  setStatus($('#testSummary'),
+    `通过 ${okN} · 空回复 ${emptyN} · 失败 ${failN}（共 ${totalN} 个 · 提示词「${prompt}」）`,
+    failN||emptyN?(okN?'wait':'bad'):'ok');
+  toast(failN===0&&emptyN===0?`✓ 全部通过（${okN}/${totalN}）`
+    :okN===0&&emptyN===0?`✗ 全部失败（0/${totalN}）`
+      :`⚠ 通过 ${okN} · 空回复 ${emptyN} · 失败 ${failN}`,failN===0&&emptyN===0?'ok':'');
   loadAll().catch(()=>{});
 }
 

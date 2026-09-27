@@ -138,11 +138,11 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 1448–1461 | `PROTO_META` `PROTO_ORDER` `chKey(id)` | 协议元数据 / 顺序 / **真实密钥取值**（原型是 `fakeKey`） |
 | 1468–1715 | `openChannelForm` … `saveChannel` | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换、保存（`weight` 随 `POST /admin/api/channels` 一起提交） |
 | 1715–1853 | `IMPORT_META` `parseCodexUnits` `parseGsSessionId` `openImport` `importCodexRt` `importGsSession` `doImport` `importFiles` | 导入：**真实对接** `codex-import` / `genspark-import` |
-| 1853–1940 | `openTestModels` `runTests` | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前） |
-| 1940–1967 | `drawer` `closeDrawer` `setTheme` | 抽屉 / 主题持久化 / 明暗互切 |
-| 1963–2005 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
-| 2005 | `tick()` | 时钟 |
-| 2015–2035 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 1853–1967 | `openTestModels` `chName` `testRowVerdict` `runTests` | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前）。**结果行必须能看懂**：每行带 `模型名` + 渠道显示名（`chName`）+ 中文结论（`testRowVerdict` 分 通过 / 空回复 / 失败 三档）+ 延迟 / token / 回复或错误原文 |
+| 1967–1994 | `drawer` `closeDrawer` `setTheme` | 抽屉 / 主题持久化 / 明暗互切 |
+| 1994–2036 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
+| 2036 | `tick()` | 时钟 |
+| 2046–2066 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
@@ -442,7 +442,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 406 + `ovSeries` 409 + `vOverview` 463 |
 | 渠道权重（输入框 / 表格列 / 抽屉角标） | **v1.5**：生产 `openChannelForm` 1468（`f-weight`）+ `saveChannel` 1666（提交 `weight`）+ `drawChTable` 698（「权重 / 分流」列）+ `openChannel` 744（抽屉角标）+ `adapt()` 58（映射 `w`/`wHits`/`wShare`）；后端 `weight` 语义见 README「加权轮询」。**原型未同步**（生产独有能力，原型不必追平） |
 | 自动权重观测页 | **v1.9**：生产 `NAV` 325（资源 → 自动权重）+ `vAutoWeight` 626 + `autoWeightCard` 634 + `build/extra.css` 的 `.aw-*`（10–57）；数据来自 `/admin/api/status` 的顶层 `autoWeight`。**原型未同步**（v1.9.1：份额列标签只留渠道显示名） |
-| 测试模型弹窗（停用渠道可测） | **v1.13**：生产 `openTestModels` 1853（不再按 `!c.on` 跳过停用渠道；停用渠道带「已停用」标记 + 说明文案，全局模式启用渠道排前）+ `runTests` 1906（逐条带 `channelId`，不走调度）。后端：`/admin/api/test` 带 `channelId` 时不看 `enabled`；自动探测 `probeAll` 默认跳过停用渠道、手动「全部重探测」显式 `includeDisabled:true`（见 README「自动 vs 手动的边界」）。`test/console-state.test.js` §5 真跑该弹窗做回归。**原型未同步**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`（设计稿演示逻辑，不随生产走；原型有 3 个 demo 停用渠道，点它们仍会看到空列表） |
+| 测试模型弹窗（停用渠道可测 + 结果可读） | **v1.13**：生产 `openTestModels` 1853（不再按 `!c.on` 跳过停用渠道；停用渠道带「已停用」标记 + 说明文案，全局模式启用渠道排前）+ `testRowVerdict` 1910（结果三档：通过 / **空回复** / 失败；判定为纯函数，`test/console-state.test.js` §6 跑真值表）+ `chName` 1904（结果行写渠道显示名）+ `runTests` 1917（逐条带 `channelId`，不走调度；每行带模型名与中文结论，汇总分开数三档）。后端：`/admin/api/test` 带 `channelId` 时不看 `enabled`；自动探测 `probeAll` 默认跳过停用渠道、手动「全部重探测」显式 `includeDisabled:true`（见 README「自动 vs 手动的边界」）。`test/console-state.test.js` §5/§6 真跑该弹窗与结果渲染做回归。**原型未同步**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`（设计稿演示逻辑，不随生产走；原型有 3 个 demo 停用渠道，点它们仍会看到空列表） |
 
 ---
 
