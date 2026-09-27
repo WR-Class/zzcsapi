@@ -72,6 +72,13 @@ function adapt() {
       w:c.weight == null ? 0 : Number(c.weight) || 0,
       wHits:Number(c.weightedHits) || 0,
       wShare:Number(c.weightedShare) || 0,
+      /* 自动权重观测（v1.6 静默版，**只算不生效**）：ah = 健康系数 0~1；
+         aFail/aN/aLat/aSpd = 这个系数是凭什么算出来的（失败率 / 样本数 / 延迟 / 相对最快者的倍数） */
+      ah:c.autoH == null ? null : Number(c.autoH),
+      aFail:c.autoFailRate == null ? null : Number(c.autoFailRate),
+      aN:Number(c.autoSamples) || 0,
+      aLat:c.autoLatMs == null ? null : Number(c.autoLatMs),
+      aSpd:c.autoSpeedRatio == null ? null : Number(c.autoSpeedRatio),
       req:u.requests || 0, err:u.errors || 0,
       aliases:c.aliases || [], upstreamModels:c.upstreamModels || [],
       baseUrl:c.baseUrl || '', apiKey:c.apiKey || '',
@@ -111,6 +118,14 @@ function adapt() {
       models:models.length, at:Date.now(),
     },
     trend, days, channels:chans, models, logs,
+    /* 自动权重观测（v1.6 静默版）：后端算好的"若启用会怎么分"，只用于展示 */
+    auto: RAW.auto ? {
+      enabled: RAW.auto.enabled === true,
+      effective: RAW.auto.effective === true,
+      knobs: RAW.auto.knobs || {},
+      at: RAW.auto.at || 0,
+      models: RAW.auto.models || [],
+    } : null,
     donut:[
       { k:'正常', v:cnt.ok, c:'var(--ok)' },
       { k:'降级', v:cnt.degraded, c:'var(--warn)' },
@@ -125,7 +140,7 @@ async function loadAll() {
     api('/admin/api/usage').catch(() => null),
     api('/admin/api/config').catch(() => null),
   ]);
-  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg };
+  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg, auto:(st && st.autoWeight) || null };
   CFG = cfg || CFG;
   adapt();
   loaded = true;
@@ -596,10 +611,51 @@ function vChannels(v){
     <button class="btn ml-auto" onclick="recheckAll(this)">${svg('test',14)}全部重探测</button>
   </div>
 
+  ${autoWeightCard()}
   <div class="card"><div class="card-bd tight tbl-wrap" id="chTable"></div></div>`;
   $$('#chTabs .tab',v).forEach(t=>t.onclick=()=>{chTab=t.dataset.t;$$('#chTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawChTable()});
   $('#chQ',v).oninput=e=>{chQ=e.target.value;drawChTable()};
   drawChTable();
+}
+/* 自动权重观测卡（v1.6 静默版）：回答"如果开了自动权重，同一个模型的候选会怎么分"。
+   只读展示——后端这一版也只算不生效，所以这里的数字与实际分流无关（卡头写明了）。
+   刻意只用行内样式：不新增 CSS 就不会动 extra.css，也就不会让代码地图里的行号偏移失效。 */
+function autoWeightCard(){
+  const a=DATA.auto; if(!a) return '';
+  const nm=(id)=>{const c=DATA.channels.find(x=>x.id===id);return c?c.name:id;};
+  const k=a.knobs||{};
+  const ms=(a.models||[]).filter(m=>(m.candidates||[]).length>1);
+  const expl=`按真实成功率与延迟算 · 速度权重 ${k.latencyPenalty} · 地板 ${k.floor} · 单渠道上限 ${k.maxShare}% · `
+    +`失败率样本 <${k.minSamples} 条不扣分 · <b>当前分流一字未动</b>`;
+  const hd=`<div class="card-hd"><h3>自动权重 · 观测</h3><span class="sub">${expl}</span></div>`;
+  if(!ms.length) return `<div class="card" style="margin-bottom:14px">${hd}
+    <div class="card-bd tight"><div class="empty">当前没有「同一个模型被多个渠道提供」的情况，暂无可观测的分流</div></div></div>`;
+  const rows=ms.slice(0,6).map(m=>{
+    const cands=m.candidates.map(c=>{
+      const col=c.h>=0.9?'var(--ok)':c.h>=0.6?'var(--warn)':'var(--err)';
+      const why=[c.failRate!=null?`失败率 ${Math.round(c.failRate*100)}%`:`失败率样本只有 ${c.samples} 条（不足 ${k.minSamples}，这一项不扣分）`,
+        c.speedRatio!=null?`延迟 ${c.latMs}ms（最快的 ${c.speedRatio} 倍）`:'无延迟数据（不按速度扣分）'].join(' · ');
+      return `<div style="min-width:150px;flex:1">
+        <div class="row" style="gap:6px;align-items:baseline">
+          <span class="mono" style="font-size:11px">${esc(nm(c.id))}</span>
+          <span class="mono" style="font-size:12px;font-weight:600">${c.share}%</span>
+          ${c.h<1?`<span style="font-size:10px;color:${col}" title="${why}">健康 ${c.h.toFixed(2)}</span>`
+                 :`<span class="muted" style="font-size:10px" title="${why}">健康</span>`}
+          ${c.nowShare!=null?`<span class="muted" style="font-size:10px" title="当前手工权重下的真实份额">当前 ${c.nowShare}%</span>`:''}
+        </div>
+        <div class="proto-bar" title="${why}"><i style="width:${Math.max(2,Math.min(100,c.share))}%;background:${col}"></i></div>
+      </div>`;
+    }).join('');
+    return `<div style="padding:9px 0;border-top:1px solid var(--line)">
+      <div class="row" style="gap:8px;align-items:baseline;margin-bottom:7px">
+        <span class="mono" style="font-size:12px">${esc(m.model)}</span>
+        <span class="muted" style="font-size:11px">${m.candidates.length} 个候选 · ${nf(m.requests)} 次请求${m.manualOff?' · 当前未开加权轮询':''}${(m.excluded||[]).length?' · 已排除 '+m.excluded.map(nm).join('、'):''}</span>
+      </div>
+      <div class="row wrap" style="gap:10px">${cands}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:14px">${hd}
+    <div class="card-bd tight">${rows}${ms.length>6?`<div class="muted" style="font-size:11px;padding-top:8px">还有 ${ms.length-6} 个多候选模型未显示</div>`:''}</div></div>`;
 }
 function drawChTable(){
   const box=$('#chTable'); if(!box) return;
@@ -672,6 +728,15 @@ function openChannel(id){
           ? `<span class="tag" title="加权轮询：同一模型的候选里按权重比例分流；占比 = 命中次数 ÷ 全部加权轮询命中（重启后重新计数）">权重 ${c.w} · 分流 ${c.wShare.toFixed(0)}%<span class="muted" style="margin-left:4px">(${c.wHits} 次)</span></span>`
           : `<span class="tag muted" title="权重为 0（或不填）= 不参与加权轮询，只按优先级 / 健康度做兜底">未参与加权轮询<span class="muted" style="margin-left:4px">· 点「编辑」可设权重</span></span>`}
       </div>
+
+      <div class="sec-title">自动权重（观测 · 只算不生效）</div>
+      <div class="row wrap" style="gap:9px;margin-bottom:8px">
+        <span class="tag" title="健康系数 0~1：若启用自动权重，这家会按它打折分流；现在只用于展示">健康系数 ${c.ah==null?'—':c.ah.toFixed(2)}</span>
+        <span class="tag" title="滚动窗口里的请求数（成功 + 失败）">样本 ${c.aN}</span>
+        <span class="tag" title="滚动窗口失败率：健康系数的主力信号；样本少于门槛时该项不参与，速度项仍独立生效">失败率 ${c.aFail==null?`<span class="muted">样本不足，不扣分</span>`:Math.round(c.aFail*100)+'%'}</span>
+        <span class="tag" title="该渠道最近成功请求的延迟指数平均，与其相对最快渠道的倍数">延迟 ${c.aLat==null?`<span class="muted">没有数据</span>`:`${c.aLat}ms${c.aSpd?'（'+c.aSpd+'× 最快）':''}`}</span>
+      </div>
+      <div class="help" style="display:block;margin-bottom:16px">这一版只**计算并展示**：真实分流仍完全按你填的权重（没填就按优先级兜底），上面的系数不会被执行。信道页顶部的观测卡能看到「同一个模型的多个候选会怎么分」。</div>
 
       <div class="sec-title">接入配置</div>
       <dl class="kv">

@@ -284,9 +284,115 @@ function testWeight() {
   }
 }
 
-/* ═══════ 4. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
+/* ═══════ 4. 自动权重观测（v1.6 静默版）：adapt() 接字段 + 观测卡渲染 ═══════
+   这一节守住"看得见"那一半：后端算出来的观测字段真被接进 DATA、观测卡真把
+   「若启用会怎么分」画出来，并且**卡面上写明只算不生效**（不许让用户以为已经生效了）。 */
+function testAutoWeight() {
+  G('4. 自动权重观测：adapt() 接字段 → 观测卡画出预测份额 + 明示"只算不生效"');
+
+  /* 4.1 adapt()：观测字段与 DATA.auto 都要接进来 */
+  {
+    const dom = makeDom();
+    const RAW = {
+      channels: [
+        { id: 'a', name: 'A', protocol: 'openai', enabled: true, status: 'ok', aliases: [], autoH: 0.62, autoFailRate: 0.3, autoSamples: 20, autoLatMs: 240, autoSpeedRatio: 2.4 },
+        { id: 'b', name: 'B', protocol: 'openai', enabled: true, status: 'ok', aliases: [], autoSamples: 0 },
+      ],
+      usage: null,
+      auto: {
+        enabled: true, effective: false, knobs: { floor: 0.2, maxShare: 70, latencyPenalty: 0.5, minSamples: 10 }, at: 123,
+        models: [{ model: 'm1', requests: 9, manualOff: true, excluded: [], candidates: [{ id: 'a', share: 38, h: 0.62 }, { id: 'b', share: 62, h: 1 }] }],
+      },
+    };
+    const a = new Function('RAW', 'DATA', 'esc', 'svg', 'nf', '$',
+      'let CFG=null, loaded=false;\n' + extract('adapt') + '\nreturn { adapt, get DATA(){ return DATA } };'
+    )(RAW, { channels: [], models: [], meta: {} }, esc, svg, nf, dom.$);
+    a.adapt();
+    const D = a.DATA;
+    const chA = D.channels.find((c) => c.id === 'a');
+    const chB = D.channels.find((c) => c.id === 'b');
+    check('★ 每个渠道的观测字段都接进来了（健康系数/失败率/样本/延迟/速度比）',
+      chA.ah === 0.62 && chA.aFail === 0.3 && chA.aN === 20 && chA.aLat === 240 && chA.aSpd === 2.4);
+    check('没有数据的渠道给 null/0，而不是 undefined（模板能直接算）',
+      chB.ah === null && chB.aFail === null && chB.aN === 0 && chB.aLat === null && chB.aSpd === null);
+    check('★ DATA.auto 的观测块接进来了（含预测份额与旋钮）',
+      D.auto && D.auto.models.length === 1 && D.auto.models[0].candidates[0].share === 38 && D.auto.knobs.maxShare === 70);
+    check('★ effective=false 被如实带过来（界面上要能看出"还没生效"）',
+      D.auto.effective === false && D.auto.enabled === true);
+  }
+
+  /* 4.2 autoWeightCard()：画出"若启用会怎么分"，并明确写着当前分流没动 */
+  {
+    const mk = (auto) => {
+      const dom = makeDom();
+      const DATA = {
+        channels: [{ id: 'a', name: '甲渠道' }, { id: 'b', name: '乙渠道' }],
+        auto,
+      };
+      const f = new Function('DATA', 'esc', 'nf', extract('autoWeightCard') + '\nreturn { autoWeightCard };')(DATA, esc, nf);
+      return f.autoWeightCard();
+    };
+    const html = mk({
+      enabled: true, effective: false, knobs: { floor: 0.2, maxShare: 70, latencyPenalty: 0.5, minSamples: 10 }, at: 1,
+      models: [
+        { model: 'm1', requests: 42, manualOff: true, excluded: [], candidates: [
+          { id: 'a', share: 38, h: 0.62, failRate: 0.3, samples: 20, latMs: 240, speedRatio: 2.4, nowShare: null },
+          { id: 'b', share: 62, h: 1, failRate: 0, samples: 12, latMs: 100, speedRatio: 1, nowShare: null },
+        ] },
+      ],
+    });
+    check('卡里出现模型名与两个候选的预测份额', html.includes('m1') && html.includes('38%') && html.includes('62%'));
+    check('★ 用渠道**名字**而不是 id 展示（否则用户对不上是哪家）', html.includes('甲渠道') && html.includes('乙渠道'));
+    check('★ 不合格的候选给出可解释的原因（失败率 / 速度倍数）', html.includes('失败率 30%') && html.includes('2.4 倍'));
+    check('★ 卡头明示「当前分流一字未动」（不许让人误以为已经生效）', html.includes('当前分流一字未动'));
+    check('旋钮值也写出来（速度权重 / 地板 / 上限 / 样本门槛）',
+      html.includes('速度权重 0.5') && html.includes('地板 0.2') && html.includes('单渠道上限 70%') && html.includes('失败率样本 <10 条不扣分'));
+
+    /* 真机实测会遇到的情形：新渠道失败率样本不足（该项不扣分），但它延迟很慢 → h 仍被速度项压低。
+       此时提示必须写清"是哪一项在扣分"，否则用户会以为"样本不足就不该动"。 */
+    const noSamples = mk({
+      enabled: true, effective: false, knobs: { floor: 0.2, maxShare: 70, latencyPenalty: 0.5, minSamples: 10 }, at: 1,
+      models: [{ model: 'm3', requests: 7, manualOff: true, excluded: [], candidates: [
+        { id: 'a', share: 30, h: 0.53, failRate: null, samples: 1, latMs: 12304, speedRatio: 19, nowShare: null },
+        { id: 'b', share: 70, h: 1, failRate: 0, samples: 40, latMs: 640, speedRatio: 1, nowShare: null },
+      ] }],
+    });
+    check('★ 失败率样本不足时标明"这一项不扣分"，同时仍给出速度项的理由（速度不看样本）',
+      noSamples.includes('失败率样本只有 1 条（不足 10，这一项不扣分）') && noSamples.includes('延迟 12304ms（最快的 19 倍）'));
+    check('健康的那家不显示"健康 1.00"这种噪音（只显示"健康"）', !html.includes('健康 1.00'));
+
+    const empty = mk({ enabled: false, effective: false, knobs: {}, at: 0, models: [] });
+    check('★ 没有多候选模型时给空状态，而不是画一张空表', empty.includes('暂无可观测的分流'));
+
+    const single = mk({ enabled: true, effective: false, knobs: {}, at: 0, models: [{ model: 'solo', requests: 3, candidates: [{ id: 'a', share: 100, h: 1 }] }] });
+    check('★ 单候选模型不进卡（一个提供方谈不上分流，显示了只会是"100%"噪音）',
+      single.includes('暂无可观测的分流'));
+
+    const withNow = mk({
+      enabled: true, effective: false, knobs: {}, at: 0,
+      models: [{ model: 'm2', requests: 5, manualOff: false, excluded: ['c'], candidates: [
+        { id: 'a', share: 40, h: 0.8, failRate: 0.2, samples: 30, latMs: 200, speedRatio: 2, nowShare: 75 },
+        { id: 'b', share: 60, h: 1, failRate: 0, samples: 30, latMs: 100, speedRatio: 1, nowShare: 25 },
+      ] }],
+    });
+    check('有手工权重时给出「当前 x%」的对照（能看出自动和手工会差多少）', withNow.includes('当前 75%') && withNow.includes('当前 25%'));
+    check('被排除的候选（冷却/down）单独写出来', withNow.includes('已排除'));
+  }
+
+  /* 4.3 抽屉里那一块：结构守卫（渲染要一整套 stub，这里只保证文案与字段还在） */
+  {
+    const oc = extract('openChannel');
+    check('★ 抽屉里有「自动权重（观测 · 只算不生效）」这一节', oc.includes('自动权重（观测 · 只算不生效）'));
+    check('★ 抽屉里把判断依据摊开（健康系数 / 样本 / 失败率 / 延迟）',
+      oc.includes('健康系数') && oc.includes('样本 ') && oc.includes('失败率 ') && oc.includes('延迟 '));
+    check('抽屉里也写明"系数不会被执行"', oc.includes('上面的系数不会被执行'));
+    check('vChannels 真的挂上了观测卡（否则写了没人用）', extract('vChannels').includes('autoWeightCard()'));
+  }
+}
+
+/* ═══════ 5. 对照组：证明本测试抓得住「没有回填」的旧写法（防恒真） ═══════ */
 function testControl() {
-  G('4. 对照组（用整改前的写法跑同样断言，必须失败）');
+  G('5. 对照组（用整改前的写法跑同样断言，必须失败）');
   const v = mkEl('viewport');
   v.innerHTML = '<div class="search"><input id="mQ" placeholder="搜索模型名…"></div>';   /* 整改前的模板 */
   const rendered = (v.innerHTML.match(/id="mQ"[^>]*value="([^"]*)"/) || [])[1];
@@ -295,7 +401,8 @@ function testControl() {
 
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
-  ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel'].forEach(extract);
+  ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
+   'autoWeightCard', 'openChannel', 'vChannels'].forEach(extract);
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"'].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
@@ -308,6 +415,7 @@ try {
   testModels();
   testPlayground();
   await testWeight();
+  testAutoWeight();
   testControl();
 
   console.log('\n' + '─'.repeat(58));

@@ -1867,8 +1867,11 @@ const server = http.createServer(async (req, res) => {
 
 function channelStatusAll() {
   const wstats = weightedStats(); // 轮询命中统计（算一次，避免每个渠道重算）
+  const autoObs = autoWeightObserve(); // 自动权重观测（只算不生效，v1.6）
   return {
-    channels: Array.from(channels.values()).map((ch) => ({
+    channels: Array.from(channels.values()).map((ch) => {
+      const ast = AUTO_STATE.get(ch.def.id);
+      return {
       id: ch.def.id,
       name: ch.def.name || ch.def.id,
       baseUrl: ch.def.baseUrl,
@@ -1879,6 +1882,12 @@ function channelStatusAll() {
       weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
       weightedHits: wstats.channels[ch.def.id]?.hits || 0,
       weightedShare: wstats.channels[ch.def.id]?.share || 0,
+      // 自动权重观测（静默：不影响分流，只是"若启用会怎么算"的输入）
+      autoH: ast ? ast.h : null,
+      autoFailRate: ast ? ast.failRate : null,
+      autoSamples: ast ? ast.samples : 0,
+      autoLatMs: ast ? ast.latMs : null,
+      autoSpeedRatio: ast ? ast.speedRatio : null,
       rollFailRate: rollFailRate(ch),
       roll: ch.roll || undefined,
       enabled: ch.def.enabled !== false,
@@ -1895,7 +1904,16 @@ function channelStatusAll() {
       aliases: Array.from(ch.aliasMap.entries()).map(([a, u]) => ({ alias: a, upstream: u })),
       upstreamModels: ch.models,
       notionUsage: ch.notion && ch.notion.usage ? ch.notion.usage : undefined,
-    })),
+      };
+    }),
+    // 自动权重观测总览：旋钮现值 + 每个"多候选模型"的预测份额（静默版的核心产出）
+    autoWeight: {
+      enabled: AUTO_W.enabled,
+      effective: false, // v1.6 恒为 false：观测不生效，见 README「自动权重（观测版）」
+      knobs: { ...AUTO_W },
+      at: AUTO_LAST_AT || null,
+      models: autoObs,
+    },
     aggregated: {
       openai: aggregateModels('openai'),
       anthropic: aggregateModels('anthropic'),
@@ -1914,6 +1932,9 @@ function persistConfig() {
     port: config.port,
     health: config.health,
     retries: config.retries,
+    // 自动权重旋钮：必须在白名单里——否则控制台随便保存一次渠道就会把用户调好的参数从 config.json 里抹掉
+    // （与渠道 weight 字段同一个坑，见 PT29）
+    autoWeight: { ...AUTO_W },
     // 首启生成的密钥随配置一起持久化（env 显式提供的密钥不落盘——config.adminKey 保持未设置）
     adminKey: config.adminKey || undefined,
     gatewayKey: config.gatewayKey || undefined,
@@ -2044,6 +2065,187 @@ function effPriority(ch) {
   return fr === null ? p : Math.round((p - fr * 3) * 100) / 100;
 }
 
+/* ══════════════════ 自动权重（静默观测版，v1.6）══════════════════
+ *
+ * 想要的效果：不手填 weight，也让"同一个模型的多个候选"按**实测表现**自动分配份额
+ * （有的能用有的不能用、有的快有的慢 ⇒ 好的多拿、坏的少拿、坏透的本来就进不了池）。
+ *
+ * 本版**只算与只显示**：pickWeighted 仍旧只认 ch.def.weight，一行都不碰真实路由。
+ * 理由：自动权重天然有反馈回路（份额改流量 → 流量改统计 → 统计改份额），
+ * 先让人对着真实数据看它算得对不对，确认无误再打开开关让它生效。
+ * 因此 `enabled` 目前是**预留字段**——就算置 true，本版也不改分流（README 里写明了）。
+ *
+ * 健康系数 h（0 到 1，地板 AUTO_FLOOR）由两个已有信号合成，不引入新统计：
+ *   1) 成功率：复用滚动窗口 ch.roll（bumpRoll 已在每次请求里维护，120 样本自动减半）
+ *      —— 失败证据优先：h 的主力是它。
+ *   2) 速度：该渠道最近成功请求的延迟 EWMA（ch.latEwma）相对池内最快者的比值
+ *      —— 只做**温和**惩罚且给地板，因为"慢"常常是长上下文/推理模型在思考，饿死它反而丢质量。
+ * 抗振荡三件套：低频（updateMs 才重算一次）+ 指数平滑（ewma）+ 死区（变化小于 deadband 不动）。
+ */
+const AUTO_W = { enabled: false };
+const AUTO_STATE = new Map(); // channelId → { h, at, failRate, samples, latMs, speedRatio }
+let AUTO_LAST_AT = 0;
+
+function normAutoWeight(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const num = (v, d, lo, hi) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+  };
+  return {
+    enabled: o.enabled === true,                              // 预留：本版置 true 也不改分流
+    minSamples: Math.round(num(o.minSamples, 10, 1, 1000)),    // 样本不足不动
+    floor: num(o.floor, 0.2, 0, 1),                            // 健康系数地板
+    latencyPenalty: num(o.latencyPenalty, 0.5, 0, 1),          // 速度惩罚强度（0 = 不看速度）
+    maxShare: num(o.maxShare, 70, 1, 100),                     // 单渠道预测份额上限（%）
+    updateMs: Math.round(num(o.updateMs, 30000, 1000, 3600000)), // 重算间隔（低频抗振荡）
+    ewma: num(o.ewma, 0.5, 0.05, 1),                           // 新值权重
+    deadband: num(o.deadband, 0.1, 0, 1),                      // 死区（相对）
+  };
+}
+Object.assign(AUTO_W, normAutoWeight(config.autoWeight));
+
+// 同模型候选的**纯枚举**：与 channelsServing 的别名规则一致，但绝不调用它
+// —— channelsServing 末尾会走 applyWeightedPick，动 SWRR_CUR/SWRR_HITS（有副作用）。
+// 观测必须是无副作用的，否则"看一眼"就把分流改了。
+function pureCandidatesFor(model) {
+  const want = String(model || '').toLowerCase().trim();
+  if (!want) return [];
+  const out = [];
+  for (const ch of channels.values()) {
+    if (ch.def.enabled === false) continue;
+    if (ch.aliasMap.has(want)) out.push({ ch, kind: 'explicit', upstream: ch.aliasMap.get(want) });
+    else if (ch.def.autoAlias !== false && ch.models.includes(want)) out.push({ ch, kind: 'auto', upstream: want });
+  }
+  return out;
+}
+
+// 按 maxShare 归一化成百分比。两条规则别搞混：
+//   · `manual: true`（用户手填了 weight）的候选**永不封顶**——手工权重是硬意图，护栏不该反过来压制它；
+//   · maxShare 只兜自动算出来的份额（防"最快的那家被顶到 90% → 被打爆 → 反而更慢"的赢家通吃）。
+// 单个候选不封顶（只有一个提供方时它就是 100%，谈不上抢份额）；候选多到 maxShare×n < 100 时
+// 数学上不可能人人都不超上限，退化成平均分（cap 取 max(maxShare, 100/n)）而不是留下一个永远不收敛的循环。
+function capShares(items, maxShare) {
+  const n = items.length;
+  const total = items.reduce((s, it) => s + it.w, 0);
+  if (!n || total <= 0) return items.map(() => 0);
+  if (n === 1) return [100];
+  const cap = Math.max(maxShare, 100 / n);
+  let share = items.map((it) => (it.w / total) * 100);
+  for (let round = 0; round < n + 2; round++) {
+    const over = share.map((s, i) => (s > cap + 1e-9 && !items[i].manual ? i : -1)).filter((i) => i >= 0);
+    if (!over.length) break;
+    for (const i of over) share[i] = cap;
+    const rest = 100 - over.reduce((s, i) => s + share[i], 0);
+    const free = share.map((s, i) => (over.includes(i) ? -1 : i)).filter((i) => i >= 0);
+    const freeW = free.reduce((s, i) => s + items[i].w, 0);
+    for (const i of free) share[i] = freeW > 0 ? (items[i].w / freeW) * rest : rest / free.length;
+  }
+  const sum = share.reduce((s, v) => s + v, 0);
+  return share.map((s) => (sum > 0 ? Math.round((s / sum) * 1000) / 10 : 0));
+}
+
+// 单个渠道的**原始**健康分（只看失败率与延迟，不含速度项/平滑）。
+// 低频：updateMs 内复用缓存——失败率与延迟都是慢变量，每秒重算只会让份额在噪声里抖。
+function autoRawFor(ch, now) {
+  const prev = AUTO_STATE.get(ch.def.id);
+  if (prev && now - prev.at < AUTO_W.updateMs) return prev;
+  const r = ch.roll || { w: 0, f: 0 };
+  const samples = r.w + r.f;
+  const failRate = samples >= AUTO_W.minSamples ? r.f / samples : null; // 样本不足 = 不动它（新渠道不被噪声打死）
+  const latMs = ch.latEwma != null ? Math.round(ch.latEwma) : null;
+  const st = Object.assign(prev || {}, {
+    at: now, samples, failRate, latMs,
+    rawH: failRate === null ? 1 : Math.max(0, 1 - failRate),           // 失败证据：主力信号
+  });
+  AUTO_STATE.set(ch.def.id, st);
+  return st;
+}
+
+// 一次观测：算每个渠道的健康系数（原始分 → 速度项 → 平滑/死区），再给每个有 ≥2 候选的模型算预测份额。
+// 全程只读：不碰 SWRR_*、不改 ch.def、不发请求。
+function autoWeightObserve() {
+  const now = Date.now();
+  const all = Array.from(channels.values());
+  for (const ch of all) autoRawFor(ch, now);
+
+  // 速度项：以"所有有延迟数据的渠道"里最快者为 1×，慢的按强度温和打折（默认 2× 慢只打 0.75）
+  const lats = all.map((ch) => AUTO_STATE.get(ch.def.id)?.latMs).filter((v) => v > 0);
+  const fastest = lats.length ? Math.min(...lats) : null;
+  const clamp01 = (v) => Math.max(AUTO_W.floor, Math.min(1, v));
+  for (const ch of all) {
+    const st = AUTO_STATE.get(ch.def.id);
+    if (!st) continue;
+    let target = st.rawH;
+    if (fastest && st.latMs > 0) {
+      st.speedRatio = Math.round((st.latMs / fastest) * 100) / 100;
+      target *= 1 - AUTO_W.latencyPenalty * (1 - Math.min(1, fastest / st.latMs));
+    } else {
+      st.speedRatio = null;                                            // 没有延迟数据 = 不因速度扣分
+    }
+    target = clamp01(target);
+    // 指数平滑 + 死区：变化小于 deadband（相对）就不动 → 抗振荡的核心
+    if (st.h == null) st.h = target;
+    else {
+      const smoothed = st.h * (1 - AUTO_W.ewma) + target * AUTO_W.ewma;
+      st.h = Math.abs(smoothed - st.h) < AUTO_W.deadband * st.h ? st.h : smoothed;
+    }
+    st.h = Math.round(clamp01(st.h) * 1000) / 1000;
+  }
+
+  // 预测份额：只看有 ≥2 个候选的模型（一个候选谈不上分流），按请求量取前 12 个
+  const u = ensureUsage();
+  const reqOf = (m) => (u.byModel && u.byModel[m] ? u.byModel[m].requests || 0 : 0);
+  const models = [];
+  for (const model of aggregateModels()) {
+    const cands = pureCandidatesFor(model);
+    if (cands.length < 2) continue;
+    models.push({ model, cands, req: reqOf(model) });
+  }
+  models.sort((a, b) => b.req - a.req || a.model.localeCompare(b.model));
+
+  const out = [];
+  for (const { model, cands } of models.slice(0, 12)) {
+    const dead = (ch) => ch.cooldownUntil > now || ch.status === 'down';
+    const live = cands.filter((c) => !dead(c.ch));                     // 冷却/down 本来就不进池
+    const items = live.map((c) => {
+      const st = AUTO_STATE.get(c.ch.def.id) || { h: 1 };
+      // 没填权重时基础权重取 1 —— 这正是"不配置也能自动分流"的关键：开了开关，所有候选都进池
+      const base = Number(c.ch.def.weight) > 0 ? Number(c.ch.def.weight) : 1;
+      return { c, base, h: st.h, w: base * st.h, manual: Number(c.ch.def.weight) > 0 };
+    });
+    const shares = capShares(items.map((it) => ({ w: it.w, manual: it.manual })), AUTO_W.maxShare);
+    // 对照：**当前**（手工权重）在同样候选里的份额；全都没填 weight 时 = 未启用加权轮询（走排序第一位）
+    const manual = live.filter((c) => Number(c.ch.def.weight) > 0);
+    const manualTotal = manual.reduce((s, c) => s + Number(c.ch.def.weight), 0);
+    out.push({
+      model,
+      requests: reqOf(model),
+      excluded: cands.filter((c) => dead(c.ch)).map((c) => c.ch.def.id),
+      manualOff: manual.length === 0,
+      candidates: items.map((it, i) => ({
+        id: it.c.ch.def.id,
+        kind: it.c.kind,
+        base: it.base,
+        manual: it.manual,
+        h: it.h,
+        share: shares[i],
+        nowShare: Number(it.c.ch.def.weight) > 0 && manualTotal > 0
+          ? Math.round((Number(it.c.ch.def.weight) / manualTotal) * 1000) / 10 : null,
+        status: it.c.ch.status,
+        cooldown: it.c.ch.cooldownUntil > now,
+        failRate: AUTO_STATE.get(it.c.ch.def.id)?.failRate ?? null,
+        samples: AUTO_STATE.get(it.c.ch.def.id)?.samples ?? 0,
+        latMs: AUTO_STATE.get(it.c.ch.def.id)?.latMs ?? null,
+        speedRatio: AUTO_STATE.get(it.c.ch.def.id)?.speedRatio ?? null,
+        weight: Number(it.c.ch.def.weight) > 0 ? Number(it.c.ch.def.weight) : 0,
+      })),
+    });
+  }
+  AUTO_LAST_AT = now;
+  return out;
+}
+
 // 记一次请求用量。realUsage 可传 {prompt_tokens, completion_tokens}（上游真实值优先）
 function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage, note }) {
   try {
@@ -2055,6 +2257,14 @@ function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, la
     if (realUsage && Number.isFinite(realUsage.completion_tokens) && realUsage.completion_tokens > 0) outTok = realUsage.completion_tokens;
     const ts = Date.now();
     bumpRoll(channels.get(channelId), ok !== false); // 滚动健康分（自动优先级用；失败经 recordFailure 也流经此处）
+    // 延迟 EWMA（只记成功请求）：给自动权重观测当"速度"输入，避免每次去扫 usage.recent 全表
+    if (ok !== false && Number(latencyMs) > 0) {
+      const lch = channels.get(channelId);
+      if (lch) {
+        lch.latEwma = lch.latEwma == null ? Number(latencyMs) : lch.latEwma * 0.7 + Number(latencyMs) * 0.3;
+        lch.latN = (lch.latN || 0) + 1;
+      }
+    }
     u.total.requests++;
     if (!ok) u.total.errors++;
     u.total.inputTokens += inTok;
@@ -2240,7 +2450,8 @@ async function handleAdminApi(req, res, url) {
     const body = await safeReadJson(req);
     const err = validateChannelDef(body);
     if (err) return sendJson(res, 400, { error: err });
-    // 已有的 weight 不能被"本次没传这个字段"抹掉（控制台表单暂未提供权重输入框）
+    // 已有的 weight 不能被"本次没传这个字段"抹掉（v1.5 起控制台表单会**显式**提交 weight：
+    // 留空 = 真的清成 0；只有那些老客户端/导入流程不传 weight 时才沿用旧值）
     const prevDef = channels.get(body.id)?.def;
     const def = {
       id: body.id,
@@ -2747,6 +2958,7 @@ async function handleAdminApi(req, res, url) {
     channels.delete(body.id);
     // 顺手清掉轮询状态：渠道删除后残留会让"同 id 重新加回来"继承旧的当前权值
     SWRR_CUR.delete(body.id); SWRR_HITS.delete(body.id);
+    AUTO_STATE.delete(body.id); // 自动权重观测状态同理：不留旧健康分（否则重加回来显示的是上一个渠道的成绩）
     persistConfig();
     return sendJson(res, 200, { ok: true, id: body.id });
   }
