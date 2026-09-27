@@ -248,7 +248,14 @@ function loadConfig() {
 const config = loadConfig();
 const PORT = config.port || 8787;
 const HEALTH = config.health || { intervalSec: 300, timeoutMs: 8000 };
-const RETRIES = config.retries || { perChannel: 1, maxModelFallbacks: 99 };
+const RETRIES = config.retries || { perChannel: 0, maxModelFallbacks: 99 };
+
+// ★ perChannel（v1.9.3 起真正接线，此前只读不用）＝ **同一个渠道**失败后原地再试几次，试完才换下一家。
+//   语义钉死三条：① 只对"可重试的失败"生效（5xx / 网络错误 / 超时），4xx 一律不重试——重发同一个请求
+//   只会再收一次同样的拒绝，该切下家就切；② 每次尝试都各记一次失败（recordFailure 在 tryChannel 内），
+//   所以连败计数与指数退避按**真实尝试次数**增长，不被打折；③ 钳制 0..5，配置写错不该把上游调用量放大十倍。
+//   注意默认值：配置里没有这个键时是 **0**（不重试 = 与接线前的行为一致），要重试必须显式写 ≥1。
+const PER_CHANNEL_RETRIES = Math.max(0, Math.min(5, Math.floor(Number(RETRIES.perChannel) || 0)));
 
 // 首启密钥生成（见鉴权块注释的优先级链）。NOAUTH 开着就不生成——那是显式选择的零鉴权开发模式。
 // 独立写回 config.json（而非走 persistConfig）：persistConfig 依赖 channels 初始化顺序，且会重建对象。
@@ -3308,11 +3315,22 @@ async function handleGeminiRequest(req, res, url) {
 // 400 参数错照原样回传，客户端看到的错误类不变（只是"还有别的家可试"时不再提前放弃）。
 // 兜底名单仍保留渠道侧状态码：鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同，必须切。
 // 代价（如实记）：真·客户端错误（参数写错）现在会把候选链走完才回 4xx，请求变慢、上游多挨几下；
-// 与之相比"明明有能用的渠道却给客户端报错"更糟。链长本身受 RETRIES.maxModelFallbacks 与 perChannel 约束。
+// 与之相比"明明有能用的渠道却给客户端报错"更糟。链长本身受 RETRIES.maxModelFallbacks 约束；
+// 同一家的**额外重试**次数由 RETRIES.perChannel 控制（v1.9.3 起接线，且只对 5xx/超时/网络错误重试）。
 function shouldPassThrough4xx(status, hasMoreCandidates) {
   if (!(status >= 400 && status < 500)) return false;
   if ([401, 402, 403, 404, 408, 429].includes(status)) return false;
   return !hasMoreCandidates;
+}
+
+// 同渠道重试的判据：这次失败"值不值得在原地再试一次"。
+// 值得：5xx / 网络错误 / 超时 / 上游异常响应——多为瞬时故障，立刻重试常常就过了。
+// 不值得：4xx（tryChannel 以 'channel_error' 明确标注）——重发同一个请求只会再收一次同样的拒绝，
+//   而且其中不少是**客户端的参数错**，重试纯粹是在给上游添负载、让客户端多等一轮。
+function isRetryableFailure(result) {
+  if (result === 'channel_error') return false;
+  if (result === 'success' || result === 'fatal_client') return false;
+  return true;
 }
 
 // ─────────────────────────── 调度核心（统一） ───────────────────────────
@@ -3340,23 +3358,31 @@ async function dispatchRequest(opts) {
     const chDef = channels.get(c.channelId) && channels.get(c.channelId).def;
     const chProto = (chDef && chDef.protocol) || 'openai';
     const native = (chProto === 'anthropic' || chProto === 'gemini') ? nativeChannelOpts(chProto, requestedModel) : null;
-    const result = await tryChannel({
-      res, url, body, candidate: c, isStream: stream,
-      encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
-      ...(native || {}),
-      // 流式的"开场/收尾"钩子也必须转发：漏掉它们时 message_start 与收尾事件就不会发出
-      // （历史上这里漏了 streamPrelude，导致 Anthropic 流式一直没有 message_start）
-      streamPrelude: opts.streamPrelude, streamEpilogue: opts.streamEpilogue,
-      hasMoreCandidates,
-    });
-    if (result === 'success') return;
-    if (result === 'fatal_client') return;
-    // 响应头已发出（某候选已开始写响应）→ 无法再切换渠道，直接结束
-    if (res.headersSent || res.writableEnded) {
-      if (!res.writableEnded) { try { res.end(); } catch {} }
-      return;
+    // ★ 同渠道重试（perChannel）：一次请求内对**同一家**最多再试 PER_CHANNEL_RETRIES 次，
+    //   只重试可重试的失败（5xx/网络/超时）；4xx 与 fatal_client 立刻跳出换下家。
+    //   注意：冷却只挡"下一次请求"选不选它，不挡这里的原地重试——正是要靠这次重试把瞬时抖动吃掉。
+    let result;
+    for (let attempt = 0; ; attempt++) {
+      result = await tryChannel({
+        res, url, body, candidate: c, isStream: stream,
+        encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
+        ...(native || {}),
+        // 流式的"开场/收尾"钩子也必须转发：漏掉它们时 message_start 与收尾事件就不会发出
+        // （历史上这里漏了 streamPrelude，导致 Anthropic 流式一直没有 message_start）
+        streamPrelude: opts.streamPrelude, streamEpilogue: opts.streamEpilogue,
+        hasMoreCandidates,
+        attempt,
+      });
+      if (result === 'success') return;
+      if (result === 'fatal_client') return;
+      // 响应头已发出（某候选已开始写响应）→ 无法再切换渠道，直接结束
+      if (res.headersSent || res.writableEnded) {
+        if (!res.writableEnded) { try { res.end(); } catch {} }
+        return;
+      }
+      errors.push({ ch: c.channelId, err: result, ...(attempt ? { attempt } : {}) });
+      if (!isRetryableFailure(result) || attempt >= PER_CHANNEL_RETRIES) break;
     }
-    errors.push({ ch: c.channelId, err: result });
   }
   if (!attemptedAny) return sendJson(res, 503, upstreamErrorPayload(503, 'all channels in cooldown'));
   return sendJson(res, 502, { error: { message: `all channels failed`, type: 'gateway_error', attempts: errors } });
@@ -3456,7 +3482,7 @@ async function tryChannel(opts) {
     const text = usedFallback ? (respBody || '') : (await resp.text().catch(() => ''));
     recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
     // 401/402/403/404/408/429 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底；
-    // 其余 4xx（400 参数错等）**只在没有后续候选、或连续两家都说同一个 4xx 时**才原样透传 ——
+    // 其余 4xx（400 参数错等）**只在没有后续候选时**才原样透传 ——
     // 详见 shouldPassThrough4xx 的注释（渠道声明过期的模型 / 参数方言不同，换一家往往就能成）。
     if (shouldPassThrough4xx(resp.status, opts.hasMoreCandidates)) {
       // 客户端错误：直接把上游响应转发
@@ -3465,6 +3491,8 @@ async function tryChannel(opts) {
       res.end(text);
       return 'fatal_client';
     }
+    // 走到这里仍是 4xx（渠道侧状态码，或"后面还有候选"的请求类 4xx）：切下家，但**同渠道不重试**
+    if (resp.status < 500) return 'channel_error';
     return `upstream ${resp.status}${usedFallback ? (ch.def.proxy ? ' (via proxy)' : ' (via ps-fallback)') : ''}`;
   }
 
@@ -3753,6 +3781,7 @@ async function tryWorkbuddyChannel(opts) {
       res.end(sseText);
       return 'fatal_client';
     }
+    if (out.status >= 400 && out.status < 500) return 'channel_error';   // 4xx：切下家，同渠道不重试
     return `workbuddy ${out.status}: ${msg}`;
   }
   if (!/^data:/m.test(sseText)) {
@@ -3961,7 +3990,7 @@ async function tryGensparkChannel(opts) {
     const j = safeJson(raw);
     const msg = (j && (j.message || (j.error && j.error.message))) || raw.slice(0, 160);
     recordFailure(ch, `genspark HTTP ${out.status}: ${String(msg).slice(0, 160)}`);
-    // 400/422 等请求错误：只在没有后续候选、或连续两家都说同一个 4xx 时才透传（见 shouldPassThrough4xx）；
+    // 400/422 等请求错误：只在没有后续候选时才透传（见 shouldPassThrough4xx）；
     // 401/403 会话或出口问题、404 该渠道没有此内容 → 切下一候选
     if (shouldPassThrough4xx(out.status, opts.hasMoreCandidates)) {
       res.writeHead(out.status, { 'Content-Type': 'application/json' });
@@ -3969,6 +3998,7 @@ async function tryGensparkChannel(opts) {
       return 'fatal_client';
     }
     if (out.status === 401 || out.status === 403) ch.cooldownUntil = Date.now() + 300_000; // 会话/出口问题长冷却，避免反复撞墙
+    if (out.status >= 400 && out.status < 500) return 'channel_error';   // 4xx：切下家，同渠道不重试
     return `genspark ${out.status}: ${String(msg).slice(0, 120)}`;
   }
   if (!/^data:/m.test(raw)) {
@@ -4298,6 +4328,7 @@ async function tryCodexChannel(opts) {
       res.end(call.raw);
       return 'fatal_client';
     }
+    if (call.status >= 400 && call.status < 500) return 'channel_error';   // 4xx：切下家，同渠道不重试
     return 'codex ' + call.status + ': ' + call.error;
   }
 
@@ -4419,6 +4450,7 @@ async function tryNotionChannel(opts) {
           res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
           return 'fatal_client';
         }
+        if (resp.status >= 400 && resp.status < 500) return 'channel_error';   // 4xx：切下家，同渠道不重试
         return `notion upstream ${resp.status}`;
       }
     } catch (err) {
