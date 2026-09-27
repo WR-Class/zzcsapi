@@ -170,6 +170,67 @@
 
 > **整改记录（2026-09-27，v1.3）**：落地**真正的加权轮询**（README 里挂了几轮的遗留项）。设计取舍：不动 `priority` 的排序语义，**新增 `weight` 专管分流** —— 只有明确填正数 `weight` 的渠道进轮询池，缺省 0 时行为与从前逐字节一致（老配置零影响，用户正在跑的 30 多个渠道不会被这一版改变选路）。算法选**平滑加权轮询**（SWRR，无随机数）：长期比例 = 权重比，且不扎堆突发；冷却/`down`/`weight=0` 不进池、份额自动归健康成员。轮询只决定"谁是第一位"，其余候选保持原「健康度→有效优先级→延迟」顺序做**兜底链**。实现期发现 PT29（渠道保存的白名单会静默抹掉新字段），一并修掉并把守卫写进回归。新增零依赖回归 `test/weighted-rr.test.js`（31 项，含"老配置零影响"对照组）与 `test/weighted-rr-e2e.test.js`（12 项，真 HTTP 数 40 次落点验证 ≈75/25）。控制台表单暂未加权重输入框（后端已支持，可改配置或调 `POST /admin/api/channel`），已记入 README「计划中」。
 
+### PT30 高：`protocol: anthropic` / `gemini` 的渠道**根本无法用于聊天**（出站永远是 OpenAI 格式） —— ✅ v1.4 已整改
+
+- 来源：用户提出「先做原生 anthropic / gemini 渠道」，排查后发现这不是"缺个功能"，而是**配了也用不了**。
+- 证据（`server.js`，整改前）：
+  · 四条客户端路由（chat / images / anthropic 侧门 / gemini）注入的出站构造器都是
+    `encodeOutgoing: (b, c) => ({ ...b, model: c.upstream })` + `Bearer` + `POST {baseUrl}/chat/completions`；
+  · 而 `protocol` 只参与两件事：探活 URL/鉴权头（`probeUrlForDef` / `probeHeadersForDef`）与 `channelsServing` 的协议过滤；
+  · 后果：把 OpenAI 格式的请求体发给 `https://api.anthropic.com/v1/messages` 必然 400 —— 渠道声明成 anthropic 协议后，
+    连管理员「测试」按钮（`/admin/api/test` 里**已经**按原生报文构造）能通，真聊天却必失败，排查成本极高。
+- 最小修复（刻意只动两处，路由侧零改动）：
+  · `dispatchRequest` 单点注入 `nativeChannelOpts(proto, requestedModel)`：按候选渠道的 `protocol` 覆盖
+    `encodeOutgoing` / `buildOutgoingUrl` / `buildOutgoingHeaders`，并挂 `translateResponse`（非流式）与
+    `makeStreamTranslator`（流式）两个钩子；
+  · `tryChannel`：`buildOutgoingUrl(ch, candidate, isStream)`（加一个参数，向后兼容）；非流式把翻译后的文本交给既有回调；
+    流式把原生 SSE **逐行翻译成 OpenAI SSE** 后再喂给既有 `onStreamChunk`（没有该回调的 OpenAI 路由则直接写翻译结果）。
+- 新增（命名避开既有的"入站方向"转换器）：`oaiRequestToAnthropic` / `anthropicToOaiResponse` / `createAnthropicToOaiStream`、
+  `oaiRequestToGemini` / `geminiToOaiResponse` / `createGeminiToOaiStream`、`nativeOutgoingUrl/Headers`、
+  `nativeResponseTranslator`、`nativeStreamTranslator`。
+- 最小回归：`test/native-channels.test.js`（78 项）、`test/native-channels-e2e.test.js`（33 项，真起原生假上游）。
+
+### PT31 高：候选链只捞"自己协议"的渠道 —— 原生渠道进不了候选（PT30 只修了一半） —— ✅ v1.4 已整改
+
+- 证据：修完 PT30 后 e2e 仍 404，`healthz` 与启动日志都正常（`aggregated: openai=[claude-a] anthropic=[claude-a] gemini=[claude-a]`），
+  但 `handleOpenAIRequest` 第一行是 `channelsServing(requested, 'openai')` —— 协议过滤把 anthropic 协议渠道挡在候选链之外，
+  于是"能力上已经能转"，"调度上却永远选不到"。
+- 最小修复：`channelsServing(model, protocol)` 的 `protocol` 支持**数组**（老的单字符串用法逐字节不变），
+  三条路由各加一层**跨协议兜底**（同协议优先、跨协议在后，仍排在 notion/codex 等文本链之前）：
+  · chat：`['anthropic','gemini']`；侧门：`['openai','gemini']`；gemini 路由：`['openai','anthropic']`。
+- 最小回归：`test/native-channels-e2e.test.js` §1/§4（渠道被选中）+ §9（openai 渠道仍优先选中的对照）。
+
+### PT32 中：Gemini 客户端路由的流式**从不发 `finishReason`** —— 客户端永远等不到"回答结束" —— ✅ v1.4 已整改
+
+- 证据（`server.js` `openAIStreamToGeminiSSE`，整改前）：只转发 `delta.content` 文本，
+  `finish_reason` 所在的结束分片被整帧丢弃（下游 `onStreamChunk` 只把 `text` 映射成 Gemini chunk）
+  ⇒ Gemini 流式客户端只能靠连接断开猜结束（PT26/PT27 修的是另外两条协议的收尾，Gemini 这条漏了）。
+- 最小修复：结束分片映射成带 `finishReason` 的 chunk（`length`→`MAX_TOKENS`、`content_filter`→`SAFETY`、其余 `STOP`），
+  并把 `usage` 一并映射成 `usageMetadata`。
+- 最小回归：`test/native-channels-e2e.test.js` §5（"收尾分片带 finishReason"）。
+
+### PT33 中：Gemini **客户端路由**丢掉工具调用（未整改，已登记）
+
+- 证据：`openAIToGeminiResponse`（非流式）只取 `choices[0].message.content`；`openAIStreamToGeminiSSE` 只取 `delta.content`
+  ⇒ 走 `/gemini/...` 的客户端拿不到 `functionCall`，`tools` / `tool_choice` 也在 `geminiToOpenAI` 里无处安放。
+  这与渠道协议无关（`openai` 协议渠道同样如此），是**入站方向**的历史缺口，因此本轮不动（改动面涉及工具转换与两条流式路径）。
+- 影响面：OpenAI 与 Anthropic 两条路由不受影响（工具调用已完整）。
+- 处置：记入 README「计划中」；真要打通时，参照 `openAIStreamToAnthropicSSE` 的有状态写法给 Gemini 侧补
+  `functionCall` 映射与 `toolConfig` 三态（`oaiRequestToGemini` 里已有可复用的映射代码）。
+
+> **整改记录（2026-09-27，v1.4）**：用户点名「先做原生 anthropic / gemini 渠道」——这是最后一块结构性缺口。落地**原生出站**：
+  内部统一格式（OpenAI）⇄ 上游原生格式双向转换，客户端协议与渠道协议彻底解耦（三条客户端路由 × 两种原生渠道全通）。
+  设计上刻意**只动 `dispatchRequest` 与 `tryChannel` 两处**（单点注入 + 逐行翻译），路由侧与既有的入站转换器一行未改，
+  好处是"原生"与"客端协议"两个维度可独立演进。顺手修掉排查中顶出来的 PT31（候选链协议过滤）与 PT32（Gemini 结束帧被丢）。
+  有损点诚实登记：Anthropic 的 `tool_choice:"none"` 无对应语义（改为去掉 tools）、`cache_control`/`top_k`/thinking 签名跨格式丢弃、
+  同协议不做直通；上游错误体**不翻译**（否则 400 会被伪装成"成功但空"的 200）。图片能力门随之从 `['openai']` 扩到
+  `['openai','anthropic','gemini']`（原生渠道带图有等价表达：`image` 块 / `inlineData`・`fileData`），
+  并按 AGENTS.md 同步了 `test/gemini-multimodal.test.js` 的白名单断言与两处错误文案断言。新增零依赖回归
+  `test/native-channels.test.js`（78 项）与 `test/native-channels-e2e.test.js`（33 项，真起原生 Anthropic / Gemini 假上游，
+  断言上游**真的收到原生 URL/鉴权头/报文字段**）。全量回归 10 个文件 / 353 项断言通过。
+  诚实说明：**本机没有任何 anthropic/gemini 协议的真实渠道**（用户配置里只有 openai 协议渠道），因此真机验证靠的是
+  忠实于官方报文形状的假上游 + 临时网关全链路，而非真实第三方端点。
+
 ## 已验证的非问题（记录在此，避免后人重查）
 - **usage.json 无增长问题**（曾疑 byDay/hourly 无界）：recent 封顶 800、byDay 每日仅 1 条、hourly 固定 24 桶（server.js:1471），实测文件 ~8.7K 行且大体平稳；4 秒防抖全量重写在 ~300KB 规模合理。
 - **arena-cookie 的 CORS 预检不会被鉴权拦死**（曾疑 OPTIONS 带不上 key）：`?key=` 在预检 URL 里随行，checkAuth 读得到（server.js:202）；1MB 读缓冲（server.js:1514）也有上界。

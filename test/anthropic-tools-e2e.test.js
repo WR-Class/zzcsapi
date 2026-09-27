@@ -243,7 +243,7 @@ const A = '/anthropic/v1/messages';
       messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: IMG } }] }] }],
     }, { 'x-api-key': GW_KEY });
     check('★ 工具结果里的图也算"含图请求" → 400（不是静默丢图作答）', r.status === 400, r.status + ' ' + r.txt.slice(0, 140));
-    check('错误文案说明原因', !!(r.txt || '').includes('only openai-protocol channels'), (r.txt || '').slice(0, 160));
+    check('错误文案说明原因', !!(r.txt || '').includes('only openai / anthropic / gemini protocol channels'), (r.txt || '').slice(0, 160));
 
     console.log('\n5. 无工具请求不受影响（回归）');
     lastBody = null;

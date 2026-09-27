@@ -153,7 +153,7 @@ const writeCfg = (file, port, channels) => {
     const imgGem = { contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: IMG } }] }] };
     r = await call(GW2_PORT, gwPath, imgGem, bearer());
     check('Gemini 路由 → 400（不是 200 后丢图作答）', r.status === 400, r.status);
-    check('错误文案说明原因', !!(r.txt && r.txt.includes('only openai-protocol channels')), r.txt.slice(0, 160));
+    check('错误文案说明原因', !!(r.txt && r.txt.includes('only openai / anthropic / gemini protocol channels')), r.txt.slice(0, 160));
     r = await call(GW2_PORT, '/v1/chat/completions', { model: 'mock-vision', messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,' + IMG } }] }] }, bearer());
     check('OpenAI 路由同样 400', r.status === 400, r.status);
     r = await call(GW2_PORT, '/anthropic/v1/messages', { model: 'mock-vision', max_tokens: 8, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: IMG } }] }] }, bearer());
