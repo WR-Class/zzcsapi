@@ -252,6 +252,60 @@ const upstream = http.createServer((req, res) => {
         disk.autoWeight && disk.autoWeight.latencyPenalty === 0.6 && disk.autoWeight.maxShare === 70, disk.autoWeight);
       check('渠道也在（没被顺手清掉）', disk.channels.length === 2, disk.channels.map((c) => c.id));
     }
+    /* ══════════ 5. 后台节拍：数据不该依赖"有没有人开着控制台" ══════════ */
+    console.log('\n5. ⭐ 后台节拍：不开控制台也在观测（自动权重要跑几天看趋势就靠它）');
+    {
+      /* 为什么要单独起两个实例：观测的 h 是"一拍一算"的（指数平滑 + 死区），而触发点原来只有
+         /admin/api/status —— 控制台一关就没数据了。这里故意**全程不拉 status**，只在最后读一次，
+         于是 ticks 里有且只有后台定时器的拍数，因果干净。 */
+      const spin = async (enabled) => {
+        const P = await freePort(), C = path.join(TMP, `tick-${enabled}.json`);
+        fs.writeFileSync(C, JSON.stringify({
+          port: P, health: { intervalSec: 3600, timeoutMs: 2000 }, retries: { perChannel: 0 },
+          autoWeight: { ...KNOBS, enabled, updateMs: 1000 },
+          channels: [{ id: 'tk-a', name: 'A', baseUrl: `http://127.0.0.1:${PU}/fast`, apiKey: 'k', protocol: 'openai', priority: 10, enabled: true, models: { m1: 'm1' } }],
+        }));
+        const cp = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+          cwd: ROOT,
+          env: { ...process.env, ZZCSAPI_CONFIG: C, ZZCSAPI_USAGE: path.join(TMP, `tick-${enabled}-u.json`), GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' },
+          stdio: 'ignore',
+        });
+        const up = async () => {
+          for (let i = 0; i < 40; i++) {
+            try { const r = await fetch(`http://127.0.0.1:${P}/healthz`); if (r.ok) return true; } catch { }
+            await sleep(150);
+          }
+          return false;
+        };
+        const ok = await up();
+        return { cp, P, ok, stop: () => stopChild(cp) };
+      };
+      const readTicks = async (P) => {
+        const r = await fetch(`http://127.0.0.1:${P}/admin/api/status`, { headers: { Authorization: 'Bearer ' + AD_KEY } });
+        const j = await r.json();
+        return j.autoWeight;
+      };
+
+      // ① 关着：不该建定时器 —— 静默不变式在"没开"的时候也要成立（不观测、不算、不占 CPU）
+      const off = await spin(false);
+      check('enabled:false 的实例起来了', off.ok);
+      await sleep(3400);                                  // 足够跑 3 拍（updateMs 1s），但它不该跑
+      const awOff = await readTicks(off.P);
+      check('★ enabled:false → 后台拍了 0 次（不开就一行都不动）', awOff.ticks === 0, { ticks: awOff.ticks });
+      await off.stop();
+
+      // ② 开着：全程不碰 status，只靠后台节拍（最后这一次读也算在因果之外：ticks 只数定时器那一路）
+      const on = await spin(true);
+      check('enabled:true 的实例起来了', on.ok);
+      await sleep(3400);
+      const awOn = await readTicks(on.P);
+      check('★ enabled:true → 后台自己拍了 ≥2 次（没人开控制台也在观测）', awOn.ticks >= 2, { ticks: awOn.ticks });
+      check('★ 而且这一路仍然只算不生效（effective 恒 false、旋钮照配置回显）',
+        awOn.effective === false && awOn.enabled === true && awOn.knobs.updateMs === 1000,
+        { effective: awOn.effective, enabled: awOn.enabled, updateMs: awOn.knobs.updateMs });
+      check('节拍真的产出了观测数据（时间戳有值）', typeof awOn.at === 'number' && awOn.at > 0, awOn.at);
+      await on.stop();
+    }
   } finally {
     await cleanup();
   }

@@ -1962,9 +1962,12 @@ function channelStatusAll() {
     // 自动权重观测总览：旋钮现值 + 每个"多候选模型"的预测份额（静默版的核心产出）
     autoWeight: {
       enabled: AUTO_W.enabled,
-      effective: false, // v1.6 恒为 false：观测不生效，见 README「自动权重（观测版）」
+      effective: false, // 观测版恒为 false：只算不生效，见 README「自动权重（观测版）」
       knobs: { ...AUTO_W },
       at: AUTO_LAST_AT || null,
+      // 后台节拍计数：观测的 EWMA/死区是"一拍一算"的，而触发点原来只有"有人拉 /admin/api/status"，
+      // 等于"没人开控制台就没有观测数据"。ticks 只数后台定时器那一路，用来证明节拍真的在跑。
+      ticks: AUTO_TICKS,
       models: autoObs,
     },
     aggregated: {
@@ -2138,6 +2141,7 @@ function effPriority(ch) {
 const AUTO_W = { enabled: false };
 const AUTO_STATE = new Map(); // channelId → { h, at, failRate, samples, latMs, speedRatio }
 let AUTO_LAST_AT = 0;
+let AUTO_TICKS = 0;           // 后台节拍跑了几拍（只数定时器那一路，见 autoWeightTick）
 
 function normAutoWeight(raw) {
   const o = raw && typeof raw === 'object' ? raw : {};
@@ -2146,7 +2150,7 @@ function normAutoWeight(raw) {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
   };
   return {
-    enabled: o.enabled === true,                              // 预留：本版置 true 也不改分流
+    enabled: o.enabled === true,                              // 打开观测（含后台节拍）；仍然一行不碰分流
     minSamples: Math.round(num(o.minSamples, 10, 1, 1000)),    // 样本不足不动
     floor: num(o.floor, 0.2, 0, 1),                            // 健康系数地板
     latencyPenalty: num(o.latencyPenalty, 0.5, 0, 1),          // 速度惩罚强度（0 = 不看速度）
@@ -2157,6 +2161,25 @@ function normAutoWeight(raw) {
   };
 }
 Object.assign(AUTO_W, normAutoWeight(config.autoWeight));
+
+// 后台观测节拍。
+// 为什么必须有它：观测里的健康系数是"一拍一算"的（指数平滑 + 死区），而触发点原来只有
+// /admin/api/status —— 也就是**没人开着控制台就没有观测数据**。想拿它跑几天看趋势，
+// 必须让节拍自己走，否则你看到的 h 永远停留在"上次打开控制台那一刻"的值。
+// 关掉时（enabled:false）不建定时器：不观测、不算、不占 CPU，静默不变式照旧。
+// 注：AUTO_W 只在启动时从 config 读一次，改 autoWeight 需要重启（与其它旋钮一致）。
+function autoWeightTick() {
+  if (!AUTO_W.enabled) return;      // 运行时兜底：即便定时器还在，关了就不再观测
+  try {
+    autoWeightObserve();
+    AUTO_TICKS++;
+  } catch (e) { /* 观测绝不允许影响服务：宁可这一拍不记，也不能把请求路径搞挂 */ }
+}
+if (AUTO_W.enabled) {
+  // 节拍 = updateMs 本人（normAutoWeight 已把它钳在 ≥1s）。不再另加隐藏下限：
+  // 配置说多少就跑多少，否则"我设了 5s 怎么还是 30s"这种事又会变成下一个坑。
+  setInterval(autoWeightTick, AUTO_W.updateMs).unref();
+}
 
 // 同模型候选的**纯枚举**：与 channelsServing 的别名规则一致，但绝不调用它
 // —— channelsServing 末尾会走 applyWeightedPick，动 SWRR_CUR/SWRR_HITS（有副作用）。
