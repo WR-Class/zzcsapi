@@ -3299,14 +3299,31 @@ async function handleGeminiRequest(req, res, url) {
   });
 }
 
+// 4xx 兜底判定：只要后面还有候选，"上游 4xx"就不许短路兜底。
+// 为什么：渠道声明了上游早已下架的模型（别名表过期 → 上游 404）、各家参数方言不同（有的中转不认
+// stream_options / 特定 temperature）——这类 4xx 换一家很可能就能成。而网关在此之前**已经**给这家
+// 记了失败（recordFailure / 置冷却），却把上游 4xx 甩给客户端并就此停手：等于自己认定是渠道的错、
+// 却对客户端说是客户端的错，还不兜底，逻辑自相矛盾（现象：该模型明明有能用的候选，客户端却拿到 404）。
+// 只有**最后一个候选**才原样透传 —— 保住"客户端的错就该原样回给调用方"这条语义：没人可切了，
+// 400 参数错照原样回传，客户端看到的错误类不变（只是"还有别的家可试"时不再提前放弃）。
+// 兜底名单仍保留渠道侧状态码：鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同，必须切。
+// 代价（如实记）：真·客户端错误（参数写错）现在会把候选链走完才回 4xx，请求变慢、上游多挨几下；
+// 与之相比"明明有能用的渠道却给客户端报错"更糟。链长本身受 RETRIES.maxModelFallbacks 与 perChannel 约束。
+function shouldPassThrough4xx(status, hasMoreCandidates) {
+  if (!(status >= 400 && status < 500)) return false;
+  if ([401, 402, 403, 404, 408, 429].includes(status)) return false;
+  return !hasMoreCandidates;
+}
+
 // ─────────────────────────── 调度核心（统一） ───────────────────────────
 async function dispatchRequest(opts) {
   const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind } = opts;
   const errors = [];
   let attemptedAny = false;
   const stream = !!isStream;
+  const maxCand = Math.min(candidates.length, RETRIES.maxModelFallbacks || 99);
 
-  for (let i = 0; i < Math.min(candidates.length, RETRIES.maxModelFallbacks || 99); i++) {
+  for (let i = 0; i < maxCand; i++) {
     const c = candidates[i];
     if (c.cooldownUntil > Date.now()) {
       errors.push({ ch: c.channelId, err: 'in cooldown' });
@@ -3315,7 +3332,9 @@ async function dispatchRequest(opts) {
     attemptedAny = true;
     // 还有后续候选 → 守门可以掐得早（快速切兜底）；已是最后候选 → 守门放宽到 300s（对齐
     // 客户端 idle 超时：上游"慢但能成"的请求留给客户端自身的重试机制，而不是被网关提前掐死）
-    const hasMoreCandidates = i < Math.min(candidates.length, RETRIES.maxModelFallbacks || 99) - 1;
+    // ★ 必须只看**还能上场的**候选：冷却中的那家这一轮根本不会被 attempt，若把它算成"还有后手"，
+    //   4xx 兜底会切进一个空池——最后兜出个 502，把客户端本来该看到的 400 弄丢了。
+    const hasMoreCandidates = candidates.slice(i + 1, maxCand).some((x) => !(x.cooldownUntil > Date.now()));
     // ★ 原生出站单点注入：候选渠道声明 anthropic / gemini 协议时，覆盖出站编码/URL/请求头，
     //   并挂上"原生响应 → 内部 OpenAI"的翻译钩子。路由侧回调一行都不用改。
     const chDef = channels.get(c.channelId) && channels.get(c.channelId).def;
@@ -3349,11 +3368,11 @@ async function tryChannel(opts) {
   try {
     // Notion 协议渠道：完全独立的请求/响应路径
     if ((ch.def.protocol || 'openai') === 'notion') {
-      return await tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+      return await tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
     }
     // Notion 官方 Agent API 渠道：会话式调用工作区 Custom Agent
     if ((ch.def.protocol || 'openai') === 'notion-agent') {
-      return await tryNotionAgentChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+      return await tryNotionAgentChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
     }
     // WorkBuddy 国际版反代：只支持流式 + 首条必须 system，OpenAI 兼容 SSE
     if ((ch.def.protocol || 'openai') === 'workbuddy') {
@@ -3361,11 +3380,11 @@ async function tryChannel(opts) {
     }
     // Genspark 网页会话反代：curl+proxy 绕 cn_code 门/CF，SSE 聚合后分发
     if ((ch.def.protocol || 'openai') === 'genspark') {
-      return await tryGensparkChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+      return await tryGensparkChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
     }
     // Codex（ChatGPT 官方订阅）：RT→AT 令牌管理 + Responses API，curl+代理传输
     if ((ch.def.protocol || 'openai') === 'codex') {
-      return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel });
+      return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
     }
   const outgoing = encodeOutgoing(body, candidate);
   const target = buildOutgoingUrl(ch, candidate, isStream);
@@ -3437,10 +3456,9 @@ async function tryChannel(opts) {
     const text = usedFallback ? (respBody || '') : (await resp.text().catch(() => ''));
     recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`);
     // 401/402/403/404/408/429 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底；
-    // 其余 4xx（400 参数错等）换渠道也一样错，是客户端错误 → 原样透传给调用方。
-    // 404 进兜底名单的动机：渠道「声明有此模型」但上游实际没有（别名表过期，渠道声明了一个它早已下架的模型）
-    // ——下一个声明者很可能真的有，不该把渠道的过期声明当成客户端的错。
-    if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 404, 408, 429].includes(resp.status)) {
+    // 其余 4xx（400 参数错等）**只在没有后续候选、或连续两家都说同一个 4xx 时**才原样透传 ——
+    // 详见 shouldPassThrough4xx 的注释（渠道声明过期的模型 / 参数方言不同，换一家往往就能成）。
+    if (shouldPassThrough4xx(resp.status, opts.hasMoreCandidates)) {
       // 客户端错误：直接把上游响应转发
       const ct = (resp.headers && resp.headers.get('content-type')) || '';
       res.writeHead(resp.status, { 'Content-Type': ct || 'application/json' });
@@ -3730,7 +3748,7 @@ async function tryWorkbuddyChannel(opts) {
     const j = safeJson(sseText);
     const msg = (j && (j.msg || (j.error && j.error.message))) || sseText.slice(0, 160);
     recordFailure(ch, `workbuddy ${out.status}: ` + msg);
-    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 404, 408, 429].includes(out.status)) {
+    if (shouldPassThrough4xx(out.status, opts.hasMoreCandidates)) {
       res.writeHead(out.status, { 'Content-Type': 'application/json' });
       res.end(sseText);
       return 'fatal_client';
@@ -3943,8 +3961,9 @@ async function tryGensparkChannel(opts) {
     const j = safeJson(raw);
     const msg = (j && (j.message || (j.error && j.error.message))) || raw.slice(0, 160);
     recordFailure(ch, `genspark HTTP ${out.status}: ${String(msg).slice(0, 160)}`);
-    // 400/422 等明确请求错误透传；401/403 会话或出口问题、404 该渠道没有此内容 → 切下一候选
-    if (out.status >= 400 && out.status < 500 && ![401, 402, 403, 404, 408, 429].includes(out.status)) {
+    // 400/422 等请求错误：只在没有后续候选、或连续两家都说同一个 4xx 时才透传（见 shouldPassThrough4xx）；
+    // 401/403 会话或出口问题、404 该渠道没有此内容 → 切下一候选
+    if (shouldPassThrough4xx(out.status, opts.hasMoreCandidates)) {
       res.writeHead(out.status, { 'Content-Type': 'application/json' });
       res.end(raw);
       return 'fatal_client';
@@ -4274,7 +4293,7 @@ async function tryCodexChannel(opts) {
   }
   if (!call.ok) {
     recordFailure(ch, 'codex ' + call.status + ': ' + call.error);
-    if (call.raw && call.status >= 400 && call.status < 500 && ![401, 402, 403, 404, 408, 429].includes(call.status)) {
+    if (call.raw && shouldPassThrough4xx(call.status, opts.hasMoreCandidates)) {
       res.writeHead(call.status, { 'Content-Type': 'application/json' });
       res.end(call.raw);
       return 'fatal_client';
@@ -4395,7 +4414,7 @@ async function tryNotionChannel(opts) {
       else {
         const errText = await resp.text().catch(() => '');
         recordFailure(ch, `notion HTTP ${resp.status}: ${errText.slice(0, 200)}`);
-        if (resp.status >= 400 && resp.status < 500 && ![401, 402, 403, 404, 408, 429].includes(resp.status)) {
+        if (shouldPassThrough4xx(resp.status, opts.hasMoreCandidates)) {
           res.writeHead(resp.status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Notion upstream HTTP ${resp.status}`, type: 'upstream_error' } }));
           return 'fatal_client';
