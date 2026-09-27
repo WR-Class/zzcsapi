@@ -95,6 +95,18 @@ console.log('\n0. 装配守卫（源码里必须真的是这套接线）');
     /channels\.delete\(body\.id\)[\s\S]{0,600}?AUTO_STATE\.delete\(body\.id\)/.test(SRC));
   check('recordUsage 里维护了延迟 EWMA（速度信号的来源）',
     /function\s+recordUsage[\s\S]{0,1500}?latEwma/.test(SRC));
+  // 后台节拍：观测的 h 是"一拍一算"的（平滑 + 死区），触发点原来只有 /admin/api/status，
+  // 等于"没人开控制台就没有观测数据"——想跑几天看趋势就必须有自己的节拍。
+  check('★ 有后台观测节拍，且只在 enabled 时才建定时器（关了就不观测、不算、不占 CPU）',
+    /function\s+autoWeightTick\s*\(/.test(SRC) && /if\s*\(AUTO_W\.enabled\)\s*\{[\s\S]{0,300}?setInterval\(autoWeightTick/.test(SRC));
+  check('★ 节拍跑的就是观测本身，且节拍长度 = updateMs（不再有隐藏下限）',
+    /setInterval\(autoWeightTick,\s*AUTO_W\.updateMs\)/.test(SRC));
+  check('★ 节拍函数运行时再兜一次 enabled（配置改了不至于还在空转），且异常不外抛（观测不许影响服务）',
+    /function\s+autoWeightTick\s*\(\)\s*\{[\s\S]{0,400}?if\s*\(!AUTO_W\.enabled\)\s*return;[\s\S]{0,200}?catch/.test(SRC));
+  check('观测计数只由节拍累加（控制台拉 status 那一路不算，否则"ticks"证明不了节拍真的在跑）',
+    (SRC.match(/AUTO_TICKS\+\+/g) || []).length === 1
+    && /function\s+autoWeightTick[\s\S]{0,300}?AUTO_TICKS\+\+/.test(SRC));
+  check('status 暴露 ticks（否则没法从外部看出节拍在不在跑）', /ticks:\s*AUTO_TICKS/.test(SRC));
 }
 
 /* ══════════════════════════ 1. 旋钮归一化 ══════════════════════════ */
