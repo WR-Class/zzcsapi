@@ -1984,6 +1984,55 @@ function nativeChannelOpts(proto, requestedModel) {
   };
 }
 
+// ── 同协议直通（v1.15）────────────────────────────────────────────────────────
+// 客户端协议与渠道协议相同时**不做任何翻译**：请求用客户端原始报文（anthropic 只把 model 换成上游名；
+// gemini 的模型名本来就在 URL 里），响应（含流式 SSE 字节）原样回传。
+// 为什么值得：以前这条链路是"客户端报文 → 内部 OpenAI → 原生报文"，来回两趟翻译，
+// 每次都要丢掉内部格式**承载不了**的字段——`thinking` / `cache_control` / `top_k` / `metadata` /
+// 多段 system / `stop_sequences` 细节 / `generationConfig.seed` 之类。直通之后它们原样到达上游、
+// 响应侧也不再被重排（连 `message_start` 都不再是网关"补"出来的，而是上游那一个）。
+// 出站 URL/请求头与原生路径完全一致，只是不再提供 encodeOutgoing 的格式转换，
+// 也不提供 translateResponse / makeStreamTranslator —— 由 tryChannel 原样读写。
+function passthroughChannelOpts(proto, rawBody) {
+  const raw = (rawBody && typeof rawBody === 'object') ? rawBody : {};
+  return {
+    passthrough: proto,
+    encodeOutgoing: (b, c) => (proto === 'anthropic' ? { ...raw, model: c.upstream } : raw),
+    buildOutgoingUrl: (ch, c, isStream) => nativeOutgoingUrl(proto, ch, c, isStream),
+    buildOutgoingHeaders: (ch) => nativeOutgoingHeaders(proto, ch),
+  };
+}
+// 直通模式下 token 统计仍要如实：从原生响应体里读 usage，归一成内部字段名
+function nativeUsageToOpenAI(proto, j) {
+  if (!j || typeof j !== 'object') return null;
+  if (proto === 'anthropic' && j.usage) {
+    const i = Number(j.usage.input_tokens) || 0, o = Number(j.usage.output_tokens) || 0;
+    if (i || o) return { prompt_tokens: i, completion_tokens: o, total_tokens: i + o };
+  }
+  const g = j.usageMetadata;
+  if (proto === 'gemini' && g) {
+    const i = Number(g.promptTokenCount) || 0, o = Number(g.candidatesTokenCount) || 0;
+    if (i || o) return { prompt_tokens: i, completion_tokens: o, total_tokens: Number(g.totalTokenCount) || i + o };
+  }
+  return null;
+}
+// 直通流式：逐行扫 usage（anthropic 的 message_start/message_delta、gemini 的 usageMetadata），
+// 与原生路径一样给出真实 token 数，而不是永远退回估算
+function nativeStreamUsageScan(proto, line, acc) {
+  if (line.indexOf('usage') < 0) return acc || null;
+  const data = line.startsWith('data:') ? line.slice(5).trim() : line.trim();
+  if (!data || data === '[DONE]') return acc || null;
+  let j; try { j = JSON.parse(data); } catch { return acc || null; }
+  const out = acc || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  const u = nativeUsageToOpenAI(proto, j) || nativeUsageToOpenAI(proto, j.message);
+  if (u) {
+    if (u.prompt_tokens) out.prompt_tokens = u.prompt_tokens;
+    if (u.completion_tokens) out.completion_tokens = u.completion_tokens;
+    out.total_tokens = out.prompt_tokens + out.completion_tokens;
+  }
+  return out;
+}
+
 // 从协议原生响应里抽 reply 文本
 function extractReply(parsed, proto) {
   if (!parsed) return '';
@@ -3457,6 +3506,9 @@ async function handleAnthropicRequest(req, res, url) {
       candidates,
       requestedModel: requested,
       isStream,
+      // 同协议直通（v1.15）：选中 anthropic 协议渠道时，出站直接用客户端原始报文、响应原样回传
+      clientProto: 'anthropic',
+      rawClientBody: body,
       encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
       buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, 'chat/completions'),
       buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
@@ -3530,6 +3582,9 @@ async function handleGeminiRequest(req, res, url) {
     candidates,
     requestedModel: model,
     isStream,
+    // 同协议直通（v1.15）：选中 gemini 协议渠道时，出站用客户端原始报文（模型名在 URL 里）、响应原样回传
+    clientProto: 'gemini',
+    rawClientBody: body,
     encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
     buildOutgoingUrl: (ch) => joinUrl(ch.def.baseUrl, 'chat/completions'),
     buildOutgoingHeaders: (ch) => ({ 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }),
@@ -3614,7 +3669,11 @@ async function dispatchRequest(opts) {
     //   并挂上"原生响应 → 内部 OpenAI"的翻译钩子。路由侧回调一行都不用改。
     const chDef = channels.get(c.channelId) && channels.get(c.channelId).def;
     const chProto = (chDef && chDef.protocol) || 'openai';
-    const native = (chProto === 'anthropic' || chProto === 'gemini') ? nativeChannelOpts(chProto, requestedModel) : null;
+    const native = (chProto === 'anthropic' || chProto === 'gemini')
+      ? ((opts.clientProto && opts.clientProto === chProto)
+        ? passthroughChannelOpts(chProto, opts.rawClientBody)   // 同协议直通：不翻译（v1.15）
+        : nativeChannelOpts(chProto, requestedModel))
+      : null;
     // ★ 同渠道重试（perChannel）：一次请求内对**同一家**最多再试 PER_CHANNEL_RETRIES 次，
     //   只重试可重试的失败（5xx/网络/超时）；4xx 与 fatal_client 立刻跳出换下家。
     //   注意：冷却只挡"下一次请求"选不选它，不挡这里的原地重试——正是要靠这次重试把瞬时抖动吃掉。
@@ -3689,6 +3748,7 @@ async function tryChannel(opts) {
       return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
     }
   const outgoing = encodeOutgoing(body, candidate);
+  const passthrough = opts.passthrough || null;   // 同协议直通时由扩展注入（'anthropic' / 'gemini'）
   const target = buildOutgoingUrl(ch, candidate, isStream);
   const headers = applyCustomHeaders(buildOutgoingHeaders(ch), ch.def);
   const bodyStr = JSON.stringify(outgoing);
@@ -3831,7 +3891,7 @@ async function tryChannel(opts) {
       'X-Accel-Buffering': 'no',
       'X-ZZCSAPI-Channel': candidate.channelId,
     });
-    if (typeof opts.streamPrelude === 'function') {
+    if (typeof opts.streamPrelude === 'function' && !passthrough) {
       const pre = opts.streamPrelude();
       if (pre) res.write(pre);
     }
@@ -3842,7 +3902,8 @@ async function tryChannel(opts) {
     //   路由没有 onStreamChunk 时（OpenAI 路由是原样透传）就直接写翻译结果 —— 否则客户端会把
     //   Anthropic/Gemini 的事件当 OpenAI 分片解析，一个字段都读不出来。
     let nativeStream = null;
-    if (typeof opts.makeStreamTranslator === 'function') nativeStream = opts.makeStreamTranslator(candidate);
+    if (typeof opts.makeStreamTranslator === 'function' && !passthrough) nativeStream = opts.makeStreamTranslator(candidate);
+    let passthroughUsage = null;   // 直通流式：从上游原始事件里读真实 usage
     const emitNative = (lines) => {
       let outText = '';
       for (const l of lines) {
@@ -3853,6 +3914,13 @@ async function tryChannel(opts) {
     };
     // 按行分发：有 onStreamChunk 就逐行转换，否则原样透传（补回被切掉的分隔空行）
     const handleLine = (line) => {
+      if (passthrough) {
+        // 同协议直通：一个字节都不改，原样写回客户端（连分隔空行都不动）
+        passthroughUsage = nativeStreamUsageScan(passthrough, line, passthroughUsage);
+        streamOutText += sseDeltaText(line) || line;
+        res.write(line + '\n');
+        return;
+      }
       if (nativeStream) {
         // 原生：raw 行没有 OpenAI 的 delta 字段，逐个统计没有意义 → 按翻译后的输出估算
         const out = emitNative(nativeStream.push(line + '\n'));
@@ -3901,7 +3969,7 @@ async function tryChannel(opts) {
       const tail = emitNative(nativeStream.end());
       if (tail) res.write(tail);
     }
-    if (typeof opts.streamEpilogue === 'function') {
+    if (typeof opts.streamEpilogue === 'function' && !passthrough) {
       const post = opts.streamEpilogue();
       if (post) res.write(post);
     }
@@ -3910,11 +3978,27 @@ async function tryChannel(opts) {
       model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
       inputTokens: estimateTokens(messagesText(body && body.messages)),
       outputTokens: estimateTokens(streamOutText), ok: true, latencyMs: Date.now() - t0,
+      realUsage: passthroughUsage,
     });
     return 'success';
   } else {
     // 非流式：先读全文（统计 + 转发），shim 给 handler 避免 double-read
     const rawText = await resp.text();
+    // ★ 同协议直通：上游报文就是客户端想要的格式 → 一个字段都不动，原样写回（连 Content-Type 都照抄）。
+    //   这条分支**必须**跳过下面的 translateResponse/onSuccessNonStream，否则等于刚省掉的翻译又加回来。
+    if (passthrough) {
+      let realUsage = null;
+      try { realUsage = nativeUsageToOpenAI(passthrough, JSON.parse(rawText)); } catch { /* 非 JSON 上游 */ }
+      recordUsage({
+        model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+        inputTokens: estimateTokens(messagesText(body && body.messages)),
+        outputTokens: estimateTokens(rawText), ok: true, latencyMs: Date.now() - t0, realUsage,
+      });
+      const ct = (resp.headers && typeof resp.headers.get === 'function' && resp.headers.get('content-type')) || 'application/json';
+      res.writeHead(200, { 'Content-Type': ct, 'X-ZZCSAPI-Channel': candidate.channelId });
+      res.end(rawText);
+      return 'success';
+    }
     // ★ 原生渠道：响应体是 Anthropic / Gemini 格式 → 先翻译成内部 OpenAI 再交给路由回调。
     //   只有 resp.ok 才翻译：错误体原样透传（4xx 判定与客户端看到的错误必须是真的）。
     const text = (resp.ok && typeof opts.translateResponse === 'function') ? opts.translateResponse(rawText) : rawText;
