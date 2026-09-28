@@ -13,6 +13,9 @@
 - 🔍 **后台健康探测**：定时 GET 渠道的 models 端点，聚合 latency / 状态 / 真实模型清单
 - 🌊 **流式透传**：SSE 全程转发；上游响应是 OpenAI 协议时自动转成 Anthropic/Gemini 流；**同协议直通则原始字节直转**（CRLF/分帧都不动，v1.16）
 - ⚡ **自带出站客户端（零依赖）**：不依赖全局 `fetch`，用 Node 内置 `http/https` + keep-alive 连接池——实测把网关净增延迟从 +13.9ms 压到 **+0.93ms**（详见「出站与流式写路径（v1.16）」）
+- 🧷 **会话粘性（v1.17，默认关）**：同一条会话固定走同一个上游渠道，让上游提示缓存 / KV cache 能复用；只改"谁是第一位"，不硬塞冷却中的渠道，也不污染加权份额统计
+- 🚧 **客户端限流（v1.17，默认关）**：整机 rpm + 并发上限，超限回 `429` + `Retry-After`，在鉴权之前就挡住
+- 📈 **`/metrics` 指标端点（v1.17）**：Prometheus 文本格式、零依赖，渠道/令牌/耗时/熔断分档/粘性/限流一屏看完
 - 🔐 **双层鉴权**：`GATEWAY_KEY`（客户端）+ `ADMIN_KEY`（控制台与管理 API）；未设置则**首启自动生成**随机密钥（日志可查、写入 config.json）
 - 🖥 **Web 控制台**：浏览器打开 `http://127.0.0.1:8787/console` 看渠道状态、改优先级、启停渠道
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
@@ -175,6 +178,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | **动代码前过目**：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查）、前端独立审查 |
 | [同类网关内部机制对比](docs/gateway-comparison.md) | **定位与取舍参考**：本项目 vs new-api / one-api / sub2api / CLIProxyAPI 的内部机制、性能、全面性对照（只比机制，不比多用户/账户管理），含本机实测数字与各家的源码级证据 |
+| [thinking 回放缓存设计稿](docs/thinking-replay-design.md) | **v1.18 待实现**：跨协议时如何把 thinking/签名按会话留存并回放（键设计、回放时机、过期与淘汰、风险与验收标准），以及为什么这一版先不做 |
 
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
@@ -202,6 +206,9 @@ node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽�
 node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 node test/outbound-http-client.test.js    # 32 项断言：出站长连接客户端（fetch 形状真值表 + 20 次请求 0 条新连接、对照 agent:false 建 20 条）+ 直通流式逐字节一致（含 CRLF 与跨片帧）
+node test/session-affinity-e2e.test.js    # 67 项断言：会话粘性（键推导真值表 + 过期/淘汰 + 冷却/down 不硬塞 + 同会话 8 次落同一家 + 上游挂了重新粘 + 关闭时零状态）
+node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令牌桶真值表 + 429 带 Retry-After + 按时间回填 + 并发闸门 + 管理面不受影响 + 关闭时零影响）
+node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -341,6 +348,46 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
   连接池上限 128（旧 `fetch` 没有这个上限，但它也不复用连接）。
 - 同类项目的机制对照与取舍，见 [`docs/gateway-comparison.md`](docs/gateway-comparison.md)。
 
+### 健康度参与调度之后的四件事（v1.17：会话粘性 / 客户端限流 / `/metrics`）
+
+这三项都是**默认关闭**的增量开关（`/metrics` 默认开、但要 key），不开就与老版本逐字节一致。
+它们补齐的是此前对比里唯一还站得住的差距：上游缓存复用、客户端面保护、可观测性。
+
+**① 会话粘性（`sessionAffinity`）**——同一条会话尽量落在同一个上游渠道，让上游侧能复用提示缓存 /
+KV cache，订阅类渠道也不会因为来回换家反复触发风控。
+
+```json
+"sessionAffinity": { "enabled": true, "ttlSec": 3600, "maxEntries": 2000, "deriveFromBody": false }
+```
+
+- 会话键按优先级取：**显式头** `X-Session-Id` / `X-Claude-Code-Session-Id` / `X-Conversation-Id` / `X-ZZCSAPI-Session`（≥8 字符）→ **正文标识** `prompt_cache_key` / `session_id` / `conversation_id` → 可选（`deriveFromBody`）"系统提示 + 首条用户消息"的稳定哈希。全都取不到就是**无粘性**，退回原来的调度。
+- 刻意**不认** Anthropic 的 `metadata.user_id`：Claude Code 带的是**账号级** id，拿它做粘性等于把整个账号钉死在一家（那是把加权轮询关掉，不是会话粘性）。
+- 刻意把 `deriveFromBody` 默认设为 `false`：正文哈希会让**相同提示的不同请求**互相抢占同一家。
+- 边界（这是它没有变成"偷偷绕过加权轮询"的原因）：只改**谁是第一位**；粘住的那家不在候选里、在冷却里、或已 `down` 时**一动不动**（不硬塞、也不清冷却）；粘性命中**不消耗** SWRR 状态、不记 `weightedHits`——所以"落点 100% 集中在一家、份额统计仍报 50/50"是正常现象（`session-affinity-e2e` 专门断言了这一点）。
+- 上游挂掉时照常切换，并在**成功的那家**上重新粘住（不会在两家之间反复横跳）。
+
+**② 客户端限流（`rateLimit`）**——给客户端面整机速率与并发上限，超限回 `429` + `Retry-After`，别让上游额度先被烧完。
+
+```json
+"rateLimit": { "enabled": true, "rpm": 120, "burst": 0, "maxConcurrent": 8 }
+```
+
+- 令牌桶按**整机**算（单点自用定位；按客户端分桶要有稳定标识才有意义）；`burst` 不填时桶容量 = `rpm`（允许"一分钟的量一次性打完"）；`rpm:0` / `maxConcurrent:0` 各自表示不限。
+- 计数在**鉴权之前**：连"刷鉴权"的流量也被挡在门外（代价：不带密钥的请求也占额度——宁可挡在门口，也不让无效流量穿到候选链上）。
+- 只装在客户端面（`/v1/*`、`/anthropic/*`、`/gemini/*`）：`/healthz`、管理面、`/metrics` 不受影响。
+- 并发额度在响应 `finish` **与** `close` 两条路归还（客户端中途断开也不会漏名额），归还幂等。
+
+**③ `/metrics`（Prometheus 文本格式，零依赖）**
+
+- 默认要 admin key（`Authorization: Bearer <ADMIN_KEY>`）；放进 Prometheus 抓取就配 `"metrics": { "public": true }`（此时匿名可抓，正文里依然**没有任何密钥**——有专门断言守着）。
+- 指标：`zzcsapi_requests_total{route,status}`、`zzcsapi_channel_requests_total{channel,ok}`、`zzcsapi_channel_tokens_total{channel,direction}`、`zzcsapi_channel_latency_ms_{sum,count}`、`zzcsapi_channels{state}`（ok/down/cooldown/probation/disabled 五档）、`zzcsapi_affinity_entries` 与 `zzcsapi_affinity_events_total`、`zzcsapi_rate_limit_events_total`、`zzcsapi_inflight_requests`、`zzcsapi_uptime_seconds`、`zzcsapi_process_resident_memory_bytes`、`zzcsapi_swrr_hits_total`。
+- 渠道标签用**渠道 id**（控制台里显示的是 name）；token/耗时来自 `recordUsage`，与用量统计**同一处收口**，不会出现"指标好看、用量难看"的分叉。
+- 诚实边界：这是**进程内**计数（重启清零，不是持久化时间序列）；单机自用够用，要长期趋势请让 Prometheus 去拉。
+
+> 控制台暂未暴露这三个开关（改 `config.json` 即可，`/admin/api/status` 里能看到它们生效后的实时状态：`affinity` / `rateLimit` / `metrics` 三段）。
+> 会话粘性、客户端限流的**设计边界与验收标准**写在测试里（`test/session-affinity-e2e.test.js` / `test/rate-limit-e2e.test.js`），改调度或网关入口时请先跑它们。
+
+
 - **怎么配**：`"protocol": "anthropic"` + `baseUrl`（如 `https://api.anthropic.com`，写不写 `/v1` 都认）+ `apiKey`；Gemini 填 `https://generativelanguage.googleapis.com`（`/v1`、`/v1beta` 都认）。模型行照旧：alias 是**客户端请求的名字**，上游是**真实模型名**（Gemini 会拼进 URL 路径）。
 - **客户端路由的四个往返方向都完整支持工具调用**（v1.12 补齐 Gemini 这条入站方向，见 PT33）：
   | 客户端路由 | 工具调用（出站/入站） | `tool_choice` 三态 | 工具结果的配对方式 |
@@ -432,9 +479,13 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
 3. 排序：冷却中 → 末位；`down` → 倒数第二；`probation`（探测半愈合过、欠账还在）→ 排在健康渠道之后；同状态按**有效优先级**降序，再看 latency
 4. **加权轮询**：填了 `weight` 的渠道按权重比例决定"谁排第一"（见下）
-5. **含图请求**先按「图片能力门」裁剪候选（见下）；纯文本请求不受影响
-6. 依次尝试直到成功；全部失败返回 502 + 错误详情
-7. **同渠道重试**（`retries.perChannel`，v1.9.3 起真正接线）：对**同一家**失败后原地再试几次，
+5. **会话粘性**（`sessionAffinity.enabled`，v1.17，默认关）：带会话标识的请求，若这条会话上次成功落在候选链里的某家、
+   且那家还能上场（不在冷却、不是 `down`），就把**它**提到第一位——覆盖上面第 4 步的结果。
+   它只改"谁是第一位"，其余候选顺序、冷却判断、兜底链一律不动；命中的请求**不消耗** SWRR 状态
+   （所以"落点集中在一家、份额统计仍是 50/50"是设计如此，不是 bug）
+6. **含图请求**先按「图片能力门」裁剪候选（见下）；纯文本请求不受影响
+7. 依次尝试直到成功；全部失败返回 502 + 错误详情
+8. **同渠道重试**（`retries.perChannel`，v1.9.3 起真正接线）：对**同一家**失败后原地再试几次，
    试满才换下一家。只重试"可重试的失败"（5xx / 网络错误 / 超时），4xx 一律不重试——重发同一个
    请求只会再收一次同样的拒绝，其中不少还是客户端自己的参数错。每次尝试**各记一次失败**
    （`consecutiveFail` 与指数退避按真实尝试次数增长），重试成功则照常清零。
@@ -518,6 +569,9 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
   （如果轮到的那家正好挂了，下一个还是按老规矩顶上来）。图片生成候选（`/v1/images/generations`）同一套规则。
 - 冷却中 / `status=down` / `probation`（探测半愈合过的观察期）/ `weight=0` 的渠道**不进池**，其份额自动分给健康成员；
   它恢复后也不会"补发欠账"（不出现报复性突发）。
+- **与会话粘性的关系（v1.17）**：粘性命中时，轮询选出的"第一位"会被粘住的那家顶掉，但**轮询状态照旧推进**——
+  所以份额统计（`weightedShare`）反映的是"轮询怎么分的"，不是"流量实际落哪"，两个数字**故意不同**
+  （落点 100% 在一家、份额仍 50/50 是正常现象；`test/session-affinity-e2e.test.js` 有专门断言）。
 - 状态是内存态（重启清零，无副作用）。改权重三种方式，效果一样：
   · **控制台**：渠道页 → 该渠道「编辑」→ 表单里的「权重」框（留空 = 0 = 不参与），保存即生效并持久化；
   · 直接改 `config.json` 的 `"weight": 3` 后重启；
@@ -662,6 +716,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/admin/api/codex-quota`            | GET  | admin       | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import`        | POST | admin       | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
 | `/admin/api/config`                 | GET  | admin       | 暴露接入信息（含 key 与 URL），仅本机 admin |
+| `/metrics`                          | GET  | admin（`metrics.public:true` 时匿名） | **Prometheus 文本格式（v1.17）**：请求/渠道/令牌/耗时/熔断分档/粘性/限流/进程指标；`metrics.enabled:false` 时返回 404 |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
 | `/v1/models`                        | GET  | gateway     | OpenAI 聚合模型                       |
 | `/v1/chat/completions`              | POST | gateway     | OpenAI chat（支持 stream）            |
@@ -708,9 +763,11 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
   下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
   "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题
-- **会话粘性**：同一条会话固定走同一个上游渠道（对提示缓存/KV cache 复用有利）。同类项目里
-  sub2api 与 CLIProxyAPI 都有，本项目是单机自用定位、暂未实现（见 [`docs/gateway-comparison.md`](docs/gateway-comparison.md) §4）
+- **会话粘性** ✅ v1.17 已实现（见「健康度参与调度之后的四件事（v1.17）」），默认关闭
+- **客户端限流** ✅ v1.17 已实现（同上），默认关闭
+- **指标端点** ✅ v1.17 已实现（`/metrics`，Prometheus 文本格式，零依赖）
 - **thinking 回放缓存**：跨轮工具调用时把 reasoning/thinking 内容与签名按会话留存回放，
-  解决"跨格式时思维链丢失"（当前只做到同协议直通保留）
-- **客户端限流**：目前只有上游 429 → 冷却，没有面向客户端的 RPM/并发上限
-- **指标端点**：`/admin/api/*` + 控制台之外，补一个 Prometheus/OpenMetrics 端点
+  解决"跨格式时思维链丢失"（当前只做到同协议直通保留）。**v1.18 目标**，设计稿已落库：
+  [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)（键设计 / 回放时机 / 过期淘汰 / 风险 / 验收标准）
+- **把 v1.17 三个开关搬进控制台**：现在只能改 `config.json`（`/admin/api/status` 里能看到实时状态）。
+  动控制台要连带重建 `console.html` 与两份前端文档，故与 v1.18 一起做

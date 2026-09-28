@@ -422,6 +422,257 @@ const COOLDOWN = (() => {
   };
 })();
 
+// ─────────────────────────── 会话粘性（v1.17）───────────────────────────
+// 做什么：同一条"会话"上的请求尽量落在**同一个上游渠道**上——上游侧因此可以复用提示缓存 /
+// KV cache，订阅类上游也不会因为来回换家而反复触发风控（同类项目里 sub2api 与 CLIProxyAPI 都有）。
+// 边界（刻意收窄，避免变成"悄悄绕过加权轮询"）：
+//   · 只改**谁是第一位**：粘住的渠道不在候选里、在冷却里、或已 down 时，一切照旧（不硬塞）；
+//   · 粘性命中**不消耗** SWRR 状态、也不记 weightedHits——权重份额统计反映的仍是轮询的分流，
+//     不会被粘性流量污染（否则"权重没生效"这类假象会从统计里冒出来）；
+//   · 默认**关闭**（enabled:false = 与老行为逐字节一致），配置里显式打开才生效。
+// 会话键来源（按优先级，取不到就是"无粘性"，退回普通调度）：
+//   ① 显式头 X-Session-Id / X-Claude-Code-Session-Id / X-Conversation-Id / X-ZZCSAPI-Session（≥8 字符）
+//   ② 正文里的会话标识：prompt_cache_key（OpenAI 系客户端用来表达"这段前缀可缓存"）/
+//      session_id / conversation_id
+//   ③ 可选（deriveFromBody:true）："系统提示 + 首条用户消息"的稳定哈希——给不带任何会话标识的
+//      客户端兜底。默认关闭：正文哈希会让**相同提示的不同请求**互相抢占同一家。
+//   刻意**不**用 anthropic 的 metadata.user_id：Claude Code 带的是**账号级** id，
+//   拿它做粘性等于把整个账号钉死在一家（那不是会话粘性，是把加权轮询关掉）。
+const AFFINITY_CFG = (() => {
+  const c = (config && config.sessionAffinity) || {};
+  const pickInt = (v, lo, hi, dflt) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) && n > 0 ? Math.max(lo, Math.min(hi, n)) : dflt;
+  };
+  return {
+    enabled: c.enabled === true,
+    ttlMs: pickInt(c.ttlSec, 30, 7 * 86_400, 3600) * 1000,
+    maxEntries: pickInt(c.maxEntries, 16, 100_000, 2000),
+    deriveFromBody: c.deriveFromBody === true,
+  };
+})();
+const AFFINITY = new Map();        // key → { channelId, ts }（Map 迭代序=插入序，淘汰最旧用）
+const AFFINITY_STAT = { hits: 0, misses: 0, learned: 0, evicted: 0, expired: 0, reordered: 0 };
+const AFFINITY_HEADERS = ['x-session-id', 'x-claude-code-session-id', 'x-conversation-id', 'x-zzcsapi-session'];
+
+function affinityKeyFor(req, body) {
+  if (!AFFINITY_CFG.enabled) return '';
+  const h = (req && req.headers) || {};
+  for (const name of AFFINITY_HEADERS) {
+    const v = h[name];
+    if (v && String(v).trim().length >= 8) return 'h:' + name + ':' + String(v).trim().slice(0, 160);
+  }
+  const b = body || {};
+  for (const [field, tag] of [['prompt_cache_key', 'pc'], ['session_id', 'sid'], ['conversation_id', 'cid']]) {
+    const v = b[field];
+    if (v && String(v).trim().length >= 8) return 'b:' + tag + ':' + String(v).trim().slice(0, 160);
+  }
+  if (AFFINITY_CFG.deriveFromBody) {
+    const sys = (typeof b.system === 'string' ? b.system : '') || '';
+    const first = (Array.isArray(b.messages) && b.messages.find((m) => m && m.role === 'user')) || null;
+    const text = sys + '\u0000' + ((first && (typeof first.content === 'string' ? first.content
+      : Array.isArray(first.content) ? first.content.map((p) => (p && (p.text || '')) || '').join('') : '')) || '');
+    if (text.trim().length >= 32) {
+      return 'b:hash:' + crypto.createHash('sha1').update(text).digest('hex').slice(0, 20);
+    }
+  }
+  return '';
+}
+
+// 取粘住的渠道；过期即丢（懒清理，不额外起定时器）
+// 每个入口都再兜一次 enabled：关闭时"一个字节状态都不留"是这个特性最容易失守的地方
+// （上层拿的是空键，但守卫不该只靠调用方——免得将来多一个调用点就把状态漏出来）
+function affinitySticky(key) {
+  if (!AFFINITY_CFG.enabled || !key) return '';
+  const rec = AFFINITY.get(key);
+  if (!rec) { AFFINITY_STAT.misses++; return ''; }
+  if (Date.now() - rec.ts > AFFINITY_CFG.ttlMs) {
+    AFFINITY.delete(key);
+    AFFINITY_STAT.expired++;
+    return '';
+  }
+  AFFINITY_STAT.hits++;
+  return rec.channelId;
+}
+
+function affinityLearn(key, channelId) {
+  if (!AFFINITY_CFG.enabled || !key || !channelId) return;
+  if (!AFFINITY.has(key) && AFFINITY.size >= AFFINITY_CFG.maxEntries) {
+    const oldest = AFFINITY.keys().next().value;
+    if (oldest !== undefined) { AFFINITY.delete(oldest); AFFINITY_STAT.evicted++; }
+  }
+  AFFINITY.set(key, { channelId, ts: Date.now() });
+  AFFINITY_STAT.learned++;
+}
+
+// 粘住的那家提到链首——只在"它确实还在候选里且可上场"时动手
+function applyAffinity(list, key) {
+  const sticky = affinitySticky(key);
+  if (!sticky) return list;
+  const now = Date.now();
+  const idx = list.findIndex((c) => c.channelId === sticky && !(c.cooldownUntil > now) && c.status !== 'down');
+  if (idx <= 0) return list;
+  list.unshift(list.splice(idx, 1)[0]);
+  AFFINITY_STAT.reordered++;
+  return list;
+}
+
+function affinityStatus() {
+  return { enabled: AFFINITY_CFG.enabled, ttlSec: AFFINITY_CFG.ttlSec, deriveFromBody: AFFINITY_CFG.deriveFromBody, entries: AFFINITY.size, ...AFFINITY_STAT };
+}
+
+// ─────────────────────────── 客户端限流（v1.17）───────────────────────────
+// 做什么：给客户端面（/v1/*、/anthropic/*、/gemini/*）加**整机**速率与并发上限，
+//   超限回 429 + Retry-After（而不是让上游先把额度烧完 / 让订阅号被风控）。
+// 边界：
+//   · 默认**关闭**（enabled:false），打开后才有行为；rpm=0 表示不限速率，maxConcurrent=0 表示不限并发；
+//   · 令牌桶按**整机**算（本网关是单点自用定位，不需要按客户端分桶；分桶要有稳定的客户端标识才有意义）；
+//   · 计数发生在**鉴权之前**：这样连"刷鉴权"的流量也被挡住（代价是未带密钥的请求也占额度，
+//     这是刻意的取舍——宁可挡在门口，也不让无效流量穿到后面的候选链上）；
+//   · 并发数在响应结束时归还（含客户端中断：挂 res 'close'，不依赖正常收尾）。
+const RATE_CFG = (() => {
+  const c = (config && config.rateLimit) || {};
+  const int = (v, dflt) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) && n >= 0 ? n : dflt;
+  };
+  const rpm = int(c.rpm, 0);
+  const burst = int(c.burst, 0);
+  return {
+    enabled: c.enabled === true,
+    rpm,
+    burst: burst > 0 ? burst : rpm,        // 默认桶容量 = 每分钟额度（允许"一分钟的量一次性打完"）
+    maxConcurrent: int(c.maxConcurrent, 0),
+  };
+})();
+const RATE_BUCKET = { tokens: 0, last: 0 };
+const RATE_STAT = { inflight: 0, peakInflight: 0, limitedRate: 0, limitedConcurrent: 0, released: 0 };
+
+function rateCheck() {
+  if (!RATE_CFG.enabled) return { ok: true };
+  const now = Date.now();
+  if (RATE_CFG.rpm > 0) {
+    const cap = RATE_CFG.burst;
+    if (!RATE_BUCKET.last) { RATE_BUCKET.last = now; RATE_BUCKET.tokens = cap; }
+    RATE_BUCKET.tokens = Math.min(cap, RATE_BUCKET.tokens + ((now - RATE_BUCKET.last) / 60000) * RATE_CFG.rpm);
+    RATE_BUCKET.last = now;
+    if (RATE_BUCKET.tokens < 1) {
+      RATE_STAT.limitedRate++;
+      return { ok: false, retryAfterSec: Math.max(1, Math.ceil(((1 - RATE_BUCKET.tokens) / RATE_CFG.rpm) * 60)) };
+    }
+    RATE_BUCKET.tokens -= 1;
+  }
+  if (RATE_CFG.maxConcurrent > 0 && RATE_STAT.inflight >= RATE_CFG.maxConcurrent) {
+    RATE_STAT.limitedConcurrent++;
+    return { ok: false, concurrent: true, retryAfterSec: 1 };
+  }
+  return { ok: true };
+}
+
+function rateAcquire() {
+  RATE_STAT.inflight++;
+  if (RATE_STAT.inflight > RATE_STAT.peakInflight) RATE_STAT.peakInflight = RATE_STAT.inflight;
+}
+
+function rateRelease() {
+  if (RATE_STAT.inflight > 0) RATE_STAT.inflight--;
+  RATE_STAT.released++;
+}
+
+function rateStatus() {
+  return { enabled: RATE_CFG.enabled, rpm: RATE_CFG.rpm, burst: RATE_CFG.burst, maxConcurrent: RATE_CFG.maxConcurrent, tokens: Math.round(RATE_BUCKET.tokens * 100) / 100, ...RATE_STAT };
+}
+
+// ─────────────────────────── 指标（v1.17）───────────────────────────
+// 做什么：把"现在到底什么情况"暴露成 Prometheus 文本格式（/metrics），不引入任何依赖。
+// 口径说明：渠道维度用**渠道 id** 作标签（本机自用；控制台里显示的是 name）；
+//   请求维度用"路由 + 最终状态码"；token 与延迟来自 recordUsage（真实对话与探测都走它）。
+const METRICS = {
+  startedAt: Date.now(),
+  requests: new Map(),     // `${route}|${status}` → n
+  channels: new Map(),     // channelId → { ok, fail, inTok, outTok, msSum, msCount, probes }
+};
+
+// 端点开关：默认**开**（本地自用，端点本身零成本、可用性信息本来就该拿得到），
+// 但仍要 admin key；要放进 Prometheus 抓取（不带 Bearer）就显式写 metrics.public=true。
+const METRICS_CFG = {
+  enabled: !(config && config.metrics && config.metrics.enabled === false),
+  public: !!(config && config.metrics && config.metrics.public === true),
+};
+
+function metricRequest(route, status) {
+  const k = route + '|' + status;
+  METRICS.requests.set(k, (METRICS.requests.get(k) || 0) + 1);
+}
+
+function metricChannel(channelId, rec) {
+  if (!channelId) return;
+  let m = METRICS.channels.get(channelId);
+  if (!m) { m = { ok: 0, fail: 0, inTok: 0, outTok: 0, msSum: 0, msCount: 0, probes: 0 }; METRICS.channels.set(channelId, m); }
+  if (rec.ok) m.ok++; else m.fail++;
+  if (rec.kind && String(rec.kind).includes('probe')) m.probes++;
+  m.inTok += Math.max(0, Math.floor(Number(rec.inputTokens) || 0));
+  m.outTok += Math.max(0, Math.floor(Number(rec.outputTokens) || 0));
+  const ms = Number(rec.latencyMs) || 0;
+  if (ms > 0) { m.msSum += ms; m.msCount++; }
+}
+
+const metricLabel = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+
+function renderMetrics() {
+  const L = [];
+  const head = (name, type, help) => { L.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`); };
+  head('zzcsapi_requests_total', 'counter', '客户端面请求数（按路由与最终状态码）');
+  for (const [k, n] of METRICS.requests) {
+    const [route, status] = k.split('|');
+    L.push(`zzcsapi_requests_total{route="${metricLabel(route)}",status="${metricLabel(status)}"} ${n}`);
+  }
+  head('zzcsapi_channel_requests_total', 'counter', '渠道维度的成功/失败次数（含探测）');
+  for (const [id, m] of METRICS.channels) {
+    L.push(`zzcsapi_channel_requests_total{channel="${metricLabel(id)}",ok="true"} ${m.ok}`,
+      `zzcsapi_channel_requests_total{channel="${metricLabel(id)}",ok="false"} ${m.fail}`);
+  }
+  head('zzcsapi_channel_tokens_total', 'counter', '渠道维度的 token 累计（真实 usage 优先）');
+  for (const [id, m] of METRICS.channels) {
+    L.push(`zzcsapi_channel_tokens_total{channel="${metricLabel(id)}",direction="in"} ${m.inTok}`,
+      `zzcsapi_channel_tokens_total{channel="${metricLabel(id)}",direction="out"} ${m.outTok}`);
+  }
+  head('zzcsapi_channel_latency_ms', 'summary', '渠道维度耗时（sum/count）');
+  for (const [id, m] of METRICS.channels) {
+    L.push(`zzcsapi_channel_latency_ms_sum{channel="${metricLabel(id)}"} ${m.msSum}`,
+      `zzcsapi_channel_latency_ms_count{channel="${metricLabel(id)}"} ${m.msCount}`);
+  }
+  head('zzcsapi_channels', 'gauge', '渠道状态计数（按健康分层）');
+  const states = { ok: 0, down: 0, cooldown: 0, probation: 0, disabled: 0 };
+  const now = Date.now();
+  for (const ch of channels.values()) {
+    if (ch.def.enabled === false) { states.disabled++; continue; }
+    if (ch.cooldownUntil > now) states.cooldown++;
+    else if (ch.status === 'down') states.down++;
+    else if (ch.probation) states.probation++;
+    else states.ok++;
+  }
+  for (const [s, n] of Object.entries(states)) L.push(`zzcsapi_channels{state="${s}"} ${n}`);
+  head('zzcsapi_affinity_entries', 'gauge', '会话粘性表里当前的会话数');
+  L.push(`zzcsapi_affinity_entries ${AFFINITY.size}`);
+  head('zzcsapi_affinity_events_total', 'counter', '会话粘性事件（命中/未命中/学习/淘汰/过期/重排）');
+  for (const k of ['hits', 'misses', 'learned', 'evicted', 'expired', 'reordered']) L.push(`zzcsapi_affinity_events_total{event="${k}"} ${AFFINITY_STAT[k]}`);
+  head('zzcsapi_rate_limit_events_total', 'counter', '限流事件（速率拒绝/并发拒绝/放行结束）');
+  for (const [k, v] of [['rate_rejected', RATE_STAT.limitedRate], ['concurrent_rejected', RATE_STAT.limitedConcurrent], ['released', RATE_STAT.released]]) {
+    L.push(`zzcsapi_rate_limit_events_total{event="${k}"} ${v}`);
+  }
+  head('zzcsapi_inflight_requests', 'gauge', '当前在飞的客户端请求数');
+  L.push(`zzcsapi_inflight_requests ${RATE_STAT.inflight}`);
+  head('zzcsapi_uptime_seconds', 'counter', '进程运行时长');
+  L.push(`zzcsapi_uptime_seconds ${Math.floor((Date.now() - METRICS.startedAt) / 1000)}`);
+  head('zzcsapi_process_resident_memory_bytes', 'gauge', '进程常驻内存');
+  L.push(`zzcsapi_process_resident_memory_bytes ${process.memoryUsage().rss}`);
+  head('zzcsapi_swrr_hits_total', 'counter', '加权轮询选中次数（份额统计）');
+  L.push(`zzcsapi_swrr_hits_total ${SWRR_TOTAL}`);
+  return L.join('\n') + '\n';
+}
+
+
 // 从状态码（优先）或错误文案判断失败属于哪一类。文案兜底是为了那些拿不到状态码的路径
 // （原生客户端的异常、success:false 的 JSON 体）不至于全被当瞬时故障。
 function failureKindFromStatus(status, msg) {
@@ -2235,6 +2486,41 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, checked: channels.size });
     }
 
+    // 指标端点（v1.17）：Prometheus 文本格式（text/plain; version=0.0.4）。
+    // 默认要 admin key；`metrics.public: true` 时才允许匿名抓取（放进 Prometheus 的常见做法）。
+    if (req.method === 'GET' && url.pathname === '/metrics') {
+      if (!METRICS_CFG.enabled) return sendJson(res, 404, upstreamErrorPayload(404, 'metrics disabled'));
+      if (!METRICS_CFG.public && !checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      const text = renderMetrics();
+      res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(text);
+    }
+
+    // 客户端面（/v1/*、/anthropic/*、/gemini/*）：客户端限流 + 请求计数（v1.17）。
+    // 位置刻意放在**鉴权之前**：这样连"刷鉴权"的无效流量也被挡在门外（取舍见 RATE_CFG 注释）。
+    // 计数用 res 的 finish/close 收尾——流式请求的 close 由客户端中断触发，也照样归还并发额度。
+    if (url.pathname === '/v1/models' || url.pathname.startsWith('/v1/') || url.pathname.startsWith('/anthropic/') || url.pathname.startsWith('/gemini/')) {
+      const verdict = rateCheck();
+      if (!verdict.ok) {
+        res.setHeader('Retry-After', String(verdict.retryAfterSec || 1));
+        metricRequest(url.pathname, 429);
+        return sendJson(res, 429, upstreamErrorPayload(429, verdict.concurrent
+          ? `too many concurrent requests（并发上限 ${RATE_CFG.maxConcurrent}）`
+          : `rate limit exceeded（上限 ${RATE_CFG.rpm} 次/分钟）`));
+      }
+      rateAcquire();
+      const route = url.pathname;
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        rateRelease();
+        metricRequest(route, res.statusCode || 0);
+      };
+      res.on('close', settle);
+      res.on('finish', settle);
+    }
+
     // OpenAI 兼容
     if (req.method === 'GET' && url.pathname === '/v1/models') {
       if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
@@ -2333,6 +2619,10 @@ function channelStatusAll() {
       anthropic: aggregateModels('anthropic'),
       gemini: aggregateModels('gemini'),
     },
+    // v1.17 运行时观测：会话粘性（命中/学习/淘汰）与客户端限流（在飞/拒绝）当前状态
+    affinity: affinityStatus(),
+    rateLimit: rateStatus(),
+    metrics: { enabled: METRICS_CFG.enabled, public: METRICS_CFG.public },
   };
 }
 
@@ -2349,6 +2639,10 @@ function persistConfig() {
     // 自动权重旋钮：必须在白名单里——否则控制台随便保存一次渠道就会把用户调好的参数从 config.json 里抹掉
     // （与渠道 weight 字段同一个坑，见 PT29）
     autoWeight: { ...AUTO_W },
+    // v1.17 的三组开关同理必须在白名单里：漏一个，控制台保存任一渠道时就会把那段配置从 config.json 里抹掉
+    sessionAffinity: (config && config.sessionAffinity) || undefined,
+    rateLimit: (config && config.rateLimit) || undefined,
+    metrics: (config && config.metrics) || undefined,
     // 首启生成的密钥随配置一起持久化（env 显式提供的密钥不落盘——config.adminKey 保持未设置）
     adminKey: config.adminKey || undefined,
     gatewayKey: config.gatewayKey || undefined,
@@ -2709,6 +3003,9 @@ function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, la
     bumpUsageBucket(u.byDay, day, inTok, outTok, ok);
     u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0, ...(note ? { note } : {}) });
     if (u.recent.length > 800) u.recent.splice(0, u.recent.length - 800);
+    // v1.17 指标：渠道维度的成功/失败、token、耗时（口径与 usage 相同——真实 usage 优先，
+    // 两根通道共用这一处收口，避免"指标好看、usage 难看"的分叉）
+    metricChannel(channelId, { ok: ok !== false, kind, inputTokens: inTok, outputTokens: outTok, latencyMs });
     scheduleUsageFlush();
   } catch { /* 统计失败不影响请求 */ }
 }
@@ -3519,6 +3816,7 @@ async function handleOpenAIRequest(req, res, url) {
     url,
     body,
     candidates,
+    affinityKey: affinityKeyFor(req, body),
     requestedModel: requested,
     isStream: !!body.stream,
     encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
@@ -3647,6 +3945,8 @@ async function handleAnthropicRequest(req, res, url) {
       url: { ...url, pathname: '/v1/chat/completions' }, // 复用 OpenAI 上游路径
       body: oaiBody,
       candidates,
+      // 粘性键用**客户端原始报文**推导（这里 body 是转换后的 OpenAI 体，会话标识在原始体里）
+      affinityKey: affinityKeyFor(req, body),
       requestedModel: requested,
       isStream,
       // 同协议直通（v1.15）：选中 anthropic 协议渠道时，出站直接用客户端原始报文、响应原样回传
@@ -3723,6 +4023,7 @@ async function handleGeminiRequest(req, res, url) {
     url: { ...url, pathname: '/v1/chat/completions' },
     body: oaiBody,
     candidates,
+    affinityKey: affinityKeyFor(req, body),
     requestedModel: model,
     isStream,
     // 同协议直通（v1.15）：选中 gemini 协议渠道时，出站用客户端原始报文（模型名在 URL 里）、响应原样回传
@@ -3785,6 +4086,9 @@ async function dispatchRequest(opts) {
   let attemptedAny = false;
   const stream = !!isStream;
   const maxCand = Math.min(candidates.length, RETRIES.maxModelFallbacks || 99);
+  // v1.17 会话粘性（默认关闭）：命中且"那家确实还在候选里、还能上场"时把它提到链首。
+  // 只动顺序、不硬塞渠道——冷却/down/不在候选表里时一切照旧，也不会去清冷却。
+  applyAffinity(candidates, opts.affinityKey);
 
   for (let i = 0; i < maxCand; i++) {
     const c = candidates[i];
@@ -3832,7 +4136,7 @@ async function dispatchRequest(opts) {
         hasMoreCandidates,
         attempt,
       });
-      if (result === 'success') return;
+      if (result === 'success') { affinityLearn(opts.affinityKey, c.channelId); return; }
       if (result === 'fatal_client') return;
       // 响应头已发出（某候选已开始写响应）→ 无法再切换渠道，直接结束
       if (res.headersSent || res.writableEnded) {
