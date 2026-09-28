@@ -65,7 +65,7 @@ function makeNorms() {
   check('端点在 handleAdminApi 里（因此天然受 admin 鉴权保护、且不受客户端限流影响）',
     apiFnIdx > 0 && getIdx > apiFnIdx && (apiFnEnd < 0 || getIdx < apiFnEnd), { apiFnIdx, getIdx, apiFnEnd });
   check('管理面统一鉴权：/admin/api/ 前缀先 checkAuth(admin) 再进 handleAdminApi',
-    /url\.pathname\.startsWith\('\/admin\/api\/'\)[\s\S]{0,140}checkAuth\(req, 'admin'\)[\s\S]{0,60}handleAdminApi\(req, res, url\)/.test(SRC) && gateIdx > 0);
+    /url\.pathname\.startsWith\('\/admin\/api\/'\)[\s\S]{0,140}authGate\(req, res, 'admin'\)[\s\S]{0,40}handleAdminApi\(req, res, url\)/.test(SRC) && gateIdx > 0);
   check('只认三组开关（白名单写死，不做通用 config 写入）',
     /const groups = \['sessionAffinity', 'rateLimit', 'metrics'\];/.test(SRC));
   check('未知字段一律 400（不静默忽略）', /unknown field \$\{g\}\.\$\{k\}/.test(SRC));

@@ -1270,6 +1270,25 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：新增 `test/security-headers-e2e.test.js`（**23 项断言**，真起临时网关）——源码级装配守卫（`build/app.js` 的 11 个"裸插值"必须一个不剩、`toast` 必须 `esc(msg)`、`data-t` 必须 `JSON.stringify`+`esc`、`SEC_HEADERS` 必须在 `createServer` 之前且 `setHeader` 在所有分支之前、CSP 不得偷偷加上）+ 真链路逐条核头（`/console`、`/healthz`、`/admin/api/status` 的 200 与 401、`/metrics`、`/v1/models`、404 全部带齐三个头；`/healthz` 与 `/admin/api/*` 带 `no-store`；页面壳零密钥明文；产物里能看到 `esc(l.m)`）。`node build/build.js` 通过（**163,938 字符 / 184,983 字节**，比改前 +324 字节）；全量回归 **29 文件 / 1251 项断言 / 0 失败**。
 
+### 8.26 v1.18.4 第二批安全加固：密钥默认不下发 + 按需揭示 + 管理面失败限流（2026-10-02，对象 `server.js` + `build/app.js` + 产物 `console.html` + `test/security-headers-e2e.test.js`）
+
+**问题（外部黑盒渗透测试报告，本机复核确认为真）**：`/admin/api/status`、`/admin/api/channels`、`/admin/api/config` 直接把全部渠道的上游 `apiKey` 明文交给浏览器（本机实测 **32 条**），其中 `/admin/api/config` 还同时给出 `ADMIN_KEY` 与 `GATEWAY_KEY` 原文。报告原文照录：「**ADMIN_KEY 一旦泄漏，全部上游密钥一起泄漏**」。控制台自己是有掩码的（`chKey()`），但那是**前端自愿**——接口已经把原文发出去了，任何拿到 `ADMIN_KEY` 的人（或任何一次脚本注入 / 浏览器扩展 / 中间代理日志）都能直接读走全部上游额度凭证，控制台显示成什么样都不影响。
+
+**根因**：这几个端点是给控制台**显示**用的（"这是哪把密钥、配没配"），响应体里给的却是**取用**才需要的东西（完整密钥）。显示与取用挤在同一条信任链、同一次下发上：控制台需要的信息量（掩码 + 是否已配置）和密钥原文的信息量差一个数量级，却没有分层。
+
+**处置**：
+① **默认只下发掩码**：`channelStatusAll()` 与 `GET /admin/api/channels` 的 `apiKey` 改为 `maskSecret()` 掩码 + 新增布尔 `apiKeySet`。**写 `config.json` 的内部构造刻意不动**（仍取 `ch.def.apiKey` 原文），否则一次 `persistConfig()` 就会把用户渠道密钥覆盖成掩码——这是"改错了会丢数据"的一步。
+② `GET /admin/api/config` 不再返回两个密钥原文，改返回 `gatewayKey` 掩码 + `adminKeyRequired` + 新增 `keysInsecure` 布尔（原来前端自己拿密钥做 `/change-me/i` 判断，现在由后端给结论）。
+③ 新增两个**按需揭示**端点：`GET /admin/api/channels/{id}/key`、`GET /admin/api/gateway-key`——仍走 admin 鉴权、逐条取名，并同样带 `Cache-Control: no-store`。
+④ `POST /admin/api/channels` 的 `apiKey` 改为「**留空 = 保持原密钥**」：`validateChannelDef` 增加 `allowMissingApiKey` 选项，**只对已存在的渠道放宽**。否则控制台带着掩码或空串回写一次，就能把用户配好的密钥抹掉。
+⑤ `checkAuth` 改 `sha256` + `crypto.timingSafeEqual` 恒定时间比较（原来 `===` 是短路比较，可被逐字节计时爆破）；并新增失败计数：9 处鉴权点全部改走 `authGate()`，每类（admin / gateway）**每分钟最多 30 次失败尝试**，超了返回 429 + `Retry-After`，**成功一次即清零**——窗口式而非永久锁定，正密钥永远不受影响，因此不存在"把自己锁在门外"。
+
+**控制台相应变化（`build/app.js`）**：渠道抽屉的「明文显示」与「复制密钥」、渠道表单的 API Key 回填、模型页的「复制真实 `/v1/models`」、Playground 直连 `/v1`、接入信息卡的「复制」与「复制全部」，全部改成**点一下才现取一次原文**（新增 `chKeyLive` / `gwKeyLive` / `copyChKey` / `copyGwKey` / `copyAllEndpoints`；`gwKeyLive` 按页缓存，避免同页重复取）。渠道表单的 API Key 框不再回填原文，占位符显示「已配置 sk-a…1234 · 留空保持不变」；编辑已有渠道时**留空即保持原密钥**；点「明文」时 `toggleKeyField` 会现取一次原文填进输入框（取到的是当前密钥本身，直接保存等于原样写回，不产生改动）；「探测上游」按钮同样自动现取一次原文。
+
+**残留（明确记下，别当成已解决）**：① 渠道密钥一旦被揭示，仍会出现在浏览器内存与剪贴板里——这是"用户主动点击"必然的代价，不是漏洞；② 揭示端点没有单独的频率限制（管理面整体的失败限流挡的是**爆破**，不是"管理员自己反复刷"）；③ CSP 仍未加（需按真实资源单独设计 + 浏览器验证）。
+
+**验证**：`node test/security-headers-e2e.test.js` 新增「第二批」一节——两处渠道列表只下发掩码而写盘构造保留原文、`POST` 留空即保持原密钥（含真链路往返）、`/admin/api/config` 不再交出 `adminKey` 且新增 `keysInsecure`、两个揭示端点仍需 admin、鉴权改 `timingSafeEqual`、9 处鉴权点全走 `authGate`、连续失败到阈值转 429 + `Retry-After` 且客户端面不受牵连；全量回归；8788 灰度实例实测。`node build/build.js` 通过（产物 **165,769 字符 / 187,743 字节**）。
+
 ---
 
 ## 9. 后续可做（未实现）

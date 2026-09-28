@@ -68,7 +68,7 @@ function makeRate(cfg) {
     (SRC.match(/res\.on\('close', settle\)/g) || []).length === 1 && (SRC.match(/res\.on\('finish', settle\)/g) || []).length === 1);
   check('归还只做一次（settled 幂等旗标）', /if \(settled\) return;/.test(SRC) && /settled = true;/.test(SRC));
   check('限流在鉴权之前计数（挡住刷鉴权的无效流量）',
-    SRC.indexOf("if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');") > gateIdx);
+    SRC.indexOf("if (!authGate(req, res, 'gateway')) return;") > gateIdx);
   check('persistConfig 白名单含 rateLimit（否则控制台保存渠道会把它抹掉）',
     /rateLimit: \(config && config\.rateLimit\) \|\| undefined/.test(SRC));
   check('默认关闭：只有显式 enabled:true 才开', /enabled: c\.enabled === true/.test(RATE_SRC));

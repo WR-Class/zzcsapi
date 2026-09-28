@@ -1160,7 +1160,7 @@ function exportModels(){
 async function copyModels(){
   const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
   try{
-    const r=await fetch(base+'/models',{headers:{'Authorization':'Bearer '+((CFG&&CFG.gatewayKey)||'')}});
+    const r=await fetch(base+'/models',{headers:{'Authorization':'Bearer '+(await gwKeyLive())}});
     const j=await r.json();
     await navigator.clipboard.writeText(JSON.stringify(j,null,2));
     toast('✓ 已复制 /v1/models（'+((j&&j.data||[]).length)+' 个）','ok');
@@ -1646,9 +1646,9 @@ function openChannel(id){
       <dl class="kv">
         <dt>Base URL</dt><dd class="mono">${esc(chBaseUrl(c))}</dd>
         <dt>密钥</dt><dd class="mono row" style="gap:6px">
-          <span id="chKeyTx" data-plain="0">${esc(maskKey(chKey(c.id)))}</span>
+          <span id="chKeyTx" data-plain="0">${esc(chKey(c.id)||'—')}</span>
           <button class="icon-btn" id="chKeyBtn" style="width:22px;height:22px" title="明文显示" onclick="toggleDrawerKey('${esc(c.id)}',this)">${svg('eye',12)}</button>
-          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyText(chKey('${esc(c.id)}'),this)">${svg('copy',12)}</button>
+          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyChKey('${esc(c.id)}',this)">${svg('copy',12)}</button>
         </dd>
         <dt>协议</dt><dd class="mono">${esc(c.proto)}</dd>
         <dt>模型数</dt><dd class="mono">${c.models} 个别名</dd>
@@ -1675,13 +1675,17 @@ function openChannel(id){
       <button class="btn danger" onclick="delChannel('${esc(c.id)}')">${svg('trash',14)}删除</button>
     </div>`);
 }
-function toggleDrawerKey(id,btn){
+async function toggleDrawerKey(id,btn){
   const tx=$('#chKeyTx'); if(!tx)return;
-  const plain=tx.dataset.plain==='1';
-  tx.textContent=plain?maskKey(chKey(id)):chKey(id);
-  tx.dataset.plain=plain?'0':'1';
-  btn.innerHTML=svg(plain?'eye':'eyeOff',12);
-  btn.title=plain?'明文显示':'隐藏';
+  if(tx.dataset.plain==='1'){   // 收起明文：回到掩码，不需要再问服务端
+    tx.textContent=chKey(id)||'—'; tx.dataset.plain='0';
+    btn.innerHTML=svg('eye',12); btn.title='明文显示'; return;
+  }
+  try{
+    const k=await chKeyLive(id);
+    tx.textContent=k||'（未配置）'; tx.dataset.plain='1';
+    btn.innerHTML=svg('eyeOff',12); btn.title='隐藏';
+  }catch(e){toast('取密钥原文失败：'+(e&&e.message||e),'bad')}
 }
 async function reprobe(id){
   const c=DATA.channels.find(x=>x.id===id); if(!c)return;
@@ -2077,7 +2081,7 @@ async function pgSend(){
   if(sys)msgs.push({role:'system',content:sys});
   for(const m of PG)msgs.push({role:m.role==='user'?'user':'assistant',content:m.text});
   const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
-  const key=(CFG&&CFG.gatewayKey)||'';
+  const key=await gwKeyLive();
   const t0=performance.now();
   let ttfb=0, answer='', usage='', channel='', err='';
   pgBusy=true;
@@ -2174,7 +2178,7 @@ function vAccess(v){
   /* 全部取自 /admin/api/config，不写死端口与密钥：CFG.urls 由服务端按实际 PORT 拼好 */
   const u=(CFG&&CFG.urls)||{};
   const base=(u.openai||(location.origin+'/v1')).replace(/\/v1$/,'');
-  const gwKey=(CFG&&CFG.gatewayKey)||'';
+  const gwKey=(CFG&&CFG.gatewayKey)||'';   // 服务端只给掩码（v1.18.4），原文要复制时走 copyGwKey() 现取
   const m1=(DATA.models[0]||{}).name||'自定义别名';
   const m2=((DATA.models.find(m=>/claude/i.test(m.name))||{}).name)||m1;
   const eps=[
@@ -2182,14 +2186,15 @@ function vAccess(v){
     {t:'Anthropic 协议',p:'anthropic',u:u.anthropic||base+'/anthropic',note:'/anthropic/v1/messages · 支持 stream'},
     {t:'Gemini 协议',p:'gemini',u:u.gemini||base+'/gemini/v1beta',note:'/gemini/v1beta/models/{m}:generateContent'}
   ];
-  const allText=[...eps.map(e=>`${e.t}\t${e.u}`),`GATEWAY_KEY\t${gwKey||'（未设置）'}`].join('\n');
+  // 端点清单先记下来：密钥原文不在这份快照里，等用户点「复制全部」时再实时取一次拼上（v1.18.4）
+  EP_COPY_TEXT=[...eps.map(e=>`${e.t}\t${e.u}`)].join('\n');
   v.innerHTML=`
   <div class="page-hd">
     <div><h1 class="page-title">接入信息</h1>
       <div class="page-sub">网关地址与密钥 · 三套协议端点共用同一个 GATEWAY_KEY</div></div>
     <div class="page-actions">
       <button class="btn" onclick="showKeyHelp()">${svg('key',14)}轮换密钥</button>
-      <button class="btn primary" data-t="${esc(allText)}" onclick="copyText(this.dataset.t,this)">${svg('copy',14)}复制全部</button>
+      <button class="btn primary" onclick="copyAllEndpoints(this)">${svg('copy',14)}复制全部</button>
     </div>
   </div>
 
@@ -2199,8 +2204,8 @@ function vAccess(v){
       <div class="ep-url"><span style="flex:1;min-width:0">${x.u}</span>
         <button class="btn ghost sm" data-t="${esc(x.u)}" onclick="copyText(this.dataset.t,this)">${svg('copy',12)}复制</button></div>
       <div class="muted" style="font-size:11.5px">${esc(x.note)}</div>
-      <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">${esc(maskKey(gwKey))}</span>
-        <button class="btn ghost sm ml-auto" data-t="${esc(gwKey)}" onclick="copyText(this.dataset.t,this)">${svg('copy',13)}复制</button></div>
+      <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">${esc(gwKey||'—')}</span>
+        <button class="btn ghost sm ml-auto" onclick="copyGwKey(this)">${svg('copy',13)}复制</button></div>
     </div></div>`).join('')}
   </div>
 
@@ -2239,7 +2244,8 @@ function vAccess(v){
 
   ${(()=>{
     /* 只有密钥还是"公开可猜的默认串"时才报警；首启随机生成的密钥不会命中，不吓唬人 */
-    const insecure=/change-me/i.test(gwKey)||/change-me/i.test((CFG&&CFG.adminKey)||'');
+    // 密钥原文已不下发到前端，无法就地 /change-me/i 判断——由服务端算好 keysInsecure 给一个布尔
+    const insecure=!!(CFG&&CFG.keysInsecure);
     return `<div class="card" style="margin-top:16px${insecure?';border-color:color-mix(in srgb,var(--warn) 34%,transparent)':''}">
     <div class="card-bd row" style="gap:12px;align-items:flex-start">
       <span style="color:var(--${insecure?'warn':'ok'})">${svg(insecure?'warn':'check',17)}</span>
@@ -2325,6 +2331,15 @@ const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbu
 
 /* 密钥来自 /admin/api/status 下发的渠道明文 key，控制台默认掩码、按需明文显示 */
 function chKey(id){const c=DATA.channels.find(x=>x.id===id);return (c&&c.apiKey)||''}
+/* v1.18.4：管理面默认只下发掩码（一次 GET 不再等于全部密钥失守），原文改成"点一下取一条"。
+   chKey() 给的是掩码，chKeyLive() 才是原文；网关密钥同理走 gwKeyLive() 并按页缓存。 */
+let EP_COPY_TEXT='';   // 「接入信息」页的端点清单（复制全部时和实时密钥拼在一起）
+let _gwk=null;
+async function chKeyLive(id){const j=await api('/admin/api/channels/'+encodeURIComponent(id)+'/key');return (j&&j.apiKey)||''}
+async function gwKeyLive(){if(_gwk!==null)return _gwk;try{const j=await api('/admin/api/gateway-key');_gwk=(j&&j.gatewayKey)||''}catch(e){_gwk=''}return _gwk}
+async function copyChKey(id,btn){try{const k=await chKeyLive(id);if(!k)return toast('这个渠道没有配密钥','warn');await copyText(k,btn)}catch(e){toast('取密钥原文失败：'+(e&&e.message||e),'bad')}}
+async function copyGwKey(btn){try{const k=await gwKeyLive();if(!k)return toast('网关没设密钥（免鉴权模式）','warn');await copyText(k,btn)}catch(e){toast('取网关密钥失败：'+(e&&e.message||e),'bad')}}
+async function copyAllEndpoints(btn){try{const k=await gwKeyLive();await copyText(EP_COPY_TEXT+'\nGATEWAY_KEY\t'+(k||'（未设置）'),btn)}catch(e){toast('复制失败：'+(e&&e.message||e),'bad')}}
 const maskKey=k=>{k=String(k||'');if(!k)return '—';if(k.length<=12)return k.slice(0,3)+'••••';return k.slice(0,7)+'•'.repeat(Math.min(20,k.length-11))+'•'+k.slice(-4)};
 const chBaseUrl=c=>c.baseUrl||(PROTO_META[c.proto]||{}).base||'—';
 const chAliases=c=>(c.aliases||[]).map(r=>({alias:r.alias,upstream:r.upstream}));
@@ -2368,7 +2383,7 @@ function openChannelForm(id){
         <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
       <div class="field"><label>API Key</label>
         <div class="row" style="gap:8px">
-          <input class="input" id="f-key" type="password" value="${esc(c?chKey(c.id):'')}" placeholder="sk-… 或 notion 的 token_v2">
+          <input class="input" id="f-key" type="password" value="" placeholder="${c?'已配置 ' + esc(chKey(c.id)||'（未设置）') + ' · 留空保持不变':'sk-… 或 notion 的 token_v2'}">
           <button class="btn ghost sm" id="f-key-btn" style="flex:0 0 auto" onclick="toggleKeyField()">${svg('eye',13)}明文</button>
         </div>
         <span class="help" id="f-key-help">${pm.key}</span></div>
@@ -2426,10 +2441,12 @@ function delModelRow(i){modalModels.splice(i,1);renderModelRows();if(probeShown(
 let probeFound=[],probeSel=new Set(),probeQ='';
 const probeShown=()=>$('#probePanel')?.style.display!=='none';
 async function probeUpstream(){
-  const base=$('#f-base').value.trim(), key=$('#f-key').value;
+  const base=$('#f-base').value.trim();
+  let key=$('#f-key').value;   // 编辑已有渠道且没重填时，按需取一次原文（v1.18.4）
+  if(!key&&modalChId){try{key=await chKeyLive(modalChId)}catch(e){}}
   const st=$('#probeStatus'), btn=$('#f-probe');
   if(!base)return setStatus(st,'先填 Base URL','bad');
-  if(!key)return setStatus(st,'先填 API Key','bad');
+  if(!key)return setStatus(st,'先填 API Key（或用抽屉里的明文按钮取一次）','bad');
   btn.disabled=true; btn.innerHTML=svg('test',13)+'探测中…';
   setStatus(st,'请求上游 /v1/models …','wait');
   try{
@@ -2523,9 +2540,19 @@ function testRowModel(i){
   closeModal();
   openTestModels({channelId:modalChId,only:row.alias||row.upstream});
 }
-function toggleKeyField(){
+async function toggleKeyField(){
   const inp=$('#f-key'), btn=$('#f-key-btn');
   const show=inp.type==='password';
+  if(show&&!inp.value.trim()&&modalChId){
+    // 表单不再回填原文（v1.18.4 管理面只下发掩码），所以输入框是空的：
+    // 首次点「明文」时现取一次真密钥填进来，否则点了也看不到东西。
+    // 取到的是**当前密钥本身**，不修改直接保存等于原样写回，不会造成改动。
+    try{
+      const k=await chKeyLive(modalChId);
+      if(k){inp.value=k;toast('已载入当前密钥（只看不改，保存后仍原样）','ok')}
+      else toast('这个渠道没有配密钥','warn');
+    }catch(e){toast('取密钥原文失败：'+(e&&e.message||e),'bad');return}
+  }
   inp.type=show?'text':'password';
   btn.innerHTML=svg(show?'eyeOff':'eye',13)+(show?'隐藏':'明文');
 }
@@ -2537,7 +2564,7 @@ async function saveChannel(){
   if(!/^[A-Za-z0-9_-]+$/.test(id))return toast('渠道 ID 只能用英文 / 数字 / _ / -');
   if(!modalChId&&DATA.channels.some(c=>c.id===id))return toast('渠道 ID「'+id+'」已存在');
   if(!base)return toast('Base URL 必填');
-  if(!key)return toast('API Key 必填');
+  if(!key&&!modalChId)return toast('API Key 必填');   // 编辑已有渠道时留空 = 保持原密钥（v1.18.4）
   // 权重：加权轮询用。空 = 0（不参与）；非数字/负数直接挡在这里，别等后端 400
   const wRaw=($('#f-weight').value||'').trim();
   const weight=wRaw===''?0:Number(wRaw);
@@ -2555,7 +2582,7 @@ async function saveChannel(){
     id,
     name:$('#f-name').value.trim()||id,
     baseUrl:base,
-    apiKey:key,
+    apiKey:key||undefined,   // undefined 会被 JSON.stringify 丢掉 → 服务端沿用原密钥
     protocol:$('#f-proto').value,
     priority:Number($('#f-pri').value)||0,
     weight,

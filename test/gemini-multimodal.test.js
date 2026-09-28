@@ -200,8 +200,13 @@ function testAnthropicImages() {
 /* ═══════ 6. 原生 SDK 鉴权头（Gemini x-goog-api-key / Anthropic x-api-key） ═══════ */
 function testAuthHeaders() {
   G('6. 原生 SDK 鉴权头（checkAuth）');
-  const fn = extract('checkAuth');
-  const mk = (NOAUTH, GATEWAY_KEY, ADMIN_KEY) => new Function('NOAUTH', 'GATEWAY_KEY', 'ADMIN_KEY', fn + '\nreturn checkAuth;')(NOAUTH, GATEWAY_KEY, ADMIN_KEY);
+  // v1.18.4 起 checkAuth 依赖恒定时间比较（safeEqual）与失败计数（AUTH_FAIL / authThrottle / authFail / authOk），
+  // 抠函数时把这几段一起带上，否则 new Function 里会直接 ReferenceError
+  const fn = ''
+    + extract('safeEqual') + '\n'
+    + src.slice(src.indexOf('const AUTH_FAIL = '), src.indexOf('function checkAuth(')) + '\n'
+    + extract('checkAuth');
+  const mk = (NOAUTH, GATEWAY_KEY, ADMIN_KEY) => new Function('crypto', 'NOAUTH', 'GATEWAY_KEY', 'ADMIN_KEY', fn + '\nreturn checkAuth;')(require('crypto'), NOAUTH, GATEWAY_KEY, ADMIN_KEY);
   const ck = mk(false, 'GW', 'AD');
   const req = (headers, url = '/gemini/v1beta/models/x:generateContent') => ({ headers, url });
 
