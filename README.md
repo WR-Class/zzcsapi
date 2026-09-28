@@ -186,6 +186,7 @@ node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
+node test/same-protocol-passthrough.test.js # 43 项断言：同协议直通（Anthropic/Gemini 客户端 → 同协议渠道不翻译；thinking/cache_control/seed 原样到达、响应逐字节一致、真实 token 仍记录、跨协议仍走转换）
 node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）
 node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
@@ -285,8 +286,22 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 | 客户端来的协议 | 渠道是 `openai` | 渠道是 `anthropic` | 渠道是 `gemini` |
 | --- | --- | --- | --- |
 | OpenAI（`/v1/chat/completions`） | 直通 | 转原生 `/v1/messages` | 转原生 `:generateContent` |
-| Anthropic（`/anthropic/v1/messages`） | 转 OpenAI 出站 | 转原生再转回 Anthropic 响应 | 转原生 Gemini 出站 |
-| Gemini（`/gemini/v1beta/...`） | 转 OpenAI 出站 | 转原生 Anthropic 出站 | 转原生 `:streamGenerateContent?alt=sse` |
+| Anthropic（`/anthropic/v1/messages`） | 转 OpenAI 出站 | **同协议直通（v1.15，不翻译）** | 转原生 Gemini 出站 |
+| Gemini（`/gemini/v1beta/...`） | 转 OpenAI 出站 | 转原生 Anthropic 出站 | **同协议直通（v1.15，不翻译）**；流式 `:streamGenerateContent?alt=sse` |
+
+**同协议直通（v1.15）**：客户端协议与渠道协议相同的两个格子**一次翻译都不做**——出站用客户端原始报文
+（Anthropic 只把 `model` 换成渠道的上游名；Gemini 的模型名本来就在 URL 路径里），响应（含流式 SSE 字节）
+原样回传。省掉"客户端 → 内部 OpenAI → 原生"来回两趟，也就省掉了两处**有损点**：
+
+- 内部 OpenAI 格式承载不了的字段，以前会在进、出两个方向上被静默丢掉：`thinking`（含 `budget_tokens`、
+  `signature`）、`cache_control`、`top_k`、`metadata`、**多段 system**、`stop_sequences` 细节、
+  `generationConfig.seed` / `thinkingConfig`、`safetySettings` …… 直通后原样到达上游、原样回到客户端。
+- 回程不再被重排：`message_start` 不再是网关"补"出来的（上游那一个原样过去），也不会多出原生协议里
+  根本没有的 `[DONE]`；`event: …` 行与分隔空行逐字节一致。
+
+代价（诚实说）：入站那层"顺手的清洗"也不再执行——内部格式才需要的工具 id 清洗、参数方言修正都不做，
+上游报什么错就透什么错；**图片能力门仍在选路阶段生效**（候选过滤用的是同一份转换结果，没有被绕过）。
+只有"客户端协议 === 渠道协议"时才直通，跨协议照旧走转换（见下表与 §协议翻译）。
 
 - **怎么配**：`"protocol": "anthropic"` + `baseUrl`（如 `https://api.anthropic.com`，写不写 `/v1` 都认）+ `apiKey`；Gemini 填 `https://generativelanguage.googleapis.com`（`/v1`、`/v1beta` 都认）。模型行照旧：alias 是**客户端请求的名字**，上游是**真实模型名**（Gemini 会拼进 URL 路径）。
 - **客户端路由的四个往返方向都完整支持工具调用**（v1.12 补齐 Gemini 这条入站方向，见 PT33）：
@@ -655,7 +670,3 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
   下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
   "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题
-- ~~Gemini **客户端路由**的工具调用透传~~ —— ✅ **v1.12 已完成**：`tools` / `toolConfig` 三态 /
-  `functionCall` / `functionResponse` 全部打通（非流式与流式），配不上 id 的无状态用法有安全退路。
-  回归见 `test/gemini-tools.test.js`（单元 44 项）与 `test/gemini-tools-e2e.test.js`（端到端 29 项）。
-- 同协议直通（Anthropic 客户端 → Anthropic 渠道不做转换，省一层且有损点更少）
