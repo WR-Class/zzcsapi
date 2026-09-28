@@ -11,7 +11,8 @@
   凭证/额度问题（401/402/403、key 失效、余额耗尽）5 分钟起、封顶 6 小时；限流（429）1 分钟起，上游给了 `Retry-After` 就听它的。
   冷却/降级的渠道排到候选链末尾，连续失败 3 次标记 `down`；**健康探测只做"半愈合"**，要一次真实对话成功才彻底恢复（见「熔断冷却」）
 - 🔍 **后台健康探测**：定时 GET 渠道的 models 端点，聚合 latency / 状态 / 真实模型清单
-- 🌊 **流式透传**：SSE 全程转发；上游响应是 OpenAI 协议时自动转成 Anthropic/Gemini 流
+- 🌊 **流式透传**：SSE 全程转发；上游响应是 OpenAI 协议时自动转成 Anthropic/Gemini 流；**同协议直通则原始字节直转**（CRLF/分帧都不动，v1.16）
+- ⚡ **自带出站客户端（零依赖）**：不依赖全局 `fetch`，用 Node 内置 `http/https` + keep-alive 连接池——实测把网关净增延迟从 +13.9ms 压到 **+0.93ms**（详见「出站与流式写路径（v1.16）」）
 - 🔐 **双层鉴权**：`GATEWAY_KEY`（客户端）+ `ADMIN_KEY`（控制台与管理 API）；未设置则**首启自动生成**随机密钥（日志可查、写入 config.json）
 - 🖥 **Web 控制台**：浏览器打开 `http://127.0.0.1:8787/console` 看渠道状态、改优先级、启停渠道
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
@@ -173,6 +174,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | **动代码前过目**：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查）、前端独立审查 |
+| [同类网关内部机制对比](docs/gateway-comparison.md) | **定位与取舍参考**：本项目 vs new-api / one-api / sub2api / CLIProxyAPI 的内部机制、性能、全面性对照（只比机制，不比多用户/账户管理），含本机实测数字与各家的源码级证据 |
 
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
@@ -199,6 +201,7 @@ node test/same-protocol-passthrough.test.js # 43 项断言：同协议直通（A
 node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）
 node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
+node test/outbound-http-client.test.js    # 32 项断言：出站长连接客户端（fetch 形状真值表 + 20 次请求 0 条新连接、对照 agent:false 建 20 条）+ 直通流式逐字节一致（含 CRLF 与跨片帧）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -311,6 +314,32 @@ PT23（非流式 shim 缺 `json()`）就是被这个脚本一次性抓到的。
 代价（诚实说）：入站那层"顺手的清洗"也不再执行——内部格式才需要的工具 id 清洗、参数方言修正都不做，
 上游报什么错就透什么错；**图片能力门仍在选路阶段生效**（候选过滤用的是同一份转换结果，没有被绕过）。
 只有"客户端协议 === 渠道协议"时才直通，跨协议照旧走转换（见下表与 §协议翻译）。
+
+### 出站与流式写路径（v1.16：两处实测出来的开销）
+
+这一版没有加功能，只把两处「自找的开销」修掉，数字都是本机实测（回环、同机、客户端用 keep-alive）：
+
+| | 改前 | 改后 |
+| --- | --- | --- |
+| 出站客户端 | Node 全局 `fetch`（undici）：容器内每跳 1.28ms vs `http.request` 0.54ms；并发 32 吞吐只有直连的 44%；**Windows 开发机上每请求 +13ms** | 自带 `http/https` + keep-alive Agent 的 `zzFetch`（`maxSockets: 128`） |
+| 网关净增延迟（非流式，Windows） | +13.9 ms | **+0.93 ms** |
+| 网关净增延迟（非流式，容器内 Linux） | 1.28 ms/跳（出站那一跳） | **+1.06 ms**（含网关自身 JSON/调度/记账的开销） |
+| 非流式吞吐（并发 32，Windows） | 950 req/s（直连 2983，32%） | **1814 req/s（直连 3135，58%）** |
+| 流式首字节净增（10 片 × 25ms，Windows） | +13.6 ms | **+1.44 ms** |
+| 块间隔抖动净增 | +10.95 ms | **+0.03 ms** |
+| 客户端收到的 TCP 写次数（上游 10 片） | 24 次（每帧被拆成"数据行 + 空行"两次写） | **11 次（与上游分帧对齐）** |
+| 直通流式字节一致 | 逐行重组：`CRLF` 被归一成 `LF` | **原始字节直转：CRLF / 分帧边界 / 空行全部逐字节一致** |
+
+- **出站**：`zzFetch(url, {method, headers, body, signal})` 接口与 `fetch` 一致（`status`/`ok`/`headers.get`/
+  `text()`可重复调用/`json()`/`body.getReader()`/`AbortError`），redirect 跟随、`Content-Encoding` 解压
+  语义都按 `fetch` 对齐，所以**调用点零改动**；`notion` / `notion-agent` 模块拿到的也是它。
+  安全网：没有 `signal` 时留 300s 兜底，避免连接阶段永久挂住。
+- **直通**：流式改为把上游字节直接写回客户端，另起一条旁路只做 usage 扫描与 token 估算——
+  所以"字节一个不改"和"真实 token 照记"同时成立（见 `test/outbound-http-client.test.js`）。
+- **非直通**：一次 drain 里的所有输出合并成一次 `write`（旧的逐行写让 SSE 每帧变成两次写）。
+- 代价（诚实说）：`identity` 编码意味着上游若无视它硬塞压缩体，解压由我们做（已覆盖 gzip/deflate/br）；
+  连接池上限 128（旧 `fetch` 没有这个上限，但它也不复用连接）。
+- 同类项目的机制对照与取舍，见 [`docs/gateway-comparison.md`](docs/gateway-comparison.md)。
 
 - **怎么配**：`"protocol": "anthropic"` + `baseUrl`（如 `https://api.anthropic.com`，写不写 `/v1` 都认）+ `apiKey`；Gemini 填 `https://generativelanguage.googleapis.com`（`/v1`、`/v1beta` 都认）。模型行照旧：alias 是**客户端请求的名字**，上游是**真实模型名**（Gemini 会拼进 URL 路径）。
 - **客户端路由的四个往返方向都完整支持工具调用**（v1.12 补齐 Gemini 这条入站方向，见 PT33）：
@@ -679,3 +708,9 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
   下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
   "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题
+- **会话粘性**：同一条会话固定走同一个上游渠道（对提示缓存/KV cache 复用有利）。同类项目里
+  sub2api 与 CLIProxyAPI 都有，本项目是单机自用定位、暂未实现（见 [`docs/gateway-comparison.md`](docs/gateway-comparison.md) §4）
+- **thinking 回放缓存**：跨轮工具调用时把 reasoning/thinking 内容与签名按会话留存回放，
+  解决"跨格式时思维链丢失"（当前只做到同协议直通保留）
+- **客户端限流**：目前只有上游 429 → 冷却，没有面向客户端的 RPM/并发上限
+- **指标端点**：`/admin/api/*` + 控制台之外，补一个 Prometheus/OpenMetrics 端点

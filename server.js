@@ -2,7 +2,7 @@
 // 用法：  1) node server.js                        （用 ./config.json）
 //        2) DSH 模型地址填 http://127.0.0.1:8787/v1
 // 目标：多渠道 API key 统一调度，失败自动切换，全失败才报错
-// 依赖：仅 Node 18+ 自带 fetch / ReadableStream / setTimeout
+// 依赖：仅 Node 18+ 内置模块（出站用自带 http/https 长连接客户端，见 zzFetch；不再依赖全局 fetch）
 
 'use strict';
 
@@ -20,6 +20,149 @@ const toolEmu = require('./tool-emu.js');
 const crypto = require('crypto');
 const GENSPARK_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const GENSPARK_REFERER = 'https://www.genspark.ai/agents?type=ai_chat';
+
+// ── 出站 HTTP 客户端（v1.16：零依赖替代全局 fetch）────────────────────────────
+// 为什么换：Node 的全局 fetch 走 undici。同一台机器对同一回环目标实测——
+//   容器内(Linux)  每跳 1.28ms vs keep-alive http.request 0.54ms（2.4×）；
+//                  并发 32 的吞吐 881 vs 2012 req/s（只有 44%）；
+//   Windows 开发机 每请求 +13ms（同项 http.request 0.6ms）。
+// 网关的出站就在流式首字节路径上，所以这里换成 http/https + 长连接 Agent 的小客户端。
+// 接口保持 fetch 形状（status/ok/headers.get/text/json/body.getReader + signal 中止），
+// 调用点零改动；redirect 跟随、Content-Encoding 解压、AbortError 名称都按 fetch 对齐。
+const zlib = require('zlib');
+const OUT_HTTP_AGENT = new http.Agent({ keepAlive: true, maxSockets: 128 });
+const OUT_HTTPS_AGENT = new https.Agent({ keepAlive: true, maxSockets: 128 });
+
+function makeResponseLite(res, url) {
+  const lower = {};
+  for (const [k, v] of Object.entries(res.headers || {})) {
+    lower[String(k).toLowerCase()] = Array.isArray(v) ? v.join(', ') : String(v);
+  }
+  const enc = String(lower['content-encoding'] || '').toLowerCase();
+  let stream = res;
+  try {
+    if (enc.includes('gzip')) stream = res.pipe(zlib.createGunzip());
+    else if (enc.includes('deflate')) stream = res.pipe(zlib.createInflate());
+    else if (enc.includes('br')) stream = res.pipe(zlib.createBrotliDecompress());
+  } catch { stream = res; }
+  let textCache = null, consumed = false;
+  // fetch 的 text() 语义：可重复调用（这里把首次结果缓存下来）
+  const readAll = () => new Promise((resolve, reject) => {
+    if (textCache !== null) return resolve(textCache);
+    if (consumed) return resolve('');
+    consumed = true;
+    const bufs = [];
+    stream.on('data', (c) => bufs.push(c));
+    stream.on('end', () => { textCache = Buffer.concat(bufs).toString('utf8'); resolve(textCache); });
+    stream.on('error', reject);
+  });
+  const body = {
+    getReader() {
+      consumed = true;
+      let ended = false;
+      const queue = [], waiters = [];
+      const finish = () => { ended = true; while (waiters.length) waiters.shift()({ done: true, value: undefined }); };
+      stream.on('data', (c) => {
+        const v = new Uint8Array(c);            // 复制一份：Buffer 可能来自共享池，不能外借
+        const w = waiters.shift();
+        w ? w({ done: false, value: v }) : queue.push(v);
+      });
+      stream.on('end', finish);
+      stream.on('close', finish);
+      stream.on('error', finish);
+      return {
+        read: () => (queue.length
+          ? Promise.resolve({ done: false, value: queue.shift() })
+          : ended ? Promise.resolve({ done: true, value: undefined }) : new Promise((r) => waiters.push(r))),
+        cancel: async () => { try { stream.destroy(); } catch { /* 已关 */ } },
+      };
+    },
+  };
+  return {
+    ok: (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300,
+    status: res.statusCode || 0,
+    statusText: res.statusMessage || '',
+    url,
+    redirected: false,
+    headers: {
+      get: (k) => { const v = lower[String(k).toLowerCase()]; return v === undefined ? null : v; },
+      has: (k) => lower[String(k).toLowerCase()] !== undefined,
+      forEach: (cb) => { for (const [k, v] of Object.entries(lower)) cb(v, k); },
+    },
+    text: readAll,
+    json: async () => JSON.parse(await readAll()),
+    body,
+  };
+}
+
+function zzFetch(urlStr, opts = {}) {
+  const start = String(urlStr);
+  const baseHeaders = {};
+  for (const [k, v] of Object.entries(opts.headers || {})) if (v !== undefined && v !== null) baseHeaders[k] = String(v);
+  const method0 = (opts.method || 'GET').toUpperCase();
+  const bodyBuf = opts.body == null ? null : Buffer.from(String(opts.body), 'utf8');
+  // undici 默认请求 gzip 并自动解压；这里先要明文，上游硬塞压缩体时按头解压（见 makeResponseLite）
+  if (!Object.keys(baseHeaders).some((k) => k.toLowerCase() === 'accept-encoding')) baseHeaders['Accept-Encoding'] = 'identity';
+  const maxHops = opts.redirect === 'manual' ? 0 : 5;
+
+  // 每一跳单独算 Content-Length：302/303 跟随时会退化成 GET 且丢掉请求体，
+  // 此时若还留着上一跳的 Content-Length，上游会一直等那几字节 —— 表现为请求挂死。
+  const headersFor = (method, payload) => {
+    const h = { ...baseHeaders };
+    const has = (n) => Object.keys(h).some((k) => k.toLowerCase() === n);
+    if (has('content-length')) return h;
+    if (payload) h['Content-Length'] = String(payload.length);
+    else if (method !== 'GET' && method !== 'HEAD') h['Content-Length'] = '0';
+    return h;
+  };
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (fn, v) => { if (!settled) { settled = true; fn(v); } };
+    const send = (target, method, payload, hop) => {
+      let tu;
+      try { tu = new URL(target); } catch (e) { return done(reject, e); }
+      const isTls = tu.protocol === 'https:';
+      const req = (isTls ? https : http).request({
+        protocol: tu.protocol,
+        hostname: tu.hostname,
+        port: tu.port || (isTls ? 443 : 80),
+        path: tu.pathname + tu.search,
+        method,
+        headers: headersFor(method, payload),
+        agent: isTls ? OUT_HTTPS_AGENT : OUT_HTTP_AGENT,
+        servername: isTls ? tu.hostname : undefined,
+      }, (res) => {
+        const st = res.statusCode || 0;
+        const loc = res.headers.location;
+        if (loc && maxHops > 0 && st >= 300 && st < 400 && hop < maxHops) {
+          res.resume();
+          const keepMethod = st === 307 || st === 308;   // 与 fetch 一致：其它 3xx 退化成 GET
+          let next;
+          try { next = new URL(loc, tu); } catch { return done(resolve, makeResponseLite(res, tu.href)); }
+          return send(next.href, keepMethod ? method : 'GET', keepMethod ? payload : null, hop + 1);
+        }
+        done(resolve, makeResponseLite(res, tu.href));
+      });
+      req.on('error', (err) => {
+        if (opts.signal && opts.signal.aborted) return done(reject, Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+        done(reject, err);
+      });
+      if (opts.signal) {
+        if (opts.signal.aborted) { try { req.destroy(); } catch { } return done(reject, Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })); }
+        const onAbort = () => { try { req.destroy(); } catch { } done(reject, Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })); };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+        req.on('close', () => { try { opts.signal.removeEventListener('abort', onAbort); } catch { } });
+      } else {
+        // 没有外部中止信号时留一条兜底，避免连接阶段永久挂住
+        req.setTimeout(300_000, () => req.destroy(new Error('outbound timeout 300s')));
+      }
+      if (payload) req.end(payload); else req.end();
+    };
+    send(start, method0, bodyBuf, 0);
+  });
+}
+
 
 // 检测响应是否 Cloudflare WAF 拦截（JA3/TLS 指纹被识别为机器人）
 function isCloudflareBlock(status, body) {
@@ -603,7 +746,7 @@ async function probeChannel(ch) {
   if ((ch.def.protocol || 'openai') === 'notion-agent') {
     const t0 = Date.now();
     try {
-      const agents = await notionAgent.listAgents(ch.def.baseUrl, ch.def.apiKey, fetch, HEALTH.timeoutMs || 15000);
+      const agents = await notionAgent.listAgents(ch.def.baseUrl, ch.def.apiKey, zzFetch, HEALTH.timeoutMs || 15000);
       ch.models = agents.map((a) => a.name).filter(Boolean);
       ch.agentModels = agents;
       ch.latencyMs = Date.now() - t0;
@@ -617,11 +760,11 @@ async function probeChannel(ch) {
   if ((ch.def.protocol || 'openai') === 'notion') {
     const t0 = Date.now();
     try {
-      const acct = await notion.notionDiscoverAccount(ch.def.baseUrl, ch.def.apiKey, fetch, HEALTH.timeoutMs || 15000);
+      const acct = await notion.notionDiscoverAccount(ch.def.baseUrl, ch.def.apiKey, zzFetch, HEALTH.timeoutMs || 15000);
       const first = acct.spaces[0];
       ch.notion = { userId: acct.userId, spaceId: first.spaceId, spaceViewId: first.spaceViewId || '', userName: acct.userName, userEmail: acct.userEmail, spaces: acct.spaces, at: Date.now() };
       try {
-        const u = await notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, fetch, 10000);
+        const u = await notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, zzFetch, 10000);
         ch.notion.usage = { type: u.type, eligible: u.isEligible, userUsage: u.userUsage, userLimit: u.userLimit, at: Date.now() };
       } catch { /* 额度查询失败不影响健康状态 */ }
       ch.models = notion.notionListModels();
@@ -686,7 +829,7 @@ async function probeChannel(ch) {
         throw new Error('proxy: ' + (out.error || 'empty'));
       }
     } else {
-    resp = await fetch(probeUrl, {
+    resp = await zzFetch(probeUrl, {
       method: 'GET',
       headers: probeHeadersForDef(ch.def),
       signal: ctrl.signal,
@@ -751,7 +894,7 @@ async function probeDef(def, timeoutMs) {
   if ((def.protocol || 'openai') === 'notion-agent') {
     const t0 = Date.now();
     try {
-      const agents = await notionAgent.listAgents(def.baseUrl, def.apiKey, fetch, timeoutMs || 15000);
+      const agents = await notionAgent.listAgents(def.baseUrl, def.apiKey, zzFetch, timeoutMs || 15000);
       return {
         ok: true, latencyMs: Date.now() - t0, status: 200,
         models: agents.map((a) => a.name).filter(Boolean),
@@ -765,10 +908,10 @@ async function probeDef(def, timeoutMs) {
   if ((def.protocol || 'openai') === 'notion') {
     const t0 = Date.now();
     try {
-      const acct = await notion.notionDiscoverAccount(def.baseUrl, def.apiKey, fetch, timeoutMs || 15000);
+      const acct = await notion.notionDiscoverAccount(def.baseUrl, def.apiKey, zzFetch, timeoutMs || 15000);
       let usage = null;
       try {
-        const u = await notion.notionUsageEligibility(def.baseUrl, def.apiKey, acct, fetch, 10000);
+        const u = await notion.notionUsageEligibility(def.baseUrl, def.apiKey, acct, zzFetch, 10000);
         usage = {
           type: u.type,
           eligible: u.isEligible,
@@ -852,7 +995,7 @@ async function probeDef(def, timeoutMs) {
       }
       return { ok: false, status: out.status, error: `HTTP ${out.status}: ${String(out.body).slice(0, 150)}`, latencyMs: ms, via: 'proxy' };
     }
-    const resp = await fetch(probeUrlForDef(def), { method: 'GET', headers: probeHeadersForDef(def), signal: ctrl.signal });
+    const resp = await zzFetch(probeUrlForDef(def), { method: 'GET', headers: probeHeadersForDef(def), signal: ctrl.signal });
     clearTimeout(timer);
     const ms = Date.now() - t0;
     if (resp.ok) {
@@ -3001,7 +3144,7 @@ async function handleAdminApi(req, res, url) {
         if (ch.def.protocol === 'notion-agent') {
           // Notion 官方 Agent API 渠道：跑一次最小会话（quickChat 内含名字→ID 解析）
           const tmo = Math.min(90000, Number(body.timeoutMs) || 60000);
-          const r = await notionAgent.quickChat(ch.def.baseUrl, ch.def.apiKey, c.upstream, prompt, fetch, tmo);
+          const r = await notionAgent.quickChat(ch.def.baseUrl, ch.def.apiKey, c.upstream, prompt, zzFetch, tmo);
           if (r.ok) {
             ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
             if (ch.status !== 'ok') ch.status = 'ok';
@@ -3034,7 +3177,7 @@ async function handleAdminApi(req, res, url) {
             text = curlOut.body; status = 200; ok = true;
           } else {
             try {
-              resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+              resp = await zzFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
               text = await resp.text();
               ok = resp.ok; status = resp.status;
             } catch (e) { text = String(e.message || e); }
@@ -3062,7 +3205,7 @@ async function handleAdminApi(req, res, url) {
             });
             // 测试消耗了额度 → 异步刷新
             try {
-              notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, fetch, 8000)
+              notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, zzFetch, 8000)
                 .then((u) => { if (ch.notion) ch.notion.usage = { type: u.type, eligible: u.isEligible, userUsage: u.userUsage, userLimit: u.userLimit, at: Date.now() }; })
                 .catch(() => {});
             } catch {}
@@ -3197,7 +3340,7 @@ async function handleAdminApi(req, res, url) {
           text = out.body || '';
           resp = { ok: out.status >= 200 && out.status < 300, status: out.status };
         } else {
-        resp = await fetch(target, { method: 'POST', headers, body: JSON.stringify(bodyOut), signal: ctrl.signal });
+        resp = await zzFetch(target, { method: 'POST', headers, body: JSON.stringify(bodyOut), signal: ctrl.signal });
         text = await resp.text();
         // Cloudflare 拦截 → PS Schannel 回退
         if (!resp.ok && isCloudflareBlock(resp.status, text)) {
@@ -3781,7 +3924,7 @@ async function tryChannel(opts) {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+      resp = await zzFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
     } finally { clearTimeout(to); }
   } catch (err) {
     recordFailure(ch, String(err && err.message || err));
@@ -3904,6 +4047,10 @@ async function tryChannel(opts) {
     let nativeStream = null;
     if (typeof opts.makeStreamTranslator === 'function' && !passthrough) nativeStream = opts.makeStreamTranslator(candidate);
     let passthroughUsage = null;   // 直通流式：从上游原始事件里读真实 usage
+    // 非直通：一次 drain 里的所有输出合并成一次 write（v1.16）。
+    // 旧写法每行一次 write，"数据行 + 分隔空行"被拆成两次 —— 实测上游 11 个 TCP 事件
+    // 会变成客户端 24 次写。合并后字节完全相同，写次数与上游分帧对齐。
+    let outChunks = [];
     const emitNative = (lines) => {
       let outText = '';
       for (const l of lines) {
@@ -3914,27 +4061,25 @@ async function tryChannel(opts) {
     };
     // 按行分发：有 onStreamChunk 就逐行转换，否则原样透传（补回被切掉的分隔空行）
     const handleLine = (line) => {
-      if (passthrough) {
-        // 同协议直通：一个字节都不改，原样写回客户端（连分隔空行都不动）
-        passthroughUsage = nativeStreamUsageScan(passthrough, line, passthroughUsage);
-        streamOutText += sseDeltaText(line) || line;
-        res.write(line + '\n');
-        return;
-      }
       if (nativeStream) {
         // 原生：raw 行没有 OpenAI 的 delta 字段，逐个统计没有意义 → 按翻译后的输出估算
         const out = emitNative(nativeStream.push(line + '\n'));
         streamOutText += sseDeltaText(out);
-        if (out) res.write(out);
+        if (out) outChunks.push(out);
         return;
       }
       streamOutText += sseDeltaText(line);
       if (onStreamChunk) {
         const out = onStreamChunk(line + '\n', candidate);
-        if (out) res.write(out);
+        if (out) outChunks.push(out);
       } else {
-        res.write(line + '\n');
+        outChunks.push(line + '\n');
       }
+    };
+    const flushOut = () => {
+      if (!outChunks.length) return;
+      res.write(outChunks.join(''));
+      outChunks = [];
     };
     const drain = (final) => {
       let idx;
@@ -3944,24 +4089,49 @@ async function tryChannel(opts) {
         handleLine(line);
       }
       if (final && buf.length) { handleLine(buf); buf = ''; }
+      flushOut();
     };
+    // ★ 直通（v1.16）：原始字节直接转给客户端，不再逐行重组 ——
+    //   因此 CRLF/分帧边界/空行与上游**逐字节一致**（旧写法把 CRLF 归一成 LF，还把每帧拆成两次写）。
+    //   同时旁路一份文本，只用于真实 usage 扫描与 token 估算，不影响转发内容。
+    let scanBuf = '';
+    const passthroughWrite = (u8) => {
+      res.write(u8);
+      scanBuf += decoder.decode(u8, { stream: true });
+      let i;
+      while ((i = scanBuf.indexOf('\n')) >= 0) {
+        const line = scanBuf.slice(0, i);
+        scanBuf = scanBuf.slice(i + 1);
+        passthroughUsage = nativeStreamUsageScan(passthrough, line, passthroughUsage);
+        streamOutText += sseDeltaText(line) || line;
+      }
+    };
+
     try {
       // ★ 首块字节必须和后续字节走同一条按行分发路径。早期实现只把它塞进 buf 就进 read 循环，
       //   于是"上游把整个流一次送到（快线路 / 小回答）"时下一次 read 直接 done，
       //   透传分支（OpenAI 路由没有 onStreamChunk）一个字节都没写出去 ——
       //   表现是 HTTP 200 + text/event-stream 却是**空响应体**，三种客户端协议全中招。
       if (firstVal && firstVal.length) {
-        buf += decoder.decode(firstVal, { stream: true });
-        drain(false);
+        if (passthrough) passthroughWrite(firstVal);
+        else { buf += decoder.decode(firstVal, { stream: true }); drain(false); }
       }
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        drain(false);
+        if (passthrough) passthroughWrite(value);
+        else { buf += decoder.decode(value, { stream: true }); drain(false); }
       }
-      buf += decoder.decode(); // 冲掉解码器里残留的多字节字符
-      drain(true);
+      if (passthrough) {
+        scanBuf += decoder.decode();   // 冲掉解码器里残留的多字节字符
+        if (scanBuf.length) {
+          passthroughUsage = nativeStreamUsageScan(passthrough, scanBuf, passthroughUsage);
+          streamOutText += sseDeltaText(scanBuf) || scanBuf;
+        }
+      } else {
+        buf += decoder.decode(); // 冲掉解码器里残留的多字节字符
+        drain(true);
+      }
     } catch (err) { /* 上游已断 */ }
     // 原生流式收尾：上游没发结束标记（异常断流）时也要把 finish_reason + [DONE] 补上，
     // 否则客户端的流式解析器会一直等（与 Anthropic 路由的 streamEpilogue 是同一类兜底）
@@ -4040,7 +4210,7 @@ async function tryChannel(opts) {
 // 凭据缓存：ch.notion = {userId, spaceId, spaceViewId, userName, userEmail, at}
 async function ensureNotionAccount(ch, timeoutMs) {
   if (ch.notion && Date.now() - ch.notion.at < 3600_000) return ch.notion;
-  const acct = await notion.notionDiscoverAccount(ch.def.baseUrl, ch.def.apiKey, fetch, timeoutMs || 15000);
+  const acct = await notion.notionDiscoverAccount(ch.def.baseUrl, ch.def.apiKey, zzFetch, timeoutMs || 15000);
   const first = acct.spaces[0];
   const info = {
     userId: acct.userId,
@@ -4881,7 +5051,7 @@ async function tryNotionChannel(opts) {
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
-        resp = await fetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+        resp = await zzFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
       } finally { clearTimeout(to); }
       httpStatus = resp.status;
       if (resp.ok) ndjsonText = await resp.text();
@@ -4925,7 +5095,7 @@ async function tryNotionChannel(opts) {
 
   // 真实对话消耗了额度 → 异步刷新用量（免费接口，不阻塞响应，失败静默）
   try {
-    notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, fetch, 8000)
+    notion.notionUsageEligibility(ch.def.baseUrl, ch.def.apiKey, acct, zzFetch, 8000)
       .then((u) => {
         if (ch.notion) ch.notion.usage = { type: u.type, eligible: u.isEligible, userUsage: u.userUsage, userLimit: u.userLimit, at: Date.now() };
       })
@@ -5087,7 +5257,7 @@ async function tryNotionAgentChannel(opts) {
   if (ch.agentMap.has(cacheKey)) agentId = ch.agentMap.get(cacheKey);
   else {
     try {
-      agentId = await notionAgent.resolveAgentId(base, token, candidate.upstream, fetch, 20000);
+      agentId = await notionAgent.resolveAgentId(base, token, candidate.upstream, zzFetch, 20000);
       ch.agentMap.set(cacheKey, agentId);
     } catch (err) {
       recordFailure(ch, 'notion-agent: ' + (err.message || err));
@@ -5115,7 +5285,7 @@ async function tryNotionAgentChannel(opts) {
   try {
     turn = await notionAgent.runAgentTurn({
       baseUrl: base, token, agentId, message: messageText, promptContext,
-      fetchFn: fetch, timeoutMs: timeoutMs - 20000,
+      fetchFn: zzFetch, timeoutMs: timeoutMs - 20000,
     });
   } catch (err) {
     // CF 间歇性拦截 / 网络异常等 → 渠道失败切兜底（渠道进入指数冷却）
