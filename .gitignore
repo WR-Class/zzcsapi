@@ -29,3 +29,4 @@ usage.json
 
 # 本机部署密钥（compose 注入用，绝不入仓库）
 .env
+keys.local.txt

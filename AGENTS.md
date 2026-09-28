@@ -86,6 +86,12 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 - **图表**：全部手写内联 SVG，不引入图表库；曲线用独立图表带 + `preserveAspectRatio="none"` 铺满，避免与文字重叠。
 - **弹窗**：遮罩**不响应点击关闭**（拖选复制易误关），关闭路径只有 × / 取消 / Esc。
 - **布局**：整页不滚动，`.viewport` 是唯一滚动容器。不要用 `min-height: calc(100vh - Npx)` 这类写死横幅高度的写法。
+- **密钥与隐私（血泪条款）**：`config.json` / `.env` / `usage.json` / `keys.local.txt` 都是**本机私有文件**（均已 gitignore）。
+  它们的**值**（网关 `GATEWAY_KEY` / `ADMIN_KEY`、各渠道上游 `apiKey`、WorkBuddy 的 JWT 与其里的账号邮箱）
+  **绝不允许**打印进对话、提交进仓库、写进任何文档或截图。需要把密钥交给用户时，**写进 `keys.local.txt`**
+  （已 gitignore）并只回报长度与来源。读这类文件必须显式指定 `-Encoding UTF8`：
+  不带编码的 `Get-Content <file> -Raw` 会按本地代码页解码，一旦后续解析报错，PowerShell 会把**整份原文回显**出来
+  —— 本仓库真的发生过一次（32 个上游 key + 一个含邮箱的 JWT 进了对话记录）。
 
 ---
 
@@ -104,6 +110,7 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/thinking-replay-design.md` | thinking 回放缓存**设计稿**（v1.18 候选，**已前置验证并判定"现有实现下无收益，暂不实现"**）：一次"先验证再动手"的完整记录——跨协议 thinking/签名保真度地图（逐函数出处）、为什么"客户端回传无签名块触发 400"不可达、唯一会 400 的场景为何回放缓存也治不了、将来重启必须先满足什么。事实的可执行版本是 `test/thinking-fidelity.test.js` |
 | `docs/console-settings-spec.md` | 控制台「运行期设置」页（会话粘性 / 客户端限流 / 指标端点开关）**交给前端执行者的实现规格**：`GET/POST /admin/api/settings` 的字段契约（`config` 用户原值 vs `effective` 钳制后生效值——两个都必须显示）、三张卡的结构与文案要点、必须守住的交互细节（只提交有改动的组、跨轮询保留输入、400 原文要显示、**新页必须同时注册进 `go()` 与 `render()` 两张表**）、要改哪些文件与 AGENTS 强制同步清单、可逐条执行的验收清单 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |
+| `sec-audit.js`（仓库根，非 test/） | **安全体检（只读）**：`node sec-audit.js` 体检本机，`ZZ_BASE=http://host:port` 体检远端，`ZZ_TRY_DEFAULTS=1` 额外试仓库里公开的示例默认密钥。查匿名可达面、默认密钥、控制台版本指纹、安全响应头/CORS、无/错/对三态鉴权覆盖面、密钥泄露面（网关密钥 + 上游 apiKey 会不会从 `/metrics`／管理面／错误体漏出）、路径穿越与私有文件暴露。**报告一律脱敏，绝不回显密钥**；加了密钥才做后三项。改动鉴权、静态文件、响应头或控制台时必跑 |
 | `test/console-state.test.js` | 前端自动化回归（`node test/console-state.test.js`，零依赖）：**视口内输入控件的值必须跨轮询重绘保留**；从 `build/app.js` 现抠真实渲染函数在最小 DOM 桩里跑。另含渠道表单**权重**一节（`adapt()` 接 `weight`/`weightedHits`/`weightedShare` → 表格显示「权重 / 分流」→ `saveChannel` 报文带 `weight`、负数与非数字在前端就挡下）与**自动权重观测**一节（`adapt()` 接 `autoH`/`autoFailRate`/`autoSamples`/`autoLatMs`/`autoSpeedRatio` 与 `DATA.auto` → `autoWeightCard()` 画出预测份额与"当前 x%"对照、卡头明示"当前分流一字未动"、单候选/空集给空状态；另有抽屉文案与 `vChannels` 挂载的结构守卫）与**停用渠道的手动测试**一节（在最小 DOM 桩里真跑 `openTestModels`：指定停用渠道必须列得出它自己的模型、只列这一条、带「已停用」标记与"不参与自动探测"说明、运行按钮不灰；全局模式含停用渠道但启用排前；`runTests` 每条带 `channelId` 的结构守卫；对照组证明旧写法下是 0 个模型）与**测试结果可读性**一节（`testRowVerdict` 真值表：有回复=通过、2xx 但空=**空回复**、其余=失败，含"缺 `ok` 字段不当作成功"；在 DOM 桩里**真跑 `runTests`**（桩 HTTP + 桩 `document` + 现抠的真实 `fMs`）断言每行带模型名、渠道显示名、中文结论、三种样式、空回复的原因文案、失败行带 HTTP 码与上游原文、成功行带回复与 token、汇总分三档；并含"旧写法只写渠道名已消失"的对照与 `esc` 结构守卫）与**调用日志渠道名**一节（表头「渠道」紧跟「请求 ID」、渠道格显示渠道显示名而不是 id、按名字/按 id 都能搜、`adapt()` 把显示名解析进 `n` 且保留 `c`；对照组证明"渠道格写 id、排在模型后面"的旧写法抓得住）与**运行期设置**一节（v1.18：在最小 DOM 桩里真跑 `vSettings`/`setPayload`/`saveSettings` —— `config` 回填表单而 `effective` 只作「生效：」角标、有改动后草稿跨 8 秒轮询重绘不被覆盖（含"旧写法无条件覆盖草稿"的对照组）、POST 只发有改动的组/字段且留空数字不下发、400 的 `error` 原文直显进错误条且失败不清脏）与**零数据（全新部署）**一节（v1.18.1，用户报「渠道管理点详情无反应」：在最小 DOM 桩里**真跑 `openChannel`**，零数据与满数据两组都必须不抛、抽屉要真画出来、有数据仍画得出曲线；`areaChart`/`sparkline` 对空数组返回占位图、单点输入不出 `NaN`；含"渲染函数的桩数据必须再跑一遍空的"这条教训与两条结构守卫）。新增带输入框的页面时补用例 |
 | `test/gemini-multimodal.test.js` | 后端自动化回归（`node test/gemini-multimodal.test.js`，零依赖）：**图片不得在协议翻译层被静默丢掉**；从 `server.js` 现抠 `geminiToOpenAI` / `anthropicToOpenAI` / `bodyHasImages` / `filterCandidatesForImages` / `checkAuth` 跑断言（含图只留可转图渠道、纯文本零改动、原生 SDK 鉴权头）。新增可转图协议时同步 `IMAGE_CAPABLE_PROTOCOLS` 与本用例 |
 | `test/gemini-multimodal-e2e.test.js` | 后端端到端回归（`node test/gemini-multimodal-e2e.test.js`，零依赖）：真起「假上游 + 临时网关实例」走完整 HTTP 链路（**动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json`/`usage.json`**）。改 `tryChannel` / 出站构造 / 鉴权 / 路由候选链时必跑——PT23（非流式 shim 缺 `json()`）就是它抓到的 |

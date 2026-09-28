@@ -748,6 +748,30 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/gemini/v1beta/models/{m}:generateContent`        | POST | gateway | Gemini 非流式（支持 `inlineData`/`fileData` 图片） |
 | `/gemini/v1beta/models/{m}:streamGenerateContent`  | POST | gateway | Gemini 流式          |
 
+## 安全体检（只读脚本）
+
+`node sec-audit.js` 对任意部署跑一遍只读体检，**报告里绝不回显密钥**：
+
+```powershell
+node sec-audit.js                                  # 体检本机 127.0.0.1:8787
+$env:ZZ_BASE='http://1.2.3.4:8787'; node sec-audit.js   # 体检远端（不带密钥时只查匿名面）
+$env:ZZ_TRY_DEFAULTS='1'; node sec-audit.js             # 额外试一下仓库里公开的示例默认密钥（判断有没有沿用默认）
+# 密钥从哪来（不打印值）：
+$e = docker inspect zzcsapi --format '{{range .Config.Env}}{{println .}}{{end}}'
+$env:ADMIN_KEY  = ($e | Select-String '^ADMIN_KEY='   | Select -First 1).Line -replace '^ADMIN_KEY=',''
+$env:GATEWAY_KEY= ($e | Select-String '^GATEWAY_KEY=' | Select -First 1).Line -replace '^GATEWAY_KEY=',''
+node sec-audit.js
+```
+
+查这些：① 哪些口匿名可达（应只有 `/healthz`、`/console`）② 示例默认密钥是否仍可用 ③ 控制台版本指纹（有没有含已知修复）
+④ 安全响应头 / CORS ⑤ 无密钥 / 错密钥 / 正确密钥的鉴权覆盖面 ⑥ 密钥泄露面（`/metrics`、管理面、`/console`、错误体里会不会出现网关密钥或上游 apiKey）
+⑦ 路径穿越与静态文件（`config.json`、`.env`、`usage.json`、`server.js` 必须都是 404）。
+
+**2026-10-02 本机实测结论**（v1.18.2 部署）：鉴权覆盖面完整（管理面/客户端面无密钥与错密钥均 401）、示例默认密钥被拒、
+私有文件全部 404、错误体不含密钥、无 CORS；**待办项**：管理面 `/admin/api/status`、`/admin/api/channels` 直接返回
+上游 `apiKey` 明文（控制台自行掩码，见下方「计划中」）；缺少 `X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` 等加固头；
+`/console?key=…` 会把管理密钥写进浏览器历史与 Referer。
+
 ## 行为细节
 
 - **4xx 重试规则（v1.9.2 起收敛为一个判据）**：`401/402/403/404/408/429` 属于渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 一律切下一候选兜底；其余 4xx（`400` 参数错、`422` 等）**只在后面已经没有能上场的候选时**才原样透传给客户端，前面还有候选就照样当"这家不行"继续切。
@@ -784,6 +808,14 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 
 ## 计划中
 
+- **安全加固（v1.19 候选，2026-10-02 体检后立档）**：
+  ① **上游密钥不再明文下发**——`/admin/api/status` 与 `/admin/api/channels` 现在直接返回 `apiKey` 原文（控制台靠自己的 `maskKey` 掩码），
+  意味着 ADMIN_KEY 一旦泄漏＝全部上游密钥一起泄漏；打算改成默认只回掩码值，控制台的「显示密钥」按钮改为按需调
+  `GET /admin/api/channels/{id}/key` 拿单个渠道的原文（前端在 `build/app.js`，需与前端改动同一次提交）。
+  ② **补安全响应头**：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`（控制台不需要被 iframe 嵌套）、
+  `Referrer-Policy: no-referrer`（顺带治 `/console?key=…` 把密钥带进 Referer 的问题）；CSP 需要按控制台真实资源
+  （MiSans CDN + 内联脚本样式）单独设计并做浏览器验证，暂缓。
+  ③ **可选**：`/console?key=…` 保留但建议客户端改用 `Authorization` 头。
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
   下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
   "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题
