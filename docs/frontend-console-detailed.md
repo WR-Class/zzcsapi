@@ -494,6 +494,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | 用量明细 / 清零 | `GET /admin/api/usage` · `POST /admin/api/usage/clear` | 总用量 / 按模型 / 按渠道 / 按天 / 24h 分布 |
 | `pgSend` | `POST /v1/chat/completions` | 支持 `stream` |
 | Playground 生图 | `POST /v1/images/generations` | 需上游支持图像接口 |
+| （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
 
 **回填时的注意事项**：
 

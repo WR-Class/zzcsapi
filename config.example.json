@@ -19,6 +19,22 @@
     "ewma": 0.5,
     "deadband": 0.1
   },
+  "sessionAffinity": {
+    "enabled": false,
+    "ttlSec": 3600,
+    "maxEntries": 2000,
+    "deriveFromBody": false
+  },
+  "rateLimit": {
+    "enabled": false,
+    "rpm": 0,
+    "burst": 0,
+    "maxConcurrent": 0
+  },
+  "metrics": {
+    "enabled": true,
+    "public": false
+  },
   "channels": [
     {
       "id": "vendor-a-openai",

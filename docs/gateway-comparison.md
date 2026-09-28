@@ -12,7 +12,7 @@
 
 | 项目 | 语言 / 形态 | 版本锚点 | 存储依赖 |
 | --- | --- | --- | --- |
-| **本项目 zzcsapi** | Node 20/24，单文件 `server.js`（约 5.2k 行），**零 npm 依赖**（无 `package.json`） | v1.16 | 两个 JSON 文件（`config.json` / `usage.json`） |
+| **本项目 zzcsapi** | Node 20/24，单文件 `server.js`（约 5.7k 行），**零 npm 依赖**（无 `package.json`） | v1.17 | 两个 JSON 文件（`config.json` / `usage.json`） |
 | [new-api](https://github.com/QuantumNous/new-api) | Go 1.25 + gin + GORM，单二进制（前端打进二进制） | HEAD `c2b7a9a9`（2026-09-25）/ `v1.0.0-rc.40` | SQLite/MySQL/PG + 可选 Redis |
 | [one-api](https://github.com/songquanpeng/one-api) | Go + gin + GORM，单二进制 | 主干 HEAD `8df4a26`，**2025-02-21 后停更** | SQLite/MySQL/PG |
 | [sub2api](https://github.com/Wei-Shaw/sub2api) | Go 1.27 + gin + Ent + Vue3 | `VERSION 0.2.9`，HEAD `9a62841`（2026-09-28，日更） | **PostgreSQL 15（必选）+ Redis 7（必选）** |
@@ -96,7 +96,7 @@
 | 冷启动到 `/healthz` 200 | — | **882 ms** |
 | 常驻内存 RSS | — | **26 MiB（空载）/ 45 MiB（线上 31 渠道）** |
 | 每请求磁盘 I/O | 0（用量 4s 防抖落盘、`recent` 上限 800 条） | 0 |
-| 回归测试 | 22 文件 / 898 断言 | **23 文件 / 930 断言** |
+| 回归测试 | 22 文件 / 898 断言 | **23 文件 / 930 断言**（v1.17 起 26 文件 / 1091 断言） |
 
 口径说明（避免误读）：
 - 本机回环上"一跳"的成本约 0.3～0.6 ms；上面的**净增**= 经网关 − 直连，含网关自己的 JSON 解析、候选选择、记账。
@@ -128,13 +128,13 @@
 | 多模态图片 | ✅（图片能力门裁剪候选） | ✅ | ✅ | ✅ | ✅ |
 | 推理字段保真 | 同协议直通保留；跨协议丢弃 | 转换映射 | 无证据 | thinking budget/effort 映射 + Gemini 签名清洗 | **thinking 回放缓存** |
 | 提示 / 响应缓存 | ❌ | 无证据 | ❌ | L1 ristretto + L2 Redis + singleflight | 仅 thinking 回放 |
-| 会话粘性 | ❌ | 渠道亲和 | ❌ | **最强（四层）** | ✅（默认关） |
-| 客户端限流 | ❌ | ✅ Redis/内存 + 按模型 | 进程内 | ✅ RPM / 窗口费用 | 无证据 |
-| 指标 / 运维面 | 11 个 `/admin/api/*` + 单页控制台（无 Prometheus） | `perf_metrics` + 系统监控 | 无 | 有 | management API v8/v0 + pprof + 内建面板（**v6.10 起不再内置统计**） |
+| 会话粘性 | ✅ v1.17（默认关；只改链首、不污染份额统计） | 渠道亲和 | ❌ | **最强（四层）** | ✅（默认关） |
+| 客户端限流 | ✅ v1.17（整机 rpm + 并发，429 + Retry-After） | ✅ Redis/内存 + 按模型 | 进程内 | ✅ RPM / 窗口费用 | 无证据 |
+| 指标 / 运维面 | 11 个 `/admin/api/*` + 单页控制台 + **`/metrics`（Prometheus 文本，v1.17）** | `perf_metrics` + 系统监控 | 无 | 有 | management API v8/v0 + pprof + 内建面板（**v6.10 起不再内置统计**） |
 | 配置热更新 | ✅（写 `config.json` 即时生效） | DB 轮询 | ❌ | ✅ | fsnotify + 管理 API |
 | 插件 / MCP | ❌ | 无 MCP 证据 | ❌ | ❌ | **插件体系（c-shared）** |
 | 集群 / 多实例 | ❌ 单机设计 | Redis 共享（配置秒级延迟） | ❌ | Redis 跨实例 | ✅（Home + JWT） |
-| 回归测试 | **23 文件 / 930 断言，零依赖真链路 e2e** | golden 测试（9 方向） | 少量 | benchmark + 测试 | 有测试 |
+| 回归测试 | **26 文件 / 1091 断言，零依赖真链路 e2e** | golden 测试（9 方向） | 少量 | benchmark + 测试 | 有测试 |
 
 ---
 
@@ -143,17 +143,21 @@
 **优势（与上面表格互证）**
 
 1. **失败语义最细**：分级冷却 + `Retry-After` 对齐 + 探测半愈合 + 4xx 不短路 + 冷却原因回传客户端。
-2. **零依赖单文件**：约 5.2k 行、可读可改；930 项断言的零依赖真链路回归（假上游 + 临时网关，不出网、不烧额度）。
+2. **零依赖单文件**：约 5.7k 行、可读可改；**1091 项断言**的零依赖真链路回归（假上游 + 临时网关，不出网、不烧额度）。
 3. **特殊上游工程**：curl/PowerShell 指纹绕行、网页会话、文本协议工具仿真、订阅额度解析——与 sub2api 的
    uTLS 路线解决同一类问题，但**零依赖**。
+4. **v1.17 补齐三项**：会话粘性（只改链首，不污染加权份额统计）、客户端限流（整机 rpm + 并发，429 + `Retry-After`）、
+   `/metrics`（Prometheus 文本格式，零依赖，正文不含任何密钥）——对比表里此前唯一还站得住的差距就这三项。
 
 **短板（诚实清单）**
 
 1. **广度不如 new-api**：audio / rerank / moderations / realtime / WebSocket 都没有；渠道类型只有 8 种协议。
-2. **缺四项机制**：会话粘性、thinking 回放缓存、客户端限流、指标端点（Prometheus/OpenMetrics）。
-3. **单机**：没有集群/多实例一致性设计（也不需要——它本来就是单点自用定位）。
+2. **还缺两项机制**：thinking 回放缓存（设计稿已落库：`docs/thinking-replay-design.md`，实施前需先复现问题）、
+   集群/多实例一致性（后者与单点自用定位不符，属于"不做"而非"没做"）。
+3. **v1.17 三个开关还没进控制台**：只能改 `config.json`（`/admin/api/status` 里能看到实时状态）。
 4. **流式写放大已在 v1.16 修掉，但非直通路径仍是"逐行解析"**：跨协议转换无法避免解析，与 new-api/one-api 同源。
 5. **出站连接池上限 128、`identity` 编码**：v1.16 引入的取舍，见 README §出站与流式写路径。
+6. **指标是进程内计数**（重启清零），不是持久化时间序列——要长期趋势得让 Prometheus 去拉。
 
 ---
 
@@ -163,7 +167,7 @@
 
 1. `node test/outbound-http-client.test.js` —— 出站客户端形状、keep-alive 复用（含 `agent:false` 对照组）、
    直通流式逐字节一致（CRLF + 跨片帧）、真实 usage 仍记录。
-2. 全量回归：`Get-ChildItem test -Filter *.test.js | % { node $_.FullName }`（23 个文件 / 930 断言）。
+2. 全量回归：`Get-ChildItem test -Filter *.test.js | % { node $_.FullName }`（26 个文件 / 1091 断言）。
 3. 延迟与吞吐：起一个假上游 + 临时网关（动态端口、配置在临时目录），客户端用 Node `http` + keep-alive，
    分别对"直连假上游"和"经网关"各跑 N 次取 mean/p50/p95，并发吞吐用 32 并发 × 600 请求。
    注意：**客户端必须用 keep-alive 的 `http.request`**，否则客户端自己（undici）的每跳开销会盖住被测对象。
