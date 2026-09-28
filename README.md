@@ -33,6 +33,19 @@ docker compose up -d --build
 # 想固定自己的密钥：根目录建 .env 写 ZZCSAPI_ADMIN_KEY=... / ZZCSAPI_GATEWAY_KEY=...
 ```
 
+> ⚠️ **改完代码要确认容器真的换了镜像**（v1.18.1 现场踩到过）：`docker compose up -d --build` 有时只**构建**出新镜像、
+> 却没重建容器——输出是 `Container zzcsapi Running`（而不是 `Recreate` / `Started`），于是你刷新控制台看到的**还是旧代码**，
+> 很容易误判成"改动没生效 / 修了还是坏的"。判断方法是对比两个 ID：
+>
+> ```powershell
+> docker inspect zzcsapi --format '{{.Image}}'        # 容器正在用的镜像
+> docker images zzcsapi:local --format '{{.ID}}'      # 刚构建出来的镜像
+> # 两者不一致 → 补一发强制重建
+> docker compose up -d --force-recreate
+> ```
+>
+> `/console` 响应头是 `Cache-Control: no-store`，所以**不需要**强刷浏览器；看到旧页面几乎总是镜像这一层的问题。
+
 `docker-compose.yml` 挂载 `./config.json` 和 `./usage.json`。
 ⚠️ 这两个文件都**必须先在宿主机上存在**：`config.json` 由 `server.js` 首次运行自动从 `config.example.json` 生成；
 `usage.json` 需要手动从 `usage.example.json` 复制。**若缺失，Docker 会把挂载点建成目录**，
