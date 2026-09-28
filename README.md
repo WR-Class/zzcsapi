@@ -225,7 +225,7 @@ node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令
 node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态）
 node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（网关从不向客户端产出 thinking 块 → "无签名块触发 400"不可达；直通是签名唯一活路）
 node test/settings-api-e2e.test.js        # 58 项断言：运行期设置端点（窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
-node test/security-headers-e2e.test.js    # 23 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文）
+node test/security-headers-e2e.test.js    # 48 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -727,15 +727,17 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/admin/api/usage/clear`            | POST | admin       | 清零用量统计                          |
 | `/admin/api/recheck`                | POST | admin       | 立即重探测（body 可传 `{id}`）；**不带 id = 全部重探测，含停用渠道**（手动动作） |
 | `/admin/api/channel`                | POST | admin       | 改渠道（`{id, priority?, enabled?, weight?}`，立即生效并持久化） |
-| `/admin/api/channels`               | GET  | admin       | 渠道集合完整列表                      |
-| `/admin/api/channels`               | POST | admin       | 新增 / 覆盖渠道（upsert，落库并立即探测一次） |
+| `/admin/api/channels`               | GET  | admin       | 渠道集合完整列表（**v1.18.4 起 `apiKey` 只下发掩码**，另给 `apiKeySet` 布尔） |
+| `/admin/api/channels`               | POST | admin       | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥（v1.18.4）** |
 | `/admin/api/channels`               | DELETE | admin     | 删除渠道（body `{id}`）               |
 | `/admin/api/probe`                  | POST | admin       | 临时探测上游模型清单（不落库，控制台「获取模型」用） |
 | `/admin/api/test`                   | POST | admin       | 真发一次最小 chat 请求，返回首字延迟 / 总耗时 / 错误；带 `channelId` 时**只打该渠道且不看 `enabled`**（停用渠道也能手动验证模型） |
 | `/admin/api/codex-import`           | POST | admin       | 导入 codex 凭据（完整 JSON 或裸 `rt.1.` 开头 RT） |
 | `/admin/api/codex-quota`            | GET  | admin       | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import`        | POST | admin       | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
-| `/admin/api/config`                 | GET  | admin       | 暴露接入信息（含 key 与 URL），仅本机 admin |
+| `/admin/api/config`                 | GET  | admin       | 接入信息（URL / 端口 + **只给密钥掩码**与 `keysInsecure`；v1.18.4 起不再交出任何密钥原文） |
+| `/admin/api/channels/{id}/key`      | GET  | admin       | **按需揭示（v1.18.4）**：取单个渠道的上游密钥原文（控制台「显示 / 复制密钥」用） |
+| `/admin/api/gateway-key`            | GET  | admin       | **按需揭示（v1.18.4）**：取网关 `GATEWAY_KEY` 原文（Playground 直连 `/v1` 与接入信息卡复制用） |
 | `/admin/api/settings`               | GET/POST | admin   | **运行期设置（v1.18）**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关。GET 返回 `config`（用户填的原值）/ `effective`（钳制后生效值）/ `status`（实时计数）；POST 是 PATCH 语义（只带要改的组与字段），**立即生效 + 立即落库**，未知字段/类型不符一律 400 并点名字段 |
 | `/metrics`                          | GET  | admin（`metrics.public:true` 时匿名） | **Prometheus 文本格式（v1.17）**：请求/渠道/令牌/耗时/熔断分档/粘性/限流/进程指标；`metrics.enabled:false` 时返回 404 |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
@@ -775,9 +777,15 @@ node sec-audit.js
 `Referrer-Policy: no-referrer` / `Permissions-Policy`，管理面与 `/healthz` 加 `Cache-Control: no-store`）；
 控制台**渲染层转义不一致**（模型名/渠道名等裸插值 + `toast()` 把上游错误串当 HTML，构成"持有网关密钥 → 管理端脚本执行"的存储型 XSS 链，
 现已统一过 `esc()`，以 `test/security-headers-e2e.test.js` 的"裸插值必须为零"守卫锁住）。
-**仍待办（见下方「计划中」）**：管理面 `/admin/api/status`、`/admin/api/channels`、`/admin/api/config` 仍返回上游 `apiKey` 明文
-（控制台自行掩码、但页面 DOM 与 `localStorage` 里是明文）；管理面**无失败限流**且密钥比较非恒定时间；无 CSP；
-`/console?key=…` 仍会把管理密钥写进浏览器历史与 Referer（`Referrer-Policy` 已挡住外泄，历史记录需改用 `#` 片段或一次性换取 session）。
+**第二批（v1.18.4）已修**：管理面**默认不再下发任何密钥原文**——`/admin/api/status` 与 `/admin/api/channels` 的 `apiKey` 只给
+`maskSecret()` 掩码（另给 `apiKeySet` 布尔；本机实测 32/32 条全是掩码、查询正文里不含任何一把真密钥）；`/admin/api/config` 不再
+同时交出 `ADMIN_KEY` 与 `GATEWAY_KEY`（改给掩码 + `keysInsecure` 布尔）。原文只能**按需单取**：两个新端点
+`GET /admin/api/channels/{id}/key`、`GET /admin/api/gateway-key` 仍走 admin 鉴权（把"一次泄漏 = 全部密钥"降成"一次泄漏 = 一把"）。
+渠道 `POST` 的 `apiKey` 改为「**留空 = 保持原密钥**」，防止控制台带着掩码回写把密钥抹掉；`checkAuth` 改 `sha256` +
+`crypto.timingSafeEqual` 恒定时间比较，9 处鉴权点统一走 `authGate()`（每类每分钟最多 30 次**失败**尝试 → 429 + `Retry-After`，
+成功一次即清零，窗口式不永久锁定，正密钥不受影响）。控制台相应改成"点一下才现取一次原文"。
+**仍待办（见下方「计划中」）**：无 CSP；`/console?key=…` 仍会把管理密钥写进浏览器历史与 Referer（`Referrer-Policy` 已挡住外泄，
+历史记录需改用 `#` 片段或一次性换取 session）。
 
 ## 行为细节
 
@@ -816,17 +824,15 @@ node sec-audit.js
 ## 计划中
 
 - **安全加固（v1.19 候选，2026-10-02 体检后立档）**：
-  ① **上游密钥不再明文下发**——`/admin/api/status` 与 `/admin/api/channels` 现在直接返回 `apiKey` 原文（控制台靠自己的 `maskKey` 掩码），
-  意味着 ADMIN_KEY 一旦泄漏＝全部上游密钥一起泄漏；打算改成默认只回掩码值，控制台的「显示密钥」按钮改为按需调
-  `GET /admin/api/channels/{id}/key` 拿单个渠道的原文（前端在 `build/app.js`，需与前端改动同一次提交）。
-  注意控制台 Playground 的「接入信息」卡还依赖 `/admin/api/config` 下发 `gatewayKey`（`build/app.js:1491`），
-  改密钥下发时必须一并改这一处，否则那张卡的复制按钮会拿不到值。
+    ① ~~上游密钥不再明文下发~~ ✅ **v1.18.4 已实现**：管理面默认只下发 `maskSecret()` 掩码（`/admin/api/status`、`/admin/api/channels`），
+  `/admin/api/config` 不再交出两个密钥原文、改给掩码 + `keysInsecure`；原文走按需揭示端点 `GET /admin/api/channels/{id}/key` 与
+  `GET /admin/api/gateway-key`。控制台相应改成"点一下才现取一次"（`chKeyLive` / `gwKeyLive` / `copyChKey` / `copyGwKey` /
+  `copyAllEndpoints`——Playground 直连与「接入信息」卡的两个复制按钮都走它），渠道表单的 API Key 框不再回填原文、**留空即保持原密钥**。
   ② ~~补安全响应头~~ ✅ **v1.18.3 已实现**（`nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: no-referrer` /
   `Permissions-Policy`，管理面与 `/healthz` 加 `no-store`；见「安全体检」节）。CSP 仍需按控制台真实资源
   （MiSans CDN + 内联脚本样式）单独设计并做浏览器验证，**暂缓**。
-  ③ **管理面失败限流 + 恒定时间比较**：`checkAuth` 目前是普通 `===`、无失败计数，错密钥可以无限快速重试
-  （实测 15 次错密钥均 401、无 429，单次约 12.5 ms）；计划加失败计数 + 429/退避 + `timingSafeEqual`。
-  **阈值要放宽且只挡失败尝试**（正密钥不受影响、不永久锁定），否则会把使用者自己锁在门外。
+    ③ ~~管理面失败限流 + 恒定时间比较~~ ✅ **v1.18.4 已实现**：`checkAuth` 改 `sha256` + `crypto.timingSafeEqual`；
+  9 处鉴权点统一走 `authGate()`，每类每分钟最多 30 次**失败**尝试 → 429 + `Retry-After`，成功一次即清零（窗口式，正密钥不受影响）。
   ④ **彻底消灭内联事件处理器**：把 `build/app.js` 的 `onclick="fn('${id}')"` 全面改成 `data-*` + 事件委托
   （v1.18.3 已给这些参数加了 `esc()`，属性层不可逃逸；仅当渠道 ID 含引号时还剩 JS 字符串层的理论风险）。
   ⑤ **刻意不做**：强制密钥长度/熵（不符合就拒绝启动）与多用户/角色/审计——本项目定位是**单用户自托管**，

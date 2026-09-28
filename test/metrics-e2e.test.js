@@ -61,7 +61,7 @@ function makeLabelFn() {
   check('/metrics 分支存在', metricsIdx > 0);
   check('/metrics 在客户端面分支之前（不会被限流/鉴权链路改写）', metricsIdx < clientIdx);
   check('/metrics 在管理面分支之后（复用同一套 admin 鉴权）', metricsIdx > adminIdx);
-  check('默认要 admin key，只有 metrics.public 才匿名', /if \(!METRICS_CFG\.public && !checkAuth\(req, 'admin'\)\) return unauthorized\(res, 'admin'\);/.test(SRC));
+  check('默认要 admin key，只有 metrics.public 才匿名', /if \(!METRICS_CFG\.public && !authGate\(req, res, 'admin'\)\) return;/.test(SRC));
   check('metrics.enabled === false 时端点整体下线（404）', /if \(!METRICS_CFG\.enabled\) return sendJson\(res, 404/.test(SRC));
   check('Content-Type 是 Prometheus 文本联盟格式（text/plain; version=0.0.4）', /'Content-Type': 'text\/plain; version=0\.0\.4; charset=utf-8'/.test(SRC));
   check('渠道记账**只**在 recordUsage 一处收口（不会和 usage 统计分叉）',

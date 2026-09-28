@@ -71,6 +71,27 @@ const freePort = () => new Promise((res, rej) => {
     /url\.pathname\.startsWith\('\/admin\/api\/'\) \|\| url\.pathname === '\/healthz'\) res\.setHeader\('Cache-Control', 'no-store'\)/.test(SRC));
   check('CSP 未被偷偷加上（要加就得配套改前端并做浏览器验证）', !/Content-Security-Policy/.test(SRC));
 
+  /* ── 第二批（v1.18.4）的装配守卫：密钥默认不下发、原文按需取、失败限流 ── */
+  check('两处「渠道列表」下发掩码，写 config.json 的那处仍保留原文（否则写盘会把密钥覆盖成掩码）',
+    (SRC.match(/maskSecret\(ch\.def\.apiKey\)/g) || []).length === 2 && /apiKey: ch\.def\.apiKey,/.test(SRC));
+  check('POST 落库不再无条件写 body.apiKey（留空 = 保持原密钥）',
+    !/^\s*apiKey: body\.apiKey,$/m.test(SRC) && /prevDef \? \{ apiKey: prevDef\.apiKey \}/.test(SRC));
+  check('/admin/api/config 不再交出 adminKey 原文，改给 keysInsecure 布尔',
+    /keysInsecure:/.test(SRC) && !/adminKey: ADMIN_KEY \|\| '',/.test(SRC));
+  check('两个按需揭示端点都在管理面里（逐条取名，不再一次给全部）',
+    /\/\^\\\/admin\\\/api\\\/channels\\\/\[\^\/\]\+\\\/key\$/.test(SRC) && SRC.includes("'/admin/api/gateway-key'"));
+  check('恒定时间比较：sha256 + timingSafeEqual，且不再有拿 === 比密钥的写法',
+    /crypto\.timingSafeEqual\(/.test(SRC) && /createHash\('sha256'\)/.test(SRC) && !/=== need/.test(SRC) && !/m\[1\] === need/.test(SRC));
+  check('9 处鉴权点全部改走 authGate，checkAuth 只被闸门调用（定义 + 调用 = 2 处）',
+    (SRC.match(/!authGate\(req, res, '/g) || []).length === 9 && (SRC.match(/checkAuth\(req, /g) || []).length === 2);
+  check('失败限流是窗口式（30 次/分钟）且成功后清零，不是永久锁定',
+    /AUTH_FAIL_MAX = 30/.test(SRC) && /AUTH_FAIL_WINDOW_MS = 60000/.test(SRC) && /authOk\(kind\)/.test(SRC));
+  check('编辑表单的「明文」按钮会现取原文（表单已不回填密钥，光切 input.type 点了看不到东西）',
+    /async function toggleKeyField\(\)[\s\S]{0,500}chKeyLive\(modalChId\)/.test(APP));
+  check('控制台不再拿 CFG.gatewayKey 当密钥直用，改为按需取（chKeyLive / gwKeyLive）',
+    APP.includes('async function gwKeyLive(') && APP.includes('async function chKeyLive(') &&
+    !/CFG&&CFG\.gatewayKey\)\|\|''\)\}\}/.test(APP) && !/maskKey\(chKey\(/.test(APP));
+
   /* ─────────────────────── 1. 真链路 ─────────────────────── */
   console.log('\n1. 真链路（临时网关，逐条看真实响应头）');
   const up = http.createServer((req, res) => {
@@ -82,7 +103,9 @@ const freePort = () => new Promise((res, rej) => {
   const cfgPath = path.join(TMP, 'sec.json');
   fs.writeFileSync(cfgPath, JSON.stringify({
     port: GW, health: { intervalSec: 3600, timeoutMs: 3000 }, retries: { perChannel: 0, maxModelFallbacks: 1 },
-    channels: [{ id: 'mock-sec', name: 'A', protocol: 'openai', baseUrl: `http://127.0.0.1:${PU}/v1`, apiKey: 'sk-a', priority: 10, enabled: true, models: { 'mock-sec': 'mock-sec' } }],
+    channels: [{ id: 'mock-sec', name: 'A', protocol: 'openai', baseUrl: `http://127.0.0.1:${PU}/v1`, apiKey: 'sk-a', priority: 10, enabled: true, models: { 'mock-sec': 'mock-sec' } },
+    // 第二把（长密钥）专门用来核对掩码形态：短密钥只该显示成 ••••，长密钥给"头4…尾4"
+    { id: 'mock-long', name: 'B', protocol: 'openai', baseUrl: `http://127.0.0.1:${PU}/v1`, apiKey: 'sk-abcdefghijklmnop', priority: 5, enabled: false, models: { 'mock-long': 'mock-long' } }],
   }));
 
   const gw = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
@@ -129,8 +152,74 @@ const freePort = () => new Promise((res, rej) => {
     check('/console 页面本身不含任何密钥明文（壳是零机密）', !html.includes(GW_KEY) && !html.includes(AD_KEY));
     check('页面的缓存策略仍是 no-store（不受新头影响）', /no-store/.test(cp.headers.get('cache-control') || ''));
     check('产物里能看到转义后的渲染（esc(l.m) / esc(c.name) 都在）', html.includes('esc(l.m)') && html.includes('esc(c.name)'));
-    check('管理面返回的渠道数据里确实带明文 apiKey —— 这是第二批要改的事实，本批只保证渲染不执行它',
-      stText.includes('apiKey'));
+
+    /* ─────────── 2. 第二批（v1.18.4）：密钥默认不下发 + 按需揭示 + 失败限流 ─────────── */
+    console.log('\n2. 第二批：管理面默认只给掩码、原文按需单取、连续失败限流');
+    const B = `http://127.0.0.1:${GW}`;
+    const ADMIN = { Authorization: 'Bearer ' + AD_KEY };
+    const st2 = JSON.parse(stText);
+    const chOf = (j, id) => (j.channels || []).find((c) => c.id === (id || 'mock-sec')) || {};
+    check('渠道列表里只剩掩码：两把密钥的原文都不在下发',
+      chOf(st2).apiKey === '••••' && chOf(st2, 'mock-long').apiKey === 'sk-a…mnop', (st2.channels || []).map((c) => c.apiKey));
+    check('掩码形态：长密钥给「头4…尾4」（看得出是哪把、取不到原文）',
+      chOf(st2, 'mock-long').apiKey === 'sk-a…mnop', chOf(st2, 'mock-long').apiKey);
+    check('短密钥（长度≤8）只显示成 ••••，不泄漏任何字符', chOf(st2).apiKey === '••••', chOf(st2).apiKey);
+    check('同时给 apiKeySet 布尔，控制台据此判"配没配"', chOf(st2).apiKeySet === true);
+    check('整个 /admin/api/status 正文里没有任何一把真密钥（网关 / 管理 / 两把上游）',
+      !stText.includes(GW_KEY) && !stText.includes(AD_KEY) && !stText.includes('"sk-a"') && !stText.includes('sk-abcdefghijklmnop'));
+    const chsText = await (await fetch(`${B}/admin/api/channels`, { headers: ADMIN })).text();
+    check('GET /admin/api/channels 同样只给掩码 + apiKeySet',
+      !chsText.includes('"sk-a"') && !chsText.includes(GW_KEY) && chsText.includes('apiKeySet'));
+    const cfgText = await (await fetch(`${B}/admin/api/config`, { headers: ADMIN })).text();
+    const cfg = JSON.parse(cfgText);
+    check('GET /admin/api/config 不再交出 GATEWAY_KEY / ADMIN_KEY 原文',
+      !cfgText.includes(GW_KEY) && !cfgText.includes(AD_KEY) && cfg.adminKey === undefined);
+    check('config 保留 required 两个布尔，并新增 keysInsecure（默认密钥判断挪到服务端）',
+      cfg.gatewayKeyRequired === true && cfg.adminKeyRequired === true && cfg.keysInsecure === false);
+    check('config 仍给出 urls（接入信息卡不依赖端口写死）', !!(cfg.urls && cfg.urls.openai));
+
+    const rv = await fetch(`${B}/admin/api/channels/mock-sec/key`, { headers: ADMIN });
+    check('按需揭示单渠道密钥：带 admin 能拿到原文', rv.status === 200 && (await rv.json()).apiKey === 'sk-a');
+    const rv401 = await fetch(`${B}/admin/api/channels/mock-sec/key`);
+    check('按需揭示端点照样要 admin（不带密钥 401）', rv401.status === 401);
+    await rv401.text();
+    const rv404 = await fetch(`${B}/admin/api/channels/nope/key`, { headers: ADMIN });
+    check('揭示不存在的渠道 → 404', rv404.status === 404);
+    await rv404.text();
+    const gk = await fetch(`${B}/admin/api/gateway-key`, { headers: ADMIN });
+    check('按需揭示网关密钥：带 admin 能拿到原文', gk.status === 200 && (await gk.json()).gatewayKey === GW_KEY);
+
+    /* 控制台"编辑表单留空"那条路：真发一次不带 apiKey 的 POST，原密钥必须被保住 */
+    const keep = await fetch(`${B}/admin/api/channels`, {
+      method: 'POST',
+      headers: { ...ADMIN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'mock-sec', name: 'A', baseUrl: `http://127.0.0.1:${PU}/v1`, protocol: 'openai', enabled: true, models: { 'mock-sec': 'mock-sec' } }),
+    });
+    const keepBody = await keep.text();
+    const after = await (await fetch(`${B}/admin/api/channels/mock-sec/key`, { headers: ADMIN })).json();
+    check('POST 不带 apiKey（控制台编辑的常态）→ 原密钥保留，不被空串/掩码覆盖',
+      keep.status === 200 && after.apiKey === 'sk-a', { status: keep.status, after: after.apiKey, body: keepBody.slice(0, 120) });
+    const fresh = await fetch(`${B}/admin/api/channels`, {
+      method: 'POST',
+      headers: { ...ADMIN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'brand-new', baseUrl: 'http://127.0.0.1:1/v1', protocol: 'openai' }),
+    });
+    const freshText = await fresh.text();
+    check('新建渠道仍必须带 apiKey（放宽只作用于"已存在的渠道"）',
+      fresh.status === 400 && /apiKey is required/.test(freshText), { status: fresh.status, body: freshText.slice(0, 120) });
+
+    /* 管理面失败限流：连打错密钥到阈值后转 429 + Retry-After；客户端面不受牵连 */
+    let last = 0, saw429 = false, ra = '';
+    for (let i = 0; i < 32; i++) {
+      const r = await fetch(`${B}/admin/api/status`, { headers: { Authorization: 'Bearer wrong-key' } });
+      last = r.status;
+      if (r.status === 429) { saw429 = true; ra = r.headers.get('retry-after') || ''; }
+      await r.text();
+    }
+    check('管理面连续失败到阈值后返回 429 + Retry-After（原来是无上限的 401）', saw429 && last === 429 && Number(ra) > 0, { last, ra });
+    const gwStill = await fetch(`${B}/v1/models`, { headers: { Authorization: 'Bearer ' + GW_KEY } });
+    check('限流只作用于刚被爆破的那一类：客户端面照常可用', gwStill.status === 200);
+    await gwStill.text();
   } finally {
     try { gw.kill(); } catch { }
     // 假上游也要关掉：否则它监听的句柄会让本进程的事件循环一直不退出

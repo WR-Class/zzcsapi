@@ -334,6 +334,36 @@ ${hdrsPs}
 const NOAUTH = process.env.ZZCSAPI_NOAUTH === '1';  // 本地开发：完全关闭鉴权
 let GATEWAY_KEY = process.env.GATEWAY_KEY || ''; // 客户端调 /v1/* / /anthropic/* / /gemini/*
 let ADMIN_KEY   = process.env.ADMIN_KEY   || ''; // 调 /admin/* + Web 控制台
+
+/* 恒定时间比较：先 sha256 再 timingSafeEqual，长度不同的输入也不会抛异常、也不泄漏长度差异。
+   （普通 === 的短路比较会随"前几个字符对上了"而变慢，理论上可被逐字节爆破；管理密钥就这么被保护的。）
+   NOAUTH 模式下 need 为空串，此时任何输入都不匹配 —— 但 NOAUTH 在 checkAuth 开头就已整体放行。 */
+function safeEqual(a, b) {
+  const A = crypto.createHash('sha256').update(String(a == null ? '' : a), 'utf8').digest();
+  const B = crypto.createHash('sha256').update(String(b == null ? '' : b), 'utf8').digest();
+  return crypto.timingSafeEqual(A, B);
+}
+
+/* 管理面失败限流（v1.18.4）：只统计**失败**尝试，成功一次即清零。
+   目的不是防"打不进来"（那是网络层的事），而是把"本地静态密钥 + 无失败计数"变成
+   "每分钟最多 30 次瞎试"——离线爆破从"想试多少试多少"变成"需要一年"。
+   刻意做成窗口式而非永久锁定：正密钥永远不受影响，也不存在把自己锁在门外的状态。 */
+const AUTH_FAIL = { admin: { n: 0, until: 0 }, gateway: { n: 0, until: 0 } };
+const AUTH_FAIL_MAX = 30;          // 每个窗口内允许的失败次数
+const AUTH_FAIL_WINDOW_MS = 60000; // 窗口长度
+function authThrottle(kind) {
+  const st = AUTH_FAIL[kind];
+  const now = Date.now();
+  if (st.until > now) return Math.ceil((st.until - now) / 1000); // 命中限流，返回还需等待的秒数
+  if (st.n >= AUTH_FAIL_MAX) { st.n = 0; st.until = now + AUTH_FAIL_WINDOW_MS; } // 攒够了，开始下一个窗口的静默期
+  return 0;
+}
+function authFail(kind) {
+  const st = AUTH_FAIL[kind];
+  if (st.until <= Date.now()) st.n++;
+}
+function authOk(kind) { const st = AUTH_FAIL[kind]; st.n = 0; st.until = 0; }
+
 function checkAuth(req, kind) {
   // kind: 'gateway' | 'admin'
   if (NOAUTH) return true;                            // 本地免鉴权（显式选择的开发模式）
@@ -341,18 +371,28 @@ function checkAuth(req, kind) {
   const need = kind === 'admin' ? ADMIN_KEY : GATEWAY_KEY;
   const h = req.headers['authorization'] || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
-  if (m && m[1] === need) return true;
+  if (m && safeEqual(m[1], need)) { authOk(kind); return true; }
   // 原生 SDK 兼容（仅 gateway 侧）：Gemini SDK 发 x-goog-api-key（其默认鉴权头，另一模式是 ?key=），
   // Anthropic SDK 发 x-api-key。不认这两个头 → 官方 SDK 直连一律 401（OpenAI SDK 走 Bearer 本来就通）。
   // 管理面不接受它们：admin 只能 Bearer / ?key=，避免把客户端密钥语义混进管理面。
   if (kind !== 'admin') {
-    if (req.headers['x-goog-api-key'] === need) return true;
-    if (req.headers['x-api-key'] === need) return true;
+    if (req.headers['x-goog-api-key'] !== undefined && safeEqual(req.headers['x-goog-api-key'], need)) { authOk(kind); return true; }
+    if (req.headers['x-api-key'] !== undefined && safeEqual(req.headers['x-api-key'], need)) { authOk(kind); return true; }
   }
   // 兼容 ?key=...
   const u = new URL(req.url, 'http://127.0.0.1');
-  if (u.searchParams.get('key') === need) return true;
+  const qk = u.searchParams.get('key');
+  if (qk !== null && safeEqual(qk, need)) { authOk(kind); return true; }
+  authFail(kind);
   return false;
+}
+
+/* 下发前掩码：管理面默认只给"能认出是哪把密钥"的程度，原文要靠按需揭示端点单取。 */
+function maskSecret(k) {
+  const s = String(k == null ? '' : k);
+  if (!s) return '';
+  if (s.length <= 8) return '••••';
+  return s.slice(0, 4) + '…' + s.slice(-4);
 }
 
 // ─────────────────────────── 加载配置 ───────────────────────────
@@ -1352,6 +1392,20 @@ function joinUrl(base, p) {
 function readBody(req) { return new Promise((resolve, reject) => { const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); }); }
 function sendJson(res, code, obj) { const body = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) }); res.end(body); }
 function unauthorized(res, kind) { sendJson(res, 401, { error: { message: `${kind} key required` } }); }
+
+/* 鉴权闸门（v1.18.4）：先看失败限流窗口，再走 checkAuth，最后才 401。
+   9 处鉴权点全部改走它 —— 于是 /admin/api/*、/metrics、五条客户端路由共用同一套失败计数。 */
+function authGate(req, res, kind) {
+  const wait = authThrottle(kind);
+  if (wait) {
+    res.setHeader('Retry-After', String(wait));
+    sendJson(res, 429, { error: { message: `too many failed ${kind} auth attempts, retry in ${wait}s`, type: 'rate_limited' } });
+    return false;
+  }
+  if (checkAuth(req, kind)) return true;
+  unauthorized(res, kind);
+  return false;
+}
 function upstreamErrorPayload(status, msg) { return { error: { message: msg, type: 'upstream_error', code: status } }; }
 function safeJson(t) { try { return JSON.parse(t); } catch { return null; } }
 
@@ -2541,17 +2595,17 @@ const server = http.createServer(async (req, res) => {
 
     // 控制台 API（用 admin key 鉴权）
     if (url.pathname.startsWith('/admin/api/')) {
-      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      if (!authGate(req, res, 'admin')) return;
       return handleAdminApi(req, res, url);
     }
 
     // 兼容旧的 admin 路径
     if (url.pathname === '/admin/status') {
-      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      if (!authGate(req, res, 'admin')) return;
       return sendJson(res, 200, channelStatusAll());
     }
     if (req.method === 'POST' && url.pathname === '/admin/recheck') {
-      if (!checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      if (!authGate(req, res, 'admin')) return;
       await probeAll();
       return sendJson(res, 200, { ok: true, checked: channels.size });
     }
@@ -2560,7 +2614,7 @@ const server = http.createServer(async (req, res) => {
     // 默认要 admin key；`metrics.public: true` 时才允许匿名抓取（放进 Prometheus 的常见做法）。
     if (req.method === 'GET' && url.pathname === '/metrics') {
       if (!METRICS_CFG.enabled) return sendJson(res, 404, upstreamErrorPayload(404, 'metrics disabled'));
-      if (!METRICS_CFG.public && !checkAuth(req, 'admin')) return unauthorized(res, 'admin');
+      if (!METRICS_CFG.public && !authGate(req, res, 'admin')) return;
       const text = renderMetrics();
       res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(text);
@@ -2593,7 +2647,7 @@ const server = http.createServer(async (req, res) => {
 
     // OpenAI 兼容
     if (req.method === 'GET' && url.pathname === '/v1/models') {
-      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      if (!authGate(req, res, 'gateway')) return;
       return sendJson(res, 200, { object: 'list', data: aggregateModels('openai').map((id) => ({ id, object: 'model', created: 0, owned_by: 'zzcsapi' })) });
     }
     if (req.method === 'POST' && (
@@ -2602,24 +2656,24 @@ const server = http.createServer(async (req, res) => {
       url.pathname === '/v1/responses' ||
       url.pathname === '/v1/completions'
     )) {
-      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      if (!authGate(req, res, 'gateway')) return;
       return handleOpenAIRequest(req, res, url);
     }
     // 图片生成：OpenAI 兼容 /v1/images/generations，走 openai 协议渠道直透（复用调度/兜底/记账）
     if (req.method === 'POST' && url.pathname === '/v1/images/generations') {
-      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      if (!authGate(req, res, 'gateway')) return;
       return handleImageRequest(req, res, url);
     }
 
     // Anthropic 兼容：/anthropic/v1/messages
     if (url.pathname.startsWith('/anthropic/')) {
-      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      if (!authGate(req, res, 'gateway')) return;
       return handleAnthropicRequest(req, res, url);
     }
 
     // Gemini 兼容：/gemini/v1beta/models/{model}:{action}
     if (url.pathname.startsWith('/gemini/')) {
-      if (!checkAuth(req, 'gateway')) return unauthorized(res, 'gateway');
+      if (!authGate(req, res, 'gateway')) return;
       return handleGeminiRequest(req, res, url);
     }
 
@@ -2640,7 +2694,7 @@ function channelStatusAll() {
       id: ch.def.id,
       name: ch.def.name || ch.def.id,
       baseUrl: ch.def.baseUrl,
-      apiKey: ch.def.apiKey,
+      apiKey: maskSecret(ch.def.apiKey), apiKeySet: !!ch.def.apiKey,
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
       effectivePriority: effPriority(ch),
@@ -3097,11 +3151,12 @@ function sseDeltaText(line) {
   } catch { return ''; }
 }
 
-function validateChannelDef(def) {
+function validateChannelDef(def, opts) {
   if (!def || typeof def !== 'object') return 'body must be an object';
   if (!def.id || !/^[a-zA-Z0-9_\-]+$/.test(def.id)) return 'id is required and must be [a-zA-Z0-9_-]+';
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
-  if (!def.apiKey || typeof def.apiKey !== 'string') return 'apiKey is required';
+  // 更新已有渠道时允许不带 apiKey：控制台现在只拿到掩码，留空即"保持原密钥"（见 POST 分支）
+  if ((!def.apiKey || typeof def.apiKey !== 'string') && !(opts && opts.allowMissingApiKey)) return 'apiKey is required';
   if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   // 加权轮询权重：必须是有限数字且 ≥ 0（0 = 不参与轮询；负数/NaN 会让分流比例失去意义）
@@ -3161,10 +3216,14 @@ async function handleAdminApi(req, res, url) {
     const base = `http://127.0.0.1:${PORT}`;
     return sendJson(res, 200, {
       port: PORT,
-      gatewayKey: GATEWAY_KEY || '',
-      adminKey: ADMIN_KEY || '',
+      // v1.18.4：这里原来同时给出 ADMIN_KEY 与 GATEWAY_KEY 原文——一次 GET 就等于全盘失守。
+      // 现在只给掩码与"设没设"，原文改走 /admin/api/gateway-key（管理面鉴权 + 按需单取）。
+      gatewayKey: maskSecret(GATEWAY_KEY),
       gatewayKeyRequired: !!GATEWAY_KEY,
       adminKeyRequired: !!ADMIN_KEY,
+      // 控制台原来自己拿两个密钥去 /change-me/i 判断"还是不是默认串"，现在密钥不下发了，
+      // 由服务端算好这一个布尔给它（同样是"看出风险"，但不泄漏值）。
+      keysInsecure: /change-me/i.test(GATEWAY_KEY || '') || /change-me/i.test(ADMIN_KEY || ''),
       urls: {
         openai: `${base}/v1`,
         anthropic: `${base}/anthropic`,
@@ -3269,13 +3328,26 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, 200, { ok: true, updated: touched, ...runtimeSettingsView() });
   }
 
+  // 按需揭示单个渠道的上游密钥（v1.18.4）：管理面默认只下发掩码，原文要点名索取。
+  // 单条 + 单次 + 仍走 admin 鉴权，把"一次泄漏 = 全部渠道密钥"降成"一次泄漏 = 一把"。
+  if (req.method === 'GET' && /^\/admin\/api\/channels\/[^/]+\/key$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.slice('/admin/api/channels/'.length, -'/key'.length));
+    const ch = channels.get(id);
+    if (!ch) return sendJson(res, 404, upstreamErrorPayload(404, `channel not found: ${id}`));
+    return sendJson(res, 200, { ok: true, id, apiKey: ch.def.apiKey || '' });
+  }
+  // 按需揭示网关密钥：控制台「接入信息」卡与 Playground 直连 /v1 时需要它
+  if (req.method === 'GET' && url.pathname === '/admin/api/gateway-key') {
+    return sendJson(res, 200, { ok: true, gatewayKey: GATEWAY_KEY || '' });
+  }
+
   // 完整 CRUD：channels 集合
   if (req.method === 'GET' && url.pathname === '/admin/api/channels') {
     return sendJson(res, 200, { channels: Array.from(channels.values()).map((ch) => ({
       id: ch.def.id,
       name: ch.def.name,
       baseUrl: ch.def.baseUrl,
-      apiKey: ch.def.apiKey,
+      apiKey: maskSecret(ch.def.apiKey), apiKeySet: !!ch.def.apiKey,
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
       weight: ch.def.weight ?? undefined,
@@ -3292,7 +3364,7 @@ async function handleAdminApi(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/channels') {
     const body = await safeReadJson(req);
-    const err = validateChannelDef(body);
+    const err = validateChannelDef(body, { allowMissingApiKey: channels.has(body.id) });
     if (err) return sendJson(res, 400, { error: err });
     // 已有的 weight 不能被"本次没传这个字段"抹掉（v1.5 起控制台表单会**显式**提交 weight：
     // 留空 = 真的清成 0；只有那些老客户端/导入流程不传 weight 时才沿用旧值）
@@ -3301,7 +3373,9 @@ async function handleAdminApi(req, res, url) {
       id: body.id,
       name: body.name || body.id,
       baseUrl: body.baseUrl.replace(/\/+$/, ''),
-      apiKey: body.apiKey,
+      // 留空 = 保持原密钥（v1.18.4 起管理面只下发掩码、控制台表单不再回填原文；
+        // 若把空串写回去，等于把用户配好的渠道密钥抹掉）
+        ...(body.apiKey ? { apiKey: body.apiKey } : (prevDef ? { apiKey: prevDef.apiKey } : { apiKey: '' })),
       protocol: body.protocol || 'openai',
       priority: body.priority !== undefined ? Number(body.priority) : 0,
       weight: body.weight !== undefined ? (Number(body.weight) > 0 ? Number(body.weight) : undefined) : (prevDef ? prevDef.weight : undefined),
