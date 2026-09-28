@@ -1179,6 +1179,31 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`node --check server.js` 通过；`node test/settings-api-e2e.test.js` 58 项断言全绿（含"打开限流不重启即第 2 发 429""关掉 `/metrics` 立即 404""落库后重启仍是这个值"）；`node build/build.js` 通过；`node test/console-state.test.js` 103 项全绿；全量 28 个测试文件全绿。
 
+### 8.23 v1.18.1 空数据炸渲染：全新部署上「渠道管理 → 详情」点了没反应（2026-10-02，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `AGENTS.md`）
+
+**问题**：别人把网关部署起来后，控制台**渠道管理点「详情」毫无反应**——不弹抽屉、不报错、不白屏，只有浏览器控制台里一行红字（用户不一定会去看）。有数据的机器上完全正常，所以本机一直没暴露。
+
+**根因**（逐层剥出来的，不是猜的）：
+
+| # | 事实 | 证据 |
+| --- | --- | --- |
+| 1 | 详情抽屉由 `openChannel(id)` 一次 `drawer(...)` 画出，而**图表是在 `drawer()` 之前求值的**（模板字符串里调 `areaChart(DATA.trend.slice(-12),…)`） | `build/app.js` 的 `openChannel` 内 `areaChart` 早于 `drawer(` |
+| 2 | `areaChart` 里取 `pts[0][0]` **没有空数据分支**，`data=[]` ⇒ `pts[0]` 是 `undefined` ⇒ `TypeError: Cannot read properties of undefined (reading '0')` | 把整个 `build/app.js` 跑进最小 DOM 桩、喂真实 `/admin/api/status` 形状数据后**稳定复现**，栈顶就落在 `areaChart` |
+| 3 | 全新部署的实例 `/admin/api/usage` 的 `byDay` 是空数组 ⇒ `adapt()` 算出 `trend=[]` ⇒ 必然走到上面那条 | 临时网关实测：0 请求时 `byDay=[]`；发过请求后 `byDay` 才有值（本机线上是 24 天，所以本机不复现） |
+| 4 | 同一个坑还有兄弟：`sparkline` 对空数组会取 `pts[pts.length-1][0]`；单点输入 `w/(length-1)` 还是 `w/0` → `NaN` | KPI 卡 / 总览的迷你曲线用的是它 |
+
+**处置**（最小改动，不动布局与配色）：
+
+1. `areaChart`：函数开头判空（`!Array.isArray(data) || data.length===0`）→ 直接返回**占位图**（保留 `viewBox`/宽高、画一条虚线基线、居中写「暂无数据（还没有调用记录）」），**绝不抛**。有数据时输出与改动前同构（同一套 `M/C` 路径与网格）。
+2. `sparkline`：同样开头判空 → 返回一条基线占位；并把单点输入的分母改成 `vals.length>1 ? w/(vals.length-1) : w/2`，消掉 `NaN`。
+3. 新增一节回归：`test/console-state.test.js` **§9「零数据（全新部署）不许把页面/抽屉打挂」**——在最小 DOM 桩里**真跑 `openChannel`**（零数据 + 满数据两组），断言不抛、抽屉真的画出来、抽屉里有渠道名与占位文案、满数据仍画得出曲线；另加两条结构守卫，防止后续重构把空数据分支“简化”掉。
+
+**为什么以前没抓到**：`console-state.test.js` 的桩数据**一直是满的**（有 `trend`、有渠道），而这类“空数据炸渲染”的 bug 的特征恰恰是**有数据时全绿**。教训写进用例注释：凡是渲染函数，桩数据必须**再跑一遍空的**。
+
+**验证**：`node test/console-state.test.js` **115 项断言全绿**（原 103，本节 +12）；`node build/build.js` 通过、产物里能搜到占位文案；全量 **28 个测试文件 / 1197 断言 / 0 失败**；对照实验：用改动前的源码跑同一组断言，`areaChart([])` 必抛、`openChannel` 必中断（测试抓得住）。
+
+**对「部署方」的结论**：这不是环境问题、不是浏览器缓存问题（`/console` 响应头是 `Cache-Control: no-store`，刷新即最新），而是**这份基于 git 的构建里就有的代码缺陷**——唯一解法是更新代码后重新构建并重启容器（`node build/build.js` + 重建镜像）。
+
 ---
 
 ## 9. 后续可做（未实现）

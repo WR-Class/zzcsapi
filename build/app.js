@@ -255,6 +255,17 @@ function copyText(t,btn){
 function areaChart(data,w,h,opts){
   const o=Object.assign({pad:[14,10,22,34],stroke:'var(--accent)'},opts||{});
   const [pt,pr,pb,pl]=o.pad, iw=w-pl-pr, ih=h-pt-pb;
+  /* 空数据保护（v1.18.1，用户报「渠道管理点详情无反应」）：
+     全新部署时 /admin/api/usage 还没有任何记录 → adapt() 算出 trend=[] →
+     下面 pts[0][0] 直接抛 TypeError，而详情抽屉是在 drawer(...) **之前**调本函数的，
+     于是整个 openChannel() 中断：界面毫无反应，只有浏览器控制台里一行红字。
+     这里给一个占位图（保留宽高与网格基线），绝不抛。 */
+  if(!Array.isArray(data)||data.length===0){
+    return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="overflow:visible">
+      <line x1="${pl}" y1="${pt+ih/2}" x2="${w-pr}" y2="${pt+ih/2}" stroke="var(--line)" stroke-dasharray="3 6" opacity=".7"/>
+      <text x="${(pl+w-pr)/2}" y="${pt+ih/2-6}" text-anchor="middle" fill="var(--tx-3)" font-size="11">暂无数据（还没有调用记录）</text>
+    </svg>`;
+  }
   const vals=data.map(d=>d[1]), max=Math.max(...vals)*1.12||1, n=vals.length;
   const X=i=>pl+(n<=1?iw/2:i*iw/(n-1)), Y=v=>pt+ih-(v/max)*ih;
   const pts=vals.map((v,i)=>[X(i),Y(v)]);
@@ -284,9 +295,14 @@ function areaChart(data,w,h,opts){
   </svg>`;
 }
 function sparkline(vals,w=72,h=22,c,stretch){
+  /* 空数据保护（v1.18.1，与 areaChart 同一处根因）：vals 为空时下面算 i*(w/(0-1)) 会得到
+     -0/NaN，末尾 pts[pts.length-1][0] 还会直接抛。空数组识别得早，这里给条基线占位。 */
+  if(!Array.isArray(vals)||vals.length===0){
+    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"${stretch?' preserveAspectRatio="none"':''}><line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="var(--line)" stroke-dasharray="2 4"/></svg>`;
+  }
   const max=Math.max(...vals)||1,min=Math.min(...vals);
   const rng=(max-min)||1;
-  const pts=vals.map((v,i)=>[i*(w/(vals.length-1)),h-3-((v-min)/rng)*(h-9)]);
+  const pts=vals.map((v,i)=>[i*(vals.length>1?w/(vals.length-1):w/2),h-3-((v-min)/rng)*(h-9)]);
   const line='M'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L');
   const stroke=c||'var(--accent)';
   const gid='sp'+Math.random().toString(36).slice(2,7);

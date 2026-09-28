@@ -135,8 +135,16 @@ function makeUpstream(tag) {
     /* ══════════ 1. 自动探测：停用的不被探 ══════════ */
     console.log('\n1. 自动探测（启动 + 每秒定时器）：只打启用渠道，停用渠道 0 次');
     {
-      await sleep(3600);
-      check('启用渠道被自动探过（≥1 次）', on.probeHits >= 1, on.probeHits);
+      // 等一下"启用渠道被探过至少一次"，但用**有界轮询**而不是固定 sleep：
+      // 之前的固定 3.6s 在机器满载（例如整仓 28 个用例连着跑）时可能不够，
+      // 于是"启用 ≥1"这条会偶发假红——那是**等待不足**，不是产品行为变了。
+      // 注意这里只延长观察窗口：停用渠道那条是"禁止发生"的断言，窗口越长它越强，不会被放水。
+      const t0 = Date.now();
+      while (on.probeHits < 1 && Date.now() - t0 < 15000) await sleep(200);
+      const waited = Date.now() - t0;
+      check('启用渠道被自动探过（≥1 次）', on.probeHits >= 1, { probeHits: on.probeHits, waitedMs: waited });
+      // 再多看两个探测周期，确保"停用的不被探"不是恰好踩在窗口边缘上侥幸通过
+      await sleep(2200);
       check('★★ 停用渠道一次都没被自动探（这就是"停用的不用自动测试"）', dis.probeHits === 0, dis.probeHits);
       check('停用渠道也没被自动打过真实对话', dis.chatHits === 0, dis.chatHits);
     }
