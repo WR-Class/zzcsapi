@@ -35,6 +35,14 @@ docker compose up -d --build
 服务不会崩（`ensureUsage` 有兜底），但用量统计将**无法落盘、每次重启归零**，且不易察觉。
 `usage.json` 已列入 `.gitignore`（每次请求都会改写，提交它只会产生噪声 diff）。
 
+**端口暴露与 `ZZCSAPI_BIND`（一个容易踩的坑）**：容器里 `server.js` 的绑定地址取自 `ZZCSAPI_BIND`，**缺省是 `127.0.0.1`**——
+即只监听**容器内部回环**。此时即使 compose 把端口映射成 `8787:8787`，宿主机的转发也打不到容器网卡，
+表现是**容器 `Up (healthy)`、容器内 `/healthz` 正常，但宿主机/局域网连 `127.0.0.1:8787` 被拒**，很像"服务停了"。
+`docker-compose.yml` 已显式写死 `ZZCSAPI_BIND: "0.0.0.0"`，所以**用 compose 起不会踩到**；
+只有手工 `docker run` 时容易漏掉这个变量（顺带别忘 `TZ=Asia/Shanghai`、`ZZCSAPI_CONFIG=/app/config.json`）。
+`docker-compose.yml` 的端口映射是 `8787:8787`（局域网可访问）；只想本机自用就改成 `127.0.0.1:8787:8787`，
+并保持 `ZZCSAPI_NOAUTH=0`，一切访问走 `checkAuth` 的 Bearer / `?key=` 通道。
+
 ### 方式二：裸 Node（18+）
 
 ```bash
@@ -51,6 +59,7 @@ node server.js
 GATEWAY_KEY=xxx  node server.js    # 客户端必须带 Bearer xxx
 ADMIN_KEY=yyy    node server.js    # 控制台 + /admin/* 必须带 Bearer yyy
 ZZCSAPI_NOAUTH=1 node server.js    # 本地开发：完全关闭鉴权（仅限本机自用）
+ZZCSAPI_BIND=0.0.0.0 node server.js  # 绑定地址，缺省 127.0.0.1（裸跑时对外提供服务的必填项）
 ```
 
 **密钥从哪来（分享/分发友好）**：
