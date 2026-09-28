@@ -48,7 +48,7 @@ const freePort = () => new Promise((res, rej) => {
 
 // 现抠真实的粘性模块（从 AFFINITY_CFG 到"客户端限流"分节之前），注入 config/crypto 后取回内部函数。
 // 这样断言的是**跑在真实源码里的那份逻辑**，不是测试里重写的一份。
-const AFF_SRC = SRC.slice(SRC.indexOf('const AFFINITY_CFG'), SRC.indexOf('// ─────────────────────────── 客户端限流'));
+const AFF_SRC = SRC.slice(SRC.indexOf('function normAffinityCfg('), SRC.indexOf('// ─────────────────────────── 客户端限流'));
 function makeAffinity(cfg) {
   const factory = new Function('config', 'crypto', AFF_SRC + `
     return { AFFINITY_CFG, AFFINITY, AFFINITY_STAT, AFFINITY_HEADERS,

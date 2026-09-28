@@ -438,8 +438,10 @@ const COOLDOWN = (() => {
 //      客户端兜底。默认关闭：正文哈希会让**相同提示的不同请求**互相抢占同一家。
 //   刻意**不**用 anthropic 的 metadata.user_id：Claude Code 带的是**账号级** id，
 //   拿它做粘性等于把整个账号钉死在一家（那不是会话粘性，是把加权轮询关掉）。
-const AFFINITY_CFG = (() => {
-  const c = (config && config.sessionAffinity) || {};
+// 把"从 config 算出运行期设置"抽成函数：启动路径与控制台保存路径**必须共用同一份**，
+// 否则哪天两边各改一半，就会变成"控制台里存的是 A、重启后读的是 B"这种最难查的分叉。
+function normAffinityCfg(raw) {
+  const c = (raw && typeof raw === 'object') ? raw : {};
   const pickInt = (v, lo, hi, dflt) => {
     const n = Math.floor(Number(v));
     return Number.isFinite(n) && n > 0 ? Math.max(lo, Math.min(hi, n)) : dflt;
@@ -450,7 +452,8 @@ const AFFINITY_CFG = (() => {
     maxEntries: pickInt(c.maxEntries, 16, 100_000, 2000),
     deriveFromBody: c.deriveFromBody === true,
   };
-})();
+}
+const AFFINITY_CFG = normAffinityCfg(config && config.sessionAffinity);
 const AFFINITY = new Map();        // key → { channelId, ts }（Map 迭代序=插入序，淘汰最旧用）
 const AFFINITY_STAT = { hits: 0, misses: 0, learned: 0, evicted: 0, expired: 0, reordered: 0 };
 const AFFINITY_HEADERS = ['x-session-id', 'x-claude-code-session-id', 'x-conversation-id', 'x-zzcsapi-session'];
@@ -530,8 +533,8 @@ function affinityStatus() {
 //   · 计数发生在**鉴权之前**：这样连"刷鉴权"的流量也被挡住（代价是未带密钥的请求也占额度，
 //     这是刻意的取舍——宁可挡在门口，也不让无效流量穿到后面的候选链上）；
 //   · 并发数在响应结束时归还（含客户端中断：挂 res 'close'，不依赖正常收尾）。
-const RATE_CFG = (() => {
-  const c = (config && config.rateLimit) || {};
+function normRateCfg(raw) {
+  const c = (raw && typeof raw === 'object') ? raw : {};
   const int = (v, dflt) => {
     const n = Math.floor(Number(v));
     return Number.isFinite(n) && n >= 0 ? n : dflt;
@@ -544,7 +547,8 @@ const RATE_CFG = (() => {
     burst: burst > 0 ? burst : rpm,        // 默认桶容量 = 每分钟额度（允许"一分钟的量一次性打完"）
     maxConcurrent: int(c.maxConcurrent, 0),
   };
-})();
+}
+const RATE_CFG = normRateCfg(config && config.rateLimit);
 const RATE_BUCKET = { tokens: 0, last: 0 };
 const RATE_STAT = { inflight: 0, peakInflight: 0, limitedRate: 0, limitedConcurrent: 0, released: 0 };
 
@@ -595,10 +599,60 @@ const METRICS = {
 
 // 端点开关：默认**开**（本地自用，端点本身零成本、可用性信息本来就该拿得到），
 // 但仍要 admin key；要放进 Prometheus 抓取（不带 Bearer）就显式写 metrics.public=true。
-const METRICS_CFG = {
-  enabled: !(config && config.metrics && config.metrics.enabled === false),
-  public: !!(config && config.metrics && config.metrics.public === true),
-};
+function normMetricsCfg(raw) {
+  const c = (raw && typeof raw === 'object') ? raw : {};
+  return {
+    enabled: !(c.enabled === false),        // 默认开：唯一"默认开"的新开关（不配也能抓，且要 key）
+    public: c.public === true,
+  };
+}
+const METRICS_CFG = normMetricsCfg(config && config.metrics);
+
+// 运行期重新套用这三组设置（控制台保存后**立即生效**，不必重启）。
+// 为什么值得做成热生效：限流/粘性/指标都是"调一下就想马上看效果"的旋钮，
+// 要求重启容器才能验证，等于把试验成本抬到"每次都要断一次线上服务"。
+// 注意只重算这三个收口常量，不碰渠道、不碰冷却、不碰 SWRR 状态。
+function applyRuntimeSettings() {
+  Object.assign(AFFINITY_CFG, normAffinityCfg(config && config.sessionAffinity));
+  Object.assign(RATE_CFG, normRateCfg(config && config.rateLimit));
+  Object.assign(METRICS_CFG, normMetricsCfg(config && config.metrics));
+}
+
+// 给控制台表单用的视图：raw 是"要回填进输入框的值"，effective 是"钳制之后真正生效的值"。
+// 两者分开很重要——用户填 ttlSec:5 会被钳成 30，如果只回填生效值，他会以为"我填的 5 生效了"；
+// 如果只回填原值，他又看不到实际跑的是什么。两个都给，前端就能做到"填的值保留 + 生效值标注"。
+function runtimeSettingsView() {
+  const raw = (config && config) || {};
+  return {
+    config: {
+      sessionAffinity: {
+        enabled: raw.sessionAffinity?.enabled === true,
+        ttlSec: Number.isFinite(Number(raw.sessionAffinity?.ttlSec)) ? Number(raw.sessionAffinity.ttlSec) : AFFINITY_CFG.ttlMs / 1000,
+        maxEntries: Number.isFinite(Number(raw.sessionAffinity?.maxEntries)) ? Number(raw.sessionAffinity.maxEntries) : AFFINITY_CFG.maxEntries,
+        deriveFromBody: raw.sessionAffinity?.deriveFromBody === true,
+      },
+      rateLimit: {
+        enabled: raw.rateLimit?.enabled === true,
+        rpm: Number(raw.rateLimit?.rpm) || 0,
+        burst: Number(raw.rateLimit?.burst) || 0,
+        maxConcurrent: Number(raw.rateLimit?.maxConcurrent) || 0,
+      },
+      metrics: {
+        enabled: !(raw.metrics?.enabled === false),
+        public: raw.metrics?.public === true,
+      },
+    },
+    effective: {
+      sessionAffinity: { enabled: AFFINITY_CFG.enabled, ttlSec: Math.round(AFFINITY_CFG.ttlMs / 1000), maxEntries: AFFINITY_CFG.maxEntries, deriveFromBody: AFFINITY_CFG.deriveFromBody },
+      rateLimit: { enabled: RATE_CFG.enabled, rpm: RATE_CFG.rpm, burst: RATE_CFG.burst, maxConcurrent: RATE_CFG.maxConcurrent },
+      metrics: { enabled: METRICS_CFG.enabled, public: METRICS_CFG.public },
+    },
+    status: {
+      affinity: affinityStatus(),
+      rateLimit: rateStatus(),
+    },
+  };
+}
 
 function metricRequest(route, status) {
   const k = route + '|' + status;
@@ -3156,6 +3210,47 @@ async function handleAdminApi(req, res, url) {
     // 启停/优先级立即持久化：否则容器重启后状态丢失，"停用的渠道复活"
     persistConfig();
     return sendJson(res, 200, { ok: true, id: body.id, priority: ch.def.priority, weight: ch.def.weight ?? 0, enabled: ch.def.enabled });
+  }
+
+  // ── 运行期设置读写（v1.18：给控制台用的开关面板）─────────────
+  // 为什么需要它：渠道级 upsert 改不了这三组开关，`/admin/api/config` 又是只读的，
+  // 于是控制台在 v1.17 里只能"看得见、改不了"（状态由 /admin/api/status 暴露）。
+  // 这里给一个**窄口**：只认 sessionAffinity / rateLimit / metrics 三组，
+  // 每组走与启动路径同一个 norm* 函数（钳制规则完全一致），写 config → 持久化 → 立即生效。
+  // 刻意不做成"通用 config 写入"：那等于给控制台一个能改坏任何配置的口子，
+  // 而它的每个调用点都得自己保证字段合法——窄口 + 白名单字段是这里唯一可靠的做法。
+  if (req.method === 'GET' && url.pathname === '/admin/api/settings') {
+    return sendJson(res, 200, { ok: true, ...runtimeSettingsView() });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/settings') {
+    const body = await safeReadJson(req);
+    if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'invalid json body' });
+    const groups = ['sessionAffinity', 'rateLimit', 'metrics'];
+    const touched = groups.filter((g) => body[g] !== undefined);
+    if (!touched.length) return sendJson(res, 400, { error: 'nothing to update: expected one of sessionAffinity / rateLimit / metrics' });
+    for (const g of touched) {
+      const v = body[g];
+      if (v === null || typeof v !== 'object' || Array.isArray(v)) return sendJson(res, 400, { error: g + ' must be an object' });
+      // 只接受白名单字段，且类型必须对——写错一个字段名不会被静默忽略（否则"我明明关了"会变成悬案）
+      const allowed = g === 'sessionAffinity' ? ['enabled', 'ttlSec', 'maxEntries', 'deriveFromBody']
+        : g === 'rateLimit' ? ['enabled', 'rpm', 'burst', 'maxConcurrent']
+          : ['enabled', 'public'];
+      for (const k of Object.keys(v)) {
+        if (!allowed.includes(k)) return sendJson(res, 400, { error: `unknown field ${g}.${k}` });
+        if (k === 'enabled' || k === 'deriveFromBody' || k === 'public') {
+          if (typeof v[k] !== 'boolean') return sendJson(res, 400, { error: `${g}.${k} must be a boolean` });
+        } else if (!Number.isFinite(Number(v[k])) || Number(v[k]) < 0) {
+          return sendJson(res, 400, { error: `${g}.${k} must be a finite number >= 0` });
+        }
+      }
+      // 合并进已有配置（PATCH 语义：没带的字段保持不变，不会"漏字段 = 归零"）
+      config[g] = { ...((config && config[g]) || {}), ...v };
+      for (const k of Object.keys(config[g])) if (config[g][k] === undefined) delete config[g][k];
+    }
+    applyRuntimeSettings();          // 立即生效（不重启）
+    persistConfig();                 // 立即落库（重启后仍是这个值）
+    console.log(`[settings] 控制台更新了 ${touched.join(' / ')}: ` + JSON.stringify(runtimeSettingsView()));
+    return sendJson(res, 200, { ok: true, updated: touched, ...runtimeSettingsView() });
   }
 
   // 完整 CRUD：channels 集合

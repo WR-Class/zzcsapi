@@ -179,6 +179,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | **动代码前过目**：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查）、前端独立审查 |
 | [同类网关内部机制对比](docs/gateway-comparison.md) | **定位与取舍参考**：本项目 vs new-api / one-api / sub2api / CLIProxyAPI 的内部机制、性能、全面性对照（只比机制，不比多用户/账户管理），含本机实测数字与各家的源码级证据 |
 | [thinking 回放缓存设计稿](docs/thinking-replay-design.md) | **已验证无收益，暂不实现**：一次"先验证再动手"的完整记录——跨协议下 thinking 与签名的**保真度地图**（逐函数出处）、为什么"客户端回传无签名块触发 400"不可达、唯一会 400 的场景为何回放缓存也治不了、以及将来要重启必须先满足什么 |
+| [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | **交给前端执行者的施工图**：`/admin/api/settings` 的字段契约（`config` vs `effective` 为什么都要显示）、三张卡的结构与文案要点、必须守住的交互细节（只提交有改动的组、跨轮询保留输入、400 原文要显示）、要改哪些文件与 AGENTS 强制同步清单、可逐条执行的验收清单 |
 
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
@@ -210,6 +211,7 @@ node test/session-affinity-e2e.test.js    # 67 项断言：会话粘性（键推
 node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令牌桶真值表 + 429 带 Retry-After + 按时间回填 + 并发闸门 + 管理面不受影响 + 关闭时零影响）
 node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态）
 node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（网关从不向客户端产出 thinking 块 → "无签名块触发 400"不可达；直通是签名唯一活路）
+node test/settings-api-e2e.test.js        # 58 项断言：运行期设置端点（窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -385,7 +387,10 @@ KV cache，订阅类渠道也不会因为来回换家反复触发风控。
 - 渠道标签用**渠道 id**（控制台里显示的是 name）；token/耗时来自 `recordUsage`，与用量统计**同一处收口**，不会出现"指标好看、用量难看"的分叉。
 - 诚实边界：这是**进程内**计数（重启清零，不是持久化时间序列）；单机自用够用，要长期趋势请让 Prometheus 去拉。
 
-> 控制台暂未暴露这三个开关（改 `config.json` 即可，`/admin/api/status` 里能看到它们生效后的实时状态：`affinity` / `rateLimit` / `metrics` 三段）。
+> **这三个开关怎么改（v1.18）**：容器里直接改 `config.json` 仍然可以（`/admin/api/status` 里能看到生效后的实时状态：
+> `affinity` / `rateLimit` / `metrics` 三段）；v1.18 起还可以**运行期改、立即生效、立即落库**——`GET/POST /admin/api/settings`
+> （窄口：只认这三组，字段白名单 + 严格类型，写错字段名/类型一律 400 并点名字段）。
+> 控制台页面按 [`docs/console-settings-spec.md`](docs/console-settings-spec.md) 的规格实现（该规格已交付前端侧，后端契约已冻结并有测试守着）。
 > 会话粘性、客户端限流的**设计边界与验收标准**写在测试里（`test/session-affinity-e2e.test.js` / `test/rate-limit-e2e.test.js`），改调度或网关入口时请先跑它们。
 
 
@@ -717,6 +722,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/admin/api/codex-quota`            | GET  | admin       | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import`        | POST | admin       | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
 | `/admin/api/config`                 | GET  | admin       | 暴露接入信息（含 key 与 URL），仅本机 admin |
+| `/admin/api/settings`               | GET/POST | admin   | **运行期设置（v1.18）**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关。GET 返回 `config`（用户填的原值）/ `effective`（钳制后生效值）/ `status`（实时计数）；POST 是 PATCH 语义（只带要改的组与字段），**立即生效 + 立即落库**，未知字段/类型不符一律 400 并点名字段 |
 | `/metrics`                          | GET  | admin（`metrics.public:true` 时匿名） | **Prometheus 文本格式（v1.17）**：请求/渠道/令牌/耗时/熔断分档/粘性/限流/进程指标；`metrics.enabled:false` 时返回 404 |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
 | `/v1/models`                        | GET  | gateway     | OpenAI 聚合模型                       |
@@ -776,5 +782,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
   且给的是**带签名的原件**），因此"客户端回传无签名块 → 上游 400"这条路**不可达**；唯一会 400 的场景
   （客户端自带的签名跨到了另一个 Anthropic 渠道）**回放缓存也治不了**。想重启请先满足设计稿 §1.4 的前提：
   [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)
-- **把 v1.17 三个开关搬进控制台**：现在只能改 `config.json`（`/admin/api/status` 里能看到实时状态）。
-  动控制台要连带重建 `console.html` 与两份前端文档，是本轮之后的候选
+- **控制台「运行期设置」页面**（会话粘性 / 客户端限流 / 指标端点的开关面板）：**后端已就绪**（v1.18 的
+  `GET/POST /admin/api/settings`，改完立即生效 + 立即落库，`test/settings-api-e2e.test.js` 58 项断言守着），
+  **前端规格已交付**：[`docs/console-settings-spec.md`](docs/console-settings-spec.md)（字段契约、三张卡的结构与文案、
+  交互红线、要改的文件与 AGENTS 同步清单、逐条验收）。当前后端只能通过 HTTP 调用它，页面待前端按规格实现

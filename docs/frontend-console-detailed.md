@@ -495,6 +495,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | `pgSend` | `POST /v1/chat/completions` | 支持 `stream` |
 | Playground 生图 | `POST /v1/images/generations` | 需上游支持图像接口 |
 | （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
+| 「运行期设置」页（**待前端实现**） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。页面按 [`console-settings-spec.md`](console-settings-spec.md) 的规格做 |
 
 **回填时的注意事项**：
 
@@ -1155,6 +1156,28 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 §1「1775–1784 `PROTO_META`」/ §0.2「1448–1461 `PROTO_META`」两个锚点区间**继续有效，无需重算**。
 
 **验证**：`node build/build.js` 通过（产物含新文案）；`test/console-state.test.js` 103 项、全量 21 个测试文件全绿。
+
+---
+
+### 8.22 v1.18 运行期设置：后端窄口就绪（`/admin/api/settings`）、前端规格交付；顺手修掉轮询重绘表漏页（2026-10-02，对象 `server.js` + `build/app.js` + 产物 `console.html` + 两份前端文档 + `README.md` + `AGENTS.md` + `test/settings-api-e2e.test.js`）
+
+**问题**：两个，一个是需求缺口，一个是自查发现的真 bug。
+
+| # | 现象 | 根因 |
+| --- | --- | --- |
+| 1 | v1.17 的会话粘性 / 客户端限流 / `/metrics` 三个开关在控制台**看得见、改不了** | 渠道级 `POST /admin/api/channel` 只管渠道字段，`GET /admin/api/config` 是只读的——**全仓没有任何路径能写这三组开关**（状态倒是早在 `/admin/api/status` 里列了三段） |
+| 2 | 停在「自动权重」页时，8 秒轮询**不会刷新这一页**（数据停在进入那一刻） | `render()` 里的重绘分发表（`build/app.js` 157 行）**漏了 `autoweight:vAutoWeight`**，只有 `go()` 那张表（345 行）是全的。`render()` 拿不到函数就 `return`，于是既不重绘、也不做滚动/焦点保留——不报错、不白屏，只是数据悄悄不更新 |
+
+**处置**：
+
+1. **后端补窄口**（`server.js`）：新增 `GET/POST /admin/api/settings`，**只认这三组**、组内只认白名单字段且类型严格（写错字段名/类型一律 400 并点名字段，不静默忽略）；每组走**与启动路径同一个** `normAffinityCfg`/`normRateCfg`/`normMetricsCfg`（启动期常量由这三个函数初始化，保存后 `applyRuntimeSettings()` 重算同一批常量）——**立即生效 + `persistConfig()` 立即落库**。GET 同时返回 `config`（用户原值，回填表单用）、`effective`（钳制后生效值，如 `ttlSec:5 → 30`）、`status`（实时计数），两个值都给是为了避免"我填的 5 没生效"这类悬案。
+2. **修轮询漏页**：`render()` 那张表补上 `autoweight:vAutoWeight`，与 `go()` 对齐。**只改一行内容、行数不变**。
+3. **前端页面按规格实现**（本轮不动页面）：规格落在 [`console-settings-spec.md`](console-settings-spec.md)——字段契约、三张卡结构与文案、交互红线（只提交有改动的组、跨轮询保留输入、400 原文要显示）、要改的文件与 AGENTS 同步清单、逐条验收。
+
+**样式与行数零变化**：`build/app.js` 仍是 **2066 行**、`console-redesign.html` **2272 行**、产物 `console.html` **2736 行**
+⇒ 行号偏移仍是 CSS **+13** / JS **+666**，`docs/frontend-code-map.md` 的两张锚点表**继续有效，无需重算**（本页新增端点在后端，不影响前端锚点）。
+
+**验证**：`node --check server.js` 通过；`node test/settings-api-e2e.test.js` 58 项断言全绿（含"打开限流不重启即第 2 发 429""关掉 `/metrics` 立即 404""落库后重启仍是这个值"）；`node build/build.js` 通过；`node test/console-state.test.js` 103 项全绿；全量 28 个测试文件全绿。
 
 ---
 
