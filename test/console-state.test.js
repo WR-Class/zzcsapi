@@ -605,11 +605,85 @@ function testControl() {
   check('旧写法（无 value= 回填）重绘后取不到搜索词 → 测试具备捕捉能力', rendered === undefined);
 }
 
+/* ═══════ 9. 零数据（全新部署）不许把页面/抽屉打挂 ═══════
+   用户报告的 bug（v1.18.1）：新部署的实例上「渠道管理 → 详情」点了毫无反应。
+   根因不在事件绑定，而在渲染：新实例 /admin/api/usage 还没有任何记录 → adapt() 算出
+   trend=[] → areaChart 里 pts[0][0] 抛 TypeError。而详情抽屉是在 drawer(...) **之前**
+   调图表函数的，于是整个 openChannel() 中断——界面无声无息，只有浏览器控制台一行红字。
+   这类"空数据炸渲染"的 bug 有个共同特征：**有数据时全绿**，所以任何只用满数据跑的用例
+   都抓不住它。这一节专门用"零数据"再跑一遍同样的渲染路径。 */
+function testEmptyData() {
+  G('9. 零数据（全新部署：还没有任何调用记录）—— 图表与详情抽屉都不许抛');
+  /* 一行式 helper 直接从源码现抠，避免在测试里维护第二份实现 */
+  const pickLine = (name) => {
+    const m = src.match(new RegExp('^const ' + name + '=[^\\n]*$', 'm'));
+    if (!m) throw new Error('build/app.js 里找不到 const ' + name + '（改名了？请同步本脚本）');
+    return m[0] + '\n';
+  };
+  const dom = makeDom();
+  const build = (trend) => {
+    const DATA = {
+      trend,
+      channels: [{
+        id: 'stub-alpha', name: '主渠道', proto: 'openai', on: true, status: 'ok', ms: 120, pri: 0, eff: 0,
+        fail: 0, w: 0, wHits: 0, wShare: 0, ah: null, aN: 0, aFail: null, aLat: null, aSpd: null,
+        req: 0, err: 0, models: 1, baseUrl: 'https://api.example.com/v1', apiKey: 'sk-stub',
+        aliases: [{ alias: 'demo-model-a', upstream: 'demo-model-a' }],
+      }],
+    };
+    const body = [pickLine('esc'), pickLine('nf'), pickLine('pct'), pickLine('fMs'), pickLine('maskKey'),
+      pickLine('stTxt'), pickLine('protoLabel'), pickLine('chBaseUrl'), pickLine('chAliases'),
+      extract('chKey'),   /* chKey 是函数声明而不是箭头常量，走 extract */
+      extract('areaChart'), extract('sparkline'), extract('drawer'), extract('openChannel'),
+      'return { areaChart, sparkline, openChannel };'].join('\n');
+    return new Function('$', '$$', 'DATA', 'svg', 'toast', 'copyText', body)(
+      dom.$, dom.$$, DATA, svg, () => {}, () => {});
+  };
+
+  /* ① 图表基元：空数组 / 单点 / 满数据 */
+  const empty = build([]);
+  let threw = null;
+  try { empty.areaChart([], 520, 150, { pad: [12, 10, 22, 32] }); } catch (e) { threw = e; }
+  check('★ 空曲线不抛异常（原 bug：pts[0] of undefined）', threw === null, threw && threw.message);
+  const emptySvg = empty.areaChart([], 520, 150, { pad: [12, 10, 22, 32] });
+  check('★ 空曲线给的是占位图（写明"暂无数据"），不是空白也不是崩', /暂无数据/.test(emptySvg) && /<svg/.test(emptySvg));
+  threw = null;
+  try { empty.areaChart([['09-24', 5]], 520, 150, {}); } catch (e) { threw = e; }
+  check('单点曲线也不抛（n=1 是合法输入）', threw === null, threw && threw.message);
+  threw = null;
+  try { empty.sparkline([], 72, 22, null, true); } catch (e) { threw = e; }
+  check('★ 空迷你曲线不抛（stretch 分支以前会取 pts[pts.length-1][0]）', threw === null, threw && threw.message);
+  check('★ 单点迷你曲线不出 NaN（以前 w/(length-1) = w/0）', !/NaN/.test(empty.sparkline([5], 72, 22)));
+  check('满数据的曲线照旧画得出来（空数据保护没有改行为）',
+    /<path d="M/.test(empty.areaChart([['a', 1], ['b', 3], ['c', 2]], 520, 150, {}))
+    && /<path d="M/.test(empty.sparkline([1, 3, 2])));
+
+  /* ② 端到端：真的走「详情」那条路径（这正是用户点的那一下） */
+  const zero = build([]);
+  const before = dom.$('#drawer').innerHTML;
+  threw = null;
+  try { zero.openChannel('stub-alpha'); } catch (e) { threw = e; }
+  check('★★ 零数据下点「详情」不抛异常（原 bug：整个抽屉打不开）', threw === null, threw && threw.message);
+  const drew = dom.$('#drawer').innerHTML;
+  check('★★ 抽屉真的画出来了（不是停在上一屏）', drew.length > before.length && drew.includes('drawer-hd'));
+  check('抽屉里有这个渠道的名字与"暂无数据"占位', drew.includes('主渠道') && drew.includes('暂无数据'));
+
+  const full = build([['09-22', 10], ['09-23', 14], ['09-24', 9]]);
+  threw = null;
+  try { full.openChannel('stub-alpha'); } catch (e) { threw = e; }
+  const drewFull = dom.$('#drawer').innerHTML;
+  check('有数据时抽屉照旧画出曲线', threw === null && /<path d="M/.test(drewFull));
+
+  /* ③ 结构守卫：空数据保护必须留在源码里（别在后续重构里被"简化"掉） */
+  check('结构守卫：areaChart 开头有空数据早返回', /function areaChart\(data,w,h,opts\)\{[\s\S]{0,1200}?if\(!Array\.isArray\(data\)/.test(src));
+  check('结构守卫：sparkline 开头有空数据早返回', /function sparkline\(vals,w=72,h=22,c,stretch\)\{[\s\S]{0,800}?if\(!Array\.isArray\(vals\)/.test(src));
+}
+
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
    'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels', 'openTestModels', 'runTests',
-   'chName', 'testRowVerdict'].forEach(extract);
+   'chName', 'testRowVerdict', 'areaChart', 'sparkline', 'drawer'].forEach(extract);
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"'].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
@@ -627,6 +701,7 @@ try {
   await testRunTests();
   testLogs();
   testControl();
+  testEmptyData();
 
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
