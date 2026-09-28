@@ -178,7 +178,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | **动代码前过目**：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查）、前端独立审查 |
 | [同类网关内部机制对比](docs/gateway-comparison.md) | **定位与取舍参考**：本项目 vs new-api / one-api / sub2api / CLIProxyAPI 的内部机制、性能、全面性对照（只比机制，不比多用户/账户管理），含本机实测数字与各家的源码级证据 |
-| [thinking 回放缓存设计稿](docs/thinking-replay-design.md) | **v1.18 待实现**：跨协议时如何把 thinking/签名按会话留存并回放（键设计、回放时机、过期与淘汰、风险与验收标准），以及为什么这一版先不做 |
+| [thinking 回放缓存设计稿](docs/thinking-replay-design.md) | **已验证无收益，暂不实现**：一次"先验证再动手"的完整记录——跨协议下 thinking 与签名的**保真度地图**（逐函数出处）、为什么"客户端回传无签名块触发 400"不可达、唯一会 400 的场景为何回放缓存也治不了、以及将来要重启必须先满足什么 |
 
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
@@ -209,6 +209,7 @@ node test/outbound-http-client.test.js    # 32 项断言：出站长连接客户
 node test/session-affinity-e2e.test.js    # 67 项断言：会话粘性（键推导真值表 + 过期/淘汰 + 冷却/down 不硬塞 + 同会话 8 次落同一家 + 上游挂了重新粘 + 关闭时零状态）
 node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令牌桶真值表 + 429 带 Retry-After + 按时间回填 + 并发闸门 + 管理面不受影响 + 关闭时零影响）
 node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态）
+node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（网关从不向客户端产出 thinking 块 → "无签名块触发 400"不可达；直通是签名唯一活路）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -741,6 +742,10 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
   · 流式：Anthropic 原生 SSE 事件与 Gemini `alt=sse` 分片都会**逐行翻译成 OpenAI 分片**，再交给该路由既有的流式转换器；上游异常断流时由收尾逻辑补 `finish_reason` + `[DONE]`（客户端不会一直等）。
   · 上游错误体不翻译（原样透传状态码与消息），避免 400 被伪装成"成功但空"。
   · 有损点（**仅跨协议时**）：`tool_choice:"none"` 在 Anthropic 侧无对应语义（改为去掉 tools）；`cache_control`/`top_k`/thinking 签名在跨格式时丢弃。同协议（Anthropic 客户端 → Anthropic 渠道、Gemini 客户端 → Gemini 渠道）自 v1.15 起走**同协议直通**，一趟转换都没有，上面这些丢件不再发生（见前文「同协议直通（v1.15）」）。
+  · **思维链（thinking）的真实边界（v1.18 核对，有测试守着）**：跨协议时**双向**都不带思维链——入站 `thinking`/`redacted_thinking` 整块丢弃，
+    回程也**不向客户端产出** `thinking` 块（`server.js` 里 `signature` 出现 **0 次**：既不保存、不校验，也**绝不伪造**）。
+    所以 Anthropic 客户端配 OpenAI 协议的渠道时，**看不到思维链、也不会因此报错**；想要思维链就走同协议的 Anthropic 渠道（直通，签名原样活着）。
+    完整地图与"为什么不做 thinking 回放缓存"：`test/thinking-fidelity.test.js` + [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)
 - **工具调用（Anthropic tool_use ↔ OpenAI tool_calls）**：双向全字段映射，客户端可混用两套说法——
   · 请求侧：`tools[].input_schema` → `function.parameters`；`tool_choice` 的 `auto/any/tool/none` → `auto/required/{function}/none`；`disable_parallel_tool_use` → `parallel_tool_calls:false`；`stop_sequences` → `stop`；`system`（字符串或 block 数组）→ `system` 消息。
   · 会话侧：`tool_use` 块 → `assistant.tool_calls`（`input` 对象 ↔ `arguments` JSON 串）；`tool_result` → `role:"tool"`（`tool_call_id` 配对）。`is_error:true` 无对应字段，前缀 `[tool_error]` 显式告诉模型"这个工具失败了"（否则它会把失败信息当正常结果继续编）。
@@ -766,8 +771,10 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 - **会话粘性** ✅ v1.17 已实现（见「健康度参与调度之后的四件事（v1.17）」），默认关闭
 - **客户端限流** ✅ v1.17 已实现（同上），默认关闭
 - **指标端点** ✅ v1.17 已实现（`/metrics`，Prometheus 文本格式，零依赖）
-- **thinking 回放缓存**：跨轮工具调用时把 reasoning/thinking 内容与签名按会话留存回放，
-  解决"跨格式时思维链丢失"（当前只做到同协议直通保留）。**v1.18 目标**，设计稿已落库：
-  [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)（键设计 / 回放时机 / 过期淘汰 / 风险 / 验收标准）
+- **thinking 回放缓存** ❌ **已验证：现有实现下无收益，暂不实现**。逐行核对 + 保真度测试
+  （`test/thinking-fidelity.test.js`）证明：网关**从不向客户端产出 thinking 块**（只有 v1.15 同协议直通会给，
+  且给的是**带签名的原件**），因此"客户端回传无签名块 → 上游 400"这条路**不可达**；唯一会 400 的场景
+  （客户端自带的签名跨到了另一个 Anthropic 渠道）**回放缓存也治不了**。想重启请先满足设计稿 §1.4 的前提：
+  [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)
 - **把 v1.17 三个开关搬进控制台**：现在只能改 `config.json`（`/admin/api/status` 里能看到实时状态）。
-  动控制台要连带重建 `console.html` 与两份前端文档，故与 v1.18 一起做
+  动控制台要连带重建 `console.html` 与两份前端文档，是本轮之后的候选
