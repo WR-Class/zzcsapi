@@ -820,7 +820,7 @@ async function loadAll() {
    所以进页面之前先记下来，出页面之后再还原。 */
 function render() {
   const v = $('#viewport'); if (!v) return;
-  const fn = { overview:vOverview, channels:vChannels, models:vModels, logs:vLogs, playground:vPlayground, access:vAccess }[page];
+  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, playground:vPlayground, access:vAccess }[page];
   if (!fn) return;
   const top = v.scrollTop;
   const act = document.activeElement;

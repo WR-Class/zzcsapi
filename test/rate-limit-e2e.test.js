@@ -45,7 +45,7 @@ const freePort = () => new Promise((res, rej) => {
 });
 
 // 现抠真实限流模块（RATE_CFG 到"指标"分节之前），注入 config 跑真值表
-const RATE_SRC = SRC.slice(SRC.indexOf('const RATE_CFG'), SRC.indexOf('// ─────────────────────────── 指标'));
+const RATE_SRC = SRC.slice(SRC.indexOf('function normRateCfg('), SRC.indexOf('// ─────────────────────────── 指标'));
 function makeRate(cfg) {
   const factory = new Function('config', RATE_SRC + `
     return { RATE_CFG, RATE_BUCKET, RATE_STAT, rateCheck, rateAcquire, rateRelease, rateStatus };`);
