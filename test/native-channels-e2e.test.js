@@ -191,8 +191,12 @@ const cleanup = () => {
     check('★ 以 data: [DONE] 收尾（原生 message_stop 被翻译过来）', r.txt.trimEnd().endsWith('data: [DONE]'), r.txt.slice(-80));
     check('finish_reason 出现', lines.some((l) => JSON.parse(l).choices[0].finish_reason === 'stop'));
 
-    console.log('\n3. ★ Anthropic 客户端 → anthropic 渠道（双重转换，流式）');
+    console.log('\n3. ★ Anthropic 客户端 → anthropic 渠道（v1.15 起同协议直通：不再两跳转换）');
     r = await post('/anthropic/v1/messages', { model: 'claude-a', max_tokens: 32, stream: true, messages: [{ role: 'user', content: 'hi' }] }, ANT);
+    saw = antSeen[antSeen.length - 1];
+    check('★ 上游收到的是原生 Anthropic 报文（直通：客户端原文 + 模型名换上游名）',
+      !!saw && /\/v1\/messages$/.test(saw.url) && saw.body.model === 'claude-x' && saw.body.messages[0].content === 'hi',
+      saw && { url: saw.url, body: saw.body });
     const evs = sseEvents(r.txt);
     check('HTTP 200 + SSE', r.status === 200, r.status);
     check('★ 客户端收回 Anthropic 协议事件（message_start 恰好一次 / message_stop 收尾）',

@@ -255,7 +255,8 @@
   设计上刻意**只动 `dispatchRequest` 与 `tryChannel` 两处**（单点注入 + 逐行翻译），路由侧与既有的入站转换器一行未改，
   好处是"原生"与"客端协议"两个维度可独立演进。顺手修掉排查中顶出来的 PT31（候选链协议过滤）与 PT32（Gemini 结束帧被丢）。
   有损点诚实登记：Anthropic 的 `tool_choice:"none"` 无对应语义（改为去掉 tools）、`cache_control`/`top_k`/thinking 签名跨格式丢弃、
-  同协议不做直通；上游错误体**不翻译**（否则 400 会被伪装成"成功但空"的 200）。图片能力门随之从 `['openai']` 扩到
+  同协议不做直通（**已作废：v1.15 起同协议改走直通**，`cache_control`/`top_k`/thinking/多段 system/`seed` 等不再跨格式丢弃，
+  见 README「同协议直通（v1.15）」与 `test/same-protocol-passthrough.test.js`）；上游错误体**不翻译**（否则 400 会被伪装成"成功但空"的 200）。图片能力门随之从 `['openai']` 扩到
   `['openai','anthropic','gemini']`（原生渠道带图有等价表达：`image` 块 / `inlineData`・`fileData`），
   并按 AGENTS.md 同步了 `test/gemini-multimodal.test.js` 的白名单断言与两处错误文案断言。新增零依赖回归
   `test/native-channels.test.js`（78 项）与 `test/native-channels-e2e.test.js`（33 项，真起原生 Anthropic / Gemini 假上游，
