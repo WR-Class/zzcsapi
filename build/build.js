@@ -23,7 +23,7 @@ const shell = R('build/shell.html');   // body 骨架
 const app = R('build/app.js');         // 数据层 + 动作层 + 渲染
 const extra = R('build/extra.css');
 
-// 行数守卫：head=21 行、shell=52 行是 code-map「CSS +13 / JS +666」行号换算的恒定前提。
+// 行数守卫：head=21 行、shell=52 行是 code-map「CSS +13 / JS +686」行号换算的恒定前提。
 // 谁增删了这两文件的行，构建期直接爆错，别让锚点漂移烂在文档里（改行数须同步 AGENTS.md §1.2 与 code-map）。
 const nHead = head.replace(/\n$/, '').split('\n').length;
 const nShell = shell.replace(/\n$/, '').split('\n').length;

@@ -184,7 +184,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 103 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜）
+node test/console-state.test.js           # 146 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -782,7 +782,8 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
   且给的是**带签名的原件**），因此"客户端回传无签名块 → 上游 400"这条路**不可达**；唯一会 400 的场景
   （客户端自带的签名跨到了另一个 Anthropic 渠道）**回放缓存也治不了**。想重启请先满足设计稿 §1.4 的前提：
   [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)
-- **控制台「运行期设置」页面**（会话粘性 / 客户端限流 / 指标端点的开关面板）：**后端已就绪**（v1.18 的
-  `GET/POST /admin/api/settings`，改完立即生效 + 立即落库，`test/settings-api-e2e.test.js` 58 项断言守着），
-  **前端规格已交付**：[`docs/console-settings-spec.md`](docs/console-settings-spec.md)（字段契约、三张卡的结构与文案、
-  交互红线、要改的文件与 AGENTS 同步清单、逐条验收）。当前后端只能通过 HTTP 调用它，页面待前端按规格实现
+- **控制台「运行期设置」页面** ✅ **v1.18 已实现**：会话粘性 / 客户端限流 / 指标端点的开关面板，位置在侧栏
+  **「工具」组、夹在 Playground 与接入信息之间**。后端 `GET/POST /admin/api/settings`（改完立即生效 + 立即落库，
+  `test/settings-api-e2e.test.js` 58 项断言守着），前端 `vSettings`（`build/app.js` 811；
+  `test/console-state.test.js` §10 守着"草稿跨轮询保留 / 只提交改动组 / 400 原文直显"）。
+  实现规格见 [`docs/console-settings-spec.md`](docs/console-settings-spec.md)

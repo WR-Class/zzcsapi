@@ -14,6 +14,9 @@
  *   产品代码同步），塞进一个最小 DOM 桩里跑「首渲染 → 触发输入 → 再渲染(=轮询重绘)」，
  *   断言输入值与选中态仍在。
  *
+ * 第 10 节起覆盖 v1.18「运行期设置」页：草稿跨轮询保留（dirty 时不被覆盖）、POST 的 PATCH 语义
+ *   （只发有改动的组/字段、留空数字不下发）、400 的 error 原文直显；并含"旧写法无条件覆盖草稿"对照组。
+ *
  * 不覆盖：真实浏览器行为（CSS 布局、中文输入法、真实流式渲染、滚动观感）——那些仍需人工点。
  *         另外它依赖 vModels / drawMTable / vPlayground 等函数名，改名会让本脚本报错，
  *         这是刻意的（会逼着同步改 docs/frontend-code-map.md 的锚点）。
@@ -608,7 +611,7 @@ function testControl() {
 /* ═══════ 9. 零数据（全新部署）不许把页面/抽屉打挂 ═══════
    用户报告的 bug（v1.18.1）：新部署的实例上「渠道管理 → 详情」点了毫无反应。
    根因不在事件绑定，而在渲染：新实例 /admin/api/usage 还没有任何记录 → adapt() 算出
-   trend=[] → areaChart 里 pts[0][0] 抛 TypeError。而详情抽屉是在 drawer(...) **之前**
+   trend=[] → areaChart 里 `pts[0][0]` 抛 TypeError。而详情抽屉是在 drawer(...) **之前**
    调图表函数的，于是整个 openChannel() 中断——界面无声无息，只有浏览器控制台一行红字。
    这类"空数据炸渲染"的 bug 有个共同特征：**有数据时全绿**，所以任何只用满数据跑的用例
    都抓不住它。这一节专门用"零数据"再跑一遍同样的渲染路径。 */
@@ -679,12 +682,199 @@ function testEmptyData() {
   check('结构守卫：sparkline 开头有空数据早返回', /function sparkline\(vals,w=72,h=22,c,stretch\)\{[\s\S]{0,800}?if\(!Array\.isArray\(vals\)/.test(src));
 }
 
+/* ═══════ 10. 运行期设置页：草稿跨轮询保留 · 只提交改动组 · 400 原文直显 ═══════
+   v1.18 新增页（规格见 docs/console-settings-spec.md）。三条最容易悄悄坏掉的契约：
+   ① 8 秒轮询重绘不许吞掉正在编辑的草稿（dirty 时 syncSettingsDraft 绝不覆盖）；
+   ② POST 是 PATCH 语义，只发有改动的组 / 字段（没带的不动、不归零；留空数字不下发）；
+   ③ 后端 400 的 error 原文要直接显示（否则用户不知道该改哪个字段）。 */
+function testSettings() {
+  G('10. 运行期设置 vSettings（草稿跨轮询保留 · 只提交改动组 · 400 原文直显）');
+
+  /* 整段实现从源码现抠：setDraft 声明 → saveSettings 结束（含中间所有 helper） */
+  const SAVE_SRC = extract('saveSettings');
+  const SET_SRC = src.slice(src.indexOf('let setDraft=null'), src.indexOf(SAVE_SRC) + SAVE_SRC.length);
+  check('装配：从 build/app.js 现抠到运行期设置整段实现（setDraft 声明 → saveSettings）',
+    SET_SRC.includes('let setDraft=null') && SET_SRC.includes('function vSettings(') && SET_SRC.includes('function setPayload('));
+
+  /* 位置守卫（v1.18.2）：运行期设置归「工具」组，夹在 Playground 与接入信息之间（不在「资源」组）。 */
+  {
+    const navBlock = src.slice(src.indexOf('const NAV=['), src.indexOf('let page='));
+    const iRes = navBlock.indexOf("sec:'资源'"), iTool = navBlock.indexOf("sec:'工具'");
+    const iPg = navBlock.indexOf("id:'playground'"), iSet = navBlock.indexOf("id:'settings'"), iAcc = navBlock.indexOf("id:'access'");
+    check('★ 运行期设置归「工具」组（在 资源 之后、工具 段内），夹在 Playground 与接入信息之间',
+      iRes >= 0 && iTool > iRes && iPg > iTool && iSet > iPg && iAcc > iSet);
+  }
+
+  const mkRaw = () => ({
+    settings: {
+      config: {
+        sessionAffinity: { enabled: false, ttlSec: 5, maxEntries: 2000, deriveFromBody: false },
+        rateLimit: { enabled: false, rpm: 60, burst: 0, maxConcurrent: 0 },
+        metrics: { enabled: true, public: false },
+      },
+      effective: {
+        sessionAffinity: { enabled: false, ttlSec: 30, maxEntries: 2000, deriveFromBody: false },
+        rateLimit: { enabled: false, rpm: 60, burst: 60, maxConcurrent: 0 },
+        metrics: { enabled: true, public: false },
+      },
+      status: {
+        affinity: { entries: 3, hits: 2, misses: 1, learned: 4 },
+        rateLimit: { inflight: 0, peakInflight: 2, limitedRate: 0, limitedConcurrent: 0 },
+        metrics: {},
+      },
+    },
+  });
+
+  const build = (rawSrc, raw, apiStub, toasts) => {
+    const dom = makeDom();
+    /* vSettings 用 dom.root、saveSettings 用 $('#viewport') 与无根的 $('#setSave') 三处取容器，
+       桩必须让它们指同一个对象，否则 #setErr / 按钮会落在不同桩元素上，断言成假通过。 */
+    const $ = (sel, root) => (sel === '#viewport' ? dom.root : dom.$(sel, root || dom.root));
+    const f = new Function('$', '$$', 'RAW', 'DATA', 'esc', 'svg', 'nf', 'toast', 'api', 'copyText', 'render', 'location',
+      rawSrc + '\nreturn { vSettings, setPayload, setToggle, syncSettingsDraft, saveSettings, ' +
+      'get setDraft(){return setDraft}, get setDirty(){return setDirty}, get setError(){return setError}, get setSaving(){return setSaving} };');
+    const api = f($, dom.$$, raw, { channels: [], models: [], meta: {} }, esc, svg, nf,
+      (m, k) => toasts.push([m, k]), apiStub, () => {}, () => {}, { origin: 'http://127.0.0.1:8787' });
+    return { dom, api };
+  };
+
+  /* ── 10.1 首渲染：config 回填表单、effective 只在与 config 不同处给「生效：」角标 ── */
+  {
+    const { dom, api } = build(SET_SRC, mkRaw(), async () => ({}), []);
+    api.vSettings(dom.root);
+    const html = dom.root.innerHTML;
+    check('首渲染：三张卡都在（会话粘性 / 客户端限流 / 指标端点）',
+      html.includes('会话粘性') && html.includes('客户端限流') && html.includes('指标端点'));
+    check('★ 表单回填 config 原值（ttlSec=5），而不是 effective 的 30',
+      html.includes('value="5"') && !html.includes('value="30"'));
+    check('★ 同时给出钳制后的生效值角标（ttlSec 5 → 生效：30），避免"我填的 5 怎么没生效"',
+      html.includes('生效：30'));
+    check('已启用的卡（指标端点）开关是 on，未启用的卡整卡降权（muted）',
+      html.includes('id="setTg_metrics"') && /set-card muted/.test(html));
+    check('无改动时保存按钮 disabled（没东西可提交就不让点）', dom.$('#setSave', dom.root).disabled === true);
+    check('指标卡给出可复制的抓取地址（带 origin）',
+      html.includes('复制抓取地址') && html.includes('http://127.0.0.1:8787/metrics'));
+    check('★ 接口没数据时给「设置接口不可用」占位，不白屏',
+      (() => {
+        const bad = build(SET_SRC, { settings: null }, async () => ({}), []);
+        bad.api.vSettings(bad.dom.root);
+        return bad.dom.root.innerHTML.includes('设置接口不可用');
+      })());
+  }
+
+  /* ── 10.2 输入跨轮询保留（dirty 时 syncSettingsDraft 绝不覆盖） ── */
+  {
+    const { dom, api } = build(SET_SRC, mkRaw(), async () => ({}), []);
+    const v = dom.root;
+    api.vSettings(v);
+    const input = dom.$('#set_sessionAffinity_ttlSec', v);
+    check('数字输入框已绑定 oninput', typeof input.oninput === 'function');
+    input.oninput({ target: { value: '120' } });
+    check('输入写回草稿（ttlSec=120）且标脏', api.setDraft.sessionAffinity.ttlSec === 120 && api.setDirty === true);
+    check('有改动后保存按钮变可用', dom.$('#setSave', v).disabled === false);
+
+    api.vSettings(v);   /* ← 等价于 8 秒轮询触发的那次重绘 */
+    check('★ 重绘后草稿仍在（value="120"），没被服务端的 5 覆盖',
+      v.innerHTML.includes('value="120"') && !v.innerHTML.includes('value="5"'));
+
+    /* 对照组：去掉 dirty 守卫（整改前的写法：无条件覆盖），同样的重绘会把草稿吞掉 */
+    const legacySrc = SET_SRC.replace(
+      'if(force||!setDraft||!setDirty) setDraft=JSON.parse(JSON.stringify(s.config));',
+      'setDraft=JSON.parse(JSON.stringify(s.config));');
+    check('对照组装配：旧写法确实少了 dirty 守卫', legacySrc !== SET_SRC && !legacySrc.includes('!setDirty'));
+    const legacy = build(legacySrc, mkRaw(), async () => ({}), []);
+    legacy.api.vSettings(legacy.dom.root);
+    legacy.dom.$('#set_sessionAffinity_ttlSec', legacy.dom.root).oninput({ target: { value: '120' } });
+    legacy.api.vSettings(legacy.dom.root);
+    check('★ 对照组：旧写法重绘后被覆盖回 value="5" → 本用例抓得住"输入被轮询吞掉"',
+      legacy.dom.root.innerHTML.includes('value="5"') && !legacy.dom.root.innerHTML.includes('value="120"'));
+  }
+
+  /* ── 10.3 只提交有改动的组 / 字段（PATCH 语义；留空数字不下发） ── */
+  {
+    const { dom, api } = build(SET_SRC, mkRaw(), async () => ({}), []);
+    const v = dom.root;
+    api.vSettings(v);
+    check('★ 无改动 → payload 为空（不会把三组原样回写）', Object.keys(api.setPayload()).length === 0);
+
+    api.setToggle('rateLimit');   /* 只开限流这一组 */
+    let p = api.setPayload();
+    check('★ 只带被改的组（rateLimit），没动的 sessionAffinity / metrics 不出现',
+      !!p.rateLimit && !p.sessionAffinity && !p.metrics);
+    check('★ 组内只带被改的字段（enabled），其余字段不跟着回写',
+      Object.keys(p.rateLimit).length === 1 && p.rateLimit.enabled === true);
+
+    dom.$('#set_rateLimit_rpm', v).oninput({ target: { value: '120' } });
+    p = api.setPayload();
+    check('改了 rpm → payload 里 rateLimit 同时含 enabled 与 rpm',
+      p.rateLimit.rpm === 120 && p.rateLimit.enabled === true);
+
+    dom.$('#set_rateLimit_rpm', v).oninput({ target: { value: '' } });
+    p = api.setPayload();
+    check('★ 数字留空 = 不下发（留空 ≠ 0，否则会被后端当成"限流 0"静默改语义）',
+      !!p.rateLimit && p.rateLimit.rpm === undefined);
+
+    api.setToggle('rateLimit');   /* 再点一次 = 还原成原值 */
+    check('改回原值后该组不再出现在 payload（不是"改过就必发"）', api.setPayload().rateLimit === undefined);
+  }
+
+  /* ── 10.4 保存成功：落库回读 + 清脏；400 失败：error 原文直显 ── */
+  return (async () => {
+    {
+      const raw = mkRaw();
+      const toasts = [], sent = [];
+      const nextCfg = {
+        sessionAffinity: { enabled: true, ttlSec: 120, maxEntries: 2000, deriveFromBody: false },
+        rateLimit: { enabled: false, rpm: 60, burst: 0, maxConcurrent: 0 },
+        metrics: { enabled: true, public: false },
+      };
+      const { dom, api } = build(SET_SRC, raw, async (path, opt) => {
+        sent.push({ path, body: JSON.parse(opt.body) });
+        return { config: nextCfg, effective: nextCfg, status: raw.settings.status };
+      }, toasts);
+      const v = dom.root;
+      api.vSettings(v);
+      api.setToggle('sessionAffinity');
+      dom.$('#set_sessionAffinity_ttlSec', v).oninput({ target: { value: '120' } });
+      await api.saveSettings();
+      check('保存走 POST /admin/api/settings', sent.length === 1 && sent[0].path === '/admin/api/settings');
+      check('★ 报文只含被改的 sessionAffinity 组（PATCH 语义）',
+        !!sent[0].body.sessionAffinity && !sent[0].body.rateLimit && !sent[0].body.metrics);
+      check('保存成功后清脏、草稿与服务端对齐',
+        api.setDirty === false && raw.settings.config.sessionAffinity.ttlSec === 120);
+      check('给出成功提示', /设置已保存/.test(toasts.map((t) => t[0]).join('')));
+      check('保存结束后按钮文案恢复、可再次点击',
+        dom.$('#setSave', v).innerHTML.includes('保存设置') && !dom.$('#setSave', v).innerHTML.includes('保存中'));
+    }
+
+    {
+      const raw = mkRaw();
+      const { dom, api } = build(SET_SRC, raw, async () => {
+        const e = new Error('http 400'); e.status = 400; e.body = { error: 'unknown field rateLimit.rpmm' }; throw e;
+      }, []);
+      const v = dom.root;
+      api.vSettings(v);
+      dom.$('#set_rateLimit_rpm', v).oninput({ target: { value: '120' } });
+      await api.saveSettings();
+      check('★ 400 的 error 原文被原样存下（不是"保存失败"这种空话）',
+        api.setError === 'unknown field rateLimit.rpmm');
+      const errEl = dom.$('#setErr', v);
+      check('★ 错误条真的显示出来（class 加 on）', errEl.className === 'set-err on');
+      check('★ 错误条文本就是后端点名的字段', errEl.textContent === 'unknown field rateLimit.rpmm');
+      check('失败后按钮也恢复（不会卡在"保存中…"）',
+        dom.$('#setSave', v).innerHTML.includes('保存设置') && api.setSaving === false);
+      check('失败不清脏（草稿还在，用户改完字段能重试）', api.setDirty === true);
+    }
+  })();
+}
+
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
    'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels', 'openTestModels', 'runTests',
-   'chName', 'testRowVerdict', 'areaChart', 'sparkline', 'drawer'].forEach(extract);
-  ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"'].forEach(s => {
+   'chName', 'testRowVerdict', 'areaChart', 'sparkline', 'drawer',
+   'vSettings', 'setCard', 'setHint', 'setPayload', 'setToggle', 'syncSettingsDraft', 'saveSettings'].forEach(extract);
+  ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"', 'let setDraft=null'].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
 } catch (e) {
@@ -702,6 +892,7 @@ try {
   testLogs();
   testControl();
   testEmptyData();
+  await testSettings();
 
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);

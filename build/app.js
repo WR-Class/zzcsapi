@@ -30,7 +30,8 @@ const IC = {
   trash:'<path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/>',
   chev:'<path d="m6 9 6 6 6-6"/>',
   upload:'<path d="M12 17V5M7 10l5-5 5 5M4 21h16"/>',
-  scale:'<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>'
+  scale:'<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',
+  sliders:'<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2.2"/><circle cx="9" cy="16" r="2.2"/>'
 };
 const svg=(n,s=15)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${IC[n]||''}</svg>`;
 
@@ -44,7 +45,7 @@ let DATA = {
   meta:{ total:0, errors:0, inTok:0, outTok:0, channels:0, enabled:0, models:0, at:0 },
   trend:[], days:[], channels:[], models:[], logs:[], donut:[]
 };
-let RAW = { channels:[], usage:null, config:null };
+let RAW = { channels:[], usage:null, config:null, settings:null };
 let loaded = false;
 
 const protoOfChannel = (id) => {
@@ -136,12 +137,14 @@ function adapt() {
 }
 
 async function loadAll() {
-  const [st, us, cfg] = await Promise.all([
+  const [st, us, cfg, settings] = await Promise.all([
     api('/admin/api/status'),
     api('/admin/api/usage').catch(() => null),
     api('/admin/api/config').catch(() => null),
+    /* 运行期设置单独兜底：这个端点挂了也不能把整页拉取拖垮（其余三份照常刷新） */
+    api('/admin/api/settings').catch(() => null),
   ]);
-  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg, auto:(st && st.autoWeight) || null };
+  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg, auto:(st && st.autoWeight) || null, settings:settings || RAW.settings };
   CFG = cfg || CFG;
   adapt();
   loaded = true;
@@ -154,7 +157,7 @@ async function loadAll() {
    所以进页面之前先记下来，出页面之后再还原。 */
 function render() {
   const v = $('#viewport'); if (!v) return;
-  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, playground:vPlayground, access:vAccess }[page];
+  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, playground:vPlayground, access:vAccess, settings:vSettings }[page];
   if (!fn) return;
   const top = v.scrollTop;
   const act = document.activeElement;
@@ -212,7 +215,7 @@ async function api(path,opts={}){
   const r=await fetch(path,{...opts,headers:{...headers,...(opts.headers||{})}});
   if(r.status===401){try{sessionStorage.removeItem('adminKey');localStorage.removeItem('adminKey')}catch(e){};showKeyGate();throw new Error('401')}
   const j=await r.json().catch(()=>null);
-  if(!r.ok){toast((j&&(j.error||j.message))||('HTTP '+r.status),'bad');throw new Error('http '+r.status)}
+  if(!r.ok){toast((j&&(j.error||j.message))||('HTTP '+r.status),'bad');const err=new Error('http '+r.status);err.status=r.status;err.body=j;throw err}
   return j;
 }
 let CFG=null;
@@ -257,7 +260,7 @@ function areaChart(data,w,h,opts){
   const [pt,pr,pb,pl]=o.pad, iw=w-pl-pr, ih=h-pt-pb;
   /* 空数据保护（v1.18.1，用户报「渠道管理点详情无反应」）：
      全新部署时 /admin/api/usage 还没有任何记录 → adapt() 算出 trend=[] →
-     下面 pts[0][0] 直接抛 TypeError，而详情抽屉是在 drawer(...) **之前**调本函数的，
+     下面 `pts[0][0]` 直接抛 TypeError，而详情抽屉是在 drawer(...) **之前**调本函数的，
      于是整个 openChannel() 中断：界面毫无反应，只有浏览器控制台里一行红字。
      这里给一个占位图（保留宽高与网格基线），绝不抛。 */
   if(!Array.isArray(data)||data.length===0){
@@ -296,7 +299,7 @@ function areaChart(data,w,h,opts){
 }
 function sparkline(vals,w=72,h=22,c,stretch){
   /* 空数据保护（v1.18.1，与 areaChart 同一处根因）：vals 为空时下面算 i*(w/(0-1)) 会得到
-     -0/NaN，末尾 pts[pts.length-1][0] 还会直接抛。空数组识别得早，这里给条基线占位。 */
+     -0/NaN，末尾 `pts[pts.length-1][0]` 还会直接抛。空数组识别得早，这里给条基线占位。 */
   if(!Array.isArray(vals)||vals.length===0){
     return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"${stretch?' preserveAspectRatio="none"':''}><line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="var(--line)" stroke-dasharray="2 4"/></svg>`;
   }
@@ -341,6 +344,7 @@ const NAV=[
   {id:'autoweight',label:'自动权重',icon:'scale'},
   {sec:'工具'},
   {id:'playground',label:'Playground',icon:'terminal'},
+  {id:'settings',label:'运行期设置',icon:'sliders'},
   {id:'access',label:'接入信息',icon:'book'}
 ];
 let page='overview';
@@ -358,7 +362,7 @@ function go(p){
   renderRail();
   const v=$('#viewport');
   v.innerHTML='';
-  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,playground:vPlayground,access:vAccess}[p]||vOverview)(v);
+  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,playground:vPlayground,access:vAccess,settings:vSettings}[p]||vOverview)(v);
   v.firstElementChild?.classList.add('page');
   // 现在滚动容器是 .viewport 自己，scrollIntoView 不会生效，必须直接归零
   v.scrollTop=0;
@@ -710,6 +714,166 @@ function autoWeightCard(){
     </div>
     ${rows}
   </div>`;
+}
+
+/* ═══════════════════════════ 页面：运行期设置（v1.18） ═══════════════════════════
+   三组运行期开关：会话粘性 / 客户端限流 / 指标端点。以前只能改 config.json + 重启容器，
+   现在在这里改完**立即生效、立即落库**（后端 GET/POST /admin/api/settings，PATCH 语义）。
+   两个值都必须展示：config=用户填的原值（回填输入框）、effective=钳制后真正生效的值
+   （ttlSec 填 5 → 生效 30）。只显示一个就会变成"我明明填了 5，怎么没生效"的悬案。
+   草稿 setDraft 与 config 分离：没改动时跟随服务端刷新，一旦改动（setDirty）就不被 8 秒轮询覆盖。 */
+let setDraft=null, setDirty=false, setSaving=false, setError='';
+const SET_GROUPS=['sessionAffinity','rateLimit','metrics'];
+const SET_META={
+  sessionAffinity:{title:'会话粘性',icon:'cookie',
+    desc:'同一会话尽量落到同一家渠道。只改「谁是第一位」——粘住的渠道不在候选 / 冷却 / 已 down 时一动不动；命中也不影响加权份额统计。'},
+  rateLimit:{title:'客户端限流',icon:'zap',
+    desc:'整机限流（不按 IP）。超限回 429 + Retry-After；闸门在鉴权之前，连刷鉴权的流量也挡；/healthz、管理面、/metrics 不受影响。'},
+  metrics:{title:'指标端点',icon:'gauge',
+    desc:'Prometheus 文本格式的 /metrics。默认开、需 admin key；public 打开后匿名可抓。'},
+};
+const SET_FIELDS={
+  sessionAffinity:[
+    {k:'ttlSec',label:'记忆时长',unit:'秒',ph:'3600',range:'范围 30 – 604800 秒'},
+    {k:'maxEntries',label:'最多记忆条数',unit:'条',ph:'2000',range:'范围 16 – 100000'},
+    {k:'deriveFromBody',label:'从请求正文推断会话',bool:true,
+      warn:'开启后，内容相同的不同请求会互相抢占同一家渠道 —— 默认关是有意的。'},
+  ],
+  rateLimit:[
+    {k:'rpm',label:'每分钟请求数',unit:'rpm',ph:'0',range:'0 = 不限'},
+    {k:'burst',label:'令牌桶容量',unit:'次',ph:'0',range:'0 = 等于 rpm'},
+    {k:'maxConcurrent',label:'并发上限',unit:'个',ph:'0',range:'0 = 不限'},
+  ],
+  metrics:[
+    {k:'public',label:'允许匿名抓取',bool:true,
+      warn:'匿名可抓会把渠道 id 暴露给能访问该端口的人（正文不含任何密钥）。'},
+  ],
+};
+function setGroupCfg(g){const s=RAW.settings||{};return {cfg:((s.config||{})[g])||{},eff:((s.effective||{})[g])||{}};}
+function metricsUrl(){return (typeof location!=='undefined'&&location.origin?location.origin:'')+'/metrics';}
+function syncSettingsDraft(force){
+  const s=RAW.settings; if(!s||!s.config) return;
+  if(force||!setDraft||!setDirty) setDraft=JSON.parse(JSON.stringify(s.config));
+}
+/* 生效值提示：只在"已保存的值被钳制"时给出（未保存的编辑不预判，免得拿旧的 effective 吓人）。 */
+function setHint(g,f){
+  const c=setGroupCfg(g), d=(setDraft&&setDraft[g])||{};
+  if(d[f.k]!==c.cfg[f.k]) return f.range||'';
+  return c.cfg[f.k]!==c.eff[f.k]?`生效：${c.eff[f.k]}`:'';
+}
+/* 只提交有改动的组 / 字段（PATCH 语义）；留空的数字不下发（留空 ≠ 0）。 */
+function setPayload(){
+  const s=RAW.settings||{}, cfg=s.config||{}, out={};
+  for(const g of SET_GROUPS){
+    const c=cfg[g]||{}, grp={};
+    if(setDraft[g].enabled!==c.enabled) grp.enabled=setDraft[g].enabled===true;
+    for(const f of SET_FIELDS[g]){
+      let v=setDraft[g][f.k];
+      if(v===''||v==null) continue;
+      if(!f.bool) v=Number(v);
+      if(v!==c[f.k]) grp[f.k]=v;
+    }
+    if(Object.keys(grp).length) out[g]=grp;
+  }
+  return out;
+}
+function setStat(g,on,d,stt){
+  if(!on) return '<span class="muted">未启用</span>';
+  if(g==='sessionAffinity') return `记忆 <b>${nf(stt.entries||0)}</b> 条 · 命中 <b>${nf(stt.hits||0)}</b> · 未命中 <b>${nf(stt.misses||0)}</b> · 学习 <b>${nf(stt.learned||0)}</b>`;
+  if(g==='rateLimit') return `在飞 <b>${nf(stt.inflight||0)}</b> · 峰值 <b>${nf(stt.peakInflight||0)}</b> · 限速拒绝 <b>${nf(stt.limitedRate||0)}</b> · 并发拒绝 <b>${nf(stt.limitedConcurrent||0)}</b>`;
+  return `已启用（${d.public?'<b>匿名可抓</b>':'需 admin key'}）
+    <button class="btn ghost sm" id="setCopyMetrics" data-t="${esc(metricsUrl())}">${svg('copy',12)}复制抓取地址</button>`;
+}
+function setCard(g){
+  const M=SET_META[g], c=setGroupCfg(g), s=RAW.settings||{};
+  const stt=((s.status||{})[g==='sessionAffinity'?'affinity':g])||{};
+  const d=setDraft[g], on=d.enabled===true;
+  const rows=SET_FIELDS[g].map(f=>{
+    if(f.bool) return `<div class="set-row"><label>${f.label}</label>
+      <button class="switch${d[f.k]?' on':''}" id="set_${g}_${f.k}" ${on?'':'disabled'} title="${d[f.k]?'关闭':'开启'}"></button>
+      <span class="set-eff"></span></div>
+      ${f.warn?`<div class="set-warn">${esc(f.warn)}</div>`:''}`;
+    const val=d[f.k]==null||d[f.k]===''?'':String(d[f.k]);
+    return `<div class="set-row"><label for="set_${g}_${f.k}">${f.label}</label>
+      <input class="input" type="number" id="set_${g}_${f.k}" value="${esc(val)}" placeholder="${f.ph}" ${on?'':'disabled'}>
+      <span class="set-unit">${f.unit||''}</span>
+      <span class="set-eff" id="setEff_${g}_${f.k}">${esc(setHint(g,f))}</span></div>`;
+  }).join('');
+  return `<div class="card set-card${on?'':' muted'}">
+    <div class="card-hd"><h3>${svg(M.icon,14)} ${M.title}</h3>
+      <button class="switch ml-auto${on?' on':''}" id="setTg_${g}" title="${on?'关闭':'开启'}"></button></div>
+    <div class="card-bd">
+      <div class="set-desc">${M.desc}</div>
+      ${rows}
+      <div class="set-stat">${setStat(g,on,d,stt)}</div>
+    </div></div>`;
+}
+function vSettings(v){
+  if(!RAW.settings||!RAW.settings.config){
+    v.innerHTML=`<div class="page-hd"><div><h1 class="page-title">运行期设置</h1>
+      <div class="page-sub">会话粘性 / 客户端限流 / 指标端点 · 改完立即生效，无需重启</div></div></div>
+      <div class="card"><div class="card-bd"><div class="empty">设置接口不可用（GET /admin/api/settings 没有返回数据）</div></div></div>`;
+    return;
+  }
+  syncSettingsDraft(false);
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">运行期设置</h1>
+      <div class="page-sub">会话粘性 / 客户端限流 / 指标端点 · 改完立即生效、立即落库，无需重启容器</div></div>
+    <div class="page-actions">
+      <button class="btn" id="setReset">${svg('x',14)}还原</button>
+      <button class="btn primary" id="setSave">${svg('check',14)}保存设置</button>
+    </div>
+  </div>
+  <div class="set-err${setError?' on':''}" id="setErr">${esc(setError)}</div>
+  <div class="grid g3">${SET_GROUPS.map(setCard).join('')}</div>`;
+  $('#setReset',v).onclick=resetSettings;
+  $('#setSave',v).onclick=saveSettings;
+  const cp=$('#setCopyMetrics',v); if(cp) cp.onclick=function(){copyText(this.dataset.t,this)};
+  for(const g of SET_GROUPS){
+    const tg=$(`#setTg_${g}`,v); if(tg) tg.onclick=()=>setToggle(g);
+    for(const f of SET_FIELDS[g]){
+      const el=$(`#set_${g}_${f.k}`,v); if(!el) continue;
+      if(f.bool) el.onclick=()=>{setDraft[g][f.k]=!setDraft[g][f.k];setDirty=true;render()};
+      else el.oninput=e=>{const raw=e.target.value;setDraft[g][f.k]=raw===''?'':Number(raw);setDirty=true;
+        const h=$(`#setEff_${g}_${f.k}`,v); if(h) h.textContent=setHint(g,f); updateSetSave(v)};
+    }
+  }
+  updateSetSave(v);
+}
+function setToggle(g){ setDraft[g].enabled=!setDraft[g].enabled; setDirty=true; render(); }
+function updateSetSave(v){
+  const b=$('#setSave',v); if(!b||setSaving) return;
+  b.disabled=!Object.keys(setPayload()).length;
+}
+function resetSettings(){
+  setDraft=null; setDirty=false; setError=''; syncSettingsDraft(true);
+  render(); toast('已还原为最近一次保存的值');
+}
+async function saveSettings(){
+  if(setSaving) return;
+  const payload=setPayload();
+  if(!Object.keys(payload).length){ toast('没有需要保存的改动'); return; }
+  const v=$('#viewport'), btn=$('#setSave');
+  setSaving=true; setError='';
+  const errEl=$('#setErr',v); if(errEl){errEl.className='set-err';errEl.textContent=''}
+  if(btn){btn.disabled=true;btn.innerHTML=svg('check',14)+'保存中…'}
+  try{
+    const r=await api('/admin/api/settings',{method:'POST',body:JSON.stringify(payload)});
+    if(r&&r.config) RAW.settings={config:r.config,effective:r.effective||RAW.settings.effective,status:r.status||RAW.settings.status};
+    setDirty=false; setDraft=null; syncSettingsDraft(true);
+    toast('✓ 设置已保存并立即生效','ok');
+    render();
+  }catch(e){
+    /* 400 的 error 原文直接显示（后端已点名到字段，如 unknown field rateLimit.rpmm）——
+       换成"保存失败"会让用户完全不知道该改哪个字段 */
+    setError=String((e&&e.body&&e.body.error)||(e&&e.message)||e);
+    const el=$('#setErr',v); if(el){el.className='set-err on';el.textContent=setError}
+  }finally{
+    setSaving=false;
+    const b=$('#setSave',v); if(b){b.disabled=false;b.innerHTML=svg('check',14)+'保存设置'}
+    updateSetSave(v);
+  }
 }
 function drawChTable(){
   const box=$('#chTable'); if(!box) return;
