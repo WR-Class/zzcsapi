@@ -232,7 +232,7 @@ const fmtTs=ts=>{const d=new Date(ts),p=n=>String(n).padStart(2,'0');return `${p
 function toast(msg,kind){
   const el=document.createElement('div');
   el.className='toast '+(kind||'');
-  el.innerHTML=svg(kind==='ok'?'check':'warn',14)+'<span>'+msg+'</span>';
+  el.innerHTML=svg(kind==='ok'?'check':'warn',14)+'<span>'+esc(msg)+'</span>';
   $('#toasts').appendChild(el);
   setTimeout(()=>{el.style.transition='opacity .3s,transform .3s';el.style.opacity=0;el.style.transform='translateY(8px)';setTimeout(()=>el.remove(),320)},2200);
 }
@@ -352,7 +352,7 @@ function renderRail(){
   $('#railNav').innerHTML=NAV.map(it=>{
     if(it.sec) return `<div class="rail-sec micro">${it.sec}</div>`;
     const on=page===it.id;
-    return `<button class="rail-item${on?' on':''}" data-nav="${it.id}">${svg(it.icon,16)}<span>${it.label}</span>${it.cnt?`<span class="cnt">${it.cnt()}</span>`:''}</button>`;
+    return `<button class="rail-item${on?' on':''}" data-nav="${esc(it.id)}">${svg(it.icon,16)}<span>${esc(it.label)}</span>${it.cnt?`<span class="cnt">${it.cnt()}</span>`:''}</button>`;
   }).join('');
   $$('#railNav [data-nav]').forEach(b=>b.onclick=()=>go(b.dataset.nav));
 }
@@ -381,7 +381,7 @@ function kpiCard(o){
     <div class="kpi-foot">
       <!-- 方向已由 +/- 与红涨绿跌双重点明，再放箭头是三重冗余 -->
       ${o.delta?`<span class="delta ${up}">${o.delta}</span>`:''}
-      <span>${o.note}</span>
+      <span>${esc(o.note)}</span>
     </div>
     <div class="kpi-spark">${sparkline(tail.length>1?tail:[0,0],300,46,up==='down'?'var(--ok)':'var(--err)',true)}</div>
   </div>`;
@@ -545,9 +545,9 @@ function vOverview(v){
           <thead><tr><th>渠道</th><th>状态</th><th class="t-r">延迟</th><th class="t-r">请求</th><th>成功率</th><th class="t-r">趋势</th></tr></thead>
           <tbody>${DATA.channels.slice(0,7).map(c=>{
             const rate=pct(c.req-c.err,c.req);
-            return `<tr class="clickable" onclick="openChannel('${c.id}')">
-              <td><div class="cell-main"><span class="avatar">${c.name.slice(0,2)}</span>
-                <div style="min-width:0"><div class="cell-name">${c.name}</div><div class="cell-sub">${c.id} · ${protoLabel[c.proto]}</div></div></div></td>
+            return `<tr class="clickable" onclick="openChannel('${esc(c.id)}')">
+              <td><div class="cell-main"><span class="avatar">${esc(c.name.slice(0,2))}</span>
+                <div style="min-width:0"><div class="cell-name">${esc(c.name)}</div><div class="cell-sub">${esc(c.id)} · ${esc(protoLabel[c.proto])}</div></div></div></td>
               <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
               <td class="t-r mono">${fMs(c.ms)}</td>
               <td class="t-r mono">${nf(c.req)}</td>
@@ -565,7 +565,7 @@ function vOverview(v){
         <div class="bars">${DATA.models.slice(0,8).map(m=>{
           const max=DATA.models[0].req||1;
           return `<div class="bar-row" data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)" style="cursor:pointer">
-            <span class="bar-name">${m.name}</span><span class="bar-val">${nf(m.req)}</span>
+            <span class="bar-name">${esc(m.name)}</span><span class="bar-val">${nf(m.req)}</span>
             <span class="bar-track"><i style="width:${(m.req/max*100).toFixed(1)}%"></i></span>
           </div>`}).join('')}</div>
       </div>
@@ -579,11 +579,11 @@ function vOverview(v){
     <div class="card-bd tight tbl-wrap">
       <table class="tbl">
         <thead><tr><th>时间</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th></tr></thead>
-        <tbody>${DATA.logs.slice(0,8).map(l=>`<tr class="clickable" onclick="openLog('${l.id}')">
+        <tbody>${DATA.logs.slice(0,8).map(l=>`<tr class="clickable" onclick="openLog('${esc(l.id)}')">
           <td class="mono" style="font-size:12px">${l.t}</td>
-          <td class="cell-name">${l.m}</td>
+          <td class="cell-name">${esc(l.m)}</td>
           <td><span class="mono" style="font-size:12px">${l.c}</span></td>
-          <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
+          <td><span class="chip ${esc(l.p)}">${esc(protoLabel[l.p]||l.p)}</span></td>
           <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
           <td class="t-r mono">${fMs(l.ms)}</td>
           <td class="t-r mono">${nf(l.i)}</td>
@@ -892,10 +892,10 @@ function drawChTable(){
       // ponytail: 下面「→ 有效优先级」角标表达式与 openChannel 抽屉处内联重复——为保 code-map 行号锚点刻意不抽 helper，下次动这两处时再抽
       const rate=c.req?pct(c.req-c.err,c.req):null;
       return `<tr class="clickable">
-        <td><button class="switch ${c.on?'on':''}" onclick="event.stopPropagation();toggleCh('${c.id}')" title="${c.on?'停用':'启用'}"></button></td>
-        <td><div class="cell-main"><span class="avatar">${c.name.slice(0,2)}</span>
-          <div style="min-width:0"><div class="cell-name">${c.name}</div><div class="cell-sub">${c.id}</div></div></div></td>
-        <td><span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span></td>
+        <td><button class="switch ${c.on?'on':''}" onclick="event.stopPropagation();toggleCh('${esc(c.id)}')" title="${c.on?'停用':'启用'}"></button></td>
+        <td><div class="cell-main"><span class="avatar">${esc(c.name.slice(0,2))}</span>
+          <div style="min-width:0"><div class="cell-name">${esc(c.name)}</div><div class="cell-sub">${esc(c.id)}</div></div></div></td>
+        <td><span class="chip ${esc(c.proto)}">${esc(protoLabel[c.proto]||c.proto)}</span></td>
         <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
         <td class="t-r mono">${fMs(c.ms)}</td>
         <td class="t-r mono">${c.models}</td>
@@ -904,9 +904,9 @@ function drawChTable(){
         <td class="t-r mono">${nf(c.req)} <span class="muted">/ ${c.err?`<span style="color:var(--err)">${nf(c.err)}</span>`:0}</span></td>
         <td>${rate===null?'<span class="muted mono">—</span>':`<div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div>`}</td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'${c.id}'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('${c.id}')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('${c.id}')">详情</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'${esc(c.id)}'})">测试</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('${esc(c.id)}')">编辑</button>
+          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('${esc(c.id)}')">详情</button>
         </div></td>
       </tr>`}).join('')}
     </tbody></table>`;
@@ -926,13 +926,13 @@ function openChannel(id){
   const rate=c.req?pct(c.req-c.err,c.req):0;
   drawer(`
     <div class="drawer-hd">
-      <span class="avatar" style="width:34px;height:34px;border-radius:9px;font-size:13px">${c.name.slice(0,2)}</span>
+      <span class="avatar" style="width:34px;height:34px;border-radius:9px;font-size:13px">${esc(c.name.slice(0,2))}</span>
       <div style="min-width:0">
-        <h3 style="font-size:16px">${c.name}</h3>
-        <div class="cell-sub">${c.id}</div>
+        <h3 style="font-size:16px">${esc(c.name)}</h3>
+        <div class="cell-sub">${esc(c.id)}</div>
       </div>
       <div class="ml-auto row" style="gap:8px">
-        <span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span>
+        <span class="chip ${esc(c.proto)}">${esc(protoLabel[c.proto]||c.proto)}</span>
         <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button>
       </div>
     </div>
@@ -958,13 +958,13 @@ function openChannel(id){
 
       <div class="sec-title">接入配置</div>
       <dl class="kv">
-        <dt>Base URL</dt><dd class="mono">${chBaseUrl(c)}</dd>
+        <dt>Base URL</dt><dd class="mono">${esc(chBaseUrl(c))}</dd>
         <dt>密钥</dt><dd class="mono row" style="gap:6px">
-          <span id="chKeyTx" data-plain="0">${maskKey(chKey(c.id))}</span>
-          <button class="icon-btn" id="chKeyBtn" style="width:22px;height:22px" title="明文显示" onclick="toggleDrawerKey('${c.id}',this)">${svg('eye',12)}</button>
-          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyText(chKey('${c.id}'),this)">${svg('copy',12)}</button>
+          <span id="chKeyTx" data-plain="0">${esc(maskKey(chKey(c.id)))}</span>
+          <button class="icon-btn" id="chKeyBtn" style="width:22px;height:22px" title="明文显示" onclick="toggleDrawerKey('${esc(c.id)}',this)">${svg('eye',12)}</button>
+          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyText(chKey('${esc(c.id)}'),this)">${svg('copy',12)}</button>
         </dd>
-        <dt>协议</dt><dd class="mono">${c.proto}</dd>
+        <dt>协议</dt><dd class="mono">${esc(c.proto)}</dd>
         <dt>模型数</dt><dd class="mono">${c.models} 个别名</dd>
       </dl>
 
@@ -982,11 +982,11 @@ function openChannel(id){
       </div>
     </div>
     <div class="drawer-ft">
-      <button class="btn primary" onclick="openTestModels({channelId:'${c.id}'})">${svg('test',14)}测试模型</button>
-      <button class="btn" onclick="reprobe('${c.id}')">${svg('test',14)}重探测</button>
-      <button class="btn" onclick="closeDrawer();openChannelForm('${c.id}')">${svg('edit',14)}编辑</button>
-      <button class="btn ml-auto" onclick="toggleCh('${c.id}');openChannel('${c.id}')">${c.on?'停用':'启用'}</button>
-      <button class="btn danger" onclick="delChannel('${c.id}')">${svg('trash',14)}删除</button>
+      <button class="btn primary" onclick="openTestModels({channelId:'${esc(c.id)}'})">${svg('test',14)}测试模型</button>
+      <button class="btn" onclick="reprobe('${esc(c.id)}')">${svg('test',14)}重探测</button>
+      <button class="btn" onclick="closeDrawer();openChannelForm('${esc(c.id)}')">${svg('edit',14)}编辑</button>
+      <button class="btn ml-auto" onclick="toggleCh('${esc(c.id)}');openChannel('${esc(c.id)}')">${c.on?'停用':'启用'}</button>
+      <button class="btn danger" onclick="delChannel('${esc(c.id)}')">${svg('trash',14)}删除</button>
     </div>`);
 }
 function toggleDrawerKey(id,btn){
@@ -1091,12 +1091,12 @@ function drawMTable(){
       const isLive=live(m);
       return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)">
         <td><div class="cell-main"><span class="avatar">${svg('layers',13)}</span>
-          <div style="min-width:0"><div class="cell-name mono" style="font-size:12.5px">${m.name}</div>
+          <div style="min-width:0"><div class="cell-name mono" style="font-size:12.5px">${esc(m.name)}</div>
           <div class="cell-sub">${single?'单点依赖':'多源冗余'}</div></div></div></td>
         <td class="t-r"><span class="mono">${m.chans.length}</span></td>
         <td><div class="row wrap" style="gap:5px">${m.chans.slice(0,4).map(cid=>{
           const c=DATA.channels.find(x=>x.id===cid);
-          return `<span class="chip ${c?c.proto:''}">${cid}</span>`}).join('')}${m.chans.length>4?`<span class="tag">+${m.chans.length-4}</span>`:''}</div></td>
+          return `<span class="chip ${esc(c?c.proto:'')}">${esc(cid)}</span>`}).join('')}${m.chans.length>4?`<span class="tag">+${m.chans.length-4}</span>`:''}</div></td>
         <td class="t-r mono">${nf(m.req)}</td>
         <td class="mono" style="color:${m.err?'var(--err)':'var(--tx-3)'}">${m.err}</td>
         <td>${!isLive?'<span class="pill unknown"><span class="dot unknown"></span>来源已停用</span>':m.err===0?'<span class="pill ok"><span class="dot ok"></span>稳定</span>':'<span class="pill degraded"><span class="dot degraded"></span>有失败</span>'}</td>
@@ -1108,7 +1108,7 @@ function openModel(name){
   drawer(`
     <div class="drawer-hd">
       <span class="avatar" style="width:34px;height:34px;border-radius:9px">${svg('layers',15)}</span>
-      <div style="min-width:0"><h3 style="font-size:16px" class="mono">${m.name}</h3>
+      <div style="min-width:0"><h3 style="font-size:16px" class="mono">${esc(m.name)}</h3>
       <div class="cell-sub">${m.chans.length} 个来源渠道</div></div>
       <div class="ml-auto"><button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
     </div>
@@ -1123,18 +1123,18 @@ function openModel(name){
         <table class="tbl"><thead><tr><th>#</th><th>渠道</th><th>协议</th><th class="t-r">延迟</th><th class="t-r">优先级</th><th>状态</th></tr></thead>
         <tbody>${m.chans.map((cid,i)=>{
           const c=DATA.channels.find(x=>x.id===cid)||{name:cid,proto:'openai',ms:-1,pri:0,status:'unknown'};
-          return `<tr><td class="mono">${i+1}</td><td class="cell-name">${c.name}</td>
-            <td><span class="chip ${c.proto}">${protoLabel[c.proto]||c.proto}</span></td>
+          return `<tr><td class="mono">${i+1}</td><td class="cell-name">${esc(c.name)}</td>
+            <td><span class="chip ${esc(c.proto)}">${esc(protoLabel[c.proto]||c.proto)}</span></td>
             <td class="t-r mono">${fMs(c.ms)}</td><td class="t-r mono">${c.pri}</td>
             <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td></tr>`}).join('')}</tbody></table>
       </div>
       <div class="sec-title">调用示例</div>
       <div class="code"><div class="code-hd"><span class="fname">curl</span>
-        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d "{\\"model\\":\\"${m.name}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"'>${svg('copy',13)}</button>
+        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d "{\\"model\\":\\"${esc(m.name)}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"'>${svg('copy',13)}</button>
       </div><pre>curl http://127.0.0.1:8787/v1/chat/completions \
   -H <span class="s">"Authorization: Bearer $GATEWAY_KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
-  -d <span class="s">'{"model":"<span class="k">${m.name}</span>","messages":[{"role":"user","content":"hi"}]}'</span></pre></div>
+  -d <span class="s">'{"model":"<span class="k">${esc(m.name)}</span>","messages":[{"role":"user","content":"hi"}]}'</span></pre></div>
     </div>`);
 }
 
@@ -1195,11 +1195,11 @@ function drawLogTable(){
   box.innerHTML=`<table class="tbl">
     <thead><tr><th>时间</th><th>请求 ID</th><th>渠道</th><th>模型</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
     <tbody>${rows.map(l=>`<tr class="clickable">
-      <td class="mono" style="font-size:12px;white-space:nowrap">${l.t}</td>
-      <td class="mono muted" style="font-size:11.5px">${l.id}</td>
+      <td class="mono" style="font-size:12px;white-space:nowrap">${esc(l.t)}</td>
+      <td class="mono muted" style="font-size:11.5px">${esc(l.id)}</td>
       <td class="cell-name">${esc(l.n)}</td>
-      <td class="cell-name">${l.m}</td>
-      <td><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></td>
+      <td class="cell-name">${esc(l.m)}</td>
+      <td><span class="chip ${esc(l.p)}">${esc(protoLabel[l.p]||l.p)}</span></td>
       <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
       <td class="t-r mono">${fMs(l.ms)}</td>
       <td class="t-r mono">${nf(l.i)}</td>
@@ -1217,25 +1217,25 @@ function openLog(id){
   const l=DATA.logs.find(x=>x.id===id); if(!l)return toast('该记录已被轮询刷新移除，请重新点击当前列表');
   drawer(`
     <div class="drawer-hd">
-      <div style="min-width:0"><h3 style="font-size:15px" class="mono">${l.id}</h3>
-      <div class="cell-sub">${l.t}</div></div>
+      <div style="min-width:0"><h3 style="font-size:15px" class="mono">${esc(l.id)}</h3>
+      <div class="cell-sub">${esc(l.t)}</div></div>
       <div class="ml-auto row" style="gap:8px">
         <span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span>
         <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
     </div>
     <div class="drawer-bd">
       <dl class="kv">
-        <dt>模型</dt><dd class="mono">${l.m}</dd>
+        <dt>模型</dt><dd class="mono">${esc(l.m)}</dd>
         <dt>渠道</dt><dd>${esc(l.n)}</dd>
-        <dt>协议</dt><dd><span class="chip ${l.p}">${protoLabel[l.p]||l.p}</span></dd>
+        <dt>协议</dt><dd><span class="chip ${esc(l.p)}">${esc(protoLabel[l.p]||l.p)}</span></dd>
         <dt>耗时</dt><dd class="mono">${fMs(l.ms)}</dd>
         <dt>Token</dt><dd class="mono">输入 ${nf(l.i)} · 输出 ${nf(l.o)}</dd>
       </dl>
       ${l.ok?'':'<div class="sec-title">失败原因</div><div class="card" style="padding:12px;border-color:color-mix(in srgb,var(--err) 30%,transparent)"><span class="mono" style="font-size:12px;color:var(--err)">'+esc(l.note||'上游返回失败，网关已自动切换到下一候选渠道')+'</span></div>'}
       <div class="sec-title">请求体</div>
       <div class="code"><div class="code-hd"><span class="fname">request.json</span>
-        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='{"model":"${l.m}","messages":[{"role":"user","content":"…"}],"stream":true}'>${svg('copy',13)}</button></div>
-        <pre>{ <span class="k">"model"</span>: <span class="s">"${l.m}"</span>,
+        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t="${esc(JSON.stringify({model:l.m,messages:[{role:'user',content:'…'}],stream:true}))}">${svg('copy',13)}</button></div>
+        <pre>{ <span class="k">"model"</span>: <span class="s">"${esc(l.m)}"</span>,
   <span class="k">"messages"</span>: [{ <span class="k">"role"</span>: <span class="s">"user"</span>, <span class="k">"content"</span>: <span class="s">"…"</span> }],
   <span class="k">"stream"</span>: <span class="s">true</span> }</pre></div>
       <div class="sec-title">响应摘要</div>
@@ -1246,7 +1246,7 @@ data: [DONE]</pre></div>
     </div>
     <div class="drawer-ft">
       <button class="btn primary" data-t="${esc(l.m)}" onclick="copyCurl(this.dataset.t,this)">${svg('copy',14)}复制 cURL</button>
-      <button class="btn" onclick="copyText('${l.id}',this)">复制请求 ID</button>
+      <button class="btn" onclick="copyText('${esc(l.id)}',this)">复制请求 ID</button>
     </div>`);
 }
 /* 复制一条可直接跑的 cURL；$GATEWAY_KEY 保持占位，避免把真实密钥写进剪贴板 */
@@ -1509,10 +1509,10 @@ function vAccess(v){
 
   <div class="grid g3 stagger" style="margin-bottom:16px">
     ${eps.map(x=>`<div class="card"><div class="card-bd ep">
-      <div class="row"><span class="chip ${x.p}">${x.t}</span><span class="dot ok ml-auto"></span></div>
+      <div class="row"><span class="chip ${esc(x.p)}">${esc(x.t)}</span><span class="dot ok ml-auto"></span></div>
       <div class="ep-url"><span style="flex:1;min-width:0">${x.u}</span>
         <button class="btn ghost sm" data-t="${esc(x.u)}" onclick="copyText(this.dataset.t,this)">${svg('copy',12)}复制</button></div>
-      <div class="muted" style="font-size:11.5px">${x.note}</div>
+      <div class="muted" style="font-size:11.5px">${esc(x.note)}</div>
       <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">${esc(maskKey(gwKey))}</span>
         <button class="btn ghost sm ml-auto" data-t="${esc(gwKey)}" onclick="copyText(this.dataset.t,this)">${svg('copy',13)}复制</button></div>
     </div></div>`).join('')}

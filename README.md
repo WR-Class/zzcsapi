@@ -225,6 +225,7 @@ node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令
 node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态）
 node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（网关从不向客户端产出 thinking 块 → "无签名块触发 400"不可达；直通是签名唯一活路）
 node test/settings-api-e2e.test.js        # 58 项断言：运行期设置端点（窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
+node test/security-headers-e2e.test.js    # 23 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -768,9 +769,15 @@ node sec-audit.js
 ⑦ 路径穿越与静态文件（`config.json`、`.env`、`usage.json`、`server.js` 必须都是 404）。
 
 **2026-10-02 本机实测结论**（v1.18.2 部署）：鉴权覆盖面完整（管理面/客户端面无密钥与错密钥均 401）、示例默认密钥被拒、
-私有文件全部 404、错误体不含密钥、无 CORS；**待办项**：管理面 `/admin/api/status`、`/admin/api/channels` 直接返回
-上游 `apiKey` 明文（控制台自行掩码，见下方「计划中」）；缺少 `X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` 等加固头；
-`/console?key=…` 会把管理密钥写进浏览器历史与 Referer。
+私有文件全部 404、错误体不含密钥、无 CORS。
+**同日外部渗透测试（黑盒、未读源码）复核**：10 项发现中 9 项属实，已按批次整改——
+**第一批（v1.18.3）已修**：无密钥/错密钥下 `/console` 可打开且全站**无任何安全响应头**（现补 `nosniff` / `X-Frame-Options: DENY` /
+`Referrer-Policy: no-referrer` / `Permissions-Policy`，管理面与 `/healthz` 加 `Cache-Control: no-store`）；
+控制台**渲染层转义不一致**（模型名/渠道名等裸插值 + `toast()` 把上游错误串当 HTML，构成"持有网关密钥 → 管理端脚本执行"的存储型 XSS 链，
+现已统一过 `esc()`，以 `test/security-headers-e2e.test.js` 的"裸插值必须为零"守卫锁住）。
+**仍待办（见下方「计划中」）**：管理面 `/admin/api/status`、`/admin/api/channels`、`/admin/api/config` 仍返回上游 `apiKey` 明文
+（控制台自行掩码、但页面 DOM 与 `localStorage` 里是明文）；管理面**无失败限流**且密钥比较非恒定时间；无 CSP；
+`/console?key=…` 仍会把管理密钥写进浏览器历史与 Referer（`Referrer-Policy` 已挡住外泄，历史记录需改用 `#` 片段或一次性换取 session）。
 
 ## 行为细节
 
@@ -812,10 +819,20 @@ node sec-audit.js
   ① **上游密钥不再明文下发**——`/admin/api/status` 与 `/admin/api/channels` 现在直接返回 `apiKey` 原文（控制台靠自己的 `maskKey` 掩码），
   意味着 ADMIN_KEY 一旦泄漏＝全部上游密钥一起泄漏；打算改成默认只回掩码值，控制台的「显示密钥」按钮改为按需调
   `GET /admin/api/channels/{id}/key` 拿单个渠道的原文（前端在 `build/app.js`，需与前端改动同一次提交）。
-  ② **补安全响应头**：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`（控制台不需要被 iframe 嵌套）、
-  `Referrer-Policy: no-referrer`（顺带治 `/console?key=…` 把密钥带进 Referer 的问题）；CSP 需要按控制台真实资源
-  （MiSans CDN + 内联脚本样式）单独设计并做浏览器验证，暂缓。
-  ③ **可选**：`/console?key=…` 保留但建议客户端改用 `Authorization` 头。
+  注意控制台 Playground 的「接入信息」卡还依赖 `/admin/api/config` 下发 `gatewayKey`（`build/app.js:1491`），
+  改密钥下发时必须一并改这一处，否则那张卡的复制按钮会拿不到值。
+  ② ~~补安全响应头~~ ✅ **v1.18.3 已实现**（`nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: no-referrer` /
+  `Permissions-Policy`，管理面与 `/healthz` 加 `no-store`；见「安全体检」节）。CSP 仍需按控制台真实资源
+  （MiSans CDN + 内联脚本样式）单独设计并做浏览器验证，**暂缓**。
+  ③ **管理面失败限流 + 恒定时间比较**：`checkAuth` 目前是普通 `===`、无失败计数，错密钥可以无限快速重试
+  （实测 15 次错密钥均 401、无 429，单次约 12.5 ms）；计划加失败计数 + 429/退避 + `timingSafeEqual`。
+  **阈值要放宽且只挡失败尝试**（正密钥不受影响、不永久锁定），否则会把使用者自己锁在门外。
+  ④ **彻底消灭内联事件处理器**：把 `build/app.js` 的 `onclick="fn('${id}')"` 全面改成 `data-*` + 事件委托
+  （v1.18.3 已给这些参数加了 `esc()`，属性层不可逃逸；仅当渠道 ID 含引号时还剩 JS 字符串层的理论风险）。
+  ⑤ **刻意不做**：强制密钥长度/熵（不符合就拒绝启动）与多用户/角色/审计——本项目定位是**单用户自托管**，
+  首启随机生成密钥、示例默认值只服务本地开发；把这两条做进来会破坏开箱即用（外部渗透测试报告的建议已据此驳回，理由记在此处以免重复提）。
+  ⑥ **部署提醒（给公网部署者）**：本项目的隐藏前提是「知道密钥的人就是管理员」——请只在可信网络或反向代理后暴露，
+  并务必给公网入口加 TLS；`/console?key=…` 建议改用 `Authorization` 头。
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
   下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
   "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题

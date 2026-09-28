@@ -2504,8 +2504,24 @@ function loadConsoleHtml() {
   }
 }
 
+/* 安全响应头（v1.18.3）：纯加法，不改任何既有行为。
+   - nosniff：禁止浏览器把 JSON 错误体当 HTML 解释（配合未转义回显的历史问题）
+   - X-Frame-Options: DENY：控制台不需要被任何页面嵌套，直接掐掉点击劫持
+   - Referrer-Policy: no-referrer：顺带治「/console?key=… 把 admin key 带进 Referer」
+   - Permissions-Policy：控制台不用摄像头/麦克风/定位，一并关掉
+   CSP 刻意不在这里加：控制台是内联脚本 + MiSans CDN，需要单独设计并做浏览器验证（见 README「计划中」）。 */
+const SEC_HEADERS = [
+  ['X-Content-Type-Options', 'nosniff'],
+  ['X-Frame-Options', 'DENY'],
+  ['Referrer-Policy', 'no-referrer'],
+  ['Permissions-Policy', 'geolocation=(), microphone=(), camera=()'],
+];
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  for (const [k, v] of SEC_HEADERS) res.setHeader(k, v);
+  // 管理面与探针的响应不该被任何中间层缓存（含密钥与否都别留在缓存里）
+  if (url.pathname.startsWith('/admin/api/') || url.pathname === '/healthz') res.setHeader('Cache-Control', 'no-store');
   try {
     // 控制台 HTML 壳：零机密（密钥不落页面，数据全走 /admin/api），放行壳本身、
     // 由前端登录门负责收 key、由 /admin/api 的每次调用强制 Bearer——「页面能开 ≠ 有权限」
