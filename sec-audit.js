@@ -84,21 +84,29 @@ const req = async (path, { key = null, method = 'GET', body = null } = {}) => {
   const c = await req('/console');
   if (c.status === 200) {
     const has = (s) => c.text.includes(s);
-    const oldChart = /function areaChart\(data,w,h,opts\)\{[\s\S]{0,600}?pts\[0\]/.test(c.text);
-    line(!oldChart, `空数据保护（v1.18.1「暂无数据」占位）：${has('暂无数据') ? '有' : '没有'}`);
+    // 版本判据只用「v1.18.1 的零数据占位文案」这一条事实：旧版没有它、新版一定有。
+    // （旧版曾用「areaChart 函数体形状」当判据，但新版只是在函数开头加了空数组守卫，形状几乎没变——
+    //   那条正则会同时命中新旧两版，把新部署误报成"还是旧版本"，2026-10-02 实测踩到，已废弃。）
+    const emptyGuard = has('暂无数据');
+    line(emptyGuard, `空数据保护（v1.18.1 起「暂无数据」占位）：${emptyGuard ? '有' : '没有'}`);
     line(has('运行期设置'), `运行期设置页（v1.18.2）：${has('运行期设置') ? '有' : '没有'}`);
-    line(!oldChart, `是否还是那个「点详情没反应」的旧图表代码：${oldChart ? '是（需要更新代码并重建容器）' : '否'}`);
-    if (oldChart) note('中', '这份控制台还是空数据会炸的旧版本（v1.18.1 之前的 areaChart），零调用记录的实例上「详情」点不开');
+    if (!emptyGuard) note('中', '这份控制台不带 v1.18.1 的零数据占位——要么是旧版本，要么有人把它改了回去；零调用记录的实例上「详情」可能点不开');
   } else line(false, `/console → ${c.status}`);
 
   /* ④ 安全响应头 / CORS */
   hdr('④ 安全响应头 / CORS');
-  const want = ['x-content-type-options', 'x-frame-options', 'referrer-policy', 'content-security-policy', 'strict-transport-security'];
+  // HSTS 只在 https 上有意义：裸 http 部署报它等于制造噪声（本机/局域网部署全是 http）
+  const isHttps = /^https:/i.test(B);
+  const want = ['x-content-type-options', 'x-frame-options', 'referrer-policy', 'content-security-policy', ...(isHttps ? ['strict-transport-security'] : [])];
   for (const h of want) {
     const v = c.headers.get(h);
     line(!!v, `${h.padEnd(28)}: ${v || '（缺失）'}`);
-    if (!v) note('低', `缺少安全响应头 ${h}（加固项：nosniff / 防 iframe 嵌套 / 不发 Referer）`);
+    if (!v) note(h === 'content-security-policy' ? '低' : '中',
+      h === 'content-security-policy'
+        ? '缺少 CSP：控制台目前靠渲染层转义兜底（v1.18.3 起统一 esc），CSP 属纵深防御，需按真实资源单独设计'
+        : `缺少安全响应头 ${h}（加固项：nosniff / 防 iframe 嵌套 / 不发 Referer）`);
   }
+  if (!isHttps) line(true, `${'strict-transport-security'.padEnd(28)}: （http 部署，不适用）`);
   const acao = c.headers.get('access-control-allow-origin');
   line(!acao, `access-control-allow-origin   : ${acao || '（未设置，跨站页面读不到响应）'}`);
   if (acao) note('中', `CORS 放开了来源 ${acao}`);

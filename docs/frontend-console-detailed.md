@@ -1258,6 +1258,18 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`node build/build.js` 通过、产物已含新顺序；`test/console-state.test.js` **146 项断言全绿**（§10 不受影响，其断言按 `id` 取元素、不依赖分组；另加一条位置守卫锁住"工具组 / Playground 与接入信息之间"）；全量 **28 文件 / 0 失败**。
 
+### 8.25 v1.18.3 第一批安全加固：渲染层统一转义 + 安全响应头（2026-10-02，对象 `build/app.js` + `server.js` + 产物 `console.html` + 新增 `test/security-headers-e2e.test.js`）
+
+**问题（外部黑盒渗透测试报告 F-03 / F-05，本机逐条复核确认为真）**：控制台的转义是**不一致**的——同一张调用日志表里渠道名走了 `esc(l.n)`，模型名却是裸的 `${l.m}`；`toast()` 更直接把上游/服务端错误串拼进 `innerHTML`。而任何持有 `GATEWAY_KEY` 的调用方都能让字符串进入这些字段：实测传 `model=<任意串>`，该串会出现在 `/admin/api/usage` 的 `recent[].note`（上游把模型名回显进错误文案）与 `channels[].lastError`；**成功**请求则会以调用方请求的模型名落进 `recent[].model`（`server.js:5056` 等 20 余处记的都是 `displayModel`）。管理员打开「调用日志」页那段文本就被当 HTML 解析 ⇒ 一条「网关密钥 → 管理端脚本执行」的存储型 XSS 链。同时全站**一个安全响应头都没有**（无 `nosniff`、可被 iframe 嵌套、`Referrer-Policy` 缺失，而 `?key=` 登录方式会把管理密钥写进 Referer），`/admin/api/*` 与 `/healthz` 也没有 `Cache-Control: no-store`。
+
+**根因**：控制台全部是手写模板字符串拼接，`esc()` 靠"记得加"，没有任何机制阻止漏加；`toast()` 为了省事把文案当 HTML。
+
+**处置**：`build/app.js` **就地**给 52 处外部可控插值补 `esc()`（渠道名/ID/协议 chip、模型名、日志 ID/协议、`class` 属性值、`data-t` 属性等），`toast()` 改成 `svg(...)+'<span>'+esc(msg)+'</span>'`。**刻意只做就地插入、不增删一行**——遵守 §1.2 的行号锚点纪律（也延续 `build/app.js:892` 既有注释的同一约定），代码地图与 JS 偏移 **+686** 全部零漂移。内联 `onclick` 的参数同样过 `esc()`：在属性上下文里这已杜绝 `"` 闭合逃逸；**彻底消灭内联处理器（改事件委托）留到下一批**，避免一次改动过大。`server.js` 新增 `SEC_HEADERS`（`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Permissions-Policy`），在 `http.createServer` 回调的**任何分支之前**统一 `setHeader`，于是 401/404/所有 API/静态壳全都带上；`/admin/api/*` 与 `/healthz` 追加 `Cache-Control: no-store`。**CSP 刻意不加**：控制台是内联脚本 + MiSans CDN，须单独设计并做浏览器验证（见 `README.md`「计划中」）。
+
+**残留（明确记下，别当成已解决）**：① 管理面仍明文下发上游 `apiKey`（第二批）；② 内联 `onclick` 未改事件委托，参数虽有 `esc()` 兜底，但依赖"渠道 ID 里不出现引号"这一现状（导入渠道理论上可构造，低危）；③ 无 CSP；④ 管理面仍无失败限流（第二批）。
+
+**验证**：新增 `test/security-headers-e2e.test.js`（**23 项断言**，真起临时网关）——源码级装配守卫（`build/app.js` 的 11 个"裸插值"必须一个不剩、`toast` 必须 `esc(msg)`、`data-t` 必须 `JSON.stringify`+`esc`、`SEC_HEADERS` 必须在 `createServer` 之前且 `setHeader` 在所有分支之前、CSP 不得偷偷加上）+ 真链路逐条核头（`/console`、`/healthz`、`/admin/api/status` 的 200 与 401、`/metrics`、`/v1/models`、404 全部带齐三个头；`/healthz` 与 `/admin/api/*` 带 `no-store`；页面壳零密钥明文；产物里能看到 `esc(l.m)`）。`node build/build.js` 通过（**163,938 字符 / 184,983 字节**，比改前 +324 字节）；全量回归 **29 文件 / 1251 项断言 / 0 失败**。
+
 ---
 
 ## 9. 后续可做（未实现）
