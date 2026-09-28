@@ -7,10 +7,10 @@
 
 - 安装位置：`D:\Genspark Claw\Genspark Claw.exe`（Electron 应用，内置 OpenClaw agent 运行时 + Node 22）
 - 数据目录：`%APPDATA%\Genspark Claw`
-- **key 存放位置**（对应 workbuddy 的 `.info` 文件，本机路径为 `C:\Users\RongWu\AppData\Roaming\...`）：
+- **key 存放位置**（对应 workbuddy 的 `.info` 文件，本机路径为 `C:\Users\<用户名>\AppData\Roaming\...`）：
   - `%APPDATA%\Genspark Claw\users\<账号uuid>\agents\main\agent\auth-profiles.json` —— 权威存储（key + usageStats）
   - 同目录上级的 `openclaw.json` —— provider 配置（baseUrl + apiKey + 模型清单），key 同一份
-  - 本机实际路径：`C:\Users\RongWu\AppData\Roaming\Genspark Claw\users\bc80ac7d-efa4-4505-8aef-34fddac56246\`
+  - 本机实际路径：`C:\Users\<用户名>\AppData\Roaming\Genspark Claw\users\<本机 profile GUID>\`
 - **凭据结构**：`gsk-` 前缀 + base64url(JSON payload) + `f`（分隔/版本字节）+ base64url 签名段（43 字符 ≈ 32 字节）
   - payload 字段：`{"cogen_id":"<账号uuid>","key_id":"<uuid>","ctime":<秒级时间戳>,"claude_big/middle/small_model":null}`
   - **payload 无过期时间字段**；`cogen_id` 与本地 users 目录 uuid 一致 → 账号级设备 key
