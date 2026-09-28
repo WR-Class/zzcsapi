@@ -55,3 +55,23 @@
 .aw-sub{margin-top:2px;font-family:var(--f-mono);font-size:10px;color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 份额为 0 的候选列宽就是 0，画在列里等于看不见，单独一行交代它为什么没分到 */
 .aw-zero{margin-top:8px;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+
+/* ── 运行期设置页 .set-*（v1.18：会话粘性 / 客户端限流 / 指标端点的读写面板） ─────────
+   生产独有组件（设计稿不含），复用全站令牌，不引入新颜色。
+   一页三卡，卡头开关、卡体旋钮 + 生效角标 + 实时计数；关闭时整卡降权（.muted）且旋钮禁用。
+   钳制提示（.set-eff）用中性色 —— 它不是错误，只是"生效值与你填的不同"。 */
+.set-err{display:none;margin:-4px 0 14px;padding:9px 12px;border-radius:var(--r-sm);font-size:12px;line-height:1.6;
+  color:var(--err);background:color-mix(in srgb,var(--err) 12%,transparent);border:1px solid color-mix(in srgb,var(--err) 30%,transparent)}
+.set-err.on{display:block}
+.set-desc{font-size:12px;line-height:1.65;color:var(--tx-2);margin-bottom:6px}
+.set-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid color-mix(in srgb,var(--line) 62%,transparent)}
+.set-row>label{flex:1;min-width:0;font-size:12.5px;color:var(--tx-2)}
+.set-row .input{width:104px;flex:0 0 auto}
+.set-row .switch{margin-left:auto}
+.set-unit{flex:0 0 auto;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+.set-eff{flex:0 0 auto;min-width:96px;text-align:right;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+.set-warn{margin:-4px 0 8px;font-family:var(--f-mono);font-size:10px;line-height:1.7;color:var(--warn)}
+.set-stat{margin-top:12px;padding-top:11px;border-top:1px solid var(--line);font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
+.set-stat b{color:var(--tx);font-weight:600}
+.set-stat .btn{margin-left:8px}
+.set-card.muted .set-desc,.set-card.muted .set-row>label{color:var(--tx-3)}

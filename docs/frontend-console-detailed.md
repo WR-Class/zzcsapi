@@ -191,7 +191,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - 表单栅格用 `.field-row > .field`，窄屏自动换行
 - **生产侧对应实现**：`build/shell.html` 里只有**一个** `#mask`（49 行），内容由 `modal(html, wide)` 动态注入——
   渠道表单、四类导入、测试模型、模型编辑器全部复用这一个容器。
-  `#mask` **不绑 `onclick`**，与原型策略一致；`Esc` 由 `build/app.js` 1817 的全局 `keydown` 监听兜底
+  `#mask` **不绑 `onclick`**，与原型策略一致；`Esc` 由 `build/app.js` 2152 的全局 `keydown` 监听兜底
   （优先关弹窗，其次关抽屉）。
   > 早期版本曾有 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 四个独立弹窗，重构时已统一收敛掉。
   > **新增弹窗不要再建新 `.mask`**，直接用 `modal()` 注入。
@@ -242,6 +242,29 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 2. **`--w` 必须是份额本身**：`flex-grow:var(--w)` 配 `flex-basis:0`，间隙（`gap`）由布局先让出、余量再按份额分，
    各列宽度才严格成比例。份额为 0 的候选**不进 `.aw-split`**（列宽 0 画出来看不见），理由放 `.aw-zero`。
 
+### 4.11 运行期设置页 `.set-*`（生产独有，设计稿不含）
+
+「工具 → 运行期设置」页上的三张开关卡（v1.18）。一页三卡：**卡头开关 + 卡体旋钮 + 生效角标 + 实时计数**；
+关闭时整卡降权（`.set-card.muted`，旋钮一并 `disabled`）。样式全部在 `build/extra.css`（第 59–77 行），
+复用全站令牌，**不引入新颜色**。
+
+| 类 | 职责 |
+| --- | --- |
+| `.set-err` / `.set-err.on` | 保存失败错误条（隐藏态 `display:none`，`.on` 才显示）。**里面放后端 400 的 `error` 原文**（如 `unknown field rateLimit.rpmm`），不是"保存失败"这种空话 |
+| `.set-desc` | 卡内说明文字（`--tx-2`） |
+| `.set-row` | 一条旋钮行（`border-top` 淡分隔）；`.set-row>label` 占满剩余宽度，`.set-row .input` 固定 104px，`.set-row .switch` 靠右 |
+| `.set-unit` | 单位（`秒` / `次` / `rpm`，等宽小字） |
+| `.set-eff` | **生效值角标**（`--tx-3` 中性色 —— 它只说明"生效值与你填的不同"，不是错误）。`setHint()` 只在"已保存的值被钳制"时给出 |
+| `.set-warn` | 警示文案（`--warn`；如 `/metrics` 公开可读、`deriveFromBody` 会互相抢占） |
+| `.set-stat` | 实时计数区（卡底，`border-top` 分隔）；`b` 是数值；`.btn` 是「复制抓取地址」 |
+| `.set-card.muted` | 关闭态整卡降权（卡头开关关闭时旋钮禁用） |
+
+**两条硬约束**：
+1. **`config` 与 `effective` 两个值都必须显示**：前者回填输入框（你填的原值），后者是钳制后真正生效的值
+   （`ttlSec` 填 5 → 生效 30）。只显示一个必然变成"我明明填了 5，怎么没生效"的悬案。
+2. **`setDirty` 时 8 秒轮询绝不覆盖草稿**（`syncSettingsDraft` 的唯一判据），否则用户填一半就被轮询清掉——
+   与 §4 顶部的「状态回填约定」同源。
+
 ---
 
 ## 5. 页面详解
@@ -254,9 +277,9 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - Top 渠道表、Top 模型条形榜
 - 时间范围页签 `24h / 7d / 30d`
   - **原型**：仅切换选中样式，不切换数据（快照里只有日粒度）
-  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 389）定义三档 → `ovSeries()`（392）按档取序列：
+  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 426）定义三档 → `ovSeries()`（429）按档取序列：
     24 小时走后端 `usage.hourly`（24 桶），7/30 天走 `DATA.trend.slice(-N)`；KPI 环比窗口同步跟着天数走
-- **延迟环比 `avgLatencyDelta()`（`build/app.js` 377）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
+- **延迟环比 `avgLatencyDelta()`（`build/app.js` 414）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
   **样本 < 40 返回 `null`**——宁可不显示，也不编一个假百分比
 
 ### 5.2 涨跌颜色（中国股票惯例）
@@ -270,7 +293,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 > 方向已由 `+/-` 符号和颜色双重表达，再加箭头是三重冗余（`kpiCard`（原型 1055）有注释留档）。
 
 **生产侧零差异**：`build/app.js` 不重定义任何涨跌样式，直接吃设计稿这条规则。
-它只负责算数值与方向：`dChip(v, unit, suffix)`（`build/app.js` 386）产出带符号的文本，`kpiCard({dir:'up'|'down'})`（`build/app.js` 335）产出 `.delta.up` / `.delta.down` 类名。
+它只负责算数值与方向：`dChip(v, unit, suffix)`（`build/app.js` 423）产出带符号的文本，`kpiCard({dir:'up'|'down'})`（`build/app.js` 372）产出 `.delta.up` / `.delta.down` 类名。
 （旧版的 `deltaBadge(delta, invert)` 已随重构删除——`invert` 会把"好/坏"折算成颜色，与"方向即颜色"的规则冲突。）
 
 **改这里时别顺手改回欧美惯例**，见 `AGENTS.md` §2。
@@ -309,7 +332,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - 位置：「资源」组的第三个页签（渠道管理 / 聚合模型 / **自动权重**）。`NAV` 加一项、`go()` 的分发表加一条
   `autoweight:vAutoWeight` —— 新增页面照这两步走（见 code-map §5「新增页面（生产）」）。
 - 结构：页头（`page-title` 自动权重 + 一句副标题）→ 一张 `.aw-card`（复用 §4.10 的 `.aw-*`）。
-  `vAutoWeight()` 只出页头 + 挂卡，真正的卡在 `autoWeightCard()`（`build/app.js` 634）。
+  `vAutoWeight()` 只出页头 + 挂卡，真正的卡在 `autoWeightCard()`（`build/app.js` 654）。
 - 目的：回答"如果开了自动权重，同一个模型的多个候选会怎么分"——**只算不生效**，卡头必须写明这点。
 - 卡头 `.card-hd`：`分流预测` + `只算不生效` chip（生效时才换成 `已生效` accent chip）+ 右侧 `N 个多候选模型` 计数。
 - `.aw-meta` 说明带：一句加粗自证的 **"当前分流一字未动"**（不说清楚，用户会以为份额已经变了）
@@ -347,17 +370,17 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   原型在模板里就地查名（`(DATA.channels.find(c=>c.id===l.c)||{}).name||l.c`）；
   生产在 `adapt()` 里把显示名解析进每条日志的 `n` 字段（`n:(chans.find(c=>c.id===r.channelId)||{}).name||r.channelId||'—'`），
   渲染层直接用 `esc(l.n)`。**渠道 id 仍保留在 `l.c`**，供筛选、导出与排障。
-- **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1011）。
-- **搜索**：搜索框同时匹配模型名 / 渠道名 / 渠道 ID / 请求 ID（`logRows()` 判据 `l.m + l.n + l.c + l.id`，生产锚点 999）——
+- **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1191）。
+- **搜索**：搜索框同时匹配模型名 / 渠道名 / 渠道 ID / 请求 ID（`logRows()` 判据 `l.m + l.n + l.c + l.id`，生产锚点 1179）——
   按名字搜比按 id 自然，老习惯按 id 也仍然命中。
-- **CSV 导出** `exportLogs`（生产锚点 440）：渠道列同样写显示名（`l.n`），与页面所见一致。
+- **CSV 导出** `exportLogs`（生产锚点 460）：渠道列同样写显示名（`l.n`），与页面所见一致。
 
 ### 5.7 Playground `vPlayground`（1539）
 
 左对话区 + 右参数栏（模型、temperature、top_p 等）。
 
 - **原型**：`pgSend`（1623）模拟流式输出——逐字/逐块插入 → 结束补 usage，**无真实请求**，仅演示交互
-- **生产**：`pgSend`（`build/app.js` 1074）**真发 `POST /v1/chat/completions`**，与外部客户端走完全同一条链路：
+- **生产**：`pgSend`（`build/app.js` 1372）**真发 `POST /v1/chat/completions`**，与外部客户端走完全同一条链路：
   - 支持 `stream`：读 `response.body.getReader()` 解析 SSE，逐块追加；记录**首块延迟 TTFB**
   - 从响应头 `X-ZZCSAPI-Channel` 取实际命中渠道 → `drawRoute()` 渲染路由信息（候选渠道 / 命中 / 首块 / 总耗时）
   - 失败时把上游错误原文显示在气泡里，不吞错
@@ -367,9 +390,30 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 三套协议（OpenAI / Anthropic / Gemini）的 baseURL、密钥、示例代码，代码片段用 `.code` + 页签切换（`vAccess` 1680 内）。
 
 - **原型**：地址与密钥是文件内写死的演示值
-- **生产**：`vAccess`（`build/app.js` 1307）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey`、模型名，
-  按当前 `location.origin` 拼端点 URL；`showKeyHelp()`（`build/app.js` 1401）给**只读**的密钥轮换步骤（每条命令可单独复制）；
+- **生产**：`vAccess`（`build/app.js` 1487）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey`、模型名，
+  按当前 `location.origin` 拼端点 URL；`showKeyHelp()`（`build/app.js` 1581）给**只读**的密钥轮换步骤（每条命令可单独复制）；
   端点地址行与客户端配置表 Base URL 列均带复制按钮
+
+### 5.9 运行期设置 `vSettings`（生产独有，原型无此页）
+
+- 位置：「工具」组第二个页签，**夹在 Playground 与接入信息之间**（工具组顺序：Playground / **运行期设置** / 接入信息）。
+  `NAV`（`build/app.js` 337）加一项、`go()`（359）与 `render()`（158）**两张分发表都要加** `settings:vSettings`
+  —— 只加一张会出现"能进页但 8 秒轮询不刷新"（v1.18 之前自动权重页就栽在 `render()` 表漏页上，见 §8.22）。
+- 结构：页头（标题 + 副标题「改完立即生效、立即落库，无需重启容器」+ 右侧「还原 / 保存设置」）→ 错误条 `.set-err`
+  → `.grid.g3` 里三张 `.set-card`（会话粘性 / 客户端限流 / 指标端点）。
+- 数据源**唯一**：`GET/POST /admin/api/settings`。`loadAll()`（139）把 `settings` 一起拉回来写进 `RAW.settings`，
+  **单独 `.catch(()=>null)` 兜底**（端点挂了不能拖垮整页）。`RAW.settings` 缺失时页面显示「设置接口不可用」，不白屏。
+- 三张卡的**唯一真源**是 `SET_GROUPS`（726）/ `SET_META`（727）/ `SET_FIELDS`（735）：加字段只改这三处，
+  `setCard()`（787）按声明生成行，`setPayload()`（765）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
+- **只提交有改动的组 / 字段**（PATCH 语义，`setPayload`）：没带的不动、不归零；留空的数字不下发（留空 ≠ 0）。
+  没改动时「保存设置」按钮 `disabled`。
+- **400 原文直显**：`api()`（211）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（853）取 `e.body.error`
+  写进 `.set-err` —— 后端已点名到字段，照抄给用户就能直接改。
+- 提交期间按钮 `disabled` + 文案变「保存中…」（`setSaving` 幂等，避免连点造成两次写入）。
+- **实时计数**来自 `status` 段：粘性命中/未命中/学习条数、在飞/峰值/限速拒绝/并发拒绝、`/metrics` 是否匿名可抓
+  —— 停在页面等轮询就会跟着刷新。
+- 样式见 §4.11 的 `.set-*`（`build/extra.css` 59–77）。
+- **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
 
 ---
 
@@ -402,7 +446,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 - 已存在的别名行标 `.have`（半透明 + 不可勾选），避免重复添加
 - 支持**搜索过滤** `filterProbeRows`、**全选** `probeSelectAll`、**清空** `probeClearSel`、**批量加入** `probeAddSelected`
 - **原型**：`probeUpstream`（1912）从 `PROBE_POOL`（1788，约 46 个模型）取数，贴近真实中转站规模
-- **生产**：`probeUpstream`（`build/app.js` 1459）真发 `POST /admin/api/probe`，
+- **生产**：`probeUpstream`（`build/app.js` 1742）真发 `POST /admin/api/probe`，
   返回的是**该渠道上游真实的 `/v1/models` 清单**；搜索/全选/批量逻辑与原型同构。
   ⚠️ 注意 `server.js` 的探测协议白名单——曾漏 `workbuddy` 导致误报失败
 
@@ -459,7 +503,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 - **原型**：`simTest`（2156）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
   回复文案取自 `REPLIES`（2155）
-- **生产**：`runTests`（`build/app.js` 1906）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt}`），
+- **生产**：`runTests`（`build/app.js` 2097）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt}`），
   逐条渲染真实 `latencyMs` / `promptTokens` / `completionTokens` / 上游回复或错误原文。
   原型的 `simTest` 与 `REPLIES` **生产侧已删除**；跑完会 `loadAll()` 刷新一次数据
 - ⚠️ **原型未同步（有意）**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`，
@@ -474,7 +518,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | 全局搜索回车 | 关键词写入 `chQ` 并跳转渠道页（原型 2261） |
 | 主题切换 | `#themeBtn`，写入 `localStorage['zzcs-theme']`，刷新保持 |
 | 点击菜单外部 | 关闭所有下拉菜单（原型 1772） |
-| 复制按钮 | 统一走 `copyText(t,btn)`（`build/app.js` 221）：安全上下文用 `navigator.clipboard`，否则回落到 `execCommand('copy')`；待复制文本一律经 `data-t="${esc(x)}"` 注入，不要用 `JSON.stringify` 直接拼进属性 |
+| 复制按钮 | 统一走 `copyText(t,btn)`（`build/app.js` 242）：安全上下文用 `navigator.clipboard`，否则回落到 `execCommand('copy')`；待复制文本一律经 `data-t="${esc(x)}"` 注入，不要用 `JSON.stringify` 直接拼进属性 |
 
 ---
 
@@ -495,7 +539,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | `pgSend` | `POST /v1/chat/completions` | 支持 `stream` |
 | Playground 生图 | `POST /v1/images/generations` | 需上游支持图像接口 |
 | （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
-| 「运行期设置」页（**待前端实现**） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。页面按 [`console-settings-spec.md`](console-settings-spec.md) 的规格做 |
+| 「运行期设置」页（**v1.18 已实现**，见 §5.9） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：三张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
 
 **回填时的注意事项**：
 
@@ -505,8 +549,8 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 4. `DATA` 就地修改的模式不能沿用——真实环境应改为"请求 → 更新本地 state → 重绘"
 
 > **回填状态（v0.4，v0.5 续修）**：以上四项均已满足。
-> 生产侧用 `chKey(id)`（`build/app.js` 1423）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
-> `DATA` 改由 `adapt()`（57）从 `/admin/api/status` 响应派生，`loadAll()`（137）统一拉取后重绘。
+> 生产侧用 `chKey(id)`（`build/app.js` 1641）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
+> `DATA` 改由 `adapt()`（59）从 `/admin/api/status` 响应派生，`loadAll()`（139）统一拉取后重绘。
 > 生产独有能力（genspark 双导入、渠道级自定义请求头、密钥明文切换、有效优先级角标、
 > 渠道权重输入框与分流占比、自动权重观测卡、真实 Playground / 测试 / 导入请求、端点地址与密钥一键复制、
 > 只读的密钥轮换步骤弹窗）原型里没有，**原型不必追平**。
@@ -1179,6 +1223,8 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`node --check server.js` 通过；`node test/settings-api-e2e.test.js` 58 项断言全绿（含"打开限流不重启即第 2 发 429""关掉 `/metrics` 立即 404""落库后重启仍是这个值"）；`node build/build.js` 通过；`node test/console-state.test.js` 103 项全绿；全量 28 个测试文件全绿。
 
+---
+
 ### 8.23 v1.18.1 空数据炸渲染：全新部署上「渠道管理 → 详情」点了没反应（2026-10-02，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `AGENTS.md`）
 
 **问题**：别人把网关部署起来后，控制台**渠道管理点「详情」毫无反应**——不弹抽屉、不报错、不白屏，只有浏览器控制台里一行红字（用户不一定会去看）。有数据的机器上完全正常，所以本机一直没暴露。
@@ -1187,22 +1233,30 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 | # | 事实 | 证据 |
 | --- | --- | --- |
-| 1 | 详情抽屉由 `openChannel(id)` 一次 `drawer(...)` 画出，而**图表是在 `drawer()` 之前求值的**（模板字符串里调 `areaChart(DATA.trend.slice(-12),…)`） | `build/app.js` 的 `openChannel` 内 `areaChart` 早于 `drawer(` |
-| 2 | `areaChart` 里取 `pts[0][0]` **没有空数据分支**，`data=[]` ⇒ `pts[0]` 是 `undefined` ⇒ `TypeError: Cannot read properties of undefined (reading '0')` | 把整个 `build/app.js` 跑进最小 DOM 桩、喂真实 `/admin/api/status` 形状数据后**稳定复现**，栈顶就落在 `areaChart` |
-| 3 | 全新部署的实例 `/admin/api/usage` 的 `byDay` 是空数组 ⇒ `adapt()` 算出 `trend=[]` ⇒ 必然走到上面那条 | 临时网关实测：0 请求时 `byDay=[]`；发过请求后 `byDay` 才有值（本机线上是 24 天，所以本机不复现） |
-| 4 | 同一个坑还有兄弟：`sparkline` 对空数组会取 `pts[pts.length-1][0]`；单点输入 `w/(length-1)` 还是 `w/0` → `NaN` | KPI 卡 / 总览的迷你曲线用的是它 |
+| 1 | 详情抽屉由 `openChannel(id)` 一次 `drawer(...)` 画出，而**图表是在 `drawer()` 之前求值的**（模板字符串里调 `areaChart(DATA.trend.slice(-12),…)`） | `build/app.js` `openChannel` 内 `areaChart` 早于 `drawer(` |
+| 2 | `areaChart` 里 `let d='M'+pts[0][0]+','+pts[0][1]` **没有空数据分支**，`data=[]` ⇒ `pts[0]` 是 `undefined` ⇒ `TypeError: Cannot read properties of undefined (reading '0')` | 把整个 `build/app.js` 跑进最小 DOM 桩、喂真实 `/admin/api/status` 形状数据后**稳定复现**，栈顶就落在 `areaChart` |
+| 3 | 全新部署的实例 `/admin/api/usage` 的 `byDay` 是空数组 ⇒ `adapt()` 算出 `trend=[]` ⇒ 必然走到上面那条 | 临时网关实测：0 请求时 `byDay=[]`；有请求后 `byDay` 才有值（本机线上是 24 天，所以本机不复现） |
+| 4 | 同一个坑还有兄弟：`sparkline` 对空数组会取 `pts[pts.length-1][0]`；单点输入 `w/(length-1)` 还是 `w/0` → `NaN` | KPI 卡/总览的迷你曲线用的是它 |
 
 **处置**（最小改动，不动布局与配色）：
 
-1. `areaChart`：函数开头判空（`!Array.isArray(data) || data.length===0`）→ 直接返回**占位图**（保留 `viewBox`/宽高、画一条虚线基线、居中写「暂无数据（还没有调用记录）」），**绝不抛**。有数据时输出与改动前同构（同一套 `M/C` 路径与网格）。
+1. `areaChart`：函数开头判空（`!Array.isArray(data) || data.length===0`）→ 直接返回**占位图**（保留 `viewBox`/宽高、画一条虚线基线、居中写「暂无数据（还没有调用记录）」），**绝不抛**。有数据时输出与改动前**逐字节同构**（同一套 `M/C` 路径与网格）。
 2. `sparkline`：同样开头判空 → 返回一条基线占位；并把单点输入的分母改成 `vals.length>1 ? w/(vals.length-1) : w/2`，消掉 `NaN`。
-3. 新增一节回归：`test/console-state.test.js` **§9「零数据（全新部署）不许把页面/抽屉打挂」**——在最小 DOM 桩里**真跑 `openChannel`**（零数据 + 满数据两组），断言不抛、抽屉真的画出来、抽屉里有渠道名与占位文案、满数据仍画得出曲线；另加两条结构守卫，防止后续重构把空数据分支“简化”掉。
+3. 新增一节回归：`test/console-state.test.js` **§9「零数据（全新部署）不许把页面/抽屉打挂」**——在最小 DOM 桩里**真跑 `openChannel`**（零数据 + 满数据两组），断言不抛、抽屉真的画出来、柜里有渠道名与占位文案、满数据仍画得出曲线；另加两条结构守卫，防止后续重构把空数据分支"简化"掉。
 
-**为什么以前没抓到**：`console-state.test.js` 的桩数据**一直是满的**（有 `trend`、有渠道），而这类“空数据炸渲染”的 bug 的特征恰恰是**有数据时全绿**。教训写进用例注释：凡是渲染函数，桩数据必须**再跑一遍空的**。
+**为什么以前没抓到**：`console-state.test.js` 的桩数据**一直是满的**（有 `trend`、有渠道），而这类"空数据炸渲染"的 bug 的特征恰恰是**有数据时全绿**。教训写进用例注释：凡是渲染函数，桩数据必须**再跑一遍空的**。
 
-**验证**：`node test/console-state.test.js` **115 项断言全绿**（原 103，本节 +12）；`node build/build.js` 通过、产物里能搜到占位文案；全量 **28 个测试文件 / 1197 断言 / 0 失败**；对照实验：用改动前的源码跑同一组断言，`areaChart([])` 必抛、`openChannel` 必中断（测试抓得住）。
+**验证**：`node test/console-state.test.js` **115 项断言全绿**（原 103，本节 +12）；`node build/build.js` 通过、产物已含占位文案；全量 **28 个测试文件 / 1197 断言 / 0 失败**；对照实验：用改动前的源码跑同一组断言，`areaChart([])` 必抛、`openChannel` 必中断（测试抓得住）。
 
-**对「部署方」的结论**：这不是环境问题、不是浏览器缓存问题（`/console` 响应头是 `Cache-Control: no-store`，刷新即最新），而是**这份基于 git 的构建里就有的代码缺陷**——唯一解法是更新代码后重新构建并重启容器（`node build/build.js` + 重建镜像）。
+**对「部署方」的结论**：这不是环境问题、不是浏览器缓存问题（`/console` 响应头是 `Cache-Control: no-store`，刷新即最新），而是**基于 `git` 的那份构建里就有的代码缺陷**——唯一解法是更新代码后重新构建并重启容器（`node build/build.js` + 重建镜像）。
+
+### 8.24 v1.18.2 运行期设置页归到「工具」组：Playground 与接入信息之间（2026-10-02，对象 `build/app.js` + 产物 `console.html` + 两份前端文档 + `README.md`）
+
+**问题**：v1.18 把「运行期设置」放进「资源」组（排在 渠道管理 / 聚合模型 / 自动权重 之后），但它是**网关运行态开关**、不是资源条目——归到「资源」语义不搭，用户在资源里找不到"设置"。
+
+**处置**：`NAV`（`build/app.js` 337）把 `{id:'settings',label:'运行期设置',icon:'sliders'}` 从「资源」组移到「工具」组，**夹在 Playground 与接入信息之间**（工具组顺序：Playground / 运行期设置 / 接入信息）。一进一出、`NAV` 行数不变 ⇒ 其后所有行号锚点（含 JS 偏移 **+686**）不漂移；`go()` / `render()` 两张分发表与 `vSettings` 本身一行未动。
+
+**验证**：`node build/build.js` 通过、产物已含新顺序；`test/console-state.test.js` **146 项断言全绿**（§10 不受影响，其断言按 `id` 取元素、不依赖分组；另加一条位置守卫锁住"工具组 / Playground 与接入信息之间"）；全量 **28 文件 / 0 失败**。
 
 ---
 
