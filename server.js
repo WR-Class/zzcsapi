@@ -364,25 +364,75 @@ function authFail(kind) {
 }
 function authOk(kind) { const st = AUTH_FAIL[kind]; st.n = 0; st.until = 0; }
 
+/* ═══ 控制台会话（v1.18.6）═══════════════════════════════════════════════
+   问题：管理密钥常驻浏览器 localStorage（任何 XSS 可读、即永久主钥匙），且 ?key= 会把密钥写进浏览器历史。
+   处置：登录门把密钥交给 POST /admin/api/session **一次**，换回 HttpOnly + SameSite=Strict 的会话 cookie；
+   之后管理面调用只带 cookie，真实密钥从浏览器里消失（JS 也读不到 HttpOnly cookie）。
+   - 会话表在内存：重启即全部掉线需重新登录（本网关重启频繁，这是刻意接受的代价）。
+   - TTL 12 小时；懒过期 + 周期清扫；上限 256 条（防爆内存）。
+   - 轮换/重置管理密钥时整表清空（旧会话不该在换锁后继续开门）；发起轮换的浏览器由该次响应补发新会话。
+   - 脚本仍可用 Bearer ADMIN_KEY 直连管理面（CI/curl 不受影响）——会话只为浏览器而生。 */
+const SESSIONS = new Map();            // token -> expiresAt（插入序即新旧序）
+const SESSION_TTL_MS = 12 * 3600 * 1000;
+const SESSION_MAX = 256;
+const SESSION_COOKIE = 'zz_session';
+function newSessionToken() {
+  if (SESSIONS.size >= SESSION_MAX) {  // 先清过期（免费腾位），不够再逐一个最旧的活会话——不过度逐人
+    const now = Date.now();
+    for (const [t, exp] of SESSIONS) {
+      if (exp <= now) { SESSIONS.delete(t); if (SESSIONS.size < SESSION_MAX) break; continue; }
+      SESSIONS.delete(t); break;
+    }
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  SESSIONS.set(token, Date.now() + SESSION_TTL_MS);
+  return token;
+}
+function sessionCookieValue(token) {
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`;
+  // 不加 Secure：本网关设计上就跑在 http 本地/局域网；加了 cookie 反而种不下去
+}
+function readSessionToken(req) {
+  const c = req.headers.cookie;
+  if (!c) return '';
+  for (const part of c.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === SESSION_COOKIE) return part.slice(i + 1).trim();
+  }
+  return '';
+}
+function sessionValid(req) {
+  const t = readSessionToken(req);
+  if (!t) return false;
+  const exp = SESSIONS.get(t);
+  if (!exp) return false;
+  if (exp <= Date.now()) { SESSIONS.delete(t); return false; }  // 懒过期
+  return true;
+}
+function clearSessions() { SESSIONS.clear(); }
+setInterval(() => { const now = Date.now(); for (const [t, exp] of SESSIONS) if (exp <= now) SESSIONS.delete(t); }, 600000).unref();
+
 function checkAuth(req, kind) {
   // kind: 'gateway' | 'admin'
   if (NOAUTH) return true;                            // 本地免鉴权（显式选择的开发模式）
   // NOAUTH 关闭时密钥恒非空（空则首启已生成，见 resolveGeneratedKeys），不再存在"没设置就放行"
   const need = kind === 'admin' ? ADMIN_KEY : GATEWAY_KEY;
+  if (kind === 'admin' && sessionValid(req)) { authOk(kind); return true; }   // 浏览器会话 cookie（v1.18.6）
   const h = req.headers['authorization'] || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   if (m && safeEqual(m[1], need)) { authOk(kind); return true; }
   // 原生 SDK 兼容（仅 gateway 侧）：Gemini SDK 发 x-goog-api-key（其默认鉴权头，另一模式是 ?key=），
   // Anthropic SDK 发 x-api-key。不认这两个头 → 官方 SDK 直连一律 401（OpenAI SDK 走 Bearer 本来就通）。
-  // 管理面不接受它们：admin 只能 Bearer / ?key=，避免把客户端密钥语义混进管理面。
+  // 管理面不接受它们：admin 只能 Bearer 或会话 cookie，避免把客户端密钥语义混进管理面。
   if (kind !== 'admin') {
     if (req.headers['x-goog-api-key'] !== undefined && safeEqual(req.headers['x-goog-api-key'], need)) { authOk(kind); return true; }
     if (req.headers['x-api-key'] !== undefined && safeEqual(req.headers['x-api-key'], need)) { authOk(kind); return true; }
+    // 兼容 ?key=...（仅 gateway：Gemini SDK 的另一默认鉴权模式）
+    // v1.18.6 起管理面不再认 ?key=——那是渗透报告点名的"密钥进浏览器历史"残留面，浏览器改用会话 cookie
+    const u = new URL(req.url, 'http://127.0.0.1');
+    const qk = u.searchParams.get('key');
+    if (qk !== null && safeEqual(qk, need)) { authOk(kind); return true; }
   }
-  // 兼容 ?key=...
-  const u = new URL(req.url, 'http://127.0.0.1');
-  const qk = u.searchParams.get('key');
-  if (qk !== null && safeEqual(qk, need)) { authOk(kind); return true; }
   authFail(kind);
   return false;
 }
@@ -884,6 +934,7 @@ function rotateKeys(patch) {         // patch 里的值必须已经过 normNewKe
   if (patch.gatewayKey !== undefined) GATEWAY_KEY = patch.gatewayKey;
   if (patch.adminKey !== undefined) ADMIN_KEY = patch.adminKey;
   resetAuthFailCounters();
+  if (patch.adminKey !== undefined) clearSessions();   // 换锁后旧会话一律作废；发起方由响应补发新会话（见路由处）
   persistConfig();
   return next;
 }
@@ -898,6 +949,7 @@ function resetManagedKeys() {        // 丢掉控制台的覆盖，回到「环�
     ADMIN_KEY = process.env.ADMIN_KEY || '';
   }
   resetAuthFailCounters();
+  clearSessions();                    // 控制权交还 .env：控制台签出的会话一并作废
   persistConfig();
 }
 function keysView() {
@@ -2667,12 +2719,15 @@ function loadConsoleHtml() {
    - X-Frame-Options: DENY：控制台不需要被任何页面嵌套，直接掐掉点击劫持
    - Referrer-Policy: no-referrer：顺带治「/console?key=… 把 admin key 带进 Referer」
    - Permissions-Policy：控制台不用摄像头/麦克风/定位，一并关掉
-   CSP 刻意不在这里加：控制台是内联脚本 + MiSans CDN，需要单独设计并做浏览器验证（见 README「计划中」）。 */
+   - CSP（v1.18.6，渗透报告第三批）：控制台是单文件内联脚本/样式，故 script/style 只能放 'unsafe-inline'
+     ——真正的兜底在 connect-src 'self'（偷到 cookie 也发不出去）与 img-src/frame-ancestors。
+     字体走小米 CDN：样式表在 font.sec.miui.com、字体文件在 cdn-file.hyperos.mi.com（head.html 的 preconnect 可证）。 */
 const SEC_HEADERS = [
   ['X-Content-Type-Options', 'nosniff'],
   ['X-Frame-Options', 'DENY'],
   ['Referrer-Policy', 'no-referrer'],
   ['Permissions-Policy', 'geolocation=(), microphone=(), camera=()'],
+  ['Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"],
 ];
 
 const server = http.createServer(async (req, res) => {
@@ -2695,6 +2750,31 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/healthz') {
       return sendJson(res, 200, { ok: true, channels: channels.size, gatewayKey: !!GATEWAY_KEY, adminKey: !!ADMIN_KEY });
+    }
+
+    // 控制台会话登录/退出（v1.18.6）——必须在 authGate 之前：登录门手里还没有会话。
+    // 登录本身计入 admin 失败限流（瞎试密钥与瞎试接口同等对待）；Bearer 直连管理面不受影响。
+    if (url.pathname === '/admin/api/session') {
+      if (req.method === 'POST') {
+        const wait = authThrottle('admin');
+        if (wait) {
+          res.setHeader('Retry-After', String(wait));
+          return sendJson(res, 429, { error: `too many failed admin auth attempts, retry in ${wait}s` });
+        }
+        const body = await safeReadJson(req);
+        const key = body && typeof body === 'object' ? String(body.key == null ? '' : body.key) : '';
+        if (!NOAUTH && !safeEqual(key, ADMIN_KEY)) { authFail('admin'); return unauthorized(res, 'admin'); }
+        authOk('admin');
+        res.setHeader('Set-Cookie', sessionCookieValue(newSessionToken()));
+        return sendJson(res, 200, { ok: true, expiresInSec: Math.floor(SESSION_TTL_MS / 1000) });
+      }
+      if (req.method === 'DELETE') {
+        const t = readSessionToken(req);
+        if (t) SESSIONS.delete(t);
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+        return sendJson(res, 200, { ok: true });
+      }
+      return sendJson(res, 405, { error: 'method not allowed' });
     }
 
     // 控制台 API（用 admin key 鉴权）
@@ -3463,6 +3543,8 @@ async function handleAdminApi(req, res, url) {
     rotateKeys(patch);
     console.log('[keys] 控制台轮换了 ' + Object.keys(patch).map((f) => (f === 'adminKey' ? '管理密钥' : '网关密钥')).join(' / ')
       + '（旧密钥已立即失效）');
+    // 换了管理密钥：rotateKeys 已清空全部会话——给发起轮换的这个浏览器补发新会话，免得它下一步就被踢回登录门
+    if (patch.adminKey !== undefined) res.setHeader('Set-Cookie', sessionCookieValue(newSessionToken()));
     // 新值放在 newKeys 里，**必须在 keysView() 之后**——keysView().gatewayKey 是个对象，
     // 写在前面会被它整个覆盖掉，控制台就拿不到刚轮换出来的值去更新自己了。
     return sendJson(res, 200, { ok: true, ...keysView(), newKeys: patch });

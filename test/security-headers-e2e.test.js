@@ -6,7 +6,10 @@
  *   ① 渲染层统一转义：控制台里所有外部可控值（模型名、渠道名/ID、上游错误文案）都必须经过 esc()。
  *      这是「任何持有 GATEWAY_KEY 的调用方 → 调用日志 → 管理端打开页面即执行脚本」那条链的唯一出路。
  *   ② 安全响应头与 no-store：nosniff / 防 iframe 嵌套 / 不发 Referer；管理面与 /healthz 不被缓存。
- *      CSP 刻意未加（控制台是内联脚本 + MiSans CDN），因此这里也不假装它存在。
+ *      CSP 于 v1.18.6（渗透第三批）刻意加上：单文件控制台只能开 'unsafe-inline'（脚本/样式），
+ *      真正的兜底是 connect-src 'self'（偷到 cookie 也发不出去）与 frame-ancestors 'none'。
+ *   ③ 第三批（v1.18.6）：管理面 ?key= 鉴权已拆除（渗透报告点名"密钥进浏览器历史"），
+ *      浏览器改走会话 cookie（见 test/admin-session-e2e.test.js）；客户端面 ?key= 保留（Gemini SDK 另一模式）。
  *
  * 安全约束：动态空闲端口；配置/用量在系统临时目录（绝不动仓库 config.json/usage.json）。
  * 跑法：node test/security-headers-e2e.test.js      （退出码非 0 表示有回归）
@@ -69,7 +72,17 @@ const freePort = () => new Promise((res, rej) => {
     setIdx > handlerIdx && setIdx < firstBranch, { setIdx, firstBranch });
   check('管理面与 /healthz 加 no-store',
     /url\.pathname\.startsWith\('\/admin\/api\/'\) \|\| url\.pathname === '\/healthz'\) res\.setHeader\('Cache-Control', 'no-store'\)/.test(SRC));
-  check('CSP 未被偷偷加上（要加就得配套改前端并做浏览器验证）', !/Content-Security-Policy/.test(SRC));
+  /* v1.18.6 第三批：CSP 从"不得偷偷加"翻成"按设计加上、值逐字核对"。
+     unsafe-inline 是单文件控制台的既定代价（脚本/样式内联）；字体走小米 CDN（font.src 与 cdn-file）；
+     兜底在 connect-src 'self'（XSS 偷到会话 cookie 也发不出去）与 frame-ancestors/base-uri/form-action。 */
+  const CSP_EXPECT = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+  const cspEntry = SRC.match(/\['Content-Security-Policy',\s*"([^"]*)"\]/);
+  check('CSP 已按设计加上（SEC_HEADERS 第 5 项）且值逐字等于设计稿（内联开、CDN 字体、connect-src self）',
+    !!cspEntry && cspEntry[1] === CSP_EXPECT, cspEntry && cspEntry[1]);
+  check('CSP 兜底三件套都在（connect-src self / frame-ancestors none / base-uri self）',
+    /connect-src 'self'/.test(cspEntry ? cspEntry[1] : '') &&
+    /frame-ancestors 'none'/.test(cspEntry ? cspEntry[1] : '') &&
+    /base-uri 'self'/.test(cspEntry ? cspEntry[1] : ''));
 
   /* ── 第二批（v1.18.4）的装配守卫：密钥默认不下发、原文按需取、失败限流 ── */
   check('两处「渠道列表」下发掩码，写 config.json 的那处仍保留原文（否则写盘会把密钥覆盖成掩码）',
@@ -134,11 +147,24 @@ const freePort = () => new Promise((res, rej) => {
       const r = await fetch(`http://127.0.0.1:${GW}${p}`, { headers });
       const h = r.headers;
       const okCode = r.status === want;
-      const okHeads = h.get('x-content-type-options') === 'nosniff' && h.get('x-frame-options') === 'DENY' && h.get('referrer-policy') === 'no-referrer' && !!h.get('permissions-policy');
-      check(`${p} → ${r.status}（期望 ${want}）且三个安全头齐全`, okCode && okHeads,
-        { status: r.status, nosniff: h.get('x-content-type-options'), xfo: h.get('x-frame-options'), ref: h.get('referrer-policy') });
+      const okHeads = h.get('x-content-type-options') === 'nosniff' && h.get('x-frame-options') === 'DENY' && h.get('referrer-policy') === 'no-referrer' && !!h.get('permissions-policy')
+        && h.get('content-security-policy') === CSP_EXPECT;
+      check(`${p} → ${r.status}（期望 ${want}）且五个安全头齐全（含 CSP）`, okCode && okHeads,
+        { status: r.status, nosniff: h.get('x-content-type-options'), xfo: h.get('x-frame-options'), ref: h.get('referrer-policy'), csp: (h.get('content-security-policy') || '').slice(0, 60) });
       await r.text();
     }
+
+    /* v1.18.6 第三批真链路：管理面 ?key= 已拆（渗透报告点名"密钥进浏览器历史"），
+       客户端面 ?key= 保留（Gemini SDK 的另一默认鉴权模式）。两把都用真密钥走查询串，
+       断言一个 401 一个 200——标签里只写去向不回显密钥。 */
+    const adminUrlKey = await fetch(`http://127.0.0.1:${GW}/admin/api/status?key=${encodeURIComponent(AD_KEY)}`);
+    check('★ 管理面 ?key= 已停用（正确管理密钥走查询串也 401，浏览器请走会话 cookie）',
+      adminUrlKey.status === 401, { status: adminUrlKey.status });
+    await adminUrlKey.text();
+    const gwUrlKey = await fetch(`http://127.0.0.1:${GW}/v1/models?key=${encodeURIComponent(GW_KEY)}`);
+    check('★ 客户端面 ?key= 保留（Gemini SDK 另一鉴权模式不受本次整改影响）',
+      gwUrlKey.status === 200, { status: gwUrlKey.status });
+    await gwUrlKey.text();
 
     const hz = await fetch(`http://127.0.0.1:${GW}/healthz`);
     check('/healthz 带 no-store', hz.headers.get('cache-control') === 'no-store', hz.headers.get('cache-control'));

@@ -869,9 +869,9 @@ function testSettings() {
 }
 
 
-/* ── 11. 密钥管理：掩码展示、草稿保留、轮换与浏览器凭据同步 ─────────────── */
+/* ── 11. 密钥管理：掩码展示、草稿保留、轮换与会话语义（v1.18.6）────────── */
 async function testKeys() {
-  G('11. 密钥管理 vKeys（掩码 · 草稿跨轮询 · 两步确认 · 管理密钥自更新）');
+  G('11. 密钥管理 vKeys（掩码 · 草稿跨轮询 · 轮换 · 会话语义）');
 
   const RESET_SRC = extract('resetKeysAction');
   const begin = src.indexOf('const KEY_SRC_TXT=');
@@ -880,6 +880,24 @@ async function testKeys() {
   check('装配：从 build/app.js 现抠到密钥管理整段实现',
     begin >= 0 && end > begin && KEY_SRC.includes('function vKeys(') &&
     KEY_SRC.includes('function rotateKey(') && KEY_SRC.includes('function toggleKeyReveal('));
+
+  {
+    /* v1.18.6 会话化：管理密钥从「常驻 localStorage/sessionStorage、api() 每次带 Bearer」
+       改成「登录门 POST /admin/api/session 一次 → HttpOnly 会话 cookie」。
+       任何 adminKey 落存储的写法回潮（含 api() 注 Authorization、登录门存 key），本守卫直接红。 */
+    check('★ 管理密钥不落任何浏览器存储（登录门换会话 cookie，不再存 key）',
+      !src.includes("sessionStorage.getItem('adminKey')") &&
+      !src.includes("localStorage.setItem('adminKey'") &&
+      !src.includes("sessionStorage.setItem('adminKey'") &&
+      !src.includes("localStorage.getItem('adminKey')"));
+    check('★ api() 不再注入 Authorization（鉴权只靠同源会话 cookie）',
+      !/headers\['Authorization'\]\s*=/.test(src.slice(src.indexOf('async function api('), src.indexOf('async function api(') + 900)));
+    check('★ 登录门走 POST /admin/api/session 换会话，?key= 通道已拆除',
+      src.includes("fetch('/admin/api/session',{method:'POST'") &&
+      !src.includes('searchParams.get(\'key\')'));
+    check('对照组：旧写法（keyFlow 收 ?key= 进 localStorage）会被本守卫抓红',
+      !src.includes('__ZZ_HAS_KEY__'));
+  }
 
   {
     const nav = src.slice(src.indexOf('const NAV=['), src.indexOf('let page='));
@@ -945,12 +963,12 @@ async function testKeys() {
       return apiStub(path, opts || {});
     };
     const factory = new Function('$', '$$', 'RAW', 'DATA', 'esc', 'svg', 'nf', 'toast',
-      'api', 'copyText', 'render', 'reload', 'sessionStorage', 'localStorage', 'location',
+      'api', 'copyText', 'render', 'reload', 'sessionStorage', 'localStorage', 'location', 'logout',
       KEY_SRC + '\nreturn { vKeys, rotateKey, resetKeysAction, toggleKeyReveal, armConfirm, fillGeneratedKey,' +
       ' get keyDraft(){return keyDraft}, get keyReveal(){return keyReveal} };');
     const api = factory($, dom.$$, raw, { channels:[], models:[], meta:{} }, esc, svg, nf,
       (m,k) => toasts.push([m,k]), apiWrap, () => {}, () => {}, async () => {},
-      sessionStorage, localStorage, { origin:'http://127.0.0.1:8787' });
+      sessionStorage, localStorage, { origin:'http://127.0.0.1:8787' }, async () => {});
     return { dom, api, sessionStorage, localStorage };
   };
 
@@ -995,9 +1013,8 @@ async function testKeys() {
       const q=sent[0], body=JSON.parse(q.opts.body);
       return q.path==='/admin/api/keys' && q.opts.method==='POST' && body.adminKey===genDraft;
     })());
-    check('★ 管理密钥轮换后同时更新 sessionStorage 与 localStorage，控制台不会把自己踢出去',
-      x.sessionStorage.getItem('adminKey')==='new-admin-key-1234567890' &&
-      x.localStorage.getItem('adminKey')==='new-admin-key-1234567890');
+    check('★ 管理密钥轮换后不往任何浏览器存储写值（会话 cookie 由服务端 Set-Cookie 补发，浏览器自己种）',
+      x.sessionStorage.getItem('adminKey')===null && x.localStorage.getItem('adminKey')===null);
     check('轮换成功后清空管理密钥草稿并提示旧值立即失效',
       x.api.keyDraft.admin==='' && toasts.some(t => String(t[0]).includes('旧值已立即失效')));
   }
