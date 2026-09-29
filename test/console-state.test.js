@@ -869,9 +869,9 @@ function testSettings() {
 }
 
 
-/* ── 11. 密钥管理：掩码展示、草稿保留、轮换与浏览器凭据同步 ─────────────── */
+/* ── 11. 密钥管理：掩码展示、草稿保留、轮换与会话语义（v1.18.6）────────── */
 async function testKeys() {
-  G('11. 密钥管理 vKeys（掩码 · 草稿跨轮询 · 两步确认 · 管理密钥自更新）');
+  G('11. 密钥管理 vKeys（掩码 · 草稿跨轮询 · 轮换 · 会话语义）');
 
   const RESET_SRC = extract('resetKeysAction');
   const begin = src.indexOf('const KEY_SRC_TXT=');
@@ -882,6 +882,24 @@ async function testKeys() {
     KEY_SRC.includes('function rotateKey(') && KEY_SRC.includes('function toggleKeyReveal('));
 
   {
+    /* v1.18.6 会话化：管理密钥从「常驻 localStorage/sessionStorage、api() 每次带 Bearer」
+       改成「登录门 POST /admin/api/session 一次 → HttpOnly 会话 cookie」。
+       任何 adminKey 落存储的写法回潮（含 api() 注 Authorization、登录门存 key），本守卫直接红。 */
+    check('★ 管理密钥不落任何浏览器存储（登录门换会话 cookie，不再存 key）',
+      !src.includes("sessionStorage.getItem('adminKey')") &&
+      !src.includes("localStorage.setItem('adminKey'") &&
+      !src.includes("sessionStorage.setItem('adminKey'") &&
+      !src.includes("localStorage.getItem('adminKey')"));
+    check('★ api() 不再注入 Authorization（鉴权只靠同源会话 cookie）',
+      !/headers\['Authorization'\]\s*=/.test(src.slice(src.indexOf('async function api('), src.indexOf('async function api(') + 900)));
+    check('★ 登录门走 POST /admin/api/session 换会话，?key= 通道已拆除',
+      src.includes("fetch('/admin/api/session',{method:'POST'") &&
+      !src.includes('searchParams.get(\'key\')'));
+    check('对照组：旧写法（keyFlow 收 ?key= 进 localStorage）会被本守卫抓红',
+      !src.includes('__ZZ_HAS_KEY__'));
+  }
+
+  {
     const nav = src.slice(src.indexOf('const NAV=['), src.indexOf('let page='));
     const iTool = nav.indexOf("sec:'工具'"), iSet = nav.indexOf("id:'settings'");
     const iKeys = nav.indexOf("id:'keys'"), iAccess = nav.indexOf("id:'access'");
@@ -889,6 +907,41 @@ async function testKeys() {
       iTool >= 0 && iSet > iTool && iKeys > iSet && iAccess > iKeys);
     check('★ render() 与 go() 两张路由表都注册 keys:vKeys',
       (src.match(/keys:vKeys/g) || []).length === 2);
+  }
+
+  {
+    /* 状态横幅必须自带内边距：.card 只有 overflow:hidden、没有 padding，
+       内容直接塞 .row 会贴着边框（v1.18.6 修的"框怪怪的"就是这个）。 */
+    check('★ 密钥状态横幅走 card-bd（.card 自身无 padding，漏了会贴边框）',
+      /class="card-bd row" style="gap:9px/.test(KEY_SRC));
+    const legacyKey = KEY_SRC.replace('class="card-bd row" style="gap:9px', 'class="row" style="gap:9px');
+    check('对照组：漏 card-bd 的旧写法不满足该守卫 → 本用例抓得住"内容贴边框"回归',
+      !/class="card-bd row" style="gap:9px/.test(legacyKey));
+  }
+
+  {
+    /* 密钥值的 span 原本写的是 class="mask mono"，而 .mask 是**弹窗遮罩**
+       （position:fixed;inset:0;opacity:0，见设计稿 modal 区块）——套上来密钥值就成了
+       一个铺满视口、透明、脱离文档流的元素：行里只剩「当前值 / 显示 / 复制」，值看不见。
+       这个类名冲突设计稿里就带着（接入信息页的 GATEWAY_KEY 一起中招），v1.18.6 修。 */
+    check('★ 密钥值走 .kval，不得再借用弹窗遮罩的 .mask 类名',
+      KEY_SRC.includes('class="kval mono"') && !/class="mask mono"/.test(KEY_SRC));
+    check('★ 接入信息页的 GATEWAY_KEY 值同样走 .kval（同一个冲突，两处一起修）',
+      src.includes('<span>GATEWAY_KEY</span><span class="kval mono">') &&
+      !/<span>GATEWAY_KEY<\/span><span class="mask mono">/.test(src));
+    const legacyVal = KEY_SRC.replace('class="kval mono"', 'class="mask mono"');
+    check('对照组：旧写法 class="mask mono" 不满足该守卫 → 本用例抓得住"密钥值整行不可见"回归',
+      /class="mask mono"/.test(legacyVal));
+  }
+
+  {
+    /* 光看源码不够：类名冲突是 CSS 层面的，产物里必须真的没有 .ep-key .mask 规则、
+       且 .mask 仍是那条弹窗遮罩（否则守卫会在"把遮罩改名"这种改法下失效）。 */
+    const built = fs.readFileSync(path.join(__dirname, '..', 'console.html'), 'utf8');
+    check('★ 产物里 .ep-key .kval 有样式，且 .ep-key .mask 规则已消失',
+      built.includes('.ep-key .kval{') && !built.includes('.ep-key .mask{'));
+    check('★ .mask 仍是弹窗遮罩（position:fixed + inset:0 + opacity:0 一条不少）',
+      /\.mask\{[^}]*position:fixed[^}]*opacity:0/.test(built));
   }
 
   const mkRaw = () => ({ keys: {
@@ -910,12 +963,12 @@ async function testKeys() {
       return apiStub(path, opts || {});
     };
     const factory = new Function('$', '$$', 'RAW', 'DATA', 'esc', 'svg', 'nf', 'toast',
-      'api', 'copyText', 'render', 'reload', 'sessionStorage', 'localStorage', 'location',
+      'api', 'copyText', 'render', 'reload', 'sessionStorage', 'localStorage', 'location', 'logout',
       KEY_SRC + '\nreturn { vKeys, rotateKey, resetKeysAction, toggleKeyReveal, armConfirm, fillGeneratedKey,' +
       ' get keyDraft(){return keyDraft}, get keyReveal(){return keyReveal} };');
     const api = factory($, dom.$$, raw, { channels:[], models:[], meta:{} }, esc, svg, nf,
       (m,k) => toasts.push([m,k]), apiWrap, () => {}, () => {}, async () => {},
-      sessionStorage, localStorage, { origin:'http://127.0.0.1:8787' });
+      sessionStorage, localStorage, { origin:'http://127.0.0.1:8787' }, async () => {});
     return { dom, api, sessionStorage, localStorage };
   };
 
@@ -960,9 +1013,8 @@ async function testKeys() {
       const q=sent[0], body=JSON.parse(q.opts.body);
       return q.path==='/admin/api/keys' && q.opts.method==='POST' && body.adminKey===genDraft;
     })());
-    check('★ 管理密钥轮换后同时更新 sessionStorage 与 localStorage，控制台不会把自己踢出去',
-      x.sessionStorage.getItem('adminKey')==='new-admin-key-1234567890' &&
-      x.localStorage.getItem('adminKey')==='new-admin-key-1234567890');
+    check('★ 管理密钥轮换后不往任何浏览器存储写值（会话 cookie 由服务端 Set-Cookie 补发，浏览器自己种）',
+      x.sessionStorage.getItem('adminKey')===null && x.localStorage.getItem('adminKey')===null);
     check('轮换成功后清空管理密钥草稿并提示旧值立即失效',
       x.api.keyDraft.admin==='' && toasts.some(t => String(t[0]).includes('旧值已立即失效')));
   }

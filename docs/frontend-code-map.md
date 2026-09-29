@@ -30,10 +30,10 @@
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 77 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**） | ✅ §0.2 |
-| `build/app.js` | 2273 | **生产逻辑主体**：数据层 + 动作层 + 8 个页面渲染 + 首启密钥登录门，真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/app.js` | 2439 | **生产逻辑主体**：数据层 + 动作层 + 8 个页面渲染 + 管理密钥登录门（会话化，v1.18.6），真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 52 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
-| `console.html` | ~2936 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
-| `server.js` | ~4520 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import` 等；含首启密钥生成与双层鉴权 | 参考 |
+| `console.html` | ~3129 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
+| `server.js` | ~6161 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import`、`/admin/api/session`（登录 / 退出，v1.18.6）等；含首启密钥生成、会话表与双层鉴权 | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
 **关键结论**：改 `console-redesign.html` 的 JS 部分时**不要**去找它的接口调用——它没有。所有"数据"都是文件内常量。
@@ -74,7 +74,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 目标 | 公式 | 校验点 |
 | --- | --- | --- |
 | `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24；`--tx:#1b1710`：原型 46 → 产物 59 |
-| `console.html` 的 JS 行号 | `build/app.js` 行号 **+686** | `const IC`：app.js 3 → 产物 689；`autoWeightCard()`：app.js 654 → 产物 1340；`tick()`：app.js 2243 → 产物 2929（偏移仍为 **+686**，与下面 §0.2 的源行号一一对应） |
+| `console.html` 的 JS 行号 | `build/app.js` 行号 **+686** | `const IC`：app.js 3 → 产物 689；`autoWeightCard()`：app.js 657 → 产物 1343；`tick()`：app.js 2410 → 产物 3096（偏移仍为 **+686**，与下面 §0.2 的源行号一一对应） |
 
 > 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（77 行）/ 设计稿 `<style>` 的行数增删影响（head/shell 已有构建期行数守卫；extra.css 与设计稿 CSS 改行数需人工重算并同步本文档、AGENTS.md §1.2 与 `build/build.js` 注释）。
 > **历史教训（v1.8 重核）**：这条公式曾长期停在 **+617**（`build/build.js` 注释里又写着 +648），而实测是 **+673** —— 三个地方对不上，且漂移量在各函数间不等（+1 ~ +26），说明是历次改动累积的局部插入。
@@ -120,34 +120,34 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 161 / 181 | `render()` / `reload()` | 重绘当前页（**保留滚动位置 + 焦点/光标**；筛选状态由各页 JS 变量回填，见下方「状态回填」约定）/ 重新拉数并重绘 |
 | 184 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
 | 201–209 | `$` `$$` `esc` `nf` `pct` `fTok` `fMs` `stTxt` `protoLabel` | DOM/格式化小工具 |
-| 214 | `api(path,opts)` | **统一请求封装**：自动带 `Authorization: Bearer <ADMIN_KEY>`、错误 toast；**401 → 清掉已存密钥并弹回登录门**（密钥被轮换时自动重新要 key）。**v1.18.1 起把 `status`/`body` 挂到抛出的 Error 上**，供运行期设置页显示后端 400 原文 |
-| 226–252 | `downloadCsv`(226) `toast`(235) `copyText`(245) | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
-| 261 / 303 / 321 | `areaChart` / `sparkline` / `donut` | 内联 SVG 图表。**v1.18.1 起两个折线函数对空数据返回占位图而不是抛错**（全新部署 `usage` 为空时，详情抽屉曾在 `pts[0][0]` 处崩掉 → 表现是"点详情没反应"） |
-| 340 | `NAV` | 侧栏导航定义（「资源」组含 **渠道管理 / 聚合模型 / 自动权重**；「工具」组含 Playground / **运行期设置** / **密钥管理** / 接入信息） |
-| 355 / 363 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`；路由表含 `autoweight:vAutoWeight`、`settings:vSettings` 与 `keys:vKeys`） |
-| 376 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
-| 396–430 | `winStats`(396) `avgLatency`(412) `avgLatencyDelta`(418) `OV_RANGE`(430) | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ **时间范围配置** |
-| 433 / 441 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
-| 452–484 | `exportUsage`(452) `exportLogs`(464) `exportModels`(471) `copyModels`(478) | 导出与复制 |
-| 487 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
-| 605 / 882 / 919 / 928 | `vChannels` / `drawChTable` / `toggleCh` / `openChannel` | 渠道页（v1.9 起**只剩页签 + 搜索 + 表格**，观测卡已迁出）/ 排序渲染（含**权重 / 分流**列）/ 启停 / 详情抽屉（含权重与分流占比角标 + 自动权重观测一节） |
-| 650 / 658 | **`vAutoWeight()`** / **`autoWeightCard()`** | **自动权重页**（v1.9，资源 → 自动权重）：`vAutoWeight` 只出页头 + 挂卡；`autoWeightCard` 把 `/admin/api/status` 的 `autoWeight.models[]` 画成"若启用会怎么分"（**只算不生效**）。份额改成**一候选一列**（`.aw-col`，列宽 = 份额，色带段与名字/百分比同列，见 `build/extra.css` 10–57），份额为 0 的候选不进列、单独一行 `未参与分流：`。列标签**只留渠道显示名**（v1.9.1 起不再拼 id 小片） |
-| 729–881 | **运行期设置页（v1.18）**：`setDraft`(729) / `SET_GROUPS`(730) / `SET_META`(731) / `SET_FIELDS`(739) / `setGroupCfg`(756) / `metricsUrl`(757) / `syncSettingsDraft`(758) / `setHint`(763) / `setPayload`(769) / `setStat`(784) / `setCard`(791) / **`vSettings`(815)** / `setToggle`(848) / `updateSetSave`(849) / `resetSettings`(853) / **`saveSettings`(857)** | **运行期设置页**（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组网关运行态开关，唯一数据源 `GET/POST /admin/api/settings`。`SET_GROUPS`/`SET_META`/`SET_FIELDS` 是**三张卡的唯一真源**（加字段只改这三处）；`setGroupCfg` 同时取 `config`（回填表单）与 `effective`（钳制后生效值）两段，`setHint` 把二者不一致时算成生效角标；`syncSettingsDraft` 决定"8 秒轮询要不要覆盖草稿"（**`setDirty` 时绝不覆盖**）；`setPayload` **只收有改动的组**（PATCH 语义，没带的不动、不归零）；`saveSettings` 提交期间按钮 disabled + 文案变「保存中…」，**400 的 `error` 原文直接显示**（后端已点名到字段，如 `unknown field rateLimit.rpmm`）。样式见 `build/extra.css` 59–77 |
-| 996–1031 | `toggleDrawerKey`(996) `reprobe`(1008) `delChannel`(1021) | 抽屉密钥切换（**v1.18.4 起点一次才现取原文**，走 `chKeyLive`）/ 重探测 / 删除 |
-| 1033–1148 | `mTab`/`mQ`(1036) `vModels`(1037) `drawMTable`(1085) `openModel`(1114) | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
-| 1149–1266 | `lgRange` 等(1150) `vLogs`(1151) `logRows`(1187) `drawLogTable`(1199) `clearUsage`(1220) `openLog`(1224) `copyCurl`(1261) | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填）。**v1.13.2 起渠道列显示渠道显示名（`adapt()` 解析进 `n`，id 留在 `c`），列序为 请求 ID → 渠道 → 模型，搜索判据含 `l.n`** |
-| 1267–1454 | `pgDraft` 等(1274) `vPlayground`(1275) `drawPG`(1344) `drawRoute`(1358) `fmtUsage`(1370) `pgClear`(1373) `pgCopyCurl`(1374) `pgSend`(1380) | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
-| 1495–1656 | **密钥管理页（v1.18.5）**：`KEY_SRC_TXT`(1505) `keyDraft`(1506) `keyOf`(1510) `keyCard`(1514) **`vKeys`(1539)** `armConfirm`(1582) `toggleKeyReveal`(1591) `copyKeyValue`(1599) `genLocalKey`(1608) `fillGeneratedKey`(1612) `rotateKey`(1619) `resetKeysAction`(1642) | **密钥管理页**（工具 → 密钥管理，夹在运行期设置与接入信息之间）：在线轮换 `GATEWAY_KEY` / `ADMIN_KEY`。快照只有**掩码 + 来源**（console/env/generated/none），明文点「显示」才现取一次（按需揭示端点）；**「轮换」单击直接生效**（用户明确要求，文案写明"旧密钥立即失效"）；「回到环境变量值」保留**两步确认**（`armConfirm`，6 秒不复位自动还原）——它把控制台轮换的成果整段交还给 .env；**换管理密钥后同步更新 sessionStorage + localStorage 的 `adminKey`**（`rotateKey` 里做，否则下一次轮询 401 把自己踢回登录门）；手填草稿存 `keyDraft` 回填（状态回填约定）。唯一数据源 `GET /admin/api/keys`（随 `loadAll` 拉取，单独兜底）；**「随机生成」只在本地把 48 位随机串（四样字符齐全）填进输入框（`fillGeneratedKey`，不发请求）——用户先看到/复制新值，再点「轮换」提交 `POST /admin/api/keys` 生效**；「回到环境变量值」走 `POST /admin/api/keys/reset`。服务端 `POST /admin/api/keys/generate` 端点保留（API 可用，e2e 已测），控制台不再用它 |
-| 1658–1786 | `vAccess`(1658) `showKeyHelp`(1754) | 接入信息（端口 / 模型名照旧；**v1.18.4 起服务端只下发掩码**，密钥原文要点一次才现取：`copyGwKey` / `copyAllEndpoints`）；端点地址可直接复制；页头「密钥管理」按钮 `go('keys')` 直接跳轮换页（v1.18.5）；`showKeyHelp` 降级为**命令行备用路径**步骤清单（会提醒：控制台轮换过之后 `.env` 说了不算） |
-| 1788–1800 | `modal`(1789) `closeModal`(1796) `setStatus`(1797) `toggleMenu`(1798) | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
-| 1801–1828 | `PROTO_META`(1802) `PROTO_ORDER`(1812) `chKey`(1815) | 协议元数据 / 顺序 / 密钥取值（**v1.18.4**：`chKey` 给的是**掩码**；原文只在用户点击时经 `GET /admin/api/channels/{id}/key` / `GET /admin/api/gateway-key` 现取一次 —— `EP_COPY_TEXT`(1818) `_gwk`(1819) `chKeyLive`(1820) `gwKeyLive`(1821) `copyChKey`(1822) `copyGwKey`(1823) `copyAllEndpoints`(1824)，`gwKeyLive` 按页缓存）；（原型是 `fakeKey`） |
-| 1829–2088 | `openChannelForm`(1831) `probeUpstream`(1925) `toggleKeyField`(2025) … `saveChannel`(2041) | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换（**v1.18.4 起不回填原文**，占位符为「已配置 sk-a…1234 · 留空保持不变」；点「明文」时 `toggleKeyField` 才经 `chKeyLive` 现取一次原文、只填进输入框不落库）、保存（`weight` 随 `POST /admin/api/channels` 一起提交；**`apiKey` 留空 = 保持原密钥**） |
-| 2089–2226 | `IMPORT_META`(2090) `parseCodexUnits`(2108) `parseGsSessionId`(2116) `openImport`(2123) `importCodexRt`(2158) `importGsSession`(2163) `doImport`(2169) `importFiles`(2189) | 导入：**真实对接** `codex-import` / `genspark-import` |
-| 2227–2340 | `openTestModels`(2228) `chName`(2279) `testRowVerdict`(2285) `runTests`(2292) | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前）。**结果行必须能看懂**：每行带 `模型名` + 渠道显示名（`chName`）+ 中文结论（`testRowVerdict` 分 通过 / 空回复 / 失败 三档）+ 延迟 / token / 回复或错误原文 |
-| 2341–2367 | `drawer`(2342) `closeDrawer`(2346) `setTheme`(2354) | 抽屉 / 主题持久化 / 明暗互切 |
-| 2369 / 2397 | `showKeyGate()` `keyFlow()` | **首启密钥登录门**：密钥三源合流（`?key=` → localStorage → sessionStorage，URL 参数用完即从地址栏抹掉）；无密钥时全屏输入门，校验 `/admin/api/status` 通过后写 localStorage+sessionStorage 并 `boot()` |
-| 2411 | `tick()` | 时钟 |
-| 2421 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有密钥直接启动，无密钥先弹门再启动）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 215 | `api(path,opts)` | **统一请求封装**：错误 toast；**v1.18.6 起不注入任何 `Authorization` 头**——管理面鉴权交给登录门换来的会话 cookie（同源自动随行，`HttpOnly`，JS 读不到）；**401 → 弹登录门**（会话过期 / 被轮换清掉时自动闭环）。**v1.18.1 起把 `status`/`body` 挂到抛出的 Error 上**，供运行期设置页显示后端 400 原文 |
+| 225–251 | `downloadCsv`(225) `toast`(234) `copyText`(244) | 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
+| 260 / 302 / 320 | `areaChart` / `sparkline` / `donut` | 内联 SVG 图表。**v1.18.1 起两个折线函数对空数据返回占位图而不是抛错**（全新部署 `usage` 为空时，详情抽屉曾在 `pts[0][0]` 处崩掉 → 表现是"点详情没反应"） |
+| 339 | `NAV` | 侧栏导航定义（「资源」组含 **渠道管理 / 聚合模型 / 自动权重**；「工具」组含 Playground / **运行期设置** / **密钥管理** / 接入信息） |
+| 354 / 362 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`；路由表含 `autoweight:vAutoWeight`、`settings:vSettings` 与 `keys:vKeys`） |
+| 375 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
+| 395–429 | `winStats`(395) `avgLatency`(411) `avgLatencyDelta`(417) `OV_RANGE`(429) | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ **时间范围配置** |
+| 432 / 440 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
+| 451–483 | `exportUsage`(451) `exportLogs`(463) `exportModels`(470) `copyModels`(477) | 导出与复制 |
+| 486 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
+| 604 / 881 / 918 / 927 | `vChannels` / `drawChTable` / `toggleCh` / `openChannel` | 渠道页（v1.9 起**只剩页签 + 搜索 + 表格**，观测卡已迁出）/ 排序渲染（含**权重 / 分流**列）/ 启停 / 详情抽屉（含权重与分流占比角标 + 自动权重观测一节） |
+| 649 / 657 | **`vAutoWeight()`** / **`autoWeightCard()`** | **自动权重页**（v1.9，资源 → 自动权重）：`vAutoWeight` 只出页头 + 挂卡；`autoWeightCard` 把 `/admin/api/status` 的 `autoWeight.models[]` 画成"若启用会怎么分"（**只算不生效**）。份额改成**一候选一列**（`.aw-col`，列宽 = 份额，色带段与名字/百分比同列，见 `build/extra.css` 10–57），份额为 0 的候选不进列、单独一行 `未参与分流：`。列标签**只留渠道显示名**（v1.9.1 起不再拼 id 小片） |
+| 728–880 | **运行期设置页（v1.18）**：`setDraft`(728) / `SET_GROUPS`(729) / `SET_META`(730) / `SET_FIELDS`(738) / `setGroupCfg`(755) / `metricsUrl`(756) / `syncSettingsDraft`(757) / `setHint`(762) / `setPayload`(768) / `setStat`(783) / `setCard`(790) / **`vSettings`(814)** / `setToggle`(847) / `updateSetSave`(848) / `resetSettings`(852) / **`saveSettings`(856)** | **运行期设置页**（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组网关运行态开关，唯一数据源 `GET/POST /admin/api/settings`。`SET_GROUPS`/`SET_META`/`SET_FIELDS` 是**三张卡的唯一真源**（加字段只改这三处）；`setGroupCfg` 同时取 `config`（回填表单）与 `effective`（钳制后生效值）两段，`setHint` 把二者不一致时算成生效角标；`syncSettingsDraft` 决定"8 秒轮询要不要覆盖草稿"（**`setDirty` 时绝不覆盖**）；`setPayload` **只收有改动的组**（PATCH 语义，没带的不动、不归零）；`saveSettings` 提交期间按钮 disabled + 文案变「保存中…」，**400 的 `error` 原文直接显示**（后端已点名到字段，如 `unknown field rateLimit.rpmm`）。样式见 `build/extra.css` 59–77 |
+| 995–1031 | `toggleDrawerKey`(995) `reprobe`(1007) `delChannel`(1020) | 抽屉密钥切换（**v1.18.4 起点一次才现取原文**，走 `chKeyLive`）/ 重探测 / 删除 |
+| 1032–1147 | `mTab`/`mQ`(1035) `vModels`(1036) `drawMTable`(1084) `openModel`(1113) | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
+| 1148–1265 | `lgRange` 等(1149) `vLogs`(1150) `logRows`(1186) `drawLogTable`(1198) `clearUsage`(1219) `openLog`(1223) `copyCurl`(1260) | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填）。**v1.13.2 起渠道列显示渠道显示名（`adapt()` 解析进 `n`，id 留在 `c`），列序为 请求 ID → 渠道 → 模型，搜索判据含 `l.n`** |
+| 1266–1453 | `pgDraft` 等(1273) `vPlayground`(1274) `drawPG`(1343) `drawRoute`(1357) `fmtUsage`(1369) `pgClear`(1372) `pgCopyCurl`(1373) `pgSend`(1379) | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
+| 1494–1659 | **密钥管理页（v1.18.5；v1.18.6 会话化）**：`KEY_SRC_TXT`(1504) `keyDraft`(1505) `keyOf`(1509) `keyCard`(1513) **`vKeys`(1538)** `armConfirm`(1583) `toggleKeyReveal`(1592) `copyKeyValue`(1600) `genLocalKey`(1609) `fillGeneratedKey`(1618) `rotateKey`(1625) `resetKeysAction`(1645) | **密钥管理页**（工具 → 密钥管理，夹在运行期设置与接入信息之间）：在线轮换 `GATEWAY_KEY` / `ADMIN_KEY`。快照只有**掩码 + 来源**（console/env/generated/none），明文点「显示」才现取一次（按需揭示端点）；**「轮换」单击直接生效**（用户明确要求，文案写明"旧密钥立即失效"）；「回到环境变量值」保留**两步确认**（`armConfirm`，6 秒不复位自动还原）——它把控制台轮换的成果整段交还给 .env；**v1.18.6 会话化**：页头页操作区挂「退出登录」按钮（`#keyLogout` → `logout()`，只杀自己那枚会话）；换管理密钥后前端**不再写任何浏览器存储**——服务端清空全部会话并在轮换响应里**补发新会话 cookie**，发起页无感继续用；页脚文案明示"所有已登录会话都会失效、重启也会掉线（内存表），重开控制台重新粘一次密钥即可"；手填草稿存 `keyDraft` 回填（状态回填约定）。唯一数据源 `GET /admin/api/keys`（随 `loadAll` 拉取，单独兜底）；**「随机生成」只在本地把 48 位随机串（四样字符齐全）填进输入框（`fillGeneratedKey`，不发请求）——用户先看到/复制新值，再点「轮换」提交 `POST /admin/api/keys` 生效**；「回到环境变量值」走 `POST /admin/api/keys/reset`。服务端 `POST /admin/api/keys/generate` 端点保留（API 可用，e2e 已测），控制台不再用它 |
+| 1454–1493 / 1661–1790 | `SNIP`(1455) `vAccess`(1661) `showKeyHelp`(1757) | 接入信息（端口 / 模型名照旧；**v1.18.4 起服务端只下发掩码**，密钥原文要点一次才现取：`copyGwKey` / `copyAllEndpoints`）；端点地址可直接复制；页头「密钥管理」按钮 `go('keys')` 直接跳轮换页（v1.18.5）；`showKeyHelp` 降级为**命令行备用路径**步骤清单（会提醒：控制台轮换过之后 `.env` 说了不算）。**v1.18.5 插入密钥管理页后本块被拆成两段**：`SNIP`（curl 等接入示例）在密钥块之前、`vAccess`/`showKeyHelp` 在其后 |
+| 1791–1803 | `modal`(1792) `closeModal`(1799) `setStatus`(1800) `toggleMenu`(1801) | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
+| 1804–1831 | `PROTO_META`(1805) `PROTO_ORDER`(1815) `chKey`(1818) | 协议元数据 / 顺序 / 密钥取值（**v1.18.4**：`chKey` 给的是**掩码**；原文只在用户点击时经 `GET /admin/api/channels/{id}/key` / `GET /admin/api/gateway-key` 现取一次 —— `EP_COPY_TEXT`(1821) `_gwk`(1822) `chKeyLive`(1823) `gwKeyLive`(1824) `copyChKey`(1825) `copyGwKey`(1826) `copyAllEndpoints`(1827)，`gwKeyLive` 按页缓存）；（原型是 `fakeKey`） |
+| 1832–2091 | `openChannelForm`(1834) `probeUpstream`(1928) `toggleKeyField`(2028) … `saveChannel`(2044) | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换（**v1.18.4 起不回填原文**，占位符为「已配置 sk-a…1234 · 留空保持不变」；点「明文」时 `toggleKeyField` 才经 `chKeyLive` 现取一次原文、只填进输入框不落库）、保存（`weight` 随 `POST /admin/api/channels` 一起提交；**`apiKey` 留空 = 保持原密钥**） |
+| 2092–2229 | `IMPORT_META`(2093) `parseCodexUnits`(2111) `parseGsSessionId`(2119) `openImport`(2126) `importCodexRt`(2161) `importGsSession`(2166) `doImport`(2172) `importFiles`(2192) | 导入：**真实对接** `codex-import` / `genspark-import` |
+| 2230–2343 | `openTestModels`(2231) `chName`(2282) `testRowVerdict`(2288) `runTests`(2295) | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前）。**结果行必须能看懂**：每行带 `模型名` + 渠道显示名（`chName`）+ 中文结论（`testRowVerdict` 分 通过 / 空回复 / 失败 三档）+ 延迟 / token / 回复或错误原文 |
+| 2344–2367 | `drawer`(2345) `closeDrawer`(2349) `setTheme`(2357) | 抽屉 / 主题持久化 / 明暗互切 |
+| 2371 / 2400 / 2404–2408 | `showKeyGate()` `logout()` 启动探针 | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
+| 2410 | `tick()` | 时钟 |
+| 2420 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
@@ -445,7 +445,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 新增协议（原型） | `PROTO_META` 1775 + `PROTO_ORDER` 1785 + `.chip.<proto>` 配色 226–233 |
 | 新增协议（生产） | `build/app.js` 的 `PROTO_META` 1802 / `PROTO_ORDER` 1812 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
 | 新增页面（原型） | `NAV` 1022 + `vXxx()` + `go()` 1042 的分发表 |
-| 新增页面（生产） | `build/app.js` 的 `NAV` 340 + `vXxx()` + `go()` 363 **与 `render()` 161 两张**分发表，然后重新构建（**v1.9 的「自动权重」页**、**v1.18 的「运行期设置」页**（`vSettings` 815）、**v1.18.5 的「密钥管理」页**（`vKeys` 1539）都是照这条加的 —— 注意 **`go()` 与 `render()` 两张表都要注册**，只加一张会出现"能进页但 8 秒轮询不刷新"） |
+| 新增页面（生产） | `build/app.js` 的 `NAV` 339 + `vXxx()` + `go()` 362 **与 `render()` 161 两张**分发表，然后重新构建（**v1.9 的「自动权重」页**、**v1.18 的「运行期设置」页**（`vSettings` 814）、**v1.18.5 的「密钥管理」页**（`vKeys` 1538）都是照这条加的 —— 注意 **`go()` 与 `render()` 两张表都要注册**，只加一张会出现"能进页但 8 秒轮询不刷新"） |
 | 新增导入类型 | `IMPORT_META` 2035（原型）/ 2090（生产）+ 工具栏菜单（原型 1186–1196、占位 markup 589 起 / 生产 587–598） |
 | 渠道列表排序 | 1179（渠道页）/ 1385（模型页）；生产 878 / 1081 |
 | 探测列表交互 | `renderProbeList` 1928 起整段（原型）/ 1953（生产） |
@@ -457,7 +457,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 渠道权重（输入框 / 表格列 / 抽屉角标） | **v1.5**：生产 `openChannelForm` 1831（`f-weight`）+ `saveChannel` 2041（提交 `weight`；**v1.18.4 起 `apiKey` 留空 = 保持原密钥**）+ `drawChTable` 882（「权重 / 分流」列）+ `openChannel` 928（抽屉角标）+ `adapt()` 59（映射 `w`/`wHits`/`wShare`）；后端 `weight` 语义见 README「加权轮询」。**原型未同步**（生产独有能力，原型不必追平） |
 | 自动权重观测页 | **v1.9**：生产 `NAV` 340（资源 → 自动权重）+ `vAutoWeight` 650 + `autoWeightCard` 658 + `build/extra.css` 的 `.aw-*`（10–57）；数据来自 `/admin/api/status` 的顶层 `autoWeight`。**原型未同步**（v1.9.1：份额列标签只留渠道显示名） |
 | 运行期设置页（会话粘性 / 客户端限流 / 指标端点） | **v1.18**：生产 `NAV` 340（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）+ `vSettings` 815 + 辅助段 729–881 + `build/extra.css` 的 `.set-*`（59–77）。唯一数据源 `GET/POST /admin/api/settings`：`config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；`setPayload` **只提交有改动的组**（PATCH 语义）。字段契约 / 文案要点 / 验收清单见 [`console-settings-spec.md`](console-settings-spec.md)。**原型未同步**（生产独有能力，设计稿不含该页） |
-| 密钥管理页（在线轮换 GATEWAY_KEY / ADMIN_KEY） | **v1.18.5**：生产 `NAV` 340（工具 → 密钥管理，夹在运行期设置与接入信息之间）+ `vKeys` 1539 + 辅助段 1495–1656（`keyCard` / `armConfirm` / `toggleKeyReveal` / `genLocalKey` / `fillGeneratedKey` / `rotateKey` / `resetKeysAction`）。数据源 `GET /admin/api/keys`（只回掩码 + 来源）；**换管理密钥后必须同步更新浏览器存的 `adminKey`**（`rotateKey` 里做，否则把自己踢出控制台）；「轮换」单击直接生效（用户要求）；「回到环境变量值」两步确认（`armConfirm`）。后端语义见 README「行为细节」与 `test/key-rotation-e2e.test.js`。**原型未同步**（生产独有能力，设计稿不含该页） |
+| 密钥管理页（在线轮换 GATEWAY_KEY / ADMIN_KEY） | **v1.18.5**：生产 `NAV` 339（工具 → 密钥管理，夹在运行期设置与接入信息之间）+ `vKeys` 1538 + 辅助段 1494–1659（`keyCard` / `armConfirm` / `toggleKeyReveal` / `genLocalKey` / `fillGeneratedKey` / `rotateKey` / `resetKeysAction`）。数据源 `GET /admin/api/keys`（只回掩码 + 来源）；「轮换」单击直接生效（用户要求）；「回到环境变量值」两步确认（`armConfirm`）。**v1.18.6 会话化**：换管理密钥后前端不写任何浏览器存储（服务端清空全部会话并在轮换响应里**补发新会话 cookie**，发起页无感继续）；页操作区挂「退出登录」按钮（`#keyLogout` → `logout()`）；`showKeyHelp` 步骤改为**粘贴密钥登录**（不再有 `?key=` 带参链接）。后端语义见 README「行为细节」与 `test/key-rotation-e2e.test.js` / `test/admin-session-e2e.test.js`。**原型未同步**（生产独有能力，设计稿不含该页） |
 | 调用日志列（渠道名 / 列序 / 搜索 / 导出） | **v1.13.2**：生产 `adapt()` 59（日志条目新增 `n` = 渠道显示名，`c` 仍保留 id）+ `logRows` 1187（搜索判据 `l.m+l.n+l.c+l.id`）+ `drawLogTable` 1199（表头 请求 ID → 渠道 → 模型，渠道格 `esc(l.n)`）+ `openLog` 1224（抽屉渠道显示名）+ `exportLogs` 464（CSV 渠道列写显示名）。**原型已同步**（`console-redesign.html` 的 `vLogs` 1478 表头 / 1482 渠道格 / 1507 抽屉，就地查 `DATA.channels`） |
 | 测试模型弹窗（停用渠道可测 + 结果可读） | **v1.13**：生产 `openTestModels` 2228（不再按 `!c.on` 跳过停用渠道；停用渠道带「已停用」标记 + 说明文案，全局模式启用渠道排前）+ `testRowVerdict` 2285（结果三档：通过 / **空回复** / 失败；判定为纯函数，`test/console-state.test.js` §6 跑真值表）+ `chName` 2279（结果行写渠道显示名）+ `runTests` 2292（逐条带 `channelId`，不走调度；每行带模型名与中文结论，汇总分开数三档）。后端：`/admin/api/test` 带 `channelId` 时不看 `enabled`；自动探测 `probeAll` 默认跳过停用渠道、手动「全部重探测」显式 `includeDisabled:true`（见 README「自动 vs 手动的边界」）。`test/console-state.test.js` §5/§6 真跑该弹窗与结果渲染做回归。**原型未同步**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`（设计稿演示逻辑，不随生产走；原型有 3 个 demo 停用渠道，点它们仍会看到空列表） |
 
@@ -480,7 +480,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | Playground `pgSend` | `POST /v1/chat/completions`（stream） |
 | Playground 生图 | `POST /v1/images/generations` |
 
-> 鉴权：`ADMIN_KEY` 走 `Authorization: Bearer`；旧版用 `?key=` 存 sessionStorage。真实接入时**不要**沿用 `fakeKey()`。
+> 鉴权：浏览器走**会话 cookie**（v1.18.6：登录门把 `ADMIN_KEY` 交给 `/admin/api/session` 换回 HttpOnly cookie，密钥本身不进浏览器）；脚本 / curl 走 `Authorization: Bearer <ADMIN_KEY>`。真实接入时**不要**沿用 `fakeKey()`。
 > **回填状态（v0.4）**：上表在 `build/app.js` 中**已全部落地**（Playground / 测试模型 / 四类导入 / 接入信息都发真实请求），
 > 原型里的假动作（`fakeKey` / `simTest` / `REPLIES` / `hash` / 假流式）**只剩演示用途**，不再有对应生产代码。
 
@@ -506,6 +506,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" onclick="copyText(this.dataset.t,this)"`。
 17. **「条 + 独立图例」必然错位，标签必须贴在自己那一段下面**：份额带的段是**单向排列**（左→右按顺序），而图例若用 `auto-fit` 网格则是「左→右、换行再左→右」——候选一多、一换行，读者就没法把图例项对回它的段。更糟的是真机上绝大多数候选健康系数 =1（色块全是同一个绿），连颜色都认不出谁是谁（v1.8.1 只修了行内基线，没修"对不上"这个根本问题）。**v1.9 的处置**：改成一候选一列（`.aw-col`，列宽 = 份额），列内上方 `.aw-seg` 色带段、下方 `.aw-cap` 直接挂名字与百分比 ——"这段是谁的"不用去别处找。**新增任何"带 + 图例"组件前先问：换行后读者还能把图例对回它的段吗？**
 18. **按比例分列宽用 `flex-grow`，别用 `width:calc(x%)`**：`.aw-split` 用 `gap:8px` 给列间真间隙，列上写 `flex-basis:0` + `flex-grow:var(--w)` —— 间隙由布局先让出、余量再按份额分，各列宽度仍**严格成比例**，也不会被 100% 撑破。手写 `width:calc(x% - Npx)` 一旦候选数变化就立刻失准。配套两条：列要 `min-width:0`、列内文字要 `overflow:hidden;text-overflow:ellipsis`，否则长渠道名会把列撑宽、把比例撑歪（全量信息放 `title`）。
+19. **新起类名之前先 grep 它的定义——`.mask` 是弹窗遮罩，不是"掩码"**：设计稿把"被遮罩的密钥值"写成 `<span class="mask mono">`，于是它连同 `.mask{position:fixed;inset:0;z-index:80;opacity:0}` 一起吃下 —— 这个值变成**铺满视口、透明、脱离文档流**的元素：文本在 DOM 里（`textContent` 有值）却永远不显示，行里只剩「当前值 / 显示 / 复制」和一块空白。密钥管理页（v1.18.5 新增）与**接入信息页的 `GATEWAY_KEY` 行**一起中招，且从设计稿一路带过来，长期没人发现。**v1.18.6 处置**：该值改用独立类 `.ep-key .kval`（原型 `<style>` 337 + 原型 markup 1700 + `build/app.js` 的 `keyCard` / `vAccess`，共 4 处），`.mask` 回归"只做弹窗遮罩"。教训：**CSS 类名没有命名空间，复用前先 `Select-String -Pattern '^\.<名字>\{'` 确认它没被别处定义**；`test/console-state.test.js` §11 已加守卫（源码不得出现 `class="mask mono"`、产物不得有 `.ep-key .mask` 规则、**且 `.mask` 必须仍是那条弹窗遮罩**——防止用"给遮罩改名"蒙混过关）。
 
 ---
 
@@ -513,7 +514,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 **构建与产物**
 
-- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置 + 密钥管理页的自动化回归，**161 项断言**；改了任何带输入框的页面都要跑）
+- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置 + 密钥管理页（含会话语义装配守卫）的自动化回归，**172 项断言**；改了任何带输入框的页面都要跑）
 - [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
 - [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）
 - [ ] 产物里 `</style>` 恰好 1 次：`(Select-String -Path console.html -Pattern '</style>' -SimpleMatch).Count`
@@ -537,7 +538,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
       保存后立即生效，且 `config`（你填的原值）与 `effective`（钳制后生效值）都对得上（填 `ttlSec:5` 时 `config` 保 5、`effective` 显示 30）；
       在输入框里填一半**静等 10 秒以上**，输入不能被 8 秒轮询清掉；故意把字段名写错，页面要显示后端 400 的**原文**（如 `unknown field rateLimit.rpmm`），不是"保存失败"这种空话；
       停在「运行期设置」页等轮询，页面上的实时计数（粘性命中 / 在飞数 / 被拒次数）要跟着刷新
-- [ ] **密钥管理（v1.18.5）**：两把密钥都显示掩码 + 来源角标；「随机生成」先把值填进输入框（不发请求、不生效），看清/复制后点「轮换」才生效；轮换管理密钥后**本页不弹登录门**（浏览器存的 key 已同步换新）；换网关密钥后旧 key 调 `/v1/models` 立即 401；「回到环境变量值」后来源角标变回「环境变量」；手填非法值（太短/带空格/change-me）直接 toast 后端 400 原文；「轮换」单击即生效（旧值立即失效）；「回到环境变量值」要点两下
+- [ ] **密钥管理（v1.18.5 / v1.18.6 会话化）**：两把密钥都显示掩码 + 来源角标；「随机生成」先把值填进输入框（不发请求、不生效），看清/复制后点「轮换」才生效；轮换管理密钥后**本页不弹登录门**（服务端清空全部会话并给本响应补发新会话 cookie）；换网关密钥后旧 key 调 `/v1/models` 立即 401；「回到环境变量值」后来源角标变回「环境变量」（此时也会清空全部会话）；手填非法值（太短/带空格/change-me）直接 toast 后端 400 原文；「轮换」单击即生效（旧值立即失效）；「回到环境变量值」要点两下；**「退出登录」按钮**点击后整页重载回登录门，且只杀自己那枚会话（别的标签页不受影响）；重启网关后所有会话掉线（内存表），重开控制台重新粘一次密钥即可
 - [ ] Playground 发一条消息，能收到真实流式回复 + 路由信息（渠道 / 首块延迟 / 总耗时）
 - [ ] 接入信息页展示的网关地址、密钥、模型名来自 `/admin/api/config`，非硬编码
 - [ ] 弹窗点遮罩**不关闭**；× / 取消 / Esc 可关闭

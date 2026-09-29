@@ -58,7 +58,7 @@ docker compose up -d --build
 `docker-compose.yml` 已显式写死 `ZZCSAPI_BIND: "0.0.0.0"`，所以**用 compose 起不会踩到**；
 只有手工 `docker run` 时容易漏掉这个变量（顺带别忘 `TZ=Asia/Shanghai`、`ZZCSAPI_CONFIG=/app/config.json`）。
 `docker-compose.yml` 的端口映射是 `8787:8787`（局域网可访问）；只想本机自用就改成 `127.0.0.1:8787:8787`，
-并保持 `ZZCSAPI_NOAUTH=0`，一切访问走 `checkAuth` 的 Bearer / `?key=` 通道。
+并保持 `ZZCSAPI_NOAUTH=0`，一切访问走 `checkAuth`：脚本用 Bearer 头（管理面另认会话 cookie），`?key=` 仅客户端面保留（Gemini SDK 的另一鉴权模式）。
 
 ### 方式二：裸 Node（18+）
 
@@ -122,11 +122,12 @@ apiKey  = <GATEWAY_KEY>
 http://127.0.0.1:8787/console
 ```
 
-首次打开会出一个「输入管理密钥」的小门，把 `ADMIN_KEY` 粘贴进去即可（页面记住它，之后**裸开 /console 就行**）。
-也兼容一次性带参访问 `http://127.0.0.1:8787/console?key=YOUR_ADMIN_KEY`（key 会被收进浏览器并自动从地址栏抹掉，避免留在历史/截图里）。
+首次打开会出一个「输入管理密钥」的小门，把 `ADMIN_KEY` 粘贴进去即可——验证通过后换回**会话 cookie**
+（`HttpOnly` + `SameSite=Strict`，12 小时有效），密钥本身**不落浏览器**（JS 也读不到）；之后裸开 `/console` 乘着活会话直接进。
+`v1.18.6` 起不再支持 `?key=` 带参访问（渗透报告点名"密钥进浏览器历史"）；侧栏「工具 → 密钥管理」页有「退出登录」按钮可随时清掉会话。
 
-> 控制台 HTML 壳本身不含任何密钥（零机密），放行；**管理 API 每次调用仍强制校验 Bearer**——"页面能开 ≠ 有权限"。
-> 密钥失效（例如服务端换了密钥）时，页面会自动清掉旧密钥并重新弹门。
+> 控制台 HTML 壳本身不含任何密钥（零机密），放行；**管理 API 每次调用仍强制鉴权**（活会话 cookie 或 Bearer）——"页面能开 ≠ 有权限"。
+> 会话失效（过期 / 服务端换了管理密钥 / 重启）时，页面收到 401 自动重新弹门，重新粘一次即可。
 
 可做：
 
@@ -197,7 +198,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 161 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显）
+node test/console-state.test.js           # 172 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换、**会话语义（密钥不落任何浏览器存储）**）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -225,8 +226,9 @@ node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令
 node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态）
 node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（网关从不向客户端产出 thinking 块 → "无签名块触发 400"不可达；直通是签名唯一活路）
 node test/settings-api-e2e.test.js        # 58 项断言：运行期设置端点（窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
-node test/security-headers-e2e.test.js    # 48 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文）
-node test/key-rotation-e2e.test.js         # 75 项断言：控制台轮换密钥（优先级链 config.auth>env>首启生成 + 旧密钥立即失效 + 非法值不落库 + 重启后仍生效 + 回到环境变量值）：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文）
+node test/security-headers-e2e.test.js    # 51 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文 + **CSP 逐字等于设计稿（v1.18.6）** + 管理面 ?key= 已停用 / 客户端面保留）
+node test/key-rotation-e2e.test.js         # 85 项断言：控制台轮换密钥（优先级链 config.auth>env>首启生成 + 旧密钥立即失效 + 非法值不落库 + 重启后仍生效 + 回到环境变量值）
+node test/admin-session-e2e.test.js        # 63 项断言：管理面会话 cookie（v1.18.6）——登录门换 HttpOnly+SameSite=Strict 会话、会话单独鉴权管理面、Bearer 通道保留、管理面 ?key= 拆除 / 客户端面保留、退出只杀自己、轮换清全会话并补发新会话、重启全部掉线、逐出先清过期
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -744,6 +746,8 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/admin/api/keys`                   | POST | admin       | **控制台轮换密钥（v1.18.5）**：body `{gatewayKey?, adminKey?}`，立即生效并写入 `config.json` 的 `auth` 段（**优先级高于环境变量**），**旧密钥立即失效**；新明文只在响应 `newKeys` 里回这一次 |
 | `/admin/api/keys/generate`          | POST | admin       | 随机生成新密钥（48 位，大小写字母+数字+特殊字符四样齐全）：body `{target: "gateway"\|"admin"\|"both"}`（缺省 both） |
 | `/admin/api/keys/reset`             | POST | admin       | 删掉 `config.json` 的 `auth` 段，回到「环境变量 → 首启生成」的取值链 |
+| `/admin/api/session`                | POST | 匿名（登录门） | **控制台会话登录（v1.18.6）**：body `{key}` 交一次 `ADMIN_KEY`，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）；**在 admin 鉴权闸门之前**（登录时手里还没有会话），登录失败计入 admin 失败限流（30 次/分钟） |
+| `/admin/api/session`                | DELETE | 会话 cookie | **控制台退出登录（v1.18.6）**：只杀自己那枚 token + 过期 cookie（`Max-Age=0`）；其余方法 405 |
 | `/admin/api/settings`               | GET/POST | admin   | **运行期设置（v1.18）**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关。GET 返回 `config`（用户填的原值）/ `effective`（钳制后生效值）/ `status`（实时计数）；POST 是 PATCH 语义（只带要改的组与字段），**立即生效 + 立即落库**，未知字段/类型不符一律 400 并点名字段 |
 | `/metrics`                          | GET  | admin（`metrics.public:true` 时匿名） | **Prometheus 文本格式（v1.17）**：请求/渠道/令牌/耗时/熔断分档/粘性/限流/进程指标；`metrics.enabled:false` 时返回 404 |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
@@ -790,8 +794,10 @@ node sec-audit.js
 渠道 `POST` 的 `apiKey` 改为「**留空 = 保持原密钥**」，防止控制台带着掩码回写把密钥抹掉；`checkAuth` 改 `sha256` +
 `crypto.timingSafeEqual` 恒定时间比较，9 处鉴权点统一走 `authGate()`（每类每分钟最多 30 次**失败**尝试 → 429 + `Retry-After`，
 成功一次即清零，窗口式不永久锁定，正密钥不受影响）。控制台相应改成"点一下才现取一次原文"。
-**仍待办（见下方「计划中」）**：无 CSP；`/console?key=…` 仍会把管理密钥写进浏览器历史与 Referer（`Referrer-Policy` 已挡住外泄，
-历史记录需改用 `#` 片段或一次性换取 session）。
+**第三批（v1.18.6）已修**：① 补上 **CSP 响应头**（`default-src 'self'`，脚本/样式因单文件控制台开放 `'unsafe-inline'`——真正的兜底在
+`connect-src 'self'`：即使 XSS 偷到会话 cookie 也发不出去；字体走 MiSans CDN 已在 `font-src` 白名单）；② **`/console?key=…` 拆除**——渗透报告点名
+"密钥进浏览器历史"，v1.18.6 起管理面不再认 `?key=`（正确密钥走查询串也 401），浏览器改走**会话 cookie**（见「行为细节 · 管理面会话」）；
+客户端面 `?key=` **保留**（Gemini SDK 的另一默认鉴权模式，不在整改面内）。
 
 ## 行为细节
 
@@ -824,8 +830,15 @@ node sec-audit.js
   · 流式失败细节见上文「流式失败」。
 - **图片（多模态）**：三条客户端协议统一把图片转成内部 `image_url` block —— Gemini 的 `inlineData`（base64，`mimeType` 缺省 `image/png`）与 `fileData`（`fileUri` 直链）、Anthropic 的 `image`（`source.type='base64'` 与 `source.type='url'` 两种都认）都会被识别；**部件顺序保留**（先图后问 vs 先问后图对视觉模型有语义）。带图请求只走 `openai` / `anthropic` / `gemini` 三种协议的渠道，见「含图请求的候选裁剪」。
 - **冷启动**：第一次请求时 `status=unknown` 仍然会被选中（health 探测在后台进行）。
-- **密钥轮换（v1.18.5，控制台可在线轮换）**：`GATEWAY_KEY` / `ADMIN_KEY` 的生效值按 `config.json` 的 `auth` 段（控制台轮换）**> 环境变量 >** 首启自动生成取值——控制台说了算，重启不会被 `.env` 顶回去。控制台「工具 → 密钥管理」页可手填或随机生成新密钥，点一下「轮换」**立即生效、旧密钥立即失效**（无宽限期）；页面上每把密钥标注来源（控制台轮换 / 环境变量 / 首启生成），「回到环境变量值」删除 `auth` 段把控制权交还给 `.env`。新密钥准入：8–128 位可见 ASCII、禁 `change-me`、两把不得相同；**管理密钥另需大小写字母+数字+特殊字符四样齐全**（它是控制台的唯一门锁），被拒的值**不生效也不落库**。换管理密钥后，发起轮换的那个页面会**自动**把浏览器里存的 ADMIN_KEY 换成新值；其它标签页 / 设备 / 脚本里的旧值立即 401，需要重新输入一次。
-- **鉴权写法**：网关密钥接受 `Authorization: Bearer <key>`、`?key=<key>`，以及**原生 SDK 的默认头**——Gemini 的 `x-goog-api-key`、Anthropic 的 `x-api-key`（仅对 `/v1/*` `/anthropic/*` `/gemini/*`；**管理面只认 Bearer / `?key=`**，客户端密钥语义不得混进管理面）。OpenAI SDK 走 Bearer，本来就通。
+- **密钥轮换（v1.18.5，控制台可在线轮换）**：`GATEWAY_KEY` / `ADMIN_KEY` 的生效值按 `config.json` 的 `auth` 段（控制台轮换）**> 环境变量 >** 首启自动生成取值——控制台说了算，重启不会被 `.env` 顶回去。控制台「工具 → 密钥管理」页可手填或随机生成新密钥，点一下「轮换」**立即生效、旧密钥立即失效**（无宽限期）；页面上每把密钥标注来源（控制台轮换 / 环境变量 / 首启生成），「回到环境变量值」删除 `auth` 段把控制权交还给 `.env`。新密钥准入：8–128 位可见 ASCII、禁 `change-me`、两把不得相同；**管理密钥另需大小写字母+数字+特殊字符四样齐全**（它是控制台的唯一门锁），被拒的值**不生效也不落库**。换管理密钥时**全部控制台会话同时作废**（换锁后旧会话不该继续开门），但发起轮换的那个响应会**补发一枚新会话 cookie**——发起页不会被踢回登录门，其它标签页 / 设备 / 脚本里的旧值立即 401，各自重新登录一次。
+- **管理面会话（v1.18.6，渗透第三批）**：浏览器打开控制台不再是"密钥常驻 localStorage"，而是**登录门交一次密钥换会话 cookie**——
+  `POST /admin/api/session`（body `{key}`）验证 `ADMIN_KEY` 后下发 `Set-Cookie: zz_session=<64 位十六进制>; HttpOnly; SameSite=Strict; Max-Age=43200`
+  （`HttpOnly` 让 JS 读不到 token，`SameSite=Strict` 顺带治 CSRF；**刻意不加 `Secure`**——本网关设计上就跑 http 本地/局域网，加了 cookie 反而种不下去）。
+  之后管理面调用只带 cookie（同源自动附上），密钥本身不进浏览器任何存储。会话表在**内存**：TTL 12 小时（懒过期 + 10 分钟清扫）、上限 256 条（先清过期、再逐最旧）、
+  **重启全部掉线**（重开控制台重新粘一次密钥即可，脚本走 Bearer 不受影响）。登录失败计入 admin 失败限流（30 次/分钟，瞎试密钥与瞎试接口同等对待）。
+  「工具 → 密钥管理」页有**退出登录**按钮（`DELETE /admin/api/session`，只杀自己那枚 token）；轮换 / 重置管理密钥会清空全部会话（见上条）。
+  脚本 / CI **不受影响**：管理面始终保留 `Authorization: Bearer ADMIN_KEY` 通道，两种鉴权可并存。
+- **鉴权写法**：网关密钥接受 `Authorization: Bearer <key>`、`?key=<key>`，以及**原生 SDK 的默认头**——Gemini 的 `x-goog-api-key`、Anthropic 的 `x-api-key`（仅对 `/v1/*` `/anthropic/*` `/gemini/*`；**管理面只认 `Bearer` 或会话 cookie——v1.18.6 起 `?key=` 已从管理面拆除**，客户端密钥语义不得混进管理面）。OpenAI SDK 走 Bearer，本来就通。
 - **别名区分大小写不敏感**，upstream 透传原样。
 
 ## 计划中
@@ -836,8 +849,9 @@ node sec-audit.js
   `GET /admin/api/gateway-key`。控制台相应改成"点一下才现取一次"（`chKeyLive` / `gwKeyLive` / `copyChKey` / `copyGwKey` /
   `copyAllEndpoints`——Playground 直连与「接入信息」卡的两个复制按钮都走它），渠道表单的 API Key 框不再回填原文、**留空即保持原密钥**。
   ② ~~补安全响应头~~ ✅ **v1.18.3 已实现**（`nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy: no-referrer` /
-  `Permissions-Policy`，管理面与 `/healthz` 加 `no-store`；见「安全体检」节）。CSP 仍需按控制台真实资源
-  （MiSans CDN + 内联脚本样式）单独设计并做浏览器验证，**暂缓**。
+  `Permissions-Policy`，管理面与 `/healthz` 加 `no-store`；见「安全体检」节）。**CSP ✅ v1.18.6 已实现**：按控制台真实资源
+  设计（单文件内联脚本/样式 → `'unsafe-inline'`、MiSans CDN 字体进 `style-src`/`font-src` 白名单、`connect-src 'self'` 兜底防外发、
+  `frame-ancestors 'none'` + `base-uri`/`form-action 'self'`），值由 `test/security-headers-e2e.test.js` 逐字守住。
     ③ ~~管理面失败限流 + 恒定时间比较~~ ✅ **v1.18.4 已实现**：`checkAuth` 改 `sha256` + `crypto.timingSafeEqual`；
   9 处鉴权点统一走 `authGate()`，每类每分钟最多 30 次**失败**尝试 → 429 + `Retry-After`，成功一次即清零（窗口式，正密钥不受影响）。
   ④ **彻底消灭内联事件处理器**：把 `build/app.js` 的 `onclick="fn('${id}')"` 全面改成 `data-*` + 事件委托
@@ -845,7 +859,8 @@ node sec-audit.js
   ⑤ **刻意不做**：强制密钥长度/熵（不符合就拒绝启动）与多用户/角色/审计——本项目定位是**单用户自托管**，
   首启随机生成密钥、示例默认值只服务本地开发；把这两条做进来会破坏开箱即用（外部渗透测试报告的建议已据此驳回，理由记在此处以免重复提）。
   ⑥ **部署提醒（给公网部署者）**：本项目的隐藏前提是「知道密钥的人就是管理员」——请只在可信网络或反向代理后暴露，
-  并务必给公网入口加 TLS；`/console?key=…` 建议改用 `Authorization` 头。
+  并务必给公网入口加 TLS（会话 cookie 刻意没加 `Secure` 旗标，就是为 http 本地/局域网；公网 TLS 部署时应在反代层终止并保留 `HttpOnly`/`SameSite` 语义）。
+  ~~`/console?key=…` 建议改用 `Authorization` 头~~ ✅ **v1.18.6 已拆**：管理面不再认 `?key=`，浏览器走 HttpOnly 会话 cookie（见「行为细节 · 管理面会话」）。
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。
   下一步才是把健康系数折进候选份额真正生效——需要同时解决"自动份额与手填权重并存谁优先"、
   "护栏（地板/上限）被反复触碰时如何告警"、"份额变化要不要写日志"三个问题

@@ -195,6 +195,9 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   （优先关弹窗，其次关抽屉）。
   > 早期版本曾有 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 四个独立弹窗，重构时已统一收敛掉。
   > **新增弹窗不要再建新 `.mask`**，直接用 `modal()` 注入。
+  > **`.mask` 是"弹窗遮罩"专用类名，别拿它当"掩码"用**：它带 `position:fixed;inset:0;opacity:0`，
+  > 任何非弹窗元素套上它都会**脱离文档流且透明**（密钥值曾因此整行看不见，v1.18.6 改用 `.ep-key .kval`）。
+  > 见 [frontend-code-map.md](./frontend-code-map.md) §7 坑位 19。
 
 ### 4.7 抽屉 `.scrim / .drawer`
 
@@ -277,7 +280,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - Top 渠道表、Top 模型条形榜
 - 时间范围页签 `24h / 7d / 30d`
   - **原型**：仅切换选中样式，不切换数据（快照里只有日粒度）
-  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 426）定义三档 → `ovSeries()`（429）按档取序列：
+  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 429）定义三档 → `ovSeries()`（432）按档取序列：
     24 小时走后端 `usage.hourly`（24 桶），7/30 天走 `DATA.trend.slice(-N)`；KPI 环比窗口同步跟着天数走
 - **延迟环比 `avgLatencyDelta()`（`build/app.js` 414）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
   **样本 < 40 返回 `null`**——宁可不显示，也不编一个假百分比
@@ -398,17 +401,17 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 ### 5.9 运行期设置 `vSettings`（生产独有，原型无此页）
 
 - 位置：「工具」组第二个页签（工具组顺序：Playground / **运行期设置** / **密钥管理** / 接入信息）。
-  `NAV`（`build/app.js` 340）加一项、`go()`（363）与 `render()`（161）**两张分发表都要加** `settings:vSettings`
+  `NAV`（`build/app.js` 339）加一项、`go()`（362）与 `render()`（161）**两张分发表都要加** `settings:vSettings`
   —— 只加一张会出现"能进页但 8 秒轮询不刷新"（v1.18 之前自动权重页就栽在 `render()` 表漏页上，见 §8.22）。
 - 结构：页头（标题 + 副标题「改完立即生效、立即落库，无需重启容器」+ 右侧「还原 / 保存设置」）→ 错误条 `.set-err`
   → `.grid.g3` 里三张 `.set-card`（会话粘性 / 客户端限流 / 指标端点）。
 - 数据源**唯一**：`GET/POST /admin/api/settings`。`loadAll()`（139）把 `settings` 一起拉回来写进 `RAW.settings`，
   **单独 `.catch(()=>null)` 兜底**（端点挂了不能拖垮整页）。`RAW.settings` 缺失时页面显示「设置接口不可用」，不白屏。
-- 三张卡的**唯一真源**是 `SET_GROUPS`（730）/ `SET_META`（731）/ `SET_FIELDS`（739）：加字段只改这三处，
-  `setCard()`（791）按声明生成行，`setPayload()`（769）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
+- 三张卡的**唯一真源**是 `SET_GROUPS`（729）/ `SET_META`（730）/ `SET_FIELDS`（738）：加字段只改这三处，
+  `setCard()`（790）按声明生成行，`setPayload()`（768）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
 - **只提交有改动的组 / 字段**（PATCH 语义，`setPayload`）：没带的不动、不归零；留空的数字不下发（留空 ≠ 0）。
   没改动时「保存设置」按钮 `disabled`。
-- **400 原文直显**：`api()`（214）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（857）取 `e.body.error`
+- **400 原文直显**：`api()`（215）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（856）取 `e.body.error`
   写进 `.set-err` —— 后端已点名到字段，照抄给用户就能直接改。
 - 提交期间按钮 `disabled` + 文案变「保存中…」（`setSaving` 幂等，避免连点造成两次写入）。
 - **实时计数**来自 `status` 段：粘性命中/未命中/学习条数、在飞/峰值/限速拒绝/并发拒绝、`/metrics` 是否匿名可抓
@@ -419,19 +422,20 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 ### 5.10 密钥管理 `vKeys`（生产独有，原型无此页，v1.18.5）
 
 - 位置：「工具」组第三个页签，**夹在运行期设置与接入信息之间**（工具组顺序：Playground / 运行期设置 / **密钥管理** / 接入信息）。
-  `NAV`（`build/app.js` 340）加一项、`go()`（363）与 `render()`（161）**两张分发表都要加** `keys:vKeys`——只加一张会出现"能进页但 8 秒轮询不刷新"（同 §5.9 的教训）。
+  `NAV`（`build/app.js` 339）加一项、`go()`（362）与 `render()`（161）**两张分发表都要加** `keys:vKeys`——只加一张会出现"能进页但 8 秒轮询不刷新"（同 §5.9 的教训）。
 - 数据源唯一：`GET /admin/api/keys`，随 `loadAll()`（139）一起拉，**单独 `.catch(()=>null)` 兜底**（端点挂了显示「密钥接口不可用」，不白屏、不拖垮整页）。
   响应里**只有掩码与来源**（`gatewayKey`/`adminKey` 各带 `masked`/`set`/`source`，外加 `rotatedAt`/`keysInsecure`/`minLen`/`noAuth`）。
-- 两张密钥卡（`keyCard` 1514）：当前值掩码 + 来源角标（控制台轮换 / 环境变量 / 首启生成）+ 「显示」「复制」按钮 + 手填输入框 + 「随机生成」「轮换」。
+- 两张密钥卡（`keyCard` 1513）：当前值掩码 + 来源角标（控制台轮换 / 环境变量 / 首启生成）+ 「显示」「复制」按钮 + 手填输入框 + 「随机生成」「轮换」。
   **「随机生成」只在本地把 48 位随机串（大小写字母+数字+特殊字符四样齐全，与服务端 `genKey` 同规格）填进输入框（`fillGeneratedKey`，用 `crypto.getRandomValues`，不发任何请求）——用户先看到/复制新值，再点「轮换」才提交生效**（服务端 `/admin/api/keys/generate` 端点保留给 API 调用方，控制台不走它）。
-- **明文绝不进页面快照**：点「显示」才经 `GET /admin/api/admin-key` / `GET /admin/api/gateway-key` 现取一次（`toggleKeyReveal` 1591），只存内存 `keyReveal`，再点「隐藏」即清。
-- **换管理密钥后的自我保命**（`rotateKey` 1606）：成功后先把响应 `newKeys.adminKey` 同时写进 `sessionStorage` **和** `localStorage` 的 `adminKey` 再刷新——
-  `api()` 每次请求现读 sessionStorage，不换的话下一次 8 秒轮询就 401 → 弹回登录门，**等于轮换者把自己踢出去**。其它标签页/设备拿旧 key 会 401，页面文案明示。
+- **明文绝不进页面快照**：点「显示」才经 `GET /admin/api/admin-key` / `GET /admin/api/gateway-key` 现取一次（`toggleKeyReveal` 1592），只存内存 `keyReveal`，再点「隐藏」即清。
+- **换管理密钥后的自我保命（v1.18.6 会话语义）**（`rotateKey` 1625）：成功后**前端什么都不用做也不再写任何浏览器存储**——
+  服务端在轮换响应里**补发一枚新会话 cookie**（`Set-Cookie`，换管理密钥会清空全部旧会话，但发起轮换的这个浏览器当场拿到新会话），
+  发起页无感继续用；其它标签页/设备拿旧 key（或旧会话）立即 401 弹回登录门，页面文案明示。
 - **「轮换」单击直接生效**（用户明确要求，最初的"点两下确认"被否掉；页面上方警示条与按钮旁文案都写明"旧密钥立即失效"）。「随机生成」只是本地填框，不算危险动作。
-  「回到环境变量值」保留两步确认（`armConfirm` 1582，第一次点击变成「确认…」，6 秒不复位自动还原）——它会把控制台轮换的成果整段交还给 .env。
+  「回到环境变量值」保留两步确认（`armConfirm` 1583，第一次点击变成「确认…」，6 秒不复位自动还原）——它会把控制台轮换的成果整段交还给 .env（也会清空全部会话）。
   无论手填还是随机生成后点「轮换」，生效的那一刻所有拿旧 key 的调用方就开始 401。
-- 手填草稿存 `keyDraft`（1506）并在模板回填（8 秒轮询重绘约定，见代码地图 §0.2「状态回填约定」）；成功/失败后清空。
-- 「回到环境变量值」（`resetKeysAction` 1630 → `POST /admin/api/keys/reset`）：删掉 `config.json` 的 `auth` 段，把密钥控制权交还给环境变量。
+- 手填草稿存 `keyDraft`（1505）并在模板回填（8 秒轮询重绘约定，见代码地图 §0.2「状态回填约定」）；成功/失败后清空。
+- 「回到环境变量值」（`resetKeysAction` 1645 → `POST /admin/api/keys/reset`）：删掉 `config.json` 的 `auth` 段，把密钥控制权交还给环境变量（同时清空全部会话）。
 - 后端语义：优先级链 `config.auth`（控制台轮换）**>** 环境变量 **>** 首启生成；准入规则 8–128 位可见 ASCII、禁 `change-me`、两把不得相同，**管理密钥另需大小写字母+数字+特殊字符四样齐全**（v1.18.5 从"16 位"放宽并加了管理密钥复杂度门槛）；
   轮换即清管理面失败计数。细节与真链路验证见 `test/key-rotation-e2e.test.js`（75 项断言）与 README「行为细节」。
 - 接入信息页的「轮换密钥」按钮从"只读步骤弹窗"改为 `go('keys')` 直达本页；`showKeyHelp` 降级为命令行备用路径（见 §5.8）。
@@ -441,7 +445,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ## 6. 交互流程
 
-### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1820）
+### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1834）
 
 ```
 openChannelForm()        新增：清空表单，协议默认 openai，权重默认 0
@@ -491,18 +495,18 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 | kind | 生产函数 | 真实端点 |
 | --- | --- | --- |
-| `codex-rt` / `codex-json` | `importCodexRt(rt)` 1637 | `POST /admin/api/codex-import` |
-| `gs-session` / `gs-json` | `importGsSession(raw)` 1642 | `POST /admin/api/genspark-import` |
+| `codex-rt` / `codex-json` | `importCodexRt(rt)` 2161 | `POST /admin/api/codex-import` |
+| `gs-session` / `gs-json` | `importGsSession(raw)` 2166 | `POST /admin/api/genspark-import` |
 
-- `doImport` 1648 / `importFiles` 1668 都直接转发给上面两个函数，逐条回填真实结果
-- 原型的 `hash(s)`（2290，造假渠道 ID）**生产侧已删除**
+- `doImport` 2172 / `importFiles` 2192 都直接转发给上面两个函数，逐条回填真实结果
+- 原型的 `hash(s)`（2117，造假渠道 ID）**生产侧已删除**
 - 解析容错逻辑与原型一致（同样的 `parseCodexUnits` / `parseGsSessionId`），改一处要两处同步
 
-### 6.3 测试模型 `openTestModels(opts)`（1853）
+### 6.3 测试模型 `openTestModels(opts)`（2231）
 
 - 支持 `{channelId}` 预筛（从渠道行/抽屉进入时只显示该渠道的模型）
 - 分组多选列表 `.test-list`（分组头 sticky）+ 提示词输入
-- `runTests`（1906）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
+- `runTests`（2295）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
 - **停用渠道同样可测（v1.13）**：停用只是"不参与调度、不参与自动探测"，不代表不能手动打一发验证模型还活着。
   弹窗按 `DATA.channels` 里**全部**渠道构造（不再 `if(!c.on)continue`），停用渠道的分组头带「已停用」标签，
   且当列表里含停用渠道时补一行说明："手动测试照打，测通也不会因此启用它，且停用渠道不参与自动探测"。
@@ -563,16 +567,17 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
 | 「运行期设置」页（**v1.18 已实现**，见 §5.9） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：三张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
 | 「密钥管理」页（**v1.18.5 已实现**，见 §5.10） | `GET /admin/api/keys` · `POST /admin/api/keys` · `POST /admin/api/keys/generate` · `POST /admin/api/keys/reset` · `GET /admin/api/admin-key` | **v1.18.5 新增**：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY。GET 只回**掩码 + 来源**（console / env / generated / none）；POST 立即生效并写入 `config.json` 的 `auth` 段（控制台「随机生成」是本地填框，不走 generate 端点）（**优先级高于环境变量**），**旧密钥立即失效**；新明文只在响应的 `newKeys` 里回这一次；reset 删掉 `auth` 段把控制权交还给环境变量 |
+| 登录门 / 「退出登录」（**v1.18.6 已实现**，见 §8.29） | `POST /admin/api/session` · `DELETE /admin/api/session` | **v1.18.6 新增**：管理密钥登录门换会话——POST body `{key}` 交一次 `ADMIN_KEY` 换回 `HttpOnly + SameSite=Strict` 会话 cookie（`zz_session`，12 小时，**刻意无 `Secure`**：http 本地/局域网部署，加了反而种不下去）；端点在管理面鉴权闸门**之前**（登录时手里还没有会话），登录失败计入 admin 失败限流（NOAUTH 放行）；DELETE 只杀自己那枚 token 并过期 cookie，其余方法 405。轮换/重置管理密钥会清空全部会话，轮换响应**补发新会话**给发起轮换的浏览器 |
 
 **回填时的注意事项**：
 
 1. `fakeKey()` / `maskKey()` 是原型专用，真实密钥来自后端，**必须删除假密钥逻辑**
 2. 密钥明文显示是敏感操作，回填时保持"默认掩码 + 手动切换 + 可复制"的交互，不要默认明文
-3. 鉴权头：`Authorization: Bearer <ADMIN_KEY>`；`?key=` 收进浏览器本地后脱敏 URL（v1.0 起：记忆升为 localStorage + 无密钥时弹登录门，见 §8.10）
+3. 鉴权（**v1.18.6 会话化**）：浏览器把 `ADMIN_KEY` 交给 `POST /admin/api/session` **一次**换回 `HttpOnly + SameSite=Strict` 会话 cookie，之后同源自动随行，密钥不进任何浏览器存储；脚本/curl 走 `Authorization: Bearer <ADMIN_KEY>`。~~`?key=` 收进浏览器本地~~（v1.0–v1.18.5 的做法，渗透报告点名"密钥进浏览器历史"，v1.18.6 起拆除）
 4. `DATA` 就地修改的模式不能沿用——真实环境应改为"请求 → 更新本地 state → 重绘"
 
 > **回填状态（v0.4，v0.5 续修）**：以上四项均已满足。
-> 生产侧用 `chKey(id)`（`build/app.js` 1641）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
+> 生产侧用 `chKey(id)`（`build/app.js` 1818）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
 > `DATA` 改由 `adapt()`（59）从 `/admin/api/status` 响应派生，`loadAll()`（139）统一拉取后重绘。
 > 生产独有能力（genspark 双导入、渠道级自定义请求头、密钥明文切换、有效优先级角标、
 > 渠道权重输入框与分流占比、自动权重观测卡、真实 Playground / 测试 / 导入请求、端点地址与密钥一键复制、
@@ -694,7 +699,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | --- | --- | --- | --- |
 | 1 | **PT03**：arena 渠道从未反代成功，chromium/nss/freetype/harfbuzz/ttf-freefont 全家桶 + `--experimental-websocket` 却全部打进镜像（1.31GB） | arena.js 逆向方案保留在主干，但实际无 arena 渠道配置 | 全链路移除：`arena.js` 删除（`tool-emu.js` 保留——notion/notion-agent 工具仿真仍用）、`server.js` 去掉 arena 分支/兜底/`/admin/api/arena-cookie` 端点/协议白名单（4218→3675 行）、Dockerfile 撤 chromium 全家桶与 flag（镜像 **1.31GB→203MB**）、`console-redesign.html`/`build/app.js` 的 `PROTO_META`/`PROTO_ORDER`/`protoLabel`/`.chip.arena` 同步删除、README 协议表改「已撤，留档」、`docs/arena-protocol.md` 留档 |
 | 2 | **PT01**：compose 端口绑 0.0.0.0 + `ZZCSAPI_NOAUTH` 默认 1，局域网任何人无 key 可读全部渠道明文 key、烧上游额度（实测复现） | 免鉴权模式默认开启 + 端口全网卡暴露 | `docker-compose.yml` 端口改 `127.0.0.1:8787:8787`、NOAUTH 默认翻成 0；实测无 key 请求 401（admin/gateway 双面）、带 key 全通、healthz 不受影响 |
-| 3 | 前端#1（信任边界）：`openModel`/`copyCurl` 3 处把模型名内联进 `onclick` JS 字符串——恶意中转站 `/models` 返回毒模型名、用户从「探测加入别名」后，点击即在控制台源执行（可偷 `sessionStorage.adminKey`，v1.0 起该密钥同时存于 localStorage，威胁同理）；`esc()` 挡不住：HTML 属性先解码实体再进 JS | 内联 JS 字符串插值 | 3 处统一改 v0.5 已有的 `data-* + dataset` 模式：`data-m="${esc(名字)}" onclick="openModel(this.dataset.m)"`（模型表格行原本连 esc 都没有，一并补上） |
+| 3 | 前端#1（信任边界）：`openModel`/`copyCurl` 3 处把模型名内联进 `onclick` JS 字符串——恶意中转站 `/models` 返回毒模型名、用户从「探测加入别名」后，点击即在控制台源执行（可偷 `sessionStorage.adminKey`，v1.0 起该密钥同时存于 localStorage，威胁同理；**v1.18.6 追记**：该存储面已随会话化拆除——管理密钥不再进浏览器，XSS 只偷得到 JS 读不到的 HttpOnly cookie，且 `connect-src 'self'` 兜底防外发）；`esc()` 挡不住：HTML 属性先解码实体再进 JS | 内联 JS 字符串插值 | 3 处统一改 v0.5 已有的 `data-* + dataset` 模式：`data-m="${esc(名字)}" onclick="openModel(this.dataset.m)"`（模型表格行原本连 esc 都没有，一并补上） |
 | 4 | 前端#2/#3：`codexQuota`/`notionUsage` 映射进 DATA 后零消费方，README/注释仍宣称「codex 配额条」是生产能力（v0.4 重设计丢失渲染）；`extra.css` 5 组选择器（sortable/mini-kv/img-out/art/loading）全源零引用 28 行死重；`IC.arrowDown` 唯一零引用图标 | 文档承诺了代码没做的事 + 原型遗留样式跟着产物走 | 删 `app.js:78` 映射 + 改 39 行注释；删 extra.css 5 组（38→8 行）；删 arrowDown；README:120 与 detailed §5.1 的「codex 配额条」宣称同步删除（要恢复配额展示时从 git 历史找回 v0.3 实现） |
 | 5 | 前端#4/#5/#6：`protoLabel` 与 `PROTO_META.label` 两套协议显示名（codex chip 显示裸 'codex'）；抽屉「调度优先级（按实际选中顺序）」与 Playground「候选渠道」编号实为 **config 渠道序**而非调度序，误导排障；`reprobe` 写入无人读的 `errText`（真名 `lastError`）；`openLog` 找不到 id 静默回退第一条 | 同义重复 + 文案失实 + 死字段 | `protoLabel` 补 codex 短名（chip 与表单下拉统一由 PROTO_META 管长名）；两处文案改「来源渠道（按 config 渠道序，非实时调度序）」；`errText`→`lastError`（数据归位，抽屉渲染留给后续）；`openLog` 找不到改为 toast 提示后返回；shell 搜索框 placeholder 只承诺「搜索渠道…」；渠道页副标协议数改 `PROTO_ORDER.length` 动态生成 |
 | 6 | **PT05**：`probeUrlFor`/`probeMethodFor`/`probeHeadersFor` 三个单行兼容包装，只服务 4 个调用点 | 旧签名兼容层早已无外部调用方 | 删除包装，4 个调用点直连 `probeUrlForDef(ch.def)`/`'GET'`/`probeHeadersForDef(ch.def)` |
@@ -1325,6 +1330,34 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **验证**：`test/key-rotation-e2e.test.js`（**75 项断言**，真起临时网关）——装配守卫（优先级链方向、`auth` 白名单、4 个端点都在 `handleAdminApi` 内、`keysInsecureNow` 唯一判据、轮换清计数、NOAUTH 安全）+ `normNewKey` 真值表 + 真链路（6 种非法值 400 且不生效不落库、旧密钥立即 401 / 新密钥立即 200、`keysInsecure` 由真变假、重启后 `config.auth` 仍压过 env、随机生成三态（48 位四样字符齐全）、reset 回环境变量且盘上 `auth` 段消失）。`test/console-state.test.js` 新增 §11（**161 项断言**总）：含"随机生成只填草稿不发请求 + 轮换提交框内值"的回归：双路由表注册、NAV 位置、掩码与来源渲染、草稿跨轮询、**换管理密钥后浏览器存值同步更新**、按需揭示端点、两步确认守卫。`node build/build.js` 通过（产物 **173,165 字符 / 197,075 字节**）；全量回归 **30 文件 / 0 失败**。
 
 **残留（明确记下）**：① 轮换动作只落一行 `[keys]` 日志，无专门审计流水（单用户自托管定位，够用）；② 其它标签页/设备上的旧管理密钥在轮换后立即 401，需要重新输入一次——页面上已写明，这是"立即失效"的必然代价。
+
+---
+
+### 8.28 v1.18.6 密钥值整行看不见：`.mask` 类名冲突（2026-10-02，对象 `console-redesign.html` + `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `README.md`）
+
+**问题（用户原话："页面新增了一个密钥管理，但是界面元素貌似不是很对……这行字所在的框感觉怪怪的，位置不对还是什么问题？"）**：密钥管理页两张卡里的「当前值」行**掩码值根本看不见**——行内只剩「当前值」与「显示 / 复制」两个按钮，中间空一块。同一个毛病也一直在**接入信息页的 `GATEWAY_KEY` 行**上（从设计稿就带着，长期没人报）。同一句反馈里还有更直观的另一半：状态横幅的 `div` 漏了 `card-bd`（`.card` 只有 `overflow:hidden`、没有 `padding`），内容直接塞 `.row` 会**贴着边框**。
+
+**根因（类名冲突，不是布局问题）**：设计稿把"被遮罩的密钥值"写成 `<span class="mask mono">`，而 `.mask` 是**弹窗遮罩**（`position:fixed;inset:0;z-index:80;display:grid;place-items:center;opacity:0;pointer-events:none`）。`.ep-key .mask{letter-spacing:.08em}` 只补了字距，其余属性全部继承自遮罩那条规则 —— 于是这个值变成一个**铺满视口、透明、脱离文档流**的元素：文本在 DOM 里（`textContent` 有值）却永远不显示，`.ep-key` 行里自然空一块。浏览器实测：`position:"fixed"`、`opacity:"0"`、`zIndex:"80"`、`getBoundingClientRect()` 约等于整个视口（1703×1198）。
+
+**处置**：① 把"被遮罩的值"改用独立类 `.ep-key .kval`——原型 `<style>` 337、原型演示 markup 1700、`build/app.js` 的 `keyCard`（1522）与 `vAccess`（1693），共 4 处；`.mask` 回归"只做弹窗遮罩"。**只改选择器名、不增删行**，因此 `console.html` 的行号偏移不变（CSS +13 / JS +686）。② 状态横幅补 `class="card-bd row"`。
+
+**验证**：`test/console-state.test.js` §11 新增 5 条断言（**168 项**总）：源码里 `class="mask mono"` 必须为 0、密钥值与接入信息页的 `GATEWAY_KEY` 都走 `class="kval mono"`、产物里 `.ep-key .kval{` 在而 `.ep-key .mask{` 不在、**且 `.mask` 仍必须是那条弹窗遮罩**（防止用"给遮罩改名"蒙混过关），外加一条"旧写法不满足守卫"的对照组。浏览器实测（本地静态托管 + 打桩后端，见 §11 构建管线）：修复前该元素 `opacity:0 / position:fixed / rect≈视口`、值不可见；修复后两张卡的掩码值均正常可见。`node build/build.js` 通过（产物 **173,929 字符**；设计 CSS 33,647 · 补充 CSS 4,587 · JS 132,315）。
+
+---
+
+### 8.29 v1.18.6 第三批安全整改：CSP 响应头 + 管理面会话化（2026-10-02，对象 `server.js` + `build/app.js` + 产物 `console.html` + 新增 `test/admin-session-e2e.test.js` + `test/security-headers-e2e.test.js` / `test/console-state.test.js` / `test/key-rotation-e2e.test.js` 增章）
+
+**问题（渗透测试报告第三批，两项同报）**：① 全站没有 CSP（Content-Security-Policy）——v1.18.3 的转义整改把"注入"堵住了，但纵深防御缺第二道墙；② `/console?key=…` 登录方式把管理密钥**写进浏览器历史**（渗透报告点名）；更结构性的问题是 v1.0–v1.18.5 的"密钥记忆"方案是 localStorage/sessionStorage **常驻**——任何 XSS 只要得手一次，读走的就不是一次性凭据而是**长效主密钥**（§8.7 第 3 行当年点名的正是这条链）。
+
+**设计决策（用户拍板）**：① 两项**一起做**；② 浏览器侧走**会话 cookie**（`HttpOnly`（JS 读不到）+ `SameSite=Strict`（顺带治 CSRF），业界惯例：浏览器会话、脚本 Bearer），**不用**"仍存 localStorage 但加密"之类的折中——浏览器里根本没有能对抗 XSS 的可逆加密；③ **刻意不加 `Secure`**——本网关设计上跑 http 本地/局域网，加了 cookie 反而种不下去，兜底在 CSP `connect-src 'self'`（即使 XSS 偷到 cookie 也发不出去）；④ 会话表放**内存**（重启全部掉线是刻意接受的代价，页面文案明示）；⑤ Gemini SDK 客户端面的 `?key=` **保留**（它是另一默认鉴权模式，不在整改面内）。
+
+**后端（`server.js`）**：内存会话表 `SESSIONS`（token→过期时刻，`SESSION_TTL` 12 小时、上限 256、先清过期再逐最旧一枚）+ `readSessionToken`（cookie 手工解析）/`sessionValid`（懒过期）/`sessionCookieValue`（四旗标拼装）/`newSessionToken`（32 字节随机）/`clearSessions` + 10 分钟周期清扫（`unref` 不吊住进程）。新端点 `POST /admin/api/session`（body `{key}` 交一次 `ADMIN_KEY` → `Set-Cookie: zz_session=…; HttpOnly; SameSite=Strict; Max-Age=43200` + `expiresInSec`）与 `DELETE`（只杀自己 + `Max-Age=0` 回写，其余方法 405），**放在 authGate 分支之前**（登录时手里还没有会话）；登录失败计入 admin 失败限流（`authThrottle('admin')` + `authFail`/`authOk`，NOAUTH 放行）且响应 `no-store`。`checkAuth('admin')` 改为**会话 cookie 或 Bearer**（脚本/CI 零影响）；`?key=` 移进 `kind !== 'admin'` 块（管理面拆、客户端面留）。`rotateKeys()` 换管理密钥时 `clearSessions()`，且 keys 路由在轮换响应里**补发新会话 cookie**（发起页不被踢回登录门）；`resetManagedKeys()` 同样清空会话。CSP 进 `SEC_HEADERS`：`default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`——`'unsafe-inline'` 是单文件内联控制台的必要妥协（真实兜底在 `connect-src 'self'`），MiSans CDN 字体按 `build/head.html` 的 preconnect 进白名单，`img-src` 只放 `data:`（实测 app.js 无图片/`createObjectURL` 用途，只有 CSV 下载 blob）。
+
+**前端（`build/app.js`）**：`api()` 不再注入任何 `Authorization`（会话 cookie 同源自动随行）；**401 → `showKeyGate()`**（会话过期/被轮换清掉时自动闭环）。登录门改 POST `/admin/api/session` 一次换 cookie——输入框粘贴后即清空，**不落任何浏览器存储、不进地址栏**；门内文案明示"验证通过后会换成会话（12 小时有效），密钥本身不会被浏览器存下来"。新增**启动探针**（`fetch /admin/api/status`：200 = 活会话直接 `boot()`，401/网络错 = 弹门——不再问本地存储）。新增 `logout()`（密钥管理页挂「退出登录」按钮：DELETE 自己那枚会话 + 整页重载）；`keyFlow`/`__ZZ_HAS_KEY__` 整块拆除；`rotateKey` 的"轮换后同步写 localStorage/sessionStorage"块删除（服务端补发新会话，前端无事可做）；`showKeyHelp` 步骤改为粘贴密钥登录（不再有 `?key=` 带参链接）；密钥管理页页脚明示"轮换管理密钥后所有已登录会话都会失效（重启也会掉线），重开控制台重新粘一次密钥即可"。
+
+**验证**：新增 `test/admin-session-e2e.test.js`（**63 项断言**：装配守卫 11（常量、`?key=` 只在客户端面块内、会话端点在 authGate 之前、登录进限流、DELETE/405、轮换清会话+补发、清扫 `unref`、CSP 存在）+ 纯函数真值表（`readSessionToken` 7 态、`sessionValid` 懒过期、`sessionCookieValue` 四旗标**刻意无 Secure**、`newSessionToken` 逐出两场景（先清过期不过度逐人 / 全活的逐最旧））+ 真链路（无凭据 401、错密钥 401 不发 cookie、登录 200 旗标齐全、只带 cookie 200、Bearer 保留、管理面 `?key=` 401 / 客户端面 200、两枚会话独立、退出只杀自己、CSP 真实下发、cookie 轮换管理密钥成功且补发新会话（旧 token 立即死、网关密钥不受牵连）、重启后会话全掉线而新 Bearer 仍活（config.auth 落库）））。`test/security-headers-e2e.test.js` 增第三批（CSP 守卫从"不得偷偷加上"翻向**逐字等于设计值**、每条真链路核 `content-security-policy`、管理面 `?key=` 401 / 客户端面 200 对照）→ **51 通过 0 失败**；`test/console-state.test.js` §11 重写为**会话语义**（api() 无 Authorization、登录门 POST session、无 `__ZZ_HAS_KEY__`、轮换后无任何浏览器存储写入）→ **172 项**；`test/key-rotation-e2e.test.js` 增轮换清会话/补发新会话语义 → **85 项**。`node build/build.js` 通过（产物 **173,707 字符**；设计 CSS 33,647 · 补充 CSS 4,587 · JS 132,093）；全量回归 **31 文件 / 0 失败**。
+
+**残留（明确记下）**：① 会话表在内存——网关重启全部掉线（重开控制台粘一次密钥即可，脚本走 Bearer 不受影响）；② 公网 TLS 部署需在反向代理层终止 TLS 并保持 `HttpOnly`/`SameSite` 语义（cookie 刻意无 `Secure`）；③ `'unsafe-inline'` 是单文件控制台的必要妥协，真正的兜底是 `connect-src 'self'`（外发被掐死）；将来若把控制台拆成外链资源，应同步收紧 CSP 并更新 `test/security-headers-e2e.test.js` 的逐字守卫。
 
 ---
 

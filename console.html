@@ -347,7 +347,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .ep{padding:15px 16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2);display:flex;flex-direction:column;gap:11px}
 .ep-url{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12.5px;color:var(--tx);word-break:break-all}
 .ep-key{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12px;color:var(--tx-2)}
-.ep-key .mask{letter-spacing:.08em}
+.ep-key .kval{letter-spacing:.08em}/* 千万别写回 .mask：那个类名是弹窗遮罩（position:fixed;inset:0;opacity:0），套上来会让密钥值整行不可见。见 docs/frontend-code-map.md §7 */
 
 /* playground */
 .pg{display:grid;grid-template-columns:1fr 316px;gap:16px;align-items:start}
@@ -895,14 +895,13 @@ const stTxt={ok:'正常',degraded:'降级',down:'不可用',unknown:'未探测'}
 const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark'};
 
 /* ═══════════════════════════ 生产：API 客户端 ═══════════════════════════
-   控制台唯一网络出口。ADMIN_KEY 从 sessionStorage 取（生产由服务端注入或手填），
-   GATEWAY_KEY 由 /admin/api/config 下发，仅 Playground 直连 /v1 时使用。 */
+   控制台唯一网络出口。鉴权走会话 cookie（v1.18.6：登录门把管理密钥交给 /admin/api/session 一次，
+   换回 HttpOnly cookie；管理密钥本身不进 localStorage，JS 永远摸不到它）。
+   GATEWAY_KEY 由 /admin/api/config 下发掩码，Playground 直连 /v1 时走按需揭示现取。 */
 async function api(path,opts={}){
   const headers={'Content-Type':'application/json'};
-  const k=sessionStorage.getItem('adminKey');
-  if(k)headers['Authorization']='Bearer '+k;
   const r=await fetch(path,{...opts,headers:{...headers,...(opts.headers||{})}});
-  if(r.status===401){try{sessionStorage.removeItem('adminKey');localStorage.removeItem('adminKey')}catch(e){};showKeyGate();throw new Error('401')}
+  if(r.status===401){showKeyGate();throw new Error('401')}
   const j=await r.json().catch(()=>null);
   if(!r.ok){toast((j&&(j.error||j.message))||('HTTP '+r.status),'bad');const err=new Error('http '+r.status);err.status=r.status;err.body=j;throw err}
   return j;
@@ -2184,8 +2183,8 @@ resp = client.chat.completions.create(
 
    实现要点（每一处都对应一个真实的坑）：
      · 轮换结果写进 config.json 的 auth 段，**优先级高于 .env**——否则重启就把轮换顶回去；
-     · 管理密钥换掉后，必须**同时**把 sessionStorage 与 localStorage 里的值换新，
-       因为 api() 每次请求都现读 sessionStorage；不换下一次轮询就 401 → 弹回登录门（等于把自己踢出去）；
+     · 换管理密钥时服务端清空全部会话并在轮换响应里**补发新会话 cookie**（v1.18.6）——
+       发起轮换的这个页面不会被踢回登录门；其它标签页/设备下次请求 401，各自重新登录；
      · 明文一律现取（GET /admin/api/admin-key、/admin/api/gateway-key），页面快照里只有掩码；
      · 旧密钥**立即**失效（不设宽限期，这是明确选择），所以按钮要点两下确认。 */
 const KEY_SRC_TXT={console:'控制台轮换',env:'环境变量',generated:'首启生成',none:'未设置（鉴权关闭）'};
@@ -2205,7 +2204,7 @@ function keyCard(kind){
     <div class="card-hd"><h3>${label}</h3><span class="sub">${esc(scope)} · 来源：${esc(KEY_SRC_TXT[o.source]||'—')}</span></div>
     <div class="card-bd">
       <div class="ep-key" style="margin-bottom:12px"><span>当前值</span>
-        <span class="mask mono" id="kr_${kind}">${esc(plain||o.masked||'—')}</span>
+        <span class="kval mono" id="kr_${kind}">${esc(plain||o.masked||'—')}</span>
         <button class="btn ghost sm ml-auto" id="ke_${kind}">${svg(plain?'eyeOff':'eye',13)}${plain?'隐藏':'显示'}</button>
         <button class="btn ghost sm" id="kc_${kind}">${svg('copy',13)}复制</button></div>
       <div class="field">
@@ -2237,10 +2236,11 @@ function vKeys(v){
       <div class="page-sub">轮换 GATEWAY_KEY 与 ADMIN_KEY · 改完立即生效，不用重开容器</div></div>
     <div class="page-actions">
       <button class="btn" id="keyReset">${svg('x',14)}回到环境变量值</button>
+      <button class="btn ghost" id="keyLogout">${svg('door',14)}退出登录</button>
     </div>
   </div>
   <div class="card" style="margin-bottom:16px;border-color:color-mix(in srgb,${bad?'var(--warn)':'var(--ok)'} 30%,transparent)">
-    <div class="row" style="gap:9px;align-items:flex-start">
+    <div class="card-bd row" style="gap:9px;align-items:flex-start">
       <span style="color:${bad?'var(--warn)':'var(--ok)'}">${svg(bad?'warn':'check',15)}</span>
       <span class="help" style="margin:0">${bad
         ?'当前密钥仍是示例默认串（含 <b>change-me</b>）——<b>建议立刻换一对新的</b>：点「随机生成」填进框内，再点「轮换」生效。'
@@ -2263,6 +2263,7 @@ function vKeys(v){
     const s=$(`#ks_${kind}`,v); if(s) s.onclick=()=>rotateKey(kind,keyDraft[kind],s);
   }
   const r=$('#keyReset',v); if(r) r.onclick=()=>resetKeysAction(r);
+  const out=$('#keyLogout',v); if(out) out.onclick=logout;
 }
 /* 危险动作点两下确认（旧密钥立即失效，误点一次就能让所有调用方 401） */
 function armConfirm(btn,what){
@@ -2317,11 +2318,8 @@ async function rotateKey(kind,value,btn){
   try{
     const body=kind==='gateway'?{gatewayKey:value}:{adminKey:value};
     const r=await api('/admin/api/keys',{method:'POST',body:JSON.stringify(body)});
-    const fresh=((r&&r.newKeys)||{})[kind==='gateway'?'gatewayKey':'adminKey']||'';
-    // 换的是管理密钥：浏览器里存的那把必须跟着换，否则下一次轮询就 401 → 弹回登录门（等于把自己踢出去）
-    if(kind==='admin'&&fresh){
-      try{ sessionStorage.setItem('adminKey',fresh); localStorage.setItem('adminKey',fresh); }catch(e){}
-    }
+    // 换的是管理密钥：服务端已清空全部会话并在本响应里补发了新会话 cookie（Set-Cookie 由浏览器自动种下），
+    // 这个页面不会把自己踢回登录门；其它标签页/设备下次请求 401，各自重新登录一次
     keyDraft[kind]=''; keyReveal[kind]='';
     toast(`${label}已轮换（旧值已立即失效）`);
     await reload();
@@ -2376,7 +2374,7 @@ function vAccess(v){
       <div class="ep-url"><span style="flex:1;min-width:0">${x.u}</span>
         <button class="btn ghost sm" data-t="${esc(x.u)}" onclick="copyText(this.dataset.t,this)">${svg('copy',12)}复制</button></div>
       <div class="muted" style="font-size:11.5px">${esc(x.note)}</div>
-      <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">${esc(gwKey||'—')}</span>
+      <div class="ep-key"><span>GATEWAY_KEY</span><span class="kval mono">${esc(gwKey||'—')}</span>
         <button class="btn ghost sm ml-auto" onclick="copyGwKey(this)">${svg('copy',13)}复制</button></div>
     </div></div>`).join('')}
   </div>
@@ -2448,8 +2446,8 @@ function showKeyHelp(){
     {t:'在仓库根目录的 .env 写入新密钥（docker-compose 读的是 ZZCSAPI_ 前缀）',
      c:'ZZCSAPI_ADMIN_KEY=<新的管理密钥>\nZZCSAPI_GATEWAY_KEY=<新的网关密钥>'},
     {t:'重建并重启容器，新密钥才生效',c:'docker compose up -d --force-recreate'},
-    {t:'用新 ADMIN_KEY 重新打开控制台（?key= 一次性输入，收进 localStorage 后从地址栏抹掉，之后裸开 /console 即可）',
-     c:`http://127.0.0.1:${port}/console?key=<新的管理密钥>`},
+    {t:'用新 ADMIN_KEY 重新进入控制台：打开 /console 粘贴一次即可——换回 12 小时会话 cookie，浏览器不再存密钥本身（v1.18.6 起 ?key= 已停用）',
+     c:`http://127.0.0.1:${port}/console`},
   ];
   modal(`
     <div class="m-hd"><span class="m-ico">${svg('key',14)}</span><h2>轮换密钥</h2>
@@ -2471,7 +2469,7 @@ function showKeyHelp(){
             <button class="btn ghost sm copy" data-t="${esc(s.c)}" onclick="copyText(this.dataset.t,this)">${svg('copy',13)}复制</button></div>
           <pre>${esc(s.c)}</pre></div>
         </div>`).join('')}
-      <div class="field"><span class="help">⚠ 只改 GATEWAY_KEY 不影响已登录的控制台；改 ADMIN_KEY 后需要用新值重新打开控制台。</span></div>
+      <div class="field"><span class="help">⚠ 只改 GATEWAY_KEY 不影响已登录的控制台；改 ADMIN_KEY 后所有已登录的会话全部作废，每个浏览器都要用新值重新粘一次。</span></div>
     </div>
     <div class="m-ft"><button class="btn ghost ml-auto" onclick="closeModal()">关闭</button></div>`);
 }
@@ -3053,10 +3051,9 @@ $('#globalSearch').addEventListener('keydown',e=>{
   if(e.key==='Enter'){const q=e.target.value.trim();if(!q)return;chQ=q;go('channels');toast('已在渠道中搜索：'+q,'ok')}
 });
 
-/* 密钥三源合流（登录门配套）：?key= URL（一次性，收进本地后从地址栏抹掉，避免留在历史/截图）
-   → localStorage（持久记忆，跨标签跨重启）→ sessionStorage（api() 实际取用的会话层）。
-   无任何来源时弹「输入管理密钥」小门（见 showKeyGate）——壳页面零机密，管理 API 仍每次强制 Bearer。 */
-let __ZZ_HAS_KEY__=false;
+/* 登录门（v1.18.6 会话化）：管理密钥只在这里出现一次——POST /admin/api/session 换回
+   HttpOnly + SameSite=Strict 的会话 cookie 后即被丢弃，不落 localStorage、不进地址栏、JS 读不到。
+   之后所有管理面调用只靠 cookie；会话过期/被轮换清掉时 api() 收到 401 重新弹这扇门。 */
 function showKeyGate(){
   if(document.getElementById('zz-gate'))return;
   const g=document.createElement('div');g.id='zz-gate';
@@ -3065,7 +3062,7 @@ function showKeyGate(){
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
       <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
       <span style="font-size:17px;font-weight:600">管理密钥</span></div>
-    <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY</div>
+    <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY<br>验证通过后会换成会话（12 小时有效），密钥本身不会被浏览器存下来。</div>
     <input id="zz-gate-input" type="password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box"
       onkeydown="if(event.key==='Enter'){document.getElementById('zz-gate-btn').click()}">
     <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>
@@ -3074,30 +3071,27 @@ function showKeyGate(){
   document.body.appendChild(g);
   const input=g.querySelector('#zz-gate-input');input.focus();
   const attempt=async()=>{
-    const k=input.value.trim();if(!k)return;
+    const k=input.value;if(!k.trim())return;
     const errEl=g.querySelector('#zz-gate-err');errEl.textContent='';
     try{
-      const r=await fetch('/admin/api/status',{headers:{'Authorization':'Bearer '+k}});
-      if(r.status!==200){errEl.textContent='密钥不对（HTTP '+r.status+'）';input.select();return}
-      try{localStorage.setItem('adminKey',k);sessionStorage.setItem('adminKey',k)}catch(e){}
+      const r=await fetch('/admin/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k})});
+      const j=await r.json().catch(()=>null);
+      if(r.status!==200){errEl.textContent=(j&&(j.error||j.message))||('密钥不对（HTTP '+r.status+'）');input.select();return}
+      input.value='';          // 密钥用完即弃：不留输入框、不进存储
       g.remove();boot();
     }catch(e){errEl.textContent='网络错误：'+(e&&e.message||e)}
   };
   g.querySelector('#zz-gate-btn').onclick=attempt;
 }
-(function keyFlow(){
-  const u=new URL(location.href);
-  const fromUrl=u.searchParams.get('key');
-  if(fromUrl){
-    try{localStorage.setItem('adminKey',fromUrl)}catch(e){}
-    u.searchParams.delete('key');history.replaceState(null,'',u.toString());
-  }
-  const ls=()=>{try{return localStorage.getItem('adminKey')}catch(e){return null}};
-  const ss=()=>{try{return sessionStorage.getItem('adminKey')}catch(e){return null}};
-  const k=fromUrl||ls()||ss();
-  if(k){try{sessionStorage.setItem('adminKey',k)}catch(e){}}
-  __ZZ_HAS_KEY__=!!k;
-})();
+async function logout(){
+  try{ await fetch('/admin/api/session',{method:'DELETE'}); }catch(e){}
+  location.reload();   // cookie 已被服务端清掉，重载自然弹回登录门
+}
+/* 启动探针：不问本地存储（里面已经什么都没有了），直接敲一发管理接口——
+   200 = 会话 cookie 还活着，直接进；401/网络错 = 弹登录门。 */
+fetch('/admin/api/status',{headers:{'Content-Type':'application/json'}})
+  .then(r=>{ r.status===200?boot():showKeyGate(); })
+  .catch(()=>showKeyGate());
 
 function tick(){
   const d=new Date(), p=n=>String(n).padStart(2,'0');
@@ -3106,8 +3100,8 @@ function tick(){
 
 /* 首屏先渲染骨架再拉数据，避免白屏；之后每 8 秒静默刷新。
    标签页不可见时不打接口，否则后台标签会一直空转网关。
-   登录门配套：无密钥 → 先 showKeyGate()，验证通过后才 boot()；
-   已有密钥（localStorage / ?key=）直接启动。api() 遇 401 会清存储并重新弹门（密钥被轮换时）。 */
+   会话化（v1.18.6）：启动前先探一发 /admin/api/status——有活着的会话 cookie 才 boot()，
+   否则 showKeyGate()；api() 遇 401 也会重新弹门（会话过期 / 密钥被轮换时）。 */
 let __ZZ_BOOTED__=false;
 function boot(){
   if(__ZZ_BOOTED__)return;__ZZ_BOOTED__=true;
@@ -3129,7 +3123,6 @@ function boot(){
     loadAll().catch(()=>{});
   },8000);
 }
-__ZZ_HAS_KEY__?boot():showKeyGate();
 
 </script>
 </body>
