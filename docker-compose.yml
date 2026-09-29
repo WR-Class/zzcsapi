@@ -5,10 +5,13 @@ services:
     container_name: zzcsapi
     restart: unless-stopped
     ports:
-      # 本机部署刻意放开到局域网（需从别的设备访问控制台）。安全前提：NOAUTH 保持 0，
-      # 一切访问走 checkAuth 的 Bearer / ?key= 通道。
-      # 只想本机自用就改成 "127.0.0.1:8787:8787"（PT01 的收紧版）。
-      - "8787:8787"
+      # 默认 = 直连模式：局域网可访问，但来源统计里所有机器会折叠成一行网桥 IP（Docker NAT 所致）。
+      # 想让来源统计看到每台机器的真实 IP（反代采信模式，见 README「方式三」）：在根目录 .env 里写
+      #   ZZCSAPI_PUBLISH=127.0.0.1:18787:8787
+      # 再在宿主机跑 nginx（deploy/nginx-reverse-proxy.conf，监听 8787 → 转发到这里）+
+      # config.json 的 security.trustedProxy 填本项目固定子网的网桥网关 172.28.137.1。
+      # 想只本机自用不开放局域网：改成 "127.0.0.1:8787:8787"。
+      - "${ZZCSAPI_PUBLISH:-8787:8787}"
     environment:
       TZ: Asia/Shanghai
       PORT: "8787"
@@ -31,3 +34,15 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    networks:
+      - zznet
+
+# 固定子网 → 网桥网关 IP 恒为 172.28.137.1（反代采信模式下 config.security.trustedProxy 登记的就是它：
+# 网关眼里"宿主机 nginx 经 Docker 转发直连进来"的源地址）。不固定子网的话 Docker 每次建网分到的
+# 网段不同，trustedProxy 会静默失效（采信不到 X-Forwarded-For，来源统计又退回一行网桥 IP）。
+networks:
+  zznet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${ZZCSAPI_SUBNET:-172.28.137.0/24}

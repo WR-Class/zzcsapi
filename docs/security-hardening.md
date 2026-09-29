@@ -83,7 +83,7 @@ v1.18.9 起只回答"活着吗"；守卫断言在 `test/security-headers-e2e.tes
 
 **强制密钥长度/熵（不符合就拒绝启动）与多用户/角色/审计**：本项目定位是**单用户自托管**，首启随机生成密钥、示例默认值只服务本地开发，把这两条做进来会破坏开箱即用（外部渗透测试报告的建议据此驳回，理由记在此处以免重复提）。
 
-**给公网部署者**：本项目的隐藏前提是「知道密钥的人就是管理员」——请只在可信网络或反向代理后暴露，并务必给公网入口加 TLS（会话 cookie 刻意没加 `Secure` 旗标，就是为 http 本地/局域网；公网 TLS 部署时应在反代层终止并保留 `HttpOnly`/`SameSite` 语义）。
+**给公网部署者**：本项目的隐藏前提是「知道密钥的人就是管理员」——请只在可信网络或反向代理后暴露，并务必给公网入口加 TLS（会话 cookie 刻意没加 `Secure` 旗标，就是为 http 本地/局域网；公网 TLS 部署时应在反代层终止并保留 `HttpOnly`/`SameSite` 语义）。**反代层仓库已备好**（v1.18.14，README「方式三」）：`deploy/nginx-reverse-proxy.conf` + compose 的 `ZZCSAPI_PUBLISH` 开关 + 固定子网 `172.28.137.0/24`（`security.trustedProxy` 登记网桥网关 `172.28.137.1` 即可拿到真实来源 IP），公网部署在它之上加 TLS 证书即可；nginx 侧**必须保持 `X-Forwarded-For` 覆写语义**（`$remote_addr`）——换成追加模式（`$proxy_add_x_forwarded_for`）会让客户端预置假 XFF 伪造来源统计、甚至借封禁把人锁死（守卫在 `test/reverse-proxy-config.test.js`）。
 
 ## 来源 IP 统计的数据留存界限（v1.18.11 补记）
 
@@ -94,6 +94,6 @@ v1.18.11 加了来源 IP 态势统计（per-IP 敲门 / token / 并发 / 会话�
 - **`X-Forwarded-For` 只在 `config.security.trustedProxy` 登记的来源上采信第一跳**（XFF 客户端可伪造；不设门槛就采信会把封禁变成假功能——任意客户端伪造 IP 甩锅给别人）。全仓只有 `clientIpOf` 一处读它，`::ffff:` 前缀两侧归一。
 - **客户端标签（UA 自报）只做显示**，绝不进任何控制逻辑的判定（UA 同样可伪造）；渲染层 `esc()` 过（外部可控值）。
 - **封禁只拦客户端面**：管理面/控制台/健康检查永远可达——解封按钮永远不会把自己锁在门外（被抄走的密钥也不该有能力把所有者锁在门外）。
-- 挂反代时（公网部署常态）**必须**把反代地址填进 `security.trustedProxy`，否则统计与封禁都会记/封反代自己的 IP（假功能）；同时按上文给公网入口加 TLS。
+- 挂反代时（公网部署常态）**必须**把反代地址填进 `security.trustedProxy`，否则统计与封禁都会记/封反代自己的 IP（假功能）；同时按上文给公网入口加 TLS。Docker Desktop 上尤其要在意这条：不加反代层时端口发布是 NAT，**所有来源都会折叠成网桥网关一个 IP**（per-IP 态势等于废掉一半，且封禁会变成"一封封全部"）——现成接法见 README「方式三」（宿主机 nginx + `ZZCSAPI_PUBLISH` 开关 + 固定子网 `172.28.137.0/24`，`trustedProxy` 填网桥网关 `172.28.137.1`；配置守卫 `test/reverse-proxy-config.test.js`）。
 
 语义与守卫：`test/ip-stats-ban-e2e.test.js`（62 项，含 trustedProxy 采信与伪造对照组）；行为细节见 docs/behavior.md「来源 IP 态势统计与封禁」。

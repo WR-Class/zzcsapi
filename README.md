@@ -38,6 +38,40 @@ docker compose up -d --build
 > 判断：`docker inspect zzcsapi --format '{{.Image}}'` 与 `docker images zzcsapi:local --format '{{.ID}}'` 不一致就补 `docker compose up -d --force-recreate`。`/console` 带 `no-store`，不需要强刷浏览器。
 > ⚠️ `config.json` / `usage.json` **必须先在宿主机存在**，否则 Docker 会把挂载点建成目录（服务不崩，但用量统计每次重启归零）。
 > 端口映射 `8787:8787`（局域网可访问）；手工 `docker run` 别忘 `ZZCSAPI_BIND=0.0.0.0`、`TZ=Asia/Shanghai`、`ZZCSAPI_CONFIG=/app/config.json`（compose 已写死，不会踩到）。
+> 想让来源统计看到**每台机器的真实 IP**（而不是一行网桥 IP）走 [方式三](#方式三反代采信模式想让来源统计看到每台机器真实-ip)。
+
+### 方式三：反代采信模式（想让来源统计看到每台机器真实 IP）
+
+**问题**：Docker Desktop 的端口发布是 NAT——打进 `8787` 的连接（宿主机自己 + 局域网其他机器）进容器后源地址都变成网桥网关那**一个** IP，来源统计永远只有一行（v1.18.11 的 per-IP 态势等于废掉一半）。
+
+**处置**：宿主机 nginx 是连接的真正终点，看得到真实客户端 IP；把它写进 `X-Forwarded-For`，网关只在"这条连接来自受信反代"时才采信（`config.security.trustedProxy`）。
+
+```
+局域网客户端 ──► 宿主机 nginx :8787 ──► 127.0.0.1:18787 ──► 网关容器 :8787
+              （看到真实来源 IP、覆写 XFF）  （只绑回环，局域网绕不过）  （trustedProxy 采信 XFF）
+```
+
+```powershell
+# 1) 网关改成只绑宿主回环的转发口：根目录 .env 加一行（.env 不入仓库）
+#    ZZCSAPI_PUBLISH=127.0.0.1:18787:8787
+docker compose up -d
+
+# 2) config.json 的 security.trustedProxy 填【本项目固定子网的网桥网关】（compose 已固定 172.28.137.0/24）
+#    "security": { "trustedProxy": "172.28.137.1" }
+docker compose restart zzcsapi
+
+# 3) 宿主机跑 nginx（for Windows 便携版解压到 D:\DSHXM\nginx-rt，路径可换；它不是 Windows 服务）
+D:\DSHXM\nginx-rt\nginx.exe -p D:\DSHXM\nginx-rt\ -c D:\DSHXM\ZZCSAPI\deploy\nginx-reverse-proxy.conf
+# 改配置后生效 / 停止：把启动参数换成 -s reload / -s stop
+```
+
+客户端地址**不用改**（仍是 `http://<局域网IP>:8787`）；统计页会显示「反代采信：172.28.137.1」，每台机器各占一行。
+
+- **trustedProxy 填网桥网关（172.28.137.1），不是宿主机的局域网 IP**——网关眼里"nginx 转进来的连接"源地址就是这个。compose 用 `${ZZCSAPI_SUBNET:-172.28.137.0/24}` 固定子网就是为了让它恒定：不固定则每次建网换网段，采信静默失效（统计又退回一行）。
+- **nginx 不是 Windows 服务**：重启电脑后不会自己起来，8787 没人监听 = 所有客户端连不上。用 `deploy/start-reverse-proxy.ps1`（幂等启动）登记开机自启，撤销就是删掉那条启动项——命令见脚本头部注释。
+- **别把 nginx 放进容器**：容器里看到的源地址同样会被 Docker NAT 折叠成网桥 IP，等于白搭。
+- **三条纪律**（XFF **覆写**为 `$remote_addr` 而非追加、转发口只绑回环、`proxy_buffering off` 否则 SSE 卡死）写在 [deploy/nginx-reverse-proxy.conf](deploy/nginx-reverse-proxy.conf) 头部，由 `test/reverse-proxy-config.test.js` 守着，改坏当场报错。
+- **回到默认直连模式**：`.env` 里删掉 `ZZCSAPI_PUBLISH`（或改回 `8787:8787`）→ `docker compose up -d`，并清空 `security.trustedProxy`。
 
 ### 方式二：裸 Node（18+）
 
@@ -116,7 +150,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 33 个测试文件 · 1652 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 34 个测试文件 · 1674 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -195,8 +229,9 @@ http://127.0.0.1:8787/console
 > 调度旋钮（`cooldown` / `retries` / `autoWeight`）与运行期四组开关（`sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`）
 > 的全量取值与钳制范围见 [调度详解](docs/scheduling.md) 与 [运行期设置](docs/runtime-settings.md)。
 > `security.trustedProxy` 只在网关部署在反向代理后面时才需要：留空 = 直连模式，一律只认 socket 地址
-> （`X-Forwarded-For` 是客户端可伪造的头，不设门槛就采信会把封禁变成假功能）。来源统计是**内存态**
-> （网关重启清零），封禁表落 `config.json` 重启不丢——语义见 [行为详解](docs/behavior.md)。
+> （`X-Forwarded-For` 是客户端可伪造的头，不设门槛就采信会把封禁变成假功能）。Docker 下想让来源统计
+> 看到每台机器真实 IP 的完整接法（宿主机 nginx + 固定子网 + `ZZCSAPI_PUBLISH` 开关）见上面[方式三](#方式三反代采信模式想让来源统计看到每台机器真实-ip)；
+> 来源统计是**内存态**（网关重启清零），封禁表落 `config.json` 重启不丢——语义见 [行为详解](docs/behavior.md)。
 
 ## 协议说明
 
@@ -295,7 +330,7 @@ node sec-audit.js
 查这些：① 哪些口匿名可达（应只有 `/healthz`、`/console`）② 示例默认密钥是否仍可用 ③ 控制台版本指纹 ④ 安全响应头 / CORS
 ⑤ 三态鉴权覆盖面 ⑥ 密钥泄露面 ⑦ 路径穿越与私有文件暴露。
 
-整改现状：渗透测试发现**全部有归宿**——六批已修（v1.18.3–v1.18.10，含 V-07 Host/Origin 门与 V-08 探针精简）、其余逐项处置台账在案（V-09/V-11 风险接受的理由、V-05 compose 内成文注释、刻意不做的两条）——完整过程、复查记录与每批的守卫测试见 [安全整改记录](docs/security-hardening.md)。**给公网部署者**：请在可信网络或反代后暴露，公网入口务必加 TLS，反代/公网域名记得登记 `ZZCSAPI_ALLOWED_HOSTS`（否则 421）。
+整改现状：渗透测试发现**全部有归宿**——六批已修（v1.18.3–v1.18.10，含 V-07 Host/Origin 门与 V-08 探针精简）、其余逐项处置台账在案（V-09/V-11 风险接受的理由、V-05 compose 内成文注释、刻意不做的两条）——完整过程、复查记录与每批的守卫测试见 [安全整改记录](docs/security-hardening.md)。**给公网部署者**：请在可信网络或反代后暴露，公网入口务必加 TLS，反代/公网域名记得登记 `ZZCSAPI_ALLOWED_HOSTS`（否则 421）；仓库已备好反代采信层（[方式三](#方式三反代采信模式想让来源统计看到每台机器真实-ip)：`deploy/nginx-reverse-proxy.conf` + `ZZCSAPI_PUBLISH` 开关 + 固定子网），在它之上加 TLS 证书即可。
 
 ## 行为细节（摘要）
 
