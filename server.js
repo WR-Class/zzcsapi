@@ -2900,7 +2900,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/healthz') {
-      return sendJson(res, 200, { ok: true, channels: channels.size, gatewayKey: !!GATEWAY_KEY, adminKey: !!ADMIN_KEY });
+      // 渗透整改 V-08：匿名面只回答"活着吗"。渠道数与密钥配置状态是内部信息，
+      // 之前一并下发等于免费给未鉴权者做侦察（规模、是否值得打、密钥是否在用）。
+      return sendJson(res, 200, { ok: true });
     }
 
     // 控制台会话登录/退出（v1.18.6）——必须在 authGate 之前：登录门手里还没有会话。

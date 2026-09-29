@@ -197,7 +197,9 @@ const freePort = () => new Promise((res, rej) => {
 
     const hz = await fetch(`http://127.0.0.1:${GW}/healthz`);
     check('/healthz 带 no-store', hz.headers.get('cache-control') === 'no-store', hz.headers.get('cache-control'));
-    await hz.text();
+    const hzBody = await hz.json();
+    check('★ /healthz 只回 {ok:true}（V-08：渠道数与密钥配置状态不下发给匿名面）',
+      JSON.stringify(Object.keys(hzBody).sort()) === '["ok"]' && hzBody.ok === true, hzBody);
     const st = await fetch(`http://127.0.0.1:${GW}/admin/api/status`, { headers: { Authorization: 'Bearer ' + AD_KEY } });
     check('/admin/api/* 带 no-store（含密钥与否都不该留在任何缓存里）', st.headers.get('cache-control') === 'no-store', st.headers.get('cache-control'));
     const stText = await st.text();
