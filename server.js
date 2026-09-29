@@ -2910,6 +2910,143 @@ function originSameAsHost(origin, hostPort) {
   catch { return false; }                                // Origin: null / 垃圾值一律视为跨源
 }
 
+/* ─────────────────────────── 来源 IP 态势统计与封禁（v1.18.11）───────────────────────────
+   场景：密钥分享出去后被人放进"中转站"转卖——单一来源长时间高并发是最响的指纹。
+   语义钉死：
+   - 统计是**内存态**（重启清零，学管理面会话的先例——检测用数据丢得起）；封禁表落 config.security.bannedIPs（持久化）。
+   - 封禁只拦**客户端面**（/v1 /anthropic /gemini）——管理面/控制台永远可达，保证"解封按钮"永远不会把自己锁在门外。
+   - 封禁检查在 Host/Origin 门之后、限流之前：被封的请求不占并发额度、不烧密钥失败计数，
+     但**照常计入该 IP 的 bannedHits**（封了之后对方还在敲，看得见）。
+   - X-Forwarded-For 只在 config.security.trustedProxy 登记的来源上采信（挂反代才有真 IP；不设就只认 socket
+     地址——XFF 是客户端可伪造的头，随便采信会把封禁变成假功能）。
+   - per-IP token/模型/会话记账只走 recordUsage 一处（渠道记账同一条纪律，不分叉）；
+     封禁/客户端标签**不参与任何控制逻辑的判定**，只进显示（UA 是"自报家门"，想伪造零成本）。 */
+const SECURITY_BANNED = new Set(
+  ((config && config.security && config.security.bannedIPs) || []).map((s) => String(s).trim()).filter(Boolean)
+);
+function isValidIpLiteral(s) {
+  if (!s || !/^[0-9a-fA-F.:]+$/.test(s)) return false;
+  if (s.includes('.')) {                                  // IPv4：四段 0-255
+    const p = s.split('.');
+    return p.length === 4 && p.every((x) => /^\d{1,3}$/.test(x) && Number(x) <= 255);
+  }
+  return s.includes(':') && s.length <= 45;               // IPv6 宽松（封禁名单准入，不做全形校验）
+}
+function trustedProxyList() {
+  return String((config && config.security && config.security.trustedProxy) || '')
+    .split(',').map((s) => s.trim().replace(/^::ffff:/i, '')).filter(Boolean);
+}
+function clientIpOf(req) {
+  let ip = String((req.socket && req.socket.remoteAddress) || '').replace(/^::ffff:/i, '');
+  for (const tp of trustedProxyList()) {
+    if (tp === ip) {                                       // 只信"来自受信反代自己"的 XFF 第一跳
+      const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim().replace(/^::ffff:/i, '');
+      if (xff) ip = xff;
+      break;
+    }
+  }
+  return ip;
+}
+function clientLabelOf(ua) {                               // L1 自报家门：标签不是身份
+  const s = String(ua || '').trim();
+  if (!s) return 'unknown';
+  const table = [
+    [/codex/i, 'codex CLI'], [/claude-?code|claude-?cli/i, 'Claude Code'], [/cline/i, 'Cline'],
+    [/roo[- ]?code/i, 'Roo Code'], [/cursor/i, 'Cursor'], [/continue\//i, 'Continue'],
+    [/OpenAI\/Python|openai-python/i, 'openai-python'], [/OpenAI\/Node|openai-node/i, 'openai-node'],
+    [/Anthropic\/Python/i, 'anthropic-python'], [/Anthropic\/TypeScript/i, 'anthropic-ts'],
+    [/google-genai|Generative Language/i, 'google-genai'],
+    [/python-requests|aiohttp/i, 'python'], [/node-fetch|undici|^node\//i, 'node-fetch'], [/axios/i, 'axios'],
+    [/Go-http-client/i, 'go-http-client'], [/okhttp/i, 'okhttp'], [/Java\//i, 'java'], [/curl\//i, 'curl'], [/Wget/i, 'wget'],
+  ];
+  for (const [re, label] of table) if (re.test(s)) return label;
+  return s.length > 24 ? s.slice(0, 24) + '…' : s;         // 认不出的原样截断展示，不瞎猜
+}
+/* per-IP 统计（内存态）：calls = 敲门次数（含 401/429——刷鉴权也是指纹）；tokens/models/sessions
+   只在成功用量上记（recordUsage 单漏斗）；buckets = 本地小时 24 桶（跨天清零）；
+   基数有界：IP 上限 512（超限丢 lastSeen 最旧的）、每 IP 会话上限 512（记满显示 ≥512）、标签 8 / 模型 64。 */
+const IP_STATS = new Map();
+const IP_STATS_CAP = 512;
+const IPSTATS_GLOBAL = { calls: 0, tokIn: 0, tokOut: 0, cur: 0, peak: 0, bannedHits: 0, since: Date.now() };
+function ipStatsEntry(ip, now) {
+  let r = IP_STATS.get(ip);
+  if (!r) {
+    if (IP_STATS.size >= IP_STATS_CAP) {                   // 有界留存：丢最久没来的
+      let oldest = null;
+      for (const [k, x] of IP_STATS) if (!oldest || x.lastSeen < oldest[1].lastSeen) oldest = [k, x];
+      if (oldest) IP_STATS.delete(oldest[0]);
+    }
+    r = { calls: 0, tokIn: 0, tokOut: 0, cur: 0, peak: 0, banned: 0,
+      sessions: new Set(), sessSat: false, uas: new Map(), models: new Map(),
+      buckets: new Array(24).fill(0), bucketDay: '', lastSeen: 0, since: now };
+    IP_STATS.set(ip, r);
+  }
+  return r;
+}
+function ipStatsBumpHour(r, now) {                         // 24 小时桶（本地时区，跨天清零）
+  const d = new Date(now), day = d.toISOString().slice(0, 10);
+  if (r.bucketDay !== day) { r.buckets.fill(0); r.bucketDay = day; }
+  r.buckets[d.getHours()]++;
+}
+function noteClientAttempt(ip, label) {
+  const now = Date.now(), r = ipStatsEntry(ip, now);
+  r.calls++; r.lastSeen = now; ipStatsBumpHour(r, now); IPSTATS_GLOBAL.calls++;
+  r.uas.set(label, (r.uas.get(label) || 0) + 1);
+  if (r.uas.size > 8) { let mk = null; for (const [k, x] of r.uas) if (!mk || x < r.uas.get(mk)) mk = k; r.uas.delete(mk); }
+}
+function noteBannedHit(ip) {
+  const now = Date.now(), r = ipStatsEntry(ip, now);
+  r.banned++; r.lastSeen = now; ipStatsBumpHour(r, now); IPSTATS_GLOBAL.bannedHits++;
+}
+function ipStatsAcquire(ip) {                              // 在飞数：与限流闸同一条 finish/close 归还路径
+  const r = ipStatsEntry(ip, Date.now());
+  r.cur++; if (r.cur > r.peak) r.peak = r.cur;
+  IPSTATS_GLOBAL.cur++; if (IPSTATS_GLOBAL.cur > IPSTATS_GLOBAL.peak) IPSTATS_GLOBAL.peak = IPSTATS_GLOBAL.cur;
+}
+function ipStatsRelease(ip) {
+  const r = IP_STATS.get(ip); if (!r) return;
+  if (r.cur > 0) r.cur--;
+  if (IPSTATS_GLOBAL.cur > 0) IPSTATS_GLOBAL.cur--;
+}
+/* 成功用量的 per-IP 记账（只被 recordUsage 调用——单漏斗纪律）：token/模型/会话只算成功路径 */
+function statsIpUsage(ip, model, inTok, outTok, sessionKey) {
+  const now = Date.now(), r = ipStatsEntry(ip, now);
+  r.tokIn += inTok; r.tokOut += outTok; IPSTATS_GLOBAL.tokIn += inTok; IPSTATS_GLOBAL.tokOut += outTok;
+  r.models.set(model, (r.models.get(model) || 0) + 1);
+  if (r.models.size > 64) { let mk = null; for (const [k, x] of r.models) if (!mk || x < r.models.get(mk)) mk = k; r.models.delete(mk); }
+  if (sessionKey && !r.sessSat) { r.sessions.add(sessionKey); if (r.sessions.size >= 512) r.sessSat = true; }
+}
+/* 每请求统计上下文：客户端面闸门处记 ip/标签（res.zzStats），路由侧补会话键（复用粘性键推导，ignoreEnabled） */
+function makeStatsCtx(req, res, body) {
+  const base = res && res.zzStats;
+  return {
+    ip: (base && base.ip) || clientIpOf(req),
+    client: (base && base.client) || clientLabelOf(req && req.headers && req.headers['user-agent']),
+    key: affinityKeyFor(req, body, true),
+  };
+}
+function topNOf(map, n) {
+  return Array.from(map.entries()).map(([k, v]) => ({ k, n: v })).sort((a, b) => b.n - a.n).slice(0, n);
+}
+function ipStatsSnapshot() {
+  const ips = Array.from(IP_STATS.entries()).map(([ip, r]) => ({
+    ip, calls: r.calls, tokIn: r.tokIn, tokOut: r.tokOut, cur: r.cur, peak: r.peak,
+    bannedHits: r.banned, banned: SECURITY_BANNED.has(ip),
+    sessions: r.sessSat ? 512 : r.sessions.size, sessSat: r.sessSat,
+    clients: topNOf(r.uas, 8), models: topNOf(r.models, 8), modelCount: r.models.size,
+    buckets: r.buckets.slice(), lastSeen: r.lastSeen, since: r.since,
+  })).sort((a, b) => (b.calls - a.calls) || (b.lastSeen - a.lastSeen));
+  const mTot = new Map();
+  for (const r of IP_STATS.values()) for (const [m, n] of r.models.entries()) mTot.set(m, (mTot.get(m) || 0) + n);
+  return {
+    global: { ...IPSTATS_GLOBAL, activeIps: IP_STATS.size },
+    ips, banned: Array.from(SECURITY_BANNED),
+    models: topNOf(mTot, 24),
+    trustedProxy: String((config && config.security && config.security.trustedProxy) || ''),
+    since: IPSTATS_GLOBAL.since,
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   for (const [k, v] of SEC_HEADERS) res.setHeader(k, v);
@@ -2997,6 +3134,17 @@ const server = http.createServer(async (req, res) => {
     // 位置刻意放在**鉴权之前**：这样连"刷鉴权"的无效流量也被挡在门外（取舍见 RATE_CFG 注释）。
     // 计数用 res 的 finish/close 收尾——流式请求的 close 由客户端中断触发，也照样归还并发额度。
     if (url.pathname === '/v1/models' || url.pathname.startsWith('/v1/') || url.pathname.startsWith('/anthropic/') || url.pathname.startsWith('/gemini/')) {
+      // IP 封禁（v1.18.11）：在 Host/Origin 门之后、限流之前——被封的请求不占并发额度、不烧密钥失败计数，
+      // 但照常计入该 IP 的 bannedHits（封了之后对方还在敲，看得见）。只拦客户端面：解封按钮永远够得着。
+      const sip = clientIpOf(req);
+      if (SECURITY_BANNED.has(sip)) {
+        noteBannedHit(sip);
+        metricRequest(url.pathname, 403);
+        return sendJson(res, 403, upstreamErrorPayload(403, 'banned source ip（来源 IP 已被封禁）'));
+      }
+      const slabel = clientLabelOf(req.headers['user-agent']);
+      res.zzStats = { ip: sip, client: slabel };           // 路由侧 makeStatsCtx 复用（IP/标签只算一次）
+      noteClientAttempt(sip, slabel);
       const verdict = rateCheck();
       if (!verdict.ok) {
         res.setHeader('Retry-After', String(verdict.retryAfterSec || 1));
@@ -3006,12 +3154,14 @@ const server = http.createServer(async (req, res) => {
           : `rate limit exceeded（上限 ${RATE_CFG.rpm} 次/分钟）`));
       }
       rateAcquire();
+      ipStatsAcquire(sip);
       const route = url.pathname;
       let settled = false;
       const settle = () => {
         if (settled) return;
         settled = true;
         rateRelease();
+        ipStatsRelease(sip);
         metricRequest(route, res.statusCode || 0);
       };
       res.on('close', settle);
@@ -3144,6 +3294,8 @@ function persistConfig() {
     metrics: (config && config.metrics) || undefined,
     // v1.18.8 的 thinking 回放开关同理（第四组）：不进白名单就会被任一次渠道保存抹掉
     thinkingReplay: (config && config.thinkingReplay) || undefined,
+    // v1.18.11 的封禁表同理：config.security.bannedIPs 不进白名单，任一次渠道保存就会把封禁名单抹掉
+    security: (config && config.security) || undefined,
     // 首启生成的密钥随配置一起持久化（env 显式提供的密钥不落盘——config.adminKey 保持未设置）
     adminKey: config.adminKey || undefined,
     gatewayKey: config.gatewayKey || undefined,
@@ -3479,7 +3631,7 @@ function autoWeightObserve() {
 }
 
 // 记一次请求用量。realUsage 可传 {prompt_tokens, completion_tokens}（上游真实值优先）
-function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage, note }) {
+function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage, note, statsCtx }) {
   try {
     const u = ensureUsage();
     let inTok = inputTokens || 0;
@@ -3505,8 +3657,11 @@ function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, la
     bumpUsageBucket(u.byChannel, channelId, inTok, outTok, ok);
     const day = new Date(ts).toISOString().slice(0, 10);
     bumpUsageBucket(u.byDay, day, inTok, outTok, ok);
-    u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0, ...(note ? { note } : {}) });
+    u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0, ...(note ? { note } : {}), ...(statsCtx && statsCtx.client ? { client: statsCtx.client } : {}) });
     if (u.recent.length > 800) u.recent.splice(0, u.recent.length - 800);
+    // v1.18.11 per-IP 态势：token/模型/会话只在成功用量上记（statsCtx 由客户端面路由注入；
+    // 管理面手动测试不带 statsCtx——不算进任何来源的态势，语义正确）
+    if (statsCtx && statsCtx.ip) { try { statsIpUsage(statsCtx.ip, model, inTok, outTok, statsCtx.key || ''); } catch { } }
     // v1.17 指标：渠道维度的成功/失败、token、耗时（口径与 usage 相同——真实 usage 优先，
     // 两根通道共用这一处收口，避免"指标好看、usage 难看"的分叉）
     metricChannel(channelId, { ok: ok !== false, kind, inputTokens: inTok, outputTokens: outTok, latencyMs });
@@ -3590,6 +3745,30 @@ async function handleAdminApi(req, res, url) {
     usageData = { total: { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0 }, byModel: {}, byChannel: {}, byDay: {}, recent: [] };
     flushUsage();
     return sendJson(res, 200, { ok: true });
+  }
+  // 来源 IP 态势统计（v1.18.11）：内存态、重启清零；封禁表持久化在 config.security.bannedIPs
+  if (req.method === 'GET' && url.pathname === '/admin/api/stats') {
+    return sendJson(res, 200, ipStatsSnapshot());
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/bans') {
+    const body = await safeReadJson(req);
+    const ip = String((body && body.ip) || '').trim();
+    if (!isValidIpLiteral(ip)) return sendJson(res, 400, { error: { message: 'ip is required and must be an IPv4/IPv6 literal', type: 'bad_request' } });
+    if (!config.security) config.security = {};
+    if (!Array.isArray(config.security.bannedIPs)) config.security.bannedIPs = [];
+    if (!config.security.bannedIPs.includes(ip)) { config.security.bannedIPs.push(ip); SECURITY_BANNED.add(ip); persistConfig(); }
+    return sendJson(res, 200, { ok: true, banned: config.security.bannedIPs.slice() });
+  }
+  if (req.method === 'DELETE' && url.pathname.startsWith('/admin/api/bans/')) {
+    const ip = decodeURIComponent(url.pathname.slice('/admin/api/bans/'.length)).trim();
+    if (!isValidIpLiteral(ip)) return sendJson(res, 400, { error: { message: 'ip must be an IPv4/IPv6 literal', type: 'bad_request' } });
+    if (!SECURITY_BANNED.has(ip)) return sendJson(res, 404, { error: { message: 'ip not banned', type: 'bad_request' } });
+    SECURITY_BANNED.delete(ip);
+    if (config.security && Array.isArray(config.security.bannedIPs)) {
+      config.security.bannedIPs = config.security.bannedIPs.filter((x) => x !== ip);
+      persistConfig();
+    }
+    return sendJson(res, 200, { ok: true, banned: (config.security && config.security.bannedIPs) || [] });
   }
   // 暴露给控制台展示接入信息（含 key 与 URL）。仅本机 admin 可用。
   if (req.method === 'GET' && url.pathname === '/admin/api/config') {
@@ -4435,7 +4614,7 @@ async function handleOpenAIRequest(req, res, url) {
     url,
     body,
     candidates,
-    affinityKey: affinityKeyFor(req, body),
+    affinityKey: affinityKeyFor(req, body), statsCtx: makeStatsCtx(req, res, body),
     requestedModel: requested,
     isStream: !!body.stream,
     encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
@@ -4513,6 +4692,7 @@ async function handleImageRequest(req, res, url) {
     url,
     body,
     candidates,
+    statsCtx: makeStatsCtx(req, res, body),
     requestedModel: requested,
     isStream: false,
     encodeOutgoing: (b, c) => ({ ...b, model: c.upstream }),
@@ -4565,7 +4745,7 @@ async function handleAnthropicRequest(req, res, url) {
       body: oaiBody,
       candidates,
       // 粘性键用**客户端原始报文**推导（这里 body 是转换后的 OpenAI 体，会话标识在原始体里）
-      affinityKey: affinityKeyFor(req, body),
+      affinityKey: affinityKeyFor(req, body), statsCtx: makeStatsCtx(req, res, body),
       // thinking 回放会话键（v1.18.8）：同一套推导，但不受粘性开关牵连（回放开、粘性关是合法组合）
       replayKey: replaySessionKeyFor(req, body),
       requestedModel: requested,
@@ -4644,7 +4824,7 @@ async function handleGeminiRequest(req, res, url) {
     url: { ...url, pathname: '/v1/chat/completions' },
     body: oaiBody,
     candidates,
-    affinityKey: affinityKeyFor(req, body),
+    affinityKey: affinityKeyFor(req, body), statsCtx: makeStatsCtx(req, res, body),
     requestedModel: model,
     isStream,
     // 同协议直通（v1.15）：选中 gemini 协议渠道时，出站用客户端原始报文（模型名在 URL 里）、响应原样回传
@@ -4754,6 +4934,7 @@ async function dispatchRequest(opts) {
       result = await tryChannel({
         res, url, body, candidate: c, isStream: stream,
         encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
+        statsCtx: opts.statsCtx,      // v1.18.11 per-IP 态势：recordUsage 单漏斗记账用
         replayKey: opts.replayKey,   // v1.18.8 thinking 回放：学习/作废要用（修复已在选路处做过）
         ...(native || {}),
         // 流式的"开场/收尾"钩子也必须转发：漏掉它们时 message_start 与收尾事件就不会发出
@@ -4802,23 +4983,23 @@ async function tryChannel(opts) {
   try {
     // Notion 协议渠道：完全独立的请求/响应路径
     if ((ch.def.protocol || 'openai') === 'notion') {
-      return await tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+      return await tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
     }
     // Notion 官方 Agent API 渠道：会话式调用工作区 Custom Agent
     if ((ch.def.protocol || 'openai') === 'notion-agent') {
-      return await tryNotionAgentChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+      return await tryNotionAgentChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
     }
     // WorkBuddy 国际版反代：只支持流式 + 首条必须 system，OpenAI 兼容 SSE
     if ((ch.def.protocol || 'openai') === 'workbuddy') {
-      return await tryWorkbuddyChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+      return await tryWorkbuddyChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
     }
     // Genspark 网页会话反代：curl+proxy 绕 cn_code 门/CF，SSE 聚合后分发
     if ((ch.def.protocol || 'openai') === 'genspark') {
-      return await tryGensparkChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+      return await tryGensparkChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
     }
     // Codex（ChatGPT 官方订阅）：RT→AT 令牌管理 + Responses API，curl+代理传输
     if ((ch.def.protocol || 'openai') === 'codex') {
-      return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates });
+      return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
     }
   const outgoing = encodeOutgoing(body, candidate);
   const passthrough = opts.passthrough || null;   // 同协议直通时由扩展注入（'anthropic' / 'gemini'）
@@ -4937,6 +5118,7 @@ async function tryChannel(opts) {
         model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
         inputTokens: estimateTokens(messagesText(body && body.messages)),
         outputTokens: estimateTokens(respBody), ok: true, latencyMs: Date.now() - t0,
+        statsCtx: opts.statsCtx,
       });
       return 'success';
     }
@@ -5092,6 +5274,7 @@ async function tryChannel(opts) {
       inputTokens: estimateTokens(messagesText(body && body.messages)),
       outputTokens: estimateTokens(streamOutText), ok: true, latencyMs: Date.now() - t0,
       realUsage: passthroughUsage,
+      statsCtx: opts.statsCtx,
     });
     return 'success';
   } else {
@@ -5115,6 +5298,7 @@ async function tryChannel(opts) {
         model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
         inputTokens: estimateTokens(messagesText(body && body.messages)),
         outputTokens: estimateTokens(rawText), ok: true, latencyMs: Date.now() - t0, realUsage,
+        statsCtx: opts.statsCtx,
       });
       const ct = (resp.headers && typeof resp.headers.get === 'function' && resp.headers.get('content-type')) || 'application/json';
       res.writeHead(200, { 'Content-Type': ct, 'X-ZZCSAPI-Channel': candidate.channelId });
@@ -5136,6 +5320,7 @@ async function tryChannel(opts) {
       inputTokens: estimateTokens(messagesText(body && body.messages)),
       outputTokens: estimateTokens(replyText),
       ok: true, latencyMs: Date.now() - t0, realUsage,
+      statsCtx: opts.statsCtx,
     });
     // shim 必须像 fetch Response 一样同时提供 text() 与 json()：Anthropic / Gemini 两条路由的
     // 响应转换都调 oai.json()，缺了它非流式请求会一律 502（internal: oai.json is not a function）
@@ -5340,6 +5525,7 @@ async function tryWorkbuddyChannel(opts) {
       model: displayModel, channelId: candidate.channelId, kind: opts.kind,
       inputTokens: estimateTokens(messagesText(body && body.messages)),
       outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+      statsCtx: opts.statsCtx,
     });
     return 'success';
   }
@@ -5364,6 +5550,7 @@ async function tryWorkbuddyChannel(opts) {
     model: displayModel, channelId: candidate.channelId, kind: opts.kind,
     inputTokens: assembled.usage.prompt_tokens,
     outputTokens: assembled.usage.completion_tokens, ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+    statsCtx: opts.statsCtx,
   });
   return 'success';
 }
@@ -5606,7 +5793,7 @@ async function tryGensparkChannel(opts) {
     }
     res.write('data: [DONE]\n\n');
     res.end();
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage, statsCtx: opts.statsCtx });
     return 'success';
   }
 
@@ -5615,7 +5802,7 @@ async function tryGensparkChannel(opts) {
     const usage = st.usage || { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok };
     const payloadOut = toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyOut || null);
     payloadOut.usage = usage;
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage, statsCtx: opts.statsCtx });
     res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
     res.end(JSON.stringify(payloadOut));
     return 'success';
@@ -5630,7 +5817,7 @@ async function tryGensparkChannel(opts) {
     choices: [{ index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }],
     usage: st.usage || { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
   }));
-  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage });
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage, statsCtx: opts.statsCtx });
   return 'success';
 }
 
@@ -5953,6 +6140,7 @@ async function tryCodexChannel(opts) {
     inputTokens: usageOut ? usageOut.prompt_tokens : estimateTokens(messagesText(body && body.messages)),
     outputTokens: usageOut ? usageOut.completion_tokens : estimateTokens(fullText),
     ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+    statsCtx: opts.statsCtx,
   });
   return 'success';
 }
@@ -6134,7 +6322,7 @@ async function tryNotionChannel(opts) {
     res.write('data: [DONE]\n\n');
     res.end();
     const inTok = estimateTokens(messagesText(body.messages));
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0 });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
     return 'success';
   }
 
@@ -6168,7 +6356,7 @@ async function tryNotionChannel(opts) {
     const parsed = toolEmu.parseEmulatedToolCalls(reply);
     if (parsed && parsed.calls.length) {
       const inTok = estimateTokens(messagesText(body.messages));
-      recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0 });
+      recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
       res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
       res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, parsed.calls, parsed.text || null)));
       return 'success';
@@ -6177,7 +6365,7 @@ async function tryNotionChannel(opts) {
   reply = reply.trim();
   const inTok = estimateTokens(messagesText(body.messages));
   const outTok = estimateTokens(reply + (mergedReasoning ? '' : (reasoningText ? ' ' + reasoningText : '')));
-  recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
   res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
   res.end(JSON.stringify({
     id: respId,
@@ -6301,19 +6489,19 @@ async function tryNotionAgentChannel(opts) {
     }
     res.write('data: [DONE]\n\n');
     res.end();
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0 });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
     return 'success';
   }
 
   // 非流式
   if (replyTools) {
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0 });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
     res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
     res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyText || null)));
     return 'success';
   }
   const outTok = estimateTokens(replyText);
-  recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0 });
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
   res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
   res.end(JSON.stringify({
     id: respId,

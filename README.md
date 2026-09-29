@@ -116,7 +116,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 32 个测试文件 · 1548 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 33 个测试文件 · 1635 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -182,7 +182,11 @@ http://127.0.0.1:8787/console
       "priority": 10,
       "models": { "gemini-1.5-pro": "gemini-1.5-pro-latest" }
     }
-  ]
+  ],
+  "security": {                                // 来源 IP 态势与封禁（v1.18.11）：bannedIPs 持久化；trustedProxy 见下
+    "bannedIPs": [],                           //   已封禁来源列表（客户端面一律 403；管理面/控制台不受影响）
+    "trustedProxy": ""                         //   逗号分隔的反代地址：只有来自这些来源的 X-Forwarded-For 第一跳才被采信
+  }
 }
 ```
 
@@ -190,6 +194,9 @@ http://127.0.0.1:8787/console
 > `notion` / `notion-agent` 不支持代理。细则见 [协议与渠道详解](docs/protocols.md)。
 > 调度旋钮（`cooldown` / `retries` / `autoWeight`）与运行期四组开关（`sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`）
 > 的全量取值与钳制范围见 [调度详解](docs/scheduling.md) 与 [运行期设置](docs/runtime-settings.md)。
+> `security.trustedProxy` 只在网关部署在反向代理后面时才需要：留空 = 直连模式，一律只认 socket 地址
+> （`X-Forwarded-For` 是客户端可伪造的头，不设门槛就采信会把封禁变成假功能）。来源统计是**内存态**
+> （网关重启清零），封禁表落 `config.json` 重启不丢——语义见 [行为详解](docs/behavior.md)。
 
 ## 协议说明
 
@@ -234,6 +241,9 @@ thinking 回放修复）。矩阵表、工具调用四方向、各渠道配置�
 | `/admin/api/status` | GET | admin | 渠道详细状态（控制台用；含 `weight`/`weightedShare`/自动权重观测/`effectivePriority` 等字段） |
 | `/admin/api/usage` | GET | admin | 用量统计（总量 / 按模型 / 按渠道 / 按天 / 近 200 条 / 24h 分布） |
 | `/admin/api/usage/clear` | POST | admin | 清零用量统计 |
+| `/admin/api/stats` | GET | admin | **来源 IP 态势统计**（per-IP 敲门数 / token / 模型 / 峰值并发 / 会话估计 / 24h 桶 / 封禁命中；内存态，重启清零） |
+| `/admin/api/bans` | POST | admin | 封禁来源 IP（body `{ip}`，字面量校验，立即生效 + 落库，幂等） |
+| `/admin/api/bans/{ip}` | DELETE | admin | 解封来源 IP（不存在 404）；封禁只拦客户端面，管理面/控制台永远可达 |
 | `/admin/api/recheck` | POST | admin | 立即重探测（body 可传 `{id}`）；**不带 id = 全部重探测，含停用渠道** |
 | `/admin/api/channel` | POST | admin | 改渠道（`{id, priority?, enabled?, weight?}`，立即生效并持久化） |
 | `/admin/api/channels` | GET | admin | 渠道列表（`apiKey` 只下发掩码 + `apiKeySet` 布尔） |

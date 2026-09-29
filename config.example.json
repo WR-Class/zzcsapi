@@ -40,6 +40,10 @@
     "ttlSec": 3600,
     "maxEntries": 2048
   },
+  "security": {
+    "bannedIPs": [],
+    "trustedProxy": ""
+  },
   "auth": {
     "gatewayKey": "",
     "adminKey": ""

@@ -1061,7 +1061,7 @@ async function testKeys() {
    （行内按钮不再冒泡去触发行/卡片自己的动作——stopPropagation 成为历史）；未知动作与
    空白点击静默不炸；change 走同一条路；数值参数走 +el.dataset.idx。另含双向覆盖守卫：
    模板里用到的每个 data-act/data-change 都注册过，注册过的都被模板用到。
-   41 个动作函数名刻意硬编码在本节：ACTS 里新增引用了不在此列的函数名时，
+   46 个动作函数名刻意硬编码在本节：ACTS 里新增引用了不在此列的函数名时，
    "逐个真调"会当场 ReferenceError，逼着同步本表与产品。 */
 function testDelegation() {
   const SHELL = fs.readFileSync(path.join(__dirname, '..', 'build', 'shell.html'), 'utf8');
@@ -1076,7 +1076,8 @@ function testDelegation() {
     'copyChKey','reprobe','delChannel','exportModels','copyModels','copyText','copyCurl','clearUsage',
     'exportLogs','drawLogTable','pgClear','pgCopyCurl','copyAllEndpoints','copyGwKey','showKeyHelp',
     'closeModal','toggleKeyField','addModelRow','probeUpstream','saveChannel','testRowModel',
-    'delModelRow','probeSelectAll','probeClearSel','probeAddSelected','importFiles','doImport','runTests'];
+    'delModelRow','probeSelectAll','probeClearSel','probeAddSelected','importFiles','doImport','runTests',
+    'refreshStats','stFilter','render','banIp','unbanIp'];
   const calls = [];
   const stubs = {}; names.forEach(n => stubs[n] = (...a) => { calls.push([n].concat(a)); });
   const doc = {
@@ -1089,7 +1090,7 @@ function testDelegation() {
 
   check('委托块给 document 挂了 click 与 change 两个监听',
     typeof doc.listeners.click === 'function' && typeof doc.listeners.change === 'function');
-  check('ACTS 注册了 44 个动作（与模板用到的动作种类数一致）', Object.keys(ACTS).length === 44,
+  check('ACTS 注册了 48 个动作（与模板用到的动作种类数一致）', Object.keys(ACTS).length === 48,
     Object.keys(ACTS).length);
 
   /* 逐个真调：每个注册动作都解析得到底层函数（引用了列表外的函数名会当场炸） */
@@ -1152,15 +1153,85 @@ function testDelegation() {
     missing.length === 0 && dead.length === 0, { missing, dead });
 }
 
+/* ══ §13 数据统计页（v1.18.11）：渲染形状、空态、过滤、转义与封禁按钮 ══
+   在最小 DOM 桩里真跑 vStats / openIpStats（现抠真实源码 + 真实 areaChart/sparkline）：
+   零数据（stats=null / 刚重启清零）不抛且有空态文案；满数据画出 per-IP 表与 24 小时 sparkline；
+   客户端过滤（从调用日志跳转的那条路）只留匹配行并显示清除按钮；
+   UA 标签是外部可控值（服务端只截断不消毒）→ 模板必须 esc()；
+   封禁/解封按钮真实存在且 data-t 带 IP（走 data-act 委托，绝不拼内联）。 */
+function testStats() {
+  G('13. 数据统计页（v1.18.11）：来源 IP 态势渲染 + 空态 + 过滤 + 转义');
+  const stFilter = { client: '' };
+  const mk = (st) => {
+    const dom = makeDom();
+    let drawerHtml = null;
+    const api = new Function('$', '$$', 'DATA', 'esc', 'svg', 'nf', 'fmtTs', 'sparkline', 'areaChart', 'drawer', 'stFilter', 'openIpStats',
+      "let RAW=null, page='stats';\n" + extract('areaChart') + '\n' + extract('sparkline') + '\n' + extract('stClients') + '\n' + extract('openIpStats') + '\n' + extract('vStats') + '\nreturn { vStats, openIpStats };'
+    )(dom.$, dom.$$, { stats: st }, esc, svg, nf,
+      (t) => String(t).slice(0, 17),
+      (v, w, h) => '<svg class="spark-stub"></svg>',
+      (d, w, h) => '<svg class="area-stub"></svg>',
+      (html) => { drawerHtml = html; return html; },
+      stFilter, null);
+    const v = mkEl('viewport');
+    api.vStats(v);
+    return {
+      html: v.innerHTML,
+      drawer: () => { api.openIpStats(((st && st.ips && st.ips[1]) || {}).ip); return drawerHtml; },
+    };
+  };
+  const buckets = new Array(24).fill(0); buckets[10] = 7; buckets[23] = 3;
+  const full = {
+    global: { calls: 12, tokIn: 100, tokOut: 60, cur: 0, peak: 3, bannedHits: 2, activeIps: 2, since: 1700000000000 },
+    ips: [
+      { ip: '203.0.113.7', calls: 10, tokIn: 90, tokOut: 50, cur: 0, peak: 3, bannedHits: 2, banned: true, sessions: 5, sessSat: false, clients: [{ k: 'curl', n: 10 }], models: [{ k: 'm-a', n: 10 }], modelCount: 1, buckets: buckets.slice(), lastSeen: 1700000123000, since: 1700000000000 },
+      { ip: '198.51.100.5', calls: 2, tokIn: 10, tokOut: 10, cur: 0, peak: 1, bannedHits: 0, banned: false, sessions: 512, sessSat: true, clients: [{ k: '<img>', n: 1 }, { k: 'curl', n: 1 }], models: [{ k: 'm-b', n: 2 }], modelCount: 1, buckets: buckets.slice(), lastSeen: 1700000123000, since: 1700000000000 },
+    ],
+    banned: ['203.0.113.7'],
+    models: [{ k: 'm-a', n: 10 }, { k: 'm-b', n: 2 }],
+    trustedProxy: '10.0.0.5',
+    since: 1700000000000,
+  };
+
+  const n0 = mk(null);
+  check('stats=null → 空态文案（旧版本网关，不抛）', n0.html.includes('统计端点不可达'));
+  const e0 = mk({ global: { calls: 0, tokIn: 0, tokOut: 0, cur: 0, peak: 0, bannedHits: 0, activeIps: 0, since: Date.now() }, ips: [], banned: [], models: [], trustedProxy: '', since: Date.now() });
+  check('刚重启清零 → 空态文案（内存态丢得起，不抛）', e0.html.includes('还没有任何客户端面流量'));
+
+  const f = mk(full);
+  check('满数据：两个来源各一行（含已封禁那个）', f.html.includes('203.0.113.7') && f.html.includes('198.51.100.5'));
+  check('封禁行带「已封禁」标记 + 封禁命中小字', f.html.includes('已封禁') && f.html.includes('封禁命中 2'));
+  check('会话饱和显示 ≥512（上限标记，不是裸数字）', f.html.includes('≥512'));
+  check('反代采信模式显示 trustedProxy（直连时不显示）', f.html.includes('反代采信') && f.html.includes('10.0.0.5'));
+  check('封禁名单卡带解封按钮（data-act + data-t，无内联）', f.html.includes('data-act="unban-ip" data-t="203.0.113.7"') && !/onclick=/.test(f.html));
+  check('每行 24 小时 sparkline 真的画出来（现抠真函数遮蔽桩）', (f.html.match(/<svg/g) || []).length >= 2, (f.html.match(/<svg/g) || []).length);
+  check('按模型聚合卡存在', f.html.includes('按模型'));
+
+  stFilter.client = 'curl';
+  const flt = mk(full);
+  check('客户端过滤：只留匹配来源（curl 两个来源都在）', (flt.html.match(/cell-name/g) || []).length >= 2);
+  stFilter.client = 'codex CLI';
+  const flt2 = mk(full);
+  check('客户端过滤：无匹配时空态并显示标签名（转义后）', flt2.html.includes('没有使用客户端') && flt2.html.includes('codex CLI'));
+  stFilter.client = '';
+
+  const raw = mk(full);
+  check('UA 标签是外部可控值：模板 esc()（<img> 不裸插）', !raw.html.includes('<img>') && raw.html.includes('&lt;img&gt;'));
+  const dh = raw.drawer();
+  check('来源详情抽屉：24 小时分布 + 封禁按钮 data-t 带 IP（开的是未封禁行）',
+    dh.includes('24 小时分布') && dh.includes('data-act="ban-ip" data-t="198.51.100.5"'), dh && dh.slice(0, 200));
+}
+
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
    'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels', 'openTestModels', 'runTests',
    'chName', 'testRowVerdict', 'areaChart', 'sparkline', 'drawer',
    'vSettings', 'setCard', 'setHint', 'setPayload', 'setToggle', 'syncSettingsDraft', 'saveSettings',
-   'vKeys', 'keyCard', 'toggleKeyReveal', 'rotateKey', 'resetKeysAction'].forEach(extract);
+   'vKeys', 'keyCard', 'toggleKeyReveal', 'rotateKey', 'resetKeysAction',
+   'vStats', 'stClients', 'openIpStats', 'vLogs', 'drawLogTable'].forEach(extract);
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"', 'let setDraft=null',
-   "let keyDraft={gateway:'',admin:''}"].forEach(s => {
+   "let keyDraft={gateway:'',admin:''}", "let stFilter={client:''}"].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
   ['const ACTS={', "document.addEventListener('change'"].forEach(s => {
@@ -1184,6 +1255,7 @@ try {
   await testSettings();
   await testKeys();
   testDelegation();
+  testStats();
 
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);

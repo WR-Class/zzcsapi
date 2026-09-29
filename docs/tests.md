@@ -1,6 +1,6 @@
-# 测试清单（32 个文件 · 1548 项断言，零依赖）
+# 测试清单（33 个文件 · 1635 项断言，零依赖）
 
-> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 32 条命令与每条守的是什么。
+> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 33 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
 > **动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json` / `usage.json`**，不出网、不烧额度。
 > 退出码非 0 = 有回归。跑单个：`node test/<名字>.test.js`。
@@ -14,13 +14,14 @@
 | 调度 / 候选链 / 重试 / 冷却 / 权重 | `weighted-rr*` / `auto-weight*` / `per-channel-retry-e2e` / `cooldown-grading-e2e` / `upstream-4xx-fallback-e2e` / `session-affinity-e2e` |
 | 运行期四组开关（粘性 / 限流 / metrics / 回放） | `settings-api-e2e` + 对应开关的 e2e |
 | 密钥 / 鉴权 / 会话 / 响应头 | `security-headers-e2e` + `key-rotation-e2e` + `admin-session-e2e` |
+| 来源 IP 统计 / 封禁 / trustedProxy 采信 / 客户端标签列 | `ip-stats-ban-e2e` + `console-state`（统计页渲染一节） |
 | thinking / 签名 / 回放 | `thinking-fidelity` + `thinking-replay-e2e` |
 | 静态文件 / 鉴权面 / 控制台版本 | `node sec-audit.js`（仓库根，只读体检，见 README「安全体检」） |
 
 ## 全量清单
 
 ```bash
-node test/console-state.test.js           # 185 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、**四张卡（v1.18.8 增 thinking 回放）**、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换、**会话语义（密钥不落任何浏览器存储）**；**事件委托：真实委托块在桩上真跑分发——dataset 参数到达动作函数、嵌套只触发最近那枚、未知动作不炸、change 走同一条路、ACTS 双向覆盖**）
+node test/console-state.test.js           # 198 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜，**客户端标签列（v1.18.11）**；运行期设置页：草稿跨轮询保留、**四张卡（v1.18.8 增 thinking 回放）**、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换、**会话语义（密钥不落任何浏览器存储）**；**事件委托：真实委托块在桩上真跑分发——dataset 参数到达动作函数、嵌套只触发最近那枚、未知动作不炸、change 走同一条路、ACTS 双向覆盖（46 个函数名硬编码）**；**数据统计页（v1.18.11）：stats=null / 刚清零不抛且有空态、满数据画 per-IP 表与 sparkline、客户端过滤（日志跳转那条路）、UA 标签 esc()、封禁/解封按钮 data-act+data-t、详情抽屉**）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -52,6 +53,7 @@ node test/settings-api-e2e.test.js        # 68 项断言：运行期设置端点
 node test/security-headers-e2e.test.js    # 69 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + **/healthz 只回 {ok:true}（V-08：匿名面不带渠道数与密钥状态）** + 页面壳零密钥明文 + **CSP 逐字等于设计稿（v1.18.6）** + 管理面 ?key= 已停用 / 客户端面保留 + **内联事件属性必须为 0 且 ACTS 与模板双向一一对应（v1.18.7）** + **第六批（v1.18.10）Host/Origin 门：陌生域名与公网 IP → 421、白名单域名与回环/私网 IP 字面量 → 200、跨源 Origin 写请求 → 403（揣着正确密钥也拒）、同源/无 Origin 照常、装配位置必须在一切路由分支之前（V-07，含 ZZCSAPI_ALLOWED_HOSTS 注入）**）
 node test/key-rotation-e2e.test.js         # 85 项断言：控制台轮换密钥（优先级链 config.auth>env>首启生成 + 旧密钥立即失效 + 非法值不落库 + 重启后仍生效 + 回到环境变量值）
 node test/admin-session-e2e.test.js        # 63 项断言：管理面会话 cookie（v1.18.6）——登录门换 HttpOnly+SameSite=Strict 会话、会话单独鉴权管理面、Bearer 通道保留、管理面 ?key= 拆除 / 客户端面保留、退出只杀自己、轮换清全会话并补发新会话、重启全部掉线、逐出先清过期
+node test/ip-stats-ban-e2e.test.js         # 62 项断言：来源 IP 态势与封禁（v1.18.11）——装配（闸门在 Host/Origin 门后、限流前，只拦客户端面；在飞归还挂限流同一条 settle；单漏斗；persistConfig 白名单含 security；XFF 只在 trustedProxy 上采信；4 路由注入 statsCtx）+ 纯函数真值表（IP 字面量校验 / 标签映射 / 采信与伪造 / 记账 / 24h 桶 / 峰值 / 会话饱和 / 淘汰）+ 真链路（预置封禁 403、XFF 三来源各行、401 算敲门、token/模型/标签/会话记成功路径、并行峰值 ≥2 且归零、封禁端点全语义 400/404/幂等、封禁落 config 且渠道不丢、重启统计清零封禁仍在）+ 对照（无 trustedProxy 时伪造 XFF 不采信）
 ```
 
 ## 测试哲学（为什么这么写）

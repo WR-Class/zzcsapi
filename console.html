@@ -796,7 +796,7 @@ function adapt() {
     t:fmtTs(r.ts), ts:r.ts, id:reqIdOf(r.ts),
     m:r.model || '—', c:r.channelId || '—', n:(chans.find(c=>c.id===r.channelId)||{}).name || r.channelId || '—', p:protoOfChannel(r.channelId),
     kind:r.kind || 'chat', ok:r.ok !== false, ms:r.ms || 0,
-    i:r.in || 0, o:r.out || 0, note:r.note || '',
+    i:r.in || 0, o:r.out || 0, note:r.note || '', cl:r.client || '',
   }));
   const tot = (us && us.total) || {};
   const cnt = { ok:0, degraded:0, down:0, unknown:0 };
@@ -809,6 +809,8 @@ function adapt() {
       models:models.length, at:Date.now(),
     },
     trend, days, channels:chans, models, logs,
+    /* 来源 IP 态势统计（v1.18.11）：内存态，重启清零——零数据时给空态而不是抛错 */
+    stats: RAW.stats || null,
     /* 自动权重观测（v1.6 静默版）：后端算好的"若启用会怎么分"，只用于展示 */
     auto: RAW.auto ? {
       enabled: RAW.auto.enabled === true,
@@ -826,7 +828,7 @@ function adapt() {
 }
 
 async function loadAll() {
-  const [st, us, cfg, settings, keys] = await Promise.all([
+  const [st, us, cfg, settings, keys, ipst] = await Promise.all([
     api('/admin/api/status'),
     api('/admin/api/usage').catch(() => null),
     api('/admin/api/config').catch(() => null),
@@ -834,9 +836,11 @@ async function loadAll() {
     api('/admin/api/settings').catch(() => null),
     /* 密钥管理页同理单独兜底 */
     api('/admin/api/keys').catch(() => null),
+    /* 来源 IP 态势统计同理单独兜底（v1.18.11） */
+    api('/admin/api/stats').catch(() => null),
   ]);
   RAW = { channels:(st && st.channels) || [], usage:us, config:cfg, auto:(st && st.autoWeight) || null,
-          settings:settings || RAW.settings, keys:keys || RAW.keys };
+          settings:settings || RAW.settings, keys:keys || RAW.keys, stats:ipst || RAW.stats };
   CFG = cfg || CFG;
   adapt();
   loaded = true;
@@ -849,7 +853,7 @@ async function loadAll() {
    所以进页面之前先记下来，出页面之后再还原。 */
 function render() {
   const v = $('#viewport'); if (!v) return;
-  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, playground:vPlayground, access:vAccess, settings:vSettings, keys:vKeys }[page];
+  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, stats:vStats, playground:vPlayground, access:vAccess, settings:vSettings, keys:vKeys }[page];
   if (!fn) return;
   const top = v.scrollTop;
   const act = document.activeElement;
@@ -1029,6 +1033,7 @@ const NAV=[
   {sec:'监控'},
   {id:'overview',label:'总览',icon:'gauge'},
   {id:'logs',label:'调用日志',icon:'list',cnt:()=>nf(DATA.meta.total)},
+  {id:'stats',label:'数据统计',icon:'zap'},
   {sec:'资源'},
   {id:'channels',label:'渠道管理',icon:'plug',cnt:()=>DATA.meta.channels},
   {id:'models',label:'聚合模型',icon:'layers',cnt:()=>DATA.meta.models},
@@ -1054,7 +1059,7 @@ function go(p){
   renderRail();
   const v=$('#viewport');
   v.innerHTML='';
-  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,playground:vPlayground,access:vAccess,settings:vSettings,keys:vKeys}[p]||vOverview)(v);
+  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,stats:vStats,playground:vPlayground,access:vAccess,settings:vSettings,keys:vKeys}[p]||vOverview)(v);
   v.firstElementChild?.classList.add('page');
   // 现在滚动容器是 .viewport 自己，scrollIntoView 不会生效，必须直接归零
   v.scrollTop=0;
@@ -1896,12 +1901,13 @@ function drawLogTable(){
   const rows=logRows();
   if(!rows.length){box.innerHTML='<div class="empty">没有匹配的调用记录</div>';return}
   box.innerHTML=`<table class="tbl">
-    <thead><tr><th>时间</th><th>请求 ID</th><th>渠道</th><th>模型</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
+    <thead><tr><th>时间</th><th>请求 ID</th><th>渠道</th><th>模型</th><th>客户端</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th><th></th></tr></thead>
     <tbody>${rows.map(l=>`<tr class="clickable">
       <td class="mono" style="font-size:12px;white-space:nowrap">${esc(l.t)}</td>
       <td class="mono muted" style="font-size:11.5px">${esc(l.id)}</td>
       <td class="cell-name">${esc(l.n)}</td>
       <td class="cell-name">${esc(l.m)}</td>
+      <td>${l.cl?`<span class="chip clickable cell-client" title="查看该客户端的来源统计">${esc(l.cl)}</span>`:'<span class="muted">—</span>'}</td>
       <td><span class="chip ${esc(l.p)}">${esc(protoLabel[l.p]||l.p)}</span></td>
       <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
       <td class="t-r mono">${fMs(l.ms)}</td>
@@ -1911,6 +1917,8 @@ function drawLogTable(){
     </tr>`).join('')}</tbody>
   </table>`;
   $$('#lgTable tbody tr',box).forEach((tr,i)=>tr.onclick=()=>openLog(rows[i].id));
+  /* 客户端标签格：点击跳「数据统计」并按该客户端过滤（stopPropagation 免得同时开请求详情） */
+  $$('#lgTable .cell-client',box).forEach((el,i)=>el.onclick=(e)=>{e.stopPropagation();stFilter.client=rows[i].cl;go('stats')});
 }
 async function clearUsage(){
   if(!confirm('确定清空全部用量统计与最近调用记录吗？会写入 usage.json，不可撤销。'))return;
@@ -1930,6 +1938,7 @@ function openLog(id){
       <dl class="kv">
         <dt>模型</dt><dd class="mono">${esc(l.m)}</dd>
         <dt>渠道</dt><dd>${esc(l.n)}</dd>
+        ${l.cl?`<dt>客户端</dt><dd>${esc(l.cl)}</dd>`:''}
         <dt>协议</dt><dd><span class="chip ${esc(l.p)}">${esc(protoLabel[l.p]||l.p)}</span></dd>
         <dt>耗时</dt><dd class="mono">${fMs(l.ms)}</dd>
         <dt>Token</dt><dd class="mono">输入 ${nf(l.i)} · 输出 ${nf(l.o)}</dd>
@@ -1957,6 +1966,132 @@ function copyCurl(model,btn){
   const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
   const body=JSON.stringify({model,messages:[{role:'user',content:'hi'}]});
   copyText('curl '+base+'/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d \''+body+'\'',btn);
+}
+
+/* ═══════════════════════════ 页面：数据统计（来源 IP 态势）═══════════════════════════ */
+/* v1.18.11：密钥分享出去后被人放进"中转站"转卖时看得见——per-IP 敲门数 / token /
+   模型 / 峰值并发 / 会话数估计 / 24 小时桶 + 固定来源外科手术式封禁。
+   数据是**内存态**（网关重启清零）；封禁表落 config.security.bannedIPs（重启不丢）。
+   过滤条件存 JS（与调用日志的 lgRange 同款）：8 秒轮询重绘不冲掉，跨页保留。 */
+let stFilter={client:''};
+function stClients(r){return (r.clients||[])}
+function vStats(v){
+  const s=DATA.stats;
+  if(!s){v.innerHTML=`<div class="page-hd"><div><h1 class="page-title">数据统计</h1>
+      <div class="page-sub">来源 IP 态势与封禁 · 重启后清零</div></div></div>
+    <div class="card"><div class="card-bd"><div class="empty">统计端点不可达（网关是旧版本？重启网关后再试）</div></div></div>`;return}
+  const g=s.global||{calls:0,tokIn:0,tokOut:0,cur:0,peak:0,bannedHits:0,activeIps:0,since:0};
+  const rows=(s.ips||[]).filter(r=>!stFilter.client||stClients(r).some(c=>c.k===stFilter.client));
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">数据统计</h1>
+      <div class="page-sub">来源 IP 态势与封禁 · 内存态（网关重启清零）· 统计起点 ${g.since?esc(fmtTs(g.since)):'—'}</div></div>
+    <div class="page-actions">
+      ${stFilter.client?`<span class="chip">客户端：${esc(stFilter.client)} <button class="icon-btn" data-act="clear-st-filter" title="清除过滤">${svg('x',12)}</button></span>`:''}
+      <button class="btn" data-act="stats-refresh">${svg('test',14)}刷新</button>
+    </div>
+  </div>
+
+  <div class="row wrap" style="gap:12px;margin-bottom:14px">
+    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+      <div class="micro muted">敲门（含 401/429）</div>
+      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.calls)}</div>
+      <div class="micro muted">封禁命中 ${nf(g.bannedHits)}</div></div></div>
+    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+      <div class="micro muted">Token（成功用量）</div>
+      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.tokIn+g.tokOut)}</div>
+      <div class="micro muted">入 ${nf(g.tokIn)} · 出 ${nf(g.tokOut)}</div></div></div>
+    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+      <div class="micro muted">并发（当前 / 峰值）</div>
+      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.cur)} <span class="muted" style="font-size:14px">/ ${nf(g.peak)}</span></div>
+      <div class="micro muted">全局峰值远超任何单 IP 峰值 = 轮换出口的中转站指纹</div></div></div>
+    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+      <div class="micro muted">活跃来源</div>
+      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.activeIps)}</div>
+      <div class="micro muted">${s.trustedProxy?'反代采信：'+esc(s.trustedProxy):'直连模式（不采信 X-Forwarded-For）'}</div></div></div>
+  </div>
+
+  ${(s.banned||[]).length?`<div class="card" style="margin-bottom:14px;border-color:color-mix(in srgb,var(--err) 30%,transparent)"><div class="card-bd tight">
+    <div class="sec-title" style="margin-bottom:6px">已封禁来源（${(s.banned||[]).length}）· 管理面与控制台不受封禁影响</div>
+    <div class="row wrap" style="gap:8px">${(s.banned||[]).map(ip=>`<span class="chip mono" style="border-color:color-mix(in srgb,var(--err) 40%,transparent)">${esc(ip)}
+      <button class="icon-btn" data-act="unban-ip" data-t="${esc(ip)}" title="解封">${svg('x',12)}</button></span>`).join('')}</div>
+  </div></div>`:''}
+
+  <div class="card"><div class="card-bd tight">
+    <div class="sec-title">来源明细（按敲门数排序 · 点击行看详情与封禁）</div>
+    ${rows.length?`<div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>来源 IP</th><th class="t-r">敲门</th><th>客户端标签</th><th class="t-r">会话</th><th class="t-r">峰值并发</th><th class="t-r">Token 入/出</th><th>模型</th><th>24 小时</th><th>最近</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr class="clickable">
+      <td class="mono" style="font-size:12px">${esc(r.ip)} ${r.banned?'<span class="pill down"><span class="dot down"></span>已封禁</span>':''}</td>
+      <td class="t-r mono">${nf(r.calls)}${r.bannedHits?`<div class="micro" style="color:var(--err)">封禁命中 ${nf(r.bannedHits)}</div>`:''}</td>
+      <td>${stClients(r).slice(0,3).map(c=>`<span class="chip">${esc(c.k)}</span>`).join(' ')||(r.calls?'<span class="muted">—</span>':'<span class="muted">仅被封</span>')}</td>
+      <td class="t-r mono">${r.sessSat?'≥512':nf(r.sessions)}</td>
+      <td class="t-r mono">${nf(r.peak)}${r.cur>0?`<div class="micro" style="color:var(--warn)">在飞 ${nf(r.cur)}</div>`:''}</td>
+      <td class="t-r mono">${nf(r.tokIn)} / ${nf(r.tokOut)}</td>
+      <td class="cell-name" style="font-size:12px">${(r.models||[]).slice(0,3).map(m=>esc(m.k)).join(' ')}${r.modelCount>3?`<span class="muted micro"> 等 ${r.modelCount}</span>`:''}</td>
+      <td>${sparkline(r.buckets,96,22)}</td>
+      <td class="mono muted" style="font-size:11.5px;white-space:nowrap">${esc(fmtTs(r.lastSeen))}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`:`<div class="empty">${stFilter.client?'没有使用客户端「'+esc(stFilter.client)+'」的来源（标签只显示每 IP 的前 8 种，且重启后清零）':'还没有任何客户端面流量（管理面手动测试不计数；网关刚重启也会清零）'}</div>`}
+  </div></div>
+
+  ${(s.models||[]).length?`<div class="card" style="margin-top:14px"><div class="card-bd tight">
+    <div class="sec-title">按模型（全部来源聚合 · 成功用量口径）</div>
+    <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>模型</th><th class="t-r">次数</th><th>占比</th></tr></thead>
+    <tbody>${(()=>{const tot=(s.models||[]).reduce((a,m)=>a+m.n,0)||1;return (s.models||[]).map(m=>`<tr>
+      <td class="cell-name mono" style="font-size:12px">${esc(m.k)}</td>
+      <td class="t-r mono">${nf(m.n)}</td>
+      <td><div class="row" style="align-items:center;gap:8px"><div style="flex:1;height:6px;border-radius:3px;background:var(--panel-3);overflow:hidden"><div style="width:${(m.n/tot*100).toFixed(1)}%;height:100%;background:var(--accent)"></div></div><span class="micro mono muted">${(m.n/tot*100).toFixed(1)}%</span></div></td>
+    </tr>`).join('')})()}</tbody>
+  </table></div>
+  </div></div>`:''}
+  `;
+  $$('#viewport .tbl tbody tr.clickable').forEach((tr,i)=>{const ip=rows[i]&&rows[i].ip;if(ip)tr.onclick=()=>openIpStats(ip)});
+}
+function openIpStats(ip){
+  const s=DATA.stats, r=s&&(s.ips||[]).find(x=>x.ip===ip); if(!r)return;
+  const hours=r.buckets.map((n,h)=>[String(h).padStart(2,'0'),n]);
+  drawer(`
+    <div class="drawer-hd">
+      <div style="min-width:0"><h3 style="font-size:15px" class="mono">${esc(ip)}</h3>
+      <div class="cell-sub">来源态势 ${r.banned?'· 已封禁':''}</div></div>
+      <div class="ml-auto row" style="gap:8px">
+        ${r.banned?'<span class="pill down"><span class="dot down"></span>已封禁</span>':''}
+        <button class="icon-btn" data-act="close-drawer">${svg('x',15)}</button></div>
+    </div>
+    <div class="drawer-bd">
+      <dl class="kv">
+        <dt>敲门</dt><dd class="mono">${nf(r.calls)} 次${r.bannedHits?`（封禁命中 ${nf(r.bannedHits)}）`:''}</dd>
+        <dt>Token</dt><dd class="mono">入 ${nf(r.tokIn)} · 出 ${nf(r.tokOut)}</dd>
+        <dt>会话数（估计）</dt><dd class="mono">${r.sessSat?'≥ 512（饱和）':nf(r.sessions)}</dd>
+        <dt>峰值并发</dt><dd class="mono">${nf(r.peak)}${r.cur>0?`（当前在飞 ${nf(r.cur)}）`:''}</dd>
+        <dt>最近活跃</dt><dd class="mono">${esc(fmtTs(r.lastSeen))}</dd>
+      </dl>
+      <div class="sec-title">客户端标签（按出现次数，前 ${stClients(r).length}${stClients(r).length>=8?'（上限 8）':''}）</div>
+      <div class="row wrap" style="gap:8px">${stClients(r).length?stClients(r).map(c=>`<span class="chip">${esc(c.k)}<span class="micro muted"> ${nf(c.n)}</span></span>`).join(''):'<span class="muted">仅被封请求（没有成功用量）</span>'}</div>
+      <div class="sec-title">模型（按次数，前 ${(r.models||[]).length}${(r.models||[]).length>=8?'（上限 8）':''}）</div>
+      <div class="row wrap" style="gap:8px">${(r.models||[]).length?(r.models||[]).map(m=>`<span class="chip mono" style="font-size:12px">${esc(m.k)}<span class="micro muted"> ${nf(m.n)}</span></span>`).join(''):'<span class="muted">—</span>'}</div>
+      <div class="sec-title">24 小时分布（本地时区 · 跨天清零）</div>
+      <div>${areaChart(hours,520,150)}</div>
+    </div>
+    <div class="drawer-ft">
+      ${r.banned
+        ?`<button class="btn" data-act="unban-ip" data-t="${esc(ip)}">${svg('check',14)}解封该来源</button>`
+        :`<button class="btn primary" data-act="ban-ip" data-t="${esc(ip)}">${svg('warn',14)}封禁该来源</button>`}
+      <button class="btn" data-act="copy" data-t="${esc(ip)}">复制 IP</button>
+    </div>`);
+}
+async function refreshStats(){
+  try{RAW.stats=await api('/admin/api/stats');adapt();render()}catch(e){}
+}
+async function banIp(ip){
+  if(!confirm('确定封禁来源 '+ip+' 吗？\n该来源对 /v1、/anthropic、/gemini 的请求将一律 403；管理面与控制台不受影响。名单写入 config.json，重启不丢。'))return;
+  try{await api('/admin/api/bans',{method:'POST',body:JSON.stringify({ip})});toast('✓ 已封禁 '+ip,'ok');await refreshStats()}catch(e){}
+}
+async function unbanIp(ip){
+  if(!confirm('确定解封 '+ip+' 吗？'))return;
+  try{await api('/admin/api/bans/'+encodeURIComponent(ip),{method:'DELETE'});toast('✓ 已解封 '+ip,'ok');await refreshStats()}catch(e){}
 }
 
 /* ═══════════════════════════ 页面：Playground ═══════════════════════════ */
@@ -3093,6 +3228,10 @@ const ACTS={
   'clear-usage':()=>clearUsage(),
   'export-logs':()=>exportLogs(),
   'apply-log-filter':()=>drawLogTable(),
+  'stats-refresh':()=>refreshStats(),
+  'clear-st-filter':()=>{stFilter.client='';render()},
+  'ban-ip':el=>banIp(el.dataset.t),
+  'unban-ip':el=>unbanIp(el.dataset.t),
   'pg-clear':()=>pgClear(),
   'pg-copy-curl':()=>pgCopyCurl(),
   'copy-all-endpoints':el=>copyAllEndpoints(el),

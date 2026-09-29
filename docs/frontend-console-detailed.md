@@ -374,10 +374,14 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   原型在模板里就地查名（`(DATA.channels.find(c=>c.id===l.c)||{}).name||l.c`）；
   生产在 `adapt()` 里把显示名解析进每条日志的 `n` 字段（`n:(chans.find(c=>c.id===r.channelId)||{}).name||r.channelId||'—'`），
   渲染层直接用 `esc(l.n)`。**渠道 id 仍保留在 `l.c`**，供筛选、导出与排障。
-- **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1191）。
-- **搜索**：搜索框同时匹配模型名 / 渠道名 / 渠道 ID / 请求 ID（`logRows()` 判据 `l.m + l.n + l.c + l.id`，生产锚点 1179）——
+- **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1210）。
+- **客户端列（v1.18.11）**：模型之后新增「客户端」列——UA 自报家门的标签（codex CLI / Claude Code / curl 等；无 UA 或未识别显示 `—`）。
+  格子是 chip，点击 → 跳「数据统计」页并**按该客户端标签过滤**（`stFilter.client` 赋值 + `go('stats')`；行内 `stopPropagation` 不触发行点击）。空值 `—` 不可点。
+  客户端标签是**外部可控值**（服务端只截断不消毒）→ 渲染必须 `esc(l.cl)`。标签只做显示，**绝不进任何控制逻辑的判定**（详见 §5.11）。
+- **搜索**：搜索框同时匹配模型名 / 渠道名 / 渠道 ID / 请求 ID（`logRows()` 判据 `l.m + l.n + l.c + l.id`，生产锚点 1198）——
   按名字搜比按 id 自然，老习惯按 id 也仍然命中。
-- **CSV 导出** `exportLogs`（生产锚点 460）：渠道列同样写显示名（`l.n`），与页面所见一致。
+- **CSV 导出** `exportLogs`（生产锚点 468）：渠道列同样写显示名（`l.n`），与页面所见一致。
+- 详情抽屉 `openLog`（生产锚点 1238）补「客户端」键值（有标签才显示）。
 
 ### 5.7 Playground `vPlayground`（1539）
 
@@ -442,6 +446,25 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - 后端语义：优先级链 `config.auth`（控制台轮换）**>** 环境变量 **>** 首启生成；准入规则 8–128 位可见 ASCII、禁 `change-me`、两把不得相同，**管理密钥另需大小写字母+数字+特殊字符四样齐全**（v1.18.5 从"16 位"放宽并加了管理密钥复杂度门槛）；
   轮换即清管理面失败计数。细节与真链路验证见 `test/key-rotation-e2e.test.js`（75 项断言）与 docs/behavior.md「密钥轮换」。
 - 接入信息页的「轮换密钥」按钮从"只读步骤弹窗"改为 `go('keys')` 直达本页；`showKeyHelp` 降级为命令行备用路径（见 §5.8）。
+- **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
+
+### 5.11 数据统计 `vStats`（生产独有，原型无此页，v1.18.11）
+
+来源 IP 态势页——回答"密钥是不是被人放进了中转站在转卖"这个问题（监控 → 数据统计，紧随调用日志之后；`NAV` 生产锚点 343，`zap` 图标复用 `IC` 现有的）。
+
+- **位置与注册**：`NAV`（343）「监控」组、调用日志之后；`go()`（367）与 `render()`（165）**两张分发表都注册了** `stats:vStats`（生产锚点 `vStats` 1289）。
+- **数据源唯一**：`GET /admin/api/stats`，随 `loadAll()`（141）一起拉、**单独 `.catch(()=>null)` 兜底**（端点挂了或旧版网关显示「统计端点不可达」，不白屏、不拖垮整页）；`adapt()` 把它放进 `DATA.stats`。手动刷新按钮走 `refreshStats()`（1396，只拉 stats 一条并重绘）。
+- **页面结构**（自上而下）：
+  - **四张全局卡**（敲门总数 / token 输入+输出 / 全局峰值并发 vs 单来源峰值 / 封禁命中）——**全局峰值远高于任何单来源峰值 = 中转站在轮换出口**的指纹，四张卡的文案把这层对比写明了。
+  - **封禁名单行**：每枚封禁 IP 一个 chip（已封禁标记 + 解封 × 按钮，`data-act="unban-ip" data-t="<ip>"`，`confirm()` 两步确认）。
+  - **per-IP 表**：IP / 敲门数（含被 401/429 拒掉的——刷鉴权也是指纹）/ token / 模型数 / 并发峰值 / 会话估计（**上限 512 饱和后显示 `≥512`**，不下发裸数字）/ 客户端标签（多个 chip）/ 24 小时 sparkline。**行点击开 `openIpStats`（1363）详情抽屉**（行 `.clickable`，`tr.onclick` 直挂，`vLogs` 的先例）。
+  - **按模型聚合卡**：全局视角哪几个模型在被谁打。
+  - trustedProxy 模式显示「反代采信：x.x.x.x」条（直连模式不显示）。
+- **`openIpStats(ip)` 详情抽屉**：per-IP 键值（敲门 / 封禁命中 / token / 会话 / 首末见）+ 客户端标签 chips 带计数 + 模型 chips 带计数 + **24 小时分布面积图**（`areaChart` 复用，本地时区整点桶）+ 底部**封禁/解封按钮**（未封禁 IP 显示「封禁该来源」，已封禁显示「解封该来源」；`confirm()` 两步确认——`clearUsage` 的先例，不用 armed 状态）。
+- **客户端过滤 `stFilter`（1287，模块级、跨页保留）**：调用日志客户端列跳进来（或统计页内点 chip）时只留匹配来源；页头显示「客户端：X ✕」chip，✕ 清除（`data-act="clear-st-filter"`）。无匹配时空态文案点明是"该客户端"的空态（区别于全网关刚清零）。
+- **封禁/解封动作**：`banIp`（1399）/`unbanIp`（1403）走 `POST /admin/api/bans` / `DELETE /admin/api/bans/{ip}`，成功后 `refreshStats()`；按钮一律 `data-act` + `data-t`（IP 经服务端字面量校验，渲染仍 `esc()`）。
+- **转义与安全**：客户端标签是外部可控值（UA 截断，不消毒）→ 一律 `esc()`；IP 是服务端校验过的字面量，仍照 `esc()` 纪律过一遍。
+- **后端语义**：统计**内存态**（重启清零、留存有界：IP 512 / 会话 512 / 标签 8 / 模型 64）；封禁**只拦客户端面**（管理面/控制台/健康检查永远可达——解封按钮永远不会把自己锁在门外）；`X-Forwarded-For` 只在 `config.security.trustedProxy` 登记的来源上采信第一跳。详见 docs/behavior.md「来源 IP 态势统计与封禁」与 `test/ip-stats-ban-e2e.test.js`（62 项）。
 - **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
 
 ---
@@ -571,6 +594,8 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | 「运行期设置」页（**v1.18 已实现**，见 §5.9；v1.18.8 增第四组） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`（v1.18.8 增）四组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：四张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
 | 「密钥管理」页（**v1.18.5 已实现**，见 §5.10） | `GET /admin/api/keys` · `POST /admin/api/keys` · `POST /admin/api/keys/generate` · `POST /admin/api/keys/reset` · `GET /admin/api/admin-key` | **v1.18.5 新增**：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY。GET 只回**掩码 + 来源**（console / env / generated / none）；POST 立即生效并写入 `config.json` 的 `auth` 段（控制台「随机生成」是本地填框，不走 generate 端点）（**优先级高于环境变量**），**旧密钥立即失效**；新明文只在响应的 `newKeys` 里回这一次；reset 删掉 `auth` 段把控制权交还给环境变量 |
 | 登录门 / 「退出登录」（**v1.18.6 已实现**，见 §8.29） | `POST /admin/api/session` · `DELETE /admin/api/session` | **v1.18.6 新增**：管理密钥登录门换会话——POST body `{key}` 交一次 `ADMIN_KEY` 换回 `HttpOnly + SameSite=Strict` 会话 cookie（`zz_session`，12 小时，**刻意无 `Secure`**：http 本地/局域网部署，加了反而种不下去）；端点在管理面鉴权闸门**之前**（登录时手里还没有会话），登录失败计入 admin 失败限流（NOAUTH 放行）；DELETE 只杀自己那枚 token 并过期 cookie，其余方法 405。轮换/重置管理密钥会清空全部会话，轮换响应**补发新会话**给发起轮换的浏览器 |
+| 「数据统计」页（**v1.18.11 已实现**，见 §5.11） | `GET /admin/api/stats` | **v1.18.11 新增**：来源 IP 态势快照——`global`（敲门 / token / 峰值并发 / 封禁命中 / 活跃来源数）+ `ips[]`（per-IP 敲门 / token / 模型 / 并发峰值 / 会话估计 / 客户端标签 / 24 小时桶，按敲门降序）+ `banned` + `models[]` + `trustedProxy`。**内存态，网关重启清零**（检测数据丢得起）；敲门计数在鉴权之前（401/429 也算敲门）；per-IP token/模型记账只在 `recordUsage` 单漏斗（成功用量才记账）。随 `loadAll()` 拉取、单独兜底 |
+| 封禁 / 解封（**v1.18.11 已实现**，见 §5.11） | `POST /admin/api/bans` · `DELETE /admin/api/bans/{ip}` | **v1.18.11 新增**：IP 字面量校验（非法 400 点名）、幂等、立即生效 + 落库（`config.security.bannedIPs`，重启不丢）；解封不存在 404。**只拦客户端面**（`/v1` `/anthropic` `/gemini` 一律 403，闸门在 Host/Origin 门之后、限流之前）——被封请求不占并发额度但**照常计入封禁命中数**（封了之后对方还在敲，看得见）；管理面/控制台/健康检查**永远可达**（解封按钮不会把自己锁在门外） |
 
 **回填时的注意事项**：
 
@@ -580,8 +605,8 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 4. `DATA` 就地修改的模式不能沿用——真实环境应改为"请求 → 更新本地 state → 重绘"
 
 > **回填状态（v0.4，v0.5 续修）**：以上四项均已满足。
-> 生产侧用 `chKey(id)`（`build/app.js` 1818）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
-> `DATA` 改由 `adapt()`（59）从 `/admin/api/status` 响应派生，`loadAll()`（139）统一拉取后重绘。
+> 生产侧用 `chKey(id)`（`build/app.js` 1960）从真实渠道对象取密钥，**没有任何假密钥逻辑**；
+> `DATA` 改由 `adapt()`（59）从 `/admin/api/status` 响应派生，`loadAll()`（141）统一拉取后重绘（v1.18.11 起同一响应集还拉 `stats`，单独兜底）。
 > 生产独有能力（genspark 双导入、渠道级自定义请求头、密钥明文切换、有效优先级角标、
 > 渠道权重输入框与分流占比、自动权重观测卡、真实 Playground / 测试 / 导入请求、端点地址与密钥一键复制、
 > 只读的密钥轮换步骤弹窗）原型里没有，**原型不必追平**。
@@ -1385,6 +1410,29 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **验证**：`node --check server.js` 通过；新增 `test/thinking-replay-e2e.test.js`（**64 项**：§0 装配守卫 12 + §1 纯函数真值表 + §2 真链路——对照轮关=400 复现、开启后逐字段补回、跨会话/渠道/模型三组反向、流式学习照修、完好客户端一字不动、4xx 作废、跨渠道不借）；既有测试同步：`thinking-fidelity`（36，`signature` 守卫改写为区域守卫）、`same-protocol-passthrough`（44，选路/非流式守卫重锚 + 修复注入守卫）、`settings-api-e2e`（68，四组 + 第四组真链路）、`metrics-e2e`（45，回放 gauge+六事件）、`console-state`（185，四张卡 + 第四组 PATCH）、`weighted-rr`（31，persistConfig 窗口放宽 1400→1900）。全量 **32 文件 / 1548 断言 / 0 失败**（v1.18.7 基线 31/1470）。
 
 **纪律（AGENTS §2 已同步为硬约束）**：thinking 回放六条配套纪律（只回放真签过的、四元键不跨、没坏不碰、4xx 作废、默认关、学习走旁路）；改回放路径后必跑 `test/thinking-replay-e2e.test.js` 与 `test/thinking-fidelity.test.js`。
+
+### 8.32 v1.18.11 数据统计页 + 调用日志客户端列 + 来源 IP 封禁（2026-10-04，对象 `server.js` 统计块 + `build/app.js` 统计页 + 产物 `console.html` + 新增 `test/ip-stats-ban-e2e.test.js` + `test/console-state.test.js` §13 增章 + 全套文档）
+
+**问题**：密钥被人放进"中转站"转卖时**看不见**——调用日志只有请求级记录，看不出"哪个来源 IP 在以多大频率、多大并发、多少个会话在打"；就算看出来了，也没有任何外科手术手段（全局改密钥伤所有正常客户端，限流是全局的连坐）。
+
+**根因**：网关此前**刻意不记来源 IP**（渗透整改后不留可关联数据的姿势，这个方向本身没错），但没有给所有者留"看一眼来源态势"的口子；封禁能力则完全缺失。
+
+**处置（后端，`server.js` 统计块，置于 Host/Origin 门之后、限流之前）**：
+- **封禁闸门只拦客户端面**：`/v1` `/anthropic` `/gemini` 撞 `SECURITY_BANNED` → 403（**管理面/控制台/健康检查永远可达**——解封按钮永远不会把自己锁在门外）；被封请求不进 `calls`、不占并发额度，但**单独计入 `bannedHits`**（封了之后对方还在敲，看得见）。
+- **敲门计数在鉴权之前**（`noteClientAttempt`：401/429 也算敲门——刷鉴权也是指纹）；per-IP token/模型/会话记账**只在 `recordUsage` 一处**（`statsCtx` 由 4 条客户端路由注入 `dispatchRequest` → `tryChannel` 字面量透传；管理面手动测试不带 statsCtx，不算进任何来源的态势）；per-IP 在飞数归还挂在与限流**同一条 finish/close settle 路径**。
+- **会话估计**复用会话粘性的键推导（`affinityKeyFor(req, body, true)` 跳过粘性门槛——粘性开关关着也推）；**客户端标签** `clientLabelOf(ua)` 只做显示；**`X-Forwarded-For` 只在 `trustedProxy` 登记的来源上采信第一跳**（全仓只有 `clientIpOf` 一处读它）。
+- **内存态 + 有界**：IP 512 / 会话 512（饱和标 `sessSat`）/ 标签 8 / 模型 64，超限丢最旧；重启清零（检测数据丢得起）。封禁落 `config.security.bannedIPs`（`persistConfig` 白名单加 `security`，否则一次渠道保存就抹掉）。
+- 三个管理端点：`GET /admin/api/stats` / `POST /admin/api/bans {ip}`（字面量校验 400 点名、幂等、立即生效）/ `DELETE /admin/api/bans/{ip}`（404 语义）。
+
+**处置（前端，`build/app.js`）**：
+- **调用日志「客户端」列**（模型之后）：`adapt()` 解析 `cl`（`r.client`）；格子是 chip，点击 → `stFilter.client` + `go('stats')`（行内 `stopPropagation` 不触发行点击）；空值 `—` 不可点；抽屉补客户端键值。**保住了 v1.13.2 的历史语义**（渠道仍紧跟请求 ID——客户端列放在模型之后，历史守卫不用改语义）。
+- **`vStats` 新页**（监控 → 数据统计，紧随调用日志）：四张全局卡（**全局峰值 vs 单来源峰值对比**写明中转站指纹）+ 封禁名单 chip 行（解封 ×）+ per-IP 表（行点击开抽屉，24h sparkline，会话饱和显示 `≥512`）+ 按模型聚合卡 + `openIpStats` 详情抽屉（24 小时面积图 + 封禁/解封按钮）；`stFilter` 模块级跨页保留（过滤 chip ✕ 清除）；封禁/解封 `confirm()` 两步确认（`clearUsage` 先例）。`NAV`/`go()`/`render()` 三表注册；`ACTS` 增 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip`（44 → **48** 个动作）。
+- 表格行内**不放按钮**（封禁/解封只在抽屉与封禁名单行）——行点击与按钮冒泡不打架。
+- 锚点漂移：`app.js` 2512 → **2650 行**（净增 138），`extra.css` 与设计稿零改动 → JS 偏移仍 **+689**，产物 3205 → **3343 行**。§0.2 已整表重核（本轮顺带修掉 vChannels/密钥块两组**历史烂账锚点**——v1.18 设置块插入期的旧号从未回填）。
+
+**验证**：`node --check server.js` 通过；新增 `test/ip-stats-ban-e2e.test.js`（**62 项**：§0 装配守卫 11 + §1 纯函数真值表 + §2 真链路——预置封禁 403、XFF 三来源、401 算敲门、token/模型/标签/会话记账、并行峰值 ≥2 且归零、封禁端点全语义、封禁落库且渠道不丢、重启统计清零封禁仍在 + §3 无 trustedProxy 对照）；`console-state` 增 **§13 数据统计页**一节（198 项总量）；`security-headers-e2e` 内联清零 + ACTS 双向覆盖守卫放行（69 项）。全量 **33 文件 / 1635 断言 / 0 失败**（v1.18.8 基线 32/1548）。
+
+**纪律（AGENTS §2 已同步为硬约束）**：来源 IP 态势与封禁六条配套纪律（只拦客户端面、单漏斗、persistConfig 白名单含 security、内存态有界 + trustedProxy 采信门槛、settle 同路径、UA 标签不进控制逻辑）；改统计/封禁/trustedProxy 采信路径后必跑 `test/ip-stats-ban-e2e.test.js`，改统计页渲染后加跑 `test/console-state.test.js`（§13 一节）。
 
 ---
 
