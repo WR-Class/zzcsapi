@@ -868,13 +868,136 @@ function testSettings() {
   })();
 }
 
+
+/* ── 11. 密钥管理：掩码展示、草稿保留、轮换与浏览器凭据同步 ─────────────── */
+async function testKeys() {
+  G('11. 密钥管理 vKeys（掩码 · 草稿跨轮询 · 两步确认 · 管理密钥自更新）');
+
+  const RESET_SRC = extract('resetKeysAction');
+  const begin = src.indexOf('const KEY_SRC_TXT=');
+  const end = src.indexOf(RESET_SRC) + RESET_SRC.length;
+  const KEY_SRC = src.slice(begin, end);
+  check('装配：从 build/app.js 现抠到密钥管理整段实现',
+    begin >= 0 && end > begin && KEY_SRC.includes('function vKeys(') &&
+    KEY_SRC.includes('function rotateKey(') && KEY_SRC.includes('function toggleKeyReveal('));
+
+  {
+    const nav = src.slice(src.indexOf('const NAV=['), src.indexOf('let page='));
+    const iTool = nav.indexOf("sec:'工具'"), iSet = nav.indexOf("id:'settings'");
+    const iKeys = nav.indexOf("id:'keys'"), iAccess = nav.indexOf("id:'access'");
+    check('★ 密钥管理归「工具」组，位于运行期设置与接入信息之间',
+      iTool >= 0 && iSet > iTool && iKeys > iSet && iAccess > iKeys);
+    check('★ render() 与 go() 两张路由表都注册 keys:vKeys',
+      (src.match(/keys:vKeys/g) || []).length === 2);
+  }
+
+  const mkRaw = () => ({ keys: {
+    gatewayKey: { masked: 'sk-a…1234', set: true, source: 'env' },
+    adminKey: { masked: 'admi…7890', set: true, source: 'console' },
+    rotatedAt: '2026-09-29T02:03:04.000Z', keysInsecure: false,
+  }});
+  const storage = () => {
+    const m = new Map();
+    return { getItem:k => m.has(k) ? m.get(k) : null,
+      setItem:(k,v) => m.set(k,String(v)), removeItem:k => m.delete(k) };
+  };
+  const build = (raw, apiStub, sent, toasts) => {
+    const dom = makeDom();
+    const $ = (sel, root) => sel === '#viewport' ? dom.root : dom.$(sel, root || dom.root);
+    const sessionStorage = storage(), localStorage = storage();
+    const apiWrap = async (path, opts) => {
+      sent.push({ path, opts: opts || {} });
+      return apiStub(path, opts || {});
+    };
+    const factory = new Function('$', '$$', 'RAW', 'DATA', 'esc', 'svg', 'nf', 'toast',
+      'api', 'copyText', 'render', 'reload', 'sessionStorage', 'localStorage', 'location',
+      KEY_SRC + '\nreturn { vKeys, rotateKey, resetKeysAction, toggleKeyReveal, armConfirm, fillGeneratedKey,' +
+      ' get keyDraft(){return keyDraft}, get keyReveal(){return keyReveal} };');
+    const api = factory($, dom.$$, raw, { channels:[], models:[], meta:{} }, esc, svg, nf,
+      (m,k) => toasts.push([m,k]), apiWrap, () => {}, () => {}, async () => {},
+      sessionStorage, localStorage, { origin:'http://127.0.0.1:8787' });
+    return { dom, api, sessionStorage, localStorage };
+  };
+
+  {
+    const sent=[], toasts=[];
+    const x = build(mkRaw(), async () => ({}), sent, toasts);
+    x.api.vKeys(x.dom.root);
+    const html = x.dom.root.innerHTML;
+    check('首渲染：两类密钥、掩码与来源均显示，不把明文塞进页面快照',
+      html.includes('网关密钥') && html.includes('管理密钥') &&
+      html.includes('sk-a…1234') && html.includes('admi…7890') &&
+      html.includes('来源：环境变量') && html.includes('来源：控制台轮换'));
+    check('接口没数据时给可理解的空状态，不白屏', (() => {
+      const y = build({keys:null}, async () => ({}), [], []);
+      y.api.vKeys(y.dom.root);
+      return y.dom.root.innerHTML.includes('密钥接口不可用');
+    })());
+
+    const input = x.dom.$('#ki_gateway', x.dom.root);
+    check('网关密钥输入框绑定 oninput', typeof input.oninput === 'function');
+    input.oninput({target:{value:'manual-gateway-key-123456'}});
+    x.api.vKeys(x.dom.root);
+    check('★ 轮询重绘后手填草稿仍回填，不会被 8 秒刷新吞掉',
+      x.dom.root.innerHTML.includes('value="manual-gateway-key-123456"'));
+  }
+
+  {
+    const sent=[], toasts=[];
+    const x = build(mkRaw(), async (path) => path.endsWith('/api/keys')
+      ? {ok:true,newKeys:{adminKey:'new-admin-key-1234567890'}} : {}, sent, toasts);
+    // 随机生成只在本地填进输入框，不发任何请求（用户要先看到/复制新值，再点「轮换」确认生效）
+    x.api.fillGeneratedKey('admin');
+    const genDraft = x.api.keyDraft.admin;
+    check('★ 随机生成把 48 位四样字符齐全的密钥填进草稿框且不发请求',
+      /^[\x21-\x7e]{48}$/.test(genDraft) && /[a-z]/.test(genDraft) && /[A-Z]/.test(genDraft) &&
+      /[0-9]/.test(genDraft) && /[^a-zA-Z0-9]/.test(genDraft) && sent.length===0);
+    check('随机生成后提示「点轮换生效」，不撒谎说已生效',
+      toasts.some(t => String(t[0]).includes('轮换」生效')));
+    const btn = mkEl('rotate-admin'); btn.dataset.arm='1';
+    await x.api.rotateKey('admin', genDraft, btn);
+    check('★ 轮换走统一轮换端点并提交框内的新值', (() => {
+      const q=sent[0], body=JSON.parse(q.opts.body);
+      return q.path==='/admin/api/keys' && q.opts.method==='POST' && body.adminKey===genDraft;
+    })());
+    check('★ 管理密钥轮换后同时更新 sessionStorage 与 localStorage，控制台不会把自己踢出去',
+      x.sessionStorage.getItem('adminKey')==='new-admin-key-1234567890' &&
+      x.localStorage.getItem('adminKey')==='new-admin-key-1234567890');
+    check('轮换成功后清空管理密钥草稿并提示旧值立即失效',
+      x.api.keyDraft.admin==='' && toasts.some(t => String(t[0]).includes('旧值已立即失效')));
+  }
+
+  {
+    const sent=[];
+    const x = build(mkRaw(), async path => path==='/admin/api/admin-key'
+      ? {ok:true,adminKey:'revealed-admin-key-123456'} : {}, sent, []);
+    await x.api.toggleKeyReveal('admin');
+    check('显示管理密钥时才按需请求明文端点',
+      sent.length===1 && sent[0].path==='/admin/api/admin-key' &&
+      x.api.keyReveal.admin==='revealed-admin-key-123456');
+  }
+
+  {
+    const sent=[];
+    const x = build(mkRaw(), async () => ({ok:true}), sent, []);
+    const btn = mkEl('reset'); btn.dataset.arm='1';
+    await x.api.resetKeysAction(btn);
+    check('「回到环境变量值」调用独立 reset 端点',
+      sent.length===1 && sent[0].path==='/admin/api/keys/reset' && sent[0].opts.method==='POST');
+    check('危险动作保留两步确认守卫与 6 秒自动复位窗口',
+      KEY_SRC.includes("btn.dataset.arm==='1'") && KEY_SRC.includes('setTimeout(') && KEY_SRC.includes('6000'));
+  }
+}
+
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
    'autoWeightCard', 'vAutoWeight', 'openChannel', 'vChannels', 'openTestModels', 'runTests',
    'chName', 'testRowVerdict', 'areaChart', 'sparkline', 'drawer',
-   'vSettings', 'setCard', 'setHint', 'setPayload', 'setToggle', 'syncSettingsDraft', 'saveSettings'].forEach(extract);
-  ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"', 'let setDraft=null'].forEach(s => {
+   'vSettings', 'setCard', 'setHint', 'setPayload', 'setToggle', 'syncSettingsDraft', 'saveSettings',
+   'vKeys', 'keyCard', 'toggleKeyReveal', 'rotateKey', 'resetKeysAction'].forEach(extract);
+  ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"', 'let setDraft=null',
+   "let keyDraft={gateway:'',admin:''}"].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
   });
 } catch (e) {
@@ -893,6 +1016,7 @@ try {
   testControl();
   testEmptyData();
   await testSettings();
+  await testKeys();
 
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
