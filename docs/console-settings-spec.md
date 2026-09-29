@@ -139,7 +139,7 @@
 
 ```powershell
 node build/build.js          # console.html 是构建产物，禁止手改
-node test/console-state.test.js   # 185 项断言，退出码非 0 = 有回归
+node test/console-state.test.js   # 198 项断言，退出码非 0 = 有回归
 ```
 
 ## 6. 文档同步（AGENTS §1 强制，漏了算改动未完成）

@@ -29,7 +29,7 @@
 | `console-redesign.html` | ~2272 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
-| `build/extra.css` | 77 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**） | ✅ §0.2 |
+| `build/extra.css` | 80 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**） | ✅ §0.2 |
 | `build/app.js` | 2650 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 52 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
 | `console.html` | ~3343 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
@@ -206,7 +206,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | `<head>` | 1–9 | `lang="zh-CN"`、`data-theme="dark"` 初始主题、**MiSans 字体 CDN**（`font.sec.miui.com`，按 unicode-range 分片） |
 | `<style>` | 10–537 | 全部 CSS（无外链样式表）。**这段原文会被逐字节复制进 `console.html`** |
 | `<body>` | 539–858 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
-| `<script>` | 859–2270 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
+| `<script>` | 859–2269 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
 
 > ⚠️ `<body>` 里 583–783 行是**渠道页的静态占位 markup**（`<div class="viewport" id="viewport">` 到 `</tbody></table>`）。`init()` 末尾会 `go('overview')`，
 > 首屏立刻用 JS 重绘整个 `#viewport`，所以那段占位只在 JS 失效时可见。
@@ -534,8 +534,8 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 **构建与产物**
 
-- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置（v1.18.8 四张卡）+ 密钥管理页（含会话语义装配守卫）+ **事件委托（真实委托块桩上真跑分发）**的自动化回归，**185 项断言**；改了任何带输入框的页面都要跑）
-- [ ] `node test/security-headers-e2e.test.js` 全绿（渲染层裸插值 + 内联事件属性清零 + `ACTS` 双向覆盖守卫，**57 项断言**；改了任何渲染/交互代码都要跑）
+- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置（v1.18.8 四张卡）+ 密钥管理页（含会话语义装配守卫）+ **事件委托（真实委托块桩上真跑分发）**的自动化回归，**198 项断言**；改了任何带输入框的页面都要跑）
+- [ ] `node test/security-headers-e2e.test.js` 全绿（渲染层裸插值 + 内联事件属性清零 + `ACTS` 双向覆盖守卫，**69 项断言**；改了任何渲染/交互代码都要跑）
 - [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
 - [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）
 - [ ] 产物里 `</style>` 恰好 1 次：`(Select-String -Path console.html -Pattern '</style>' -SimpleMatch).Count`
