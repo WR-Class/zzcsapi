@@ -310,7 +310,7 @@ table.tbl tbody tr:hover{background:var(--panel-2)}
 table.tbl tbody tr.clickable{cursor:pointer}
 table.tbl tbody tr:last-child td{border-bottom:0}
 .t-r{text-align:right}table.tbl thead th.t-r{text-align:right}/* 表头基样式 text-align:left 权重(0,1,3) 高于 .t-r(0,1,0)，右对齐列必须用更高权重补回，否则表头与数值错位 */
-.t-c{text-align:center}
+.t-c{text-align:center}table.tbl thead th.t-c{text-align:center}/* 表头基样式 text-align:left 权重(0,1,3) 高于 .t-c(0,1,0)，居中列必须用更高权重补回，否则表头与数值错位 */
 .cell-main{display:flex;align-items:center;gap:9px;min-width:0}
 .cell-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cell-sub{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -629,6 +629,31 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 /* 四张卡两排各两张：只用 .grid 的间距与 display，列数自己定（通用 .g4 是四连排，原型别处在用，不能改它） */
 .set-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media(max-width:900px){.set-cards{grid-template-columns:1fr}}
+
+/* ── 数据统计页 .st-*（v1.18.12 布局整改：KPI 居中 / 列宽定量 / 占位符居中） ──────────
+   生产独有组件（设计稿不含），复用全站令牌，不引入新颜色。
+   注意：extra.css 在拼接序里位于 app.js 之前，本段每增删 1 行，console.html 的 JS 行号偏移
+   整体 ±1 —— 增删后必须同步 AGENTS.md §1.2 与 docs/frontend-code-map.md 的偏移量。 */
+/* ① KPI 四卡内容居中（四卡等高，避免内容长短不一时参差） */
+.st-kpi-row{align-items:stretch}
+.st-kpi{text-align:center}
+.st-kpi .card-bd{display:flex;flex-direction:column;justify-content:center}
+.st-kpi-num{font-size:22px;font-weight:700;line-height:1.35;margin:3px 0}
+.st-kpi-unit{font-size:14px;font-weight:500;color:var(--tx-3)}
+/* ② 来源明细：定量列宽（配 colgroup 百分比），替掉 auto 布局的挤/空失衡 */
+table.tbl.st-fixed{table-layout:fixed;min-width:1000px}
+/* ③ 按模型：模型/次数按内容收紧，占比吃掉剩余宽度 */
+table.tbl.st-models th:first-child,table.tbl.st-models td:first-child{width:1%;white-space:nowrap}
+table.tbl.st-models th:nth-child(2),table.tbl.st-models td:nth-child(2){width:1%;white-space:nowrap}
+/* ④ 首/末列内边距与卡片 16px 对齐；分区标题同款留白（原来贴卡片边框） */
+table.tbl.st-fixed th:first-child,table.tbl.st-fixed td:first-child,
+table.tbl.st-models th:first-child,table.tbl.st-models td:first-child{padding-left:16px}
+table.tbl.st-fixed th:last-child,table.tbl.st-fixed td:last-child,
+table.tbl.st-models th:last-child,table.tbl.st-models td:last-child{padding-right:16px}
+.st-sec{padding:0 16px}
+/* ⑤ 占位符「—」自己居中：列仍左对齐（模型名/客户端标签左对齐才好看），
+      只有这一格是占位符时才居中 —— 这就是「— 居中、真名左对齐」的实现方式 */
+.t-c-ph{display:block;text-align:center}
 
 </style>
 </head>
@@ -1992,22 +2017,22 @@ function vStats(v){
     </div>
   </div>
 
-  <div class="row wrap" style="gap:12px;margin-bottom:14px">
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+  <div class="row wrap st-kpi-row" style="gap:12px;margin-bottom:14px">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">敲门（含 401/429）</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.calls)}</div>
+      <div class="mono st-kpi-num">${nf(g.calls)}</div>
       <div class="micro muted">封禁命中 ${nf(g.bannedHits)}</div></div></div>
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">Token（成功用量）</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.tokIn+g.tokOut)}</div>
+      <div class="mono st-kpi-num">${nf(g.tokIn+g.tokOut)}</div>
       <div class="micro muted">入 ${nf(g.tokIn)} · 出 ${nf(g.tokOut)}</div></div></div>
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">并发（当前 / 峰值）</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.cur)} <span class="muted" style="font-size:14px">/ ${nf(g.peak)}</span></div>
+      <div class="mono st-kpi-num">${nf(g.cur)} <span class="muted st-kpi-unit" style="font-size:14px">/ ${nf(g.peak)}</span></div>
       <div class="micro muted">全局峰值远超任何单 IP 峰值 = 轮换出口的中转站指纹</div></div></div>
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">活跃来源</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.activeIps)}</div>
+      <div class="mono st-kpi-num">${nf(g.activeIps)}</div>
       <div class="micro muted">${s.trustedProxy?'反代采信：'+esc(s.trustedProxy):'直连模式（不采信 X-Forwarded-For）'}</div></div></div>
   </div>
 
@@ -2018,30 +2043,30 @@ function vStats(v){
   </div></div>`:''}
 
   <div class="card"><div class="card-bd tight">
-    <div class="sec-title">来源明细（按敲门数排序 · 点击行看详情与封禁）</div>
-    ${rows.length?`<div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>来源 IP</th><th class="t-r">敲门</th><th>客户端标签</th><th class="t-r">会话</th><th class="t-r">峰值并发</th><th class="t-r">Token 入/出</th><th>模型</th><th>24 小时</th><th>最近</th></tr></thead>
+    <div class="sec-title st-sec">来源明细（按敲门数排序 · 点击行看详情与封禁）</div>
+    ${rows.length?`<div class="tbl-wrap"><table class="tbl st-fixed"><colgroup><col style="width:11%"><col style="width:7%"><col style="width:15%"><col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:16%"><col style="width:13%"><col style="width:10%"></colgroup>
+    <thead><tr><th class="t-c">来源 IP</th><th class="t-c">敲门</th><th>客户端标签</th><th class="t-c">会话</th><th class="t-c">峰值并发</th><th class="t-c">Token 入/出</th><th>模型</th><th class="t-c">24 小时</th><th class="t-c">最近</th></tr></thead>
     <tbody>${rows.map(r=>`<tr class="clickable">
-      <td class="mono" style="font-size:12px">${esc(r.ip)} ${r.banned?'<span class="pill down"><span class="dot down"></span>已封禁</span>':''}</td>
-      <td class="t-r mono">${nf(r.calls)}${r.bannedHits?`<div class="micro" style="color:var(--err)">封禁命中 ${nf(r.bannedHits)}</div>`:''}</td>
-      <td>${stClients(r).slice(0,3).map(c=>`<span class="chip">${esc(c.k)}</span>`).join(' ')||(r.calls?'<span class="muted">—</span>':'<span class="muted">仅被封</span>')}</td>
-      <td class="t-r mono">${r.sessSat?'≥512':nf(r.sessions)}</td>
-      <td class="t-r mono">${nf(r.peak)}${r.cur>0?`<div class="micro" style="color:var(--warn)">在飞 ${nf(r.cur)}</div>`:''}</td>
-      <td class="t-r mono">${nf(r.tokIn)} / ${nf(r.tokOut)}</td>
-      <td class="cell-name" style="font-size:12px">${(r.models||[]).slice(0,3).map(m=>esc(m.k)).join(' ')}${r.modelCount>3?`<span class="muted micro"> 等 ${r.modelCount}</span>`:''}</td>
-      <td>${sparkline(r.buckets,96,22)}</td>
-      <td class="mono muted" style="font-size:11.5px;white-space:nowrap">${esc(fmtTs(r.lastSeen))}</td>
+      <td class="mono t-c" style="font-size:12px">${esc(r.ip)} ${r.banned?'<span class="pill down"><span class="dot down"></span>已封禁</span>':''}</td>
+      <td class="t-c mono">${nf(r.calls)}${r.bannedHits?`<div class="micro" style="color:var(--err)">封禁命中 ${nf(r.bannedHits)}</div>`:''}</td>
+      <td>${stClients(r).slice(0,3).map(c=>`<span class="chip">${esc(c.k)}</span>`).join(' ')||(r.calls?'<span class="muted t-c-ph">—</span>':'<span class="muted">仅被封</span>')}</td>
+      <td class="t-c mono">${r.sessSat?'≥512':nf(r.sessions)}</td>
+      <td class="t-c mono">${nf(r.peak)}${r.cur>0?`<div class="micro" style="color:var(--warn)">在飞 ${nf(r.cur)}</div>`:''}</td>
+      <td class="t-c mono">${nf(r.tokIn)} / ${nf(r.tokOut)}</td>
+      <td class="cell-name" style="font-size:12px">${(r.models||[]).slice(0,3).map(m=>esc(m.k)).join(' ')||'<span class="muted t-c-ph">—</span>'}${r.modelCount>3?`<span class="muted micro"> 等 ${r.modelCount}</span>`:''}</td>
+      <td class="t-c">${sparkline(r.buckets,96,22)}</td>
+      <td class="mono muted t-c" style="font-size:11.5px;white-space:nowrap">${esc(fmtTs(r.lastSeen))}</td>
     </tr>`).join('')}</tbody>
   </table></div>`:`<div class="empty">${stFilter.client?'没有使用客户端「'+esc(stFilter.client)+'」的来源（标签只显示每 IP 的前 8 种，且重启后清零）':'还没有任何客户端面流量（管理面手动测试不计数；网关刚重启也会清零）'}</div>`}
   </div></div>
 
   ${(s.models||[]).length?`<div class="card" style="margin-top:14px"><div class="card-bd tight">
-    <div class="sec-title">按模型（全部来源聚合 · 成功用量口径）</div>
-    <div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>模型</th><th class="t-r">次数</th><th>占比</th></tr></thead>
+    <div class="sec-title st-sec">按模型（全部来源聚合 · 成功用量口径）</div>
+    <div class="tbl-wrap"><table class="tbl st-models">
+    <thead><tr><th>模型</th><th class="t-c">次数</th><th class="t-c">占比</th></tr></thead>
     <tbody>${(()=>{const tot=(s.models||[]).reduce((a,m)=>a+m.n,0)||1;return (s.models||[]).map(m=>`<tr>
       <td class="cell-name mono" style="font-size:12px">${esc(m.k)}</td>
-      <td class="t-r mono">${nf(m.n)}</td>
+      <td class="t-c mono">${nf(m.n)}</td>
       <td><div class="row" style="align-items:center;gap:8px"><div style="flex:1;height:6px;border-radius:3px;background:var(--panel-3);overflow:hidden"><div style="width:${(m.n/tot*100).toFixed(1)}%;height:100%;background:var(--accent)"></div></div><span class="micro mono muted">${(m.n/tot*100).toFixed(1)}%</span></div></td>
     </tr>`).join('')})()}</tbody>
   </table></div>

@@ -1303,22 +1303,22 @@ function vStats(v){
     </div>
   </div>
 
-  <div class="row wrap" style="gap:12px;margin-bottom:14px">
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+  <div class="row wrap st-kpi-row" style="gap:12px;margin-bottom:14px">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">敲门（含 401/429）</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.calls)}</div>
+      <div class="mono st-kpi-num">${nf(g.calls)}</div>
       <div class="micro muted">封禁命中 ${nf(g.bannedHits)}</div></div></div>
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">Token（成功用量）</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.tokIn+g.tokOut)}</div>
+      <div class="mono st-kpi-num">${nf(g.tokIn+g.tokOut)}</div>
       <div class="micro muted">入 ${nf(g.tokIn)} · 出 ${nf(g.tokOut)}</div></div></div>
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">并发（当前 / 峰值）</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.cur)} <span class="muted" style="font-size:14px">/ ${nf(g.peak)}</span></div>
+      <div class="mono st-kpi-num">${nf(g.cur)} <span class="muted st-kpi-unit" style="font-size:14px">/ ${nf(g.peak)}</span></div>
       <div class="micro muted">全局峰值远超任何单 IP 峰值 = 轮换出口的中转站指纹</div></div></div>
-    <div class="card" style="flex:1;min-width:150px"><div class="card-bd">
+    <div class="card st-kpi" style="flex:1;min-width:150px"><div class="card-bd">
       <div class="micro muted">活跃来源</div>
-      <div class="mono" style="font-size:22px;font-weight:700">${nf(g.activeIps)}</div>
+      <div class="mono st-kpi-num">${nf(g.activeIps)}</div>
       <div class="micro muted">${s.trustedProxy?'反代采信：'+esc(s.trustedProxy):'直连模式（不采信 X-Forwarded-For）'}</div></div></div>
   </div>
 
@@ -1329,30 +1329,30 @@ function vStats(v){
   </div></div>`:''}
 
   <div class="card"><div class="card-bd tight">
-    <div class="sec-title">来源明细（按敲门数排序 · 点击行看详情与封禁）</div>
-    ${rows.length?`<div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>来源 IP</th><th class="t-r">敲门</th><th>客户端标签</th><th class="t-r">会话</th><th class="t-r">峰值并发</th><th class="t-r">Token 入/出</th><th>模型</th><th>24 小时</th><th>最近</th></tr></thead>
+    <div class="sec-title st-sec">来源明细（按敲门数排序 · 点击行看详情与封禁）</div>
+    ${rows.length?`<div class="tbl-wrap"><table class="tbl st-fixed"><colgroup><col style="width:11%"><col style="width:7%"><col style="width:15%"><col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:16%"><col style="width:13%"><col style="width:10%"></colgroup>
+    <thead><tr><th class="t-c">来源 IP</th><th class="t-c">敲门</th><th>客户端标签</th><th class="t-c">会话</th><th class="t-c">峰值并发</th><th class="t-c">Token 入/出</th><th>模型</th><th class="t-c">24 小时</th><th class="t-c">最近</th></tr></thead>
     <tbody>${rows.map(r=>`<tr class="clickable">
-      <td class="mono" style="font-size:12px">${esc(r.ip)} ${r.banned?'<span class="pill down"><span class="dot down"></span>已封禁</span>':''}</td>
-      <td class="t-r mono">${nf(r.calls)}${r.bannedHits?`<div class="micro" style="color:var(--err)">封禁命中 ${nf(r.bannedHits)}</div>`:''}</td>
-      <td>${stClients(r).slice(0,3).map(c=>`<span class="chip">${esc(c.k)}</span>`).join(' ')||(r.calls?'<span class="muted">—</span>':'<span class="muted">仅被封</span>')}</td>
-      <td class="t-r mono">${r.sessSat?'≥512':nf(r.sessions)}</td>
-      <td class="t-r mono">${nf(r.peak)}${r.cur>0?`<div class="micro" style="color:var(--warn)">在飞 ${nf(r.cur)}</div>`:''}</td>
-      <td class="t-r mono">${nf(r.tokIn)} / ${nf(r.tokOut)}</td>
-      <td class="cell-name" style="font-size:12px">${(r.models||[]).slice(0,3).map(m=>esc(m.k)).join(' ')}${r.modelCount>3?`<span class="muted micro"> 等 ${r.modelCount}</span>`:''}</td>
-      <td>${sparkline(r.buckets,96,22)}</td>
-      <td class="mono muted" style="font-size:11.5px;white-space:nowrap">${esc(fmtTs(r.lastSeen))}</td>
+      <td class="mono t-c" style="font-size:12px">${esc(r.ip)} ${r.banned?'<span class="pill down"><span class="dot down"></span>已封禁</span>':''}</td>
+      <td class="t-c mono">${nf(r.calls)}${r.bannedHits?`<div class="micro" style="color:var(--err)">封禁命中 ${nf(r.bannedHits)}</div>`:''}</td>
+      <td>${stClients(r).slice(0,3).map(c=>`<span class="chip">${esc(c.k)}</span>`).join(' ')||(r.calls?'<span class="muted t-c-ph">—</span>':'<span class="muted">仅被封</span>')}</td>
+      <td class="t-c mono">${r.sessSat?'≥512':nf(r.sessions)}</td>
+      <td class="t-c mono">${nf(r.peak)}${r.cur>0?`<div class="micro" style="color:var(--warn)">在飞 ${nf(r.cur)}</div>`:''}</td>
+      <td class="t-c mono">${nf(r.tokIn)} / ${nf(r.tokOut)}</td>
+      <td class="cell-name" style="font-size:12px">${(r.models||[]).slice(0,3).map(m=>esc(m.k)).join(' ')||'<span class="muted t-c-ph">—</span>'}${r.modelCount>3?`<span class="muted micro"> 等 ${r.modelCount}</span>`:''}</td>
+      <td class="t-c">${sparkline(r.buckets,96,22)}</td>
+      <td class="mono muted t-c" style="font-size:11.5px;white-space:nowrap">${esc(fmtTs(r.lastSeen))}</td>
     </tr>`).join('')}</tbody>
   </table></div>`:`<div class="empty">${stFilter.client?'没有使用客户端「'+esc(stFilter.client)+'」的来源（标签只显示每 IP 的前 8 种，且重启后清零）':'还没有任何客户端面流量（管理面手动测试不计数；网关刚重启也会清零）'}</div>`}
   </div></div>
 
   ${(s.models||[]).length?`<div class="card" style="margin-top:14px"><div class="card-bd tight">
-    <div class="sec-title">按模型（全部来源聚合 · 成功用量口径）</div>
-    <div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>模型</th><th class="t-r">次数</th><th>占比</th></tr></thead>
+    <div class="sec-title st-sec">按模型（全部来源聚合 · 成功用量口径）</div>
+    <div class="tbl-wrap"><table class="tbl st-models">
+    <thead><tr><th>模型</th><th class="t-c">次数</th><th class="t-c">占比</th></tr></thead>
     <tbody>${(()=>{const tot=(s.models||[]).reduce((a,m)=>a+m.n,0)||1;return (s.models||[]).map(m=>`<tr>
       <td class="cell-name mono" style="font-size:12px">${esc(m.k)}</td>
-      <td class="t-r mono">${nf(m.n)}</td>
+      <td class="t-c mono">${nf(m.n)}</td>
       <td><div class="row" style="align-items:center;gap:8px"><div style="flex:1;height:6px;border-radius:3px;background:var(--panel-3);overflow:hidden"><div style="width:${(m.n/tot*100).toFixed(1)}%;height:100%;background:var(--accent)"></div></div><span class="micro mono muted">${(m.n/tot*100).toFixed(1)}%</span></div></td>
     </tr>`).join('')})()}</tbody>
   </table></div>

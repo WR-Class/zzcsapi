@@ -29,10 +29,10 @@
 | `console-redesign.html` | ~2272 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
-| `build/extra.css` | 80 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**） | ✅ §0.2 |
+| `build/extra.css` | 105 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**、**数据统计页 `.st-*` / 占位符 `.t-c-ph`**） | ✅ §0.2 |
 | `build/app.js` | 2650 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 52 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
-| `console.html` | ~3343 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
+| `console.html` | ~3368 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~6572 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import`、`/admin/api/session`（登录 / 退出，v1.18.6）、`/admin/api/settings`（四组，v1.18.8）、`/admin/api/stats` 与 `/admin/api/bans`（来源 IP 态势与封禁，v1.18.11）等；含首启密钥生成、会话表与双层鉴权、thinking 回放块（v1.18.8）、来源 IP 统计与封禁块（v1.18.11） | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
@@ -74,9 +74,9 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 目标 | 公式 | 校验点 |
 | --- | --- | --- |
 | `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24；`--tx:#1b1710`：原型 46 → 产物 59 |
-| `console.html` 的 JS 行号 | `build/app.js` 行号 **+689** | `const IC`：app.js 3 → 产物 692；`autoWeightCard()`：app.js 662 → 产物 1351；`vStats()`：app.js 1289 → 产物 1978；`tick()`：app.js 2621 → 产物 3310（偏移仍为 **+689**，与下面 §0.2 的源行号一一对应） |
+| `console.html` 的 JS 行号 | `build/app.js` 行号 **+714** | `const IC`：app.js 3 → 产物 717；`autoWeightCard()`：app.js 662 → 产物 1376；`vStats()`：app.js 1289 → 产物 2003；`tick()`：app.js 2621 → 产物 3335（偏移仍为 **+714**，与下面 §0.2 的源行号一一对应） |
 
-> 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（80 行）/ 设计稿 `<style>` 的行数增删影响（head/shell 已有构建期行数守卫；extra.css 与设计稿 CSS 改行数需人工重算并同步本文档、AGENTS.md §1.2 与 `build/build.js` 注释）。
+> 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（105 行）/ 设计稿 `<style>` 的行数增删影响（head/shell 已有构建期行数守卫；extra.css 与设计稿 CSS 改行数需人工重算并同步本文档、AGENTS.md §1.2 与 `build/build.js` 注释）。
 > **历史教训（v1.8 重核）**：这条公式曾长期停在 **+617**（`build/build.js` 注释里又写着 +648），而实测是 **+673** —— 三个地方对不上，且漂移量在各函数间不等（+1 ~ +26），说明是历次改动累积的局部插入。
 > **v1.8.1（图例对齐修复）**：`build/extra.css` 的 `.aw-*` 注释块 +4 行 → 偏移 **+673 → +677**，CSS 偏移仍 +13。
 > **v1.9（自动权重独立成页 + 份额列对齐）**：`.aw-*` 由「堆叠带 + `auto-fit` 图例」重写成「一候选一列（`.aw-split`/`.aw-col`/`.aw-seg`）」，`build/extra.css` 68 → **58 行** → 偏移 **+677 → +667**（CSS 偏移仍 +13）。注意本轮是**双向变化**：`extra.css` 减 10 行（偏移 −10）+ `app.js` 在 `vAutoWeight()` 处净增行（app.js 行号 +）——所以产物行号在插入点**前后表现不同**：`autoWeightCard()` 之前的函数产物行号整体 −10（如 `const IC` 680 → 670），之后的函数因两个方向抵消而基本不动（`autoWeightCard()` 恰好 1301 → 1301）。
@@ -84,6 +84,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 > **v1.18（运行期设置页）**：`build/extra.css` 57 → **77 行**（新增 `.set-*` 20 行）→ JS 偏移 **+666 → +686**（CSS 偏移仍 +13）；同时 `build/app.js` 在 `autoWeightCard()` 与 `drawChTable()` 之间插入运行期设置整段（725–877）。**v1.18.1**（空数据保护 + `api()` 错误体）又在插入点**之前**加了 16 行，所以 §0.2 的 app.js 锚点漂移**分段不同**：插入点之前 **+20**（v1.13–v1.17 的局部插入 + v1.18.1 的 16 行，此前一直没回写文档），插入点之后 **+180**。本轮已按 AGENTS §1.2 的命令整表重核。
 > **v1.18.8（thinking 回放第四张卡 + 两排布局）**：`build/extra.css` 77 → **80 行**（`.set-cards` 两列规则块 +3 行：注释 + 规则 + ≤900px 折一列）→ JS 偏移 **+686 → +689**（CSS 偏移仍 +13）。`app.js` 侧第四张卡净增 7 行（`SET_META`/`SET_FIELDS` 内各 +2、`setStat` +2、`vSettings` 副标题/卡容器就地改不增行）→ 其后锚点整体 +7，已整表重核。
 > **v1.18.11（数据统计页 + 调用日志客户端列）**：`extra.css` 与设计稿 CSS 零改动 → 偏移仍 **+689**。`app.js` 侧净增 138 行（stats 整块 ~126 + NAV/render/go 三表 + 客户端列 +3 + ACTS +4 + adapt/loadAll 数据层），`app.js` 2512 → **2650 行**、产物 3205 → **3343 行**。本轮重核时还发现两处**历史烂账**：vChannels 行的 `drawChTable`(881)/`toggleCh`(918)/`openChannel`(927) 是 v1.18 设置块插入前就烂掉的旧行号，密钥块 `keyDraft`(1512) 一排同理——已随本轮整表重核一并修正（现 893/930/939、1647）。
+> **v1.18.12（数据统计页布局整改：KPI 居中 / 列宽定量 / 占位符居中）**：`build/extra.css` 80 → **105 行**（新增 `.st-*` 数据统计页区块 + 占位符 `.t-c-ph`，共 25 行）→ JS 偏移 **+689 → +714**（CSS 偏移仍 +13；实测复核：`const IC` 3→717、`vStats` 1289→**2003**、`autoWeightCard` 662→1376、`tick` 2621→3335）。`app.js` 侧**净零行**（`vStats()` 内就地改类名 + colgroup 内联进 `<table>` 同一行，不加行）→ §0.2 的 app.js 锚点**全部不动**，`app.js` 仍 **2650 行**、产物 3343 → **3368 行**。设计稿 CSS 只在既有 `.t-c` 那一行**就地追加** `table.tbl thead th.t-c{text-align:center}`（照抄 `.t-r` 的同款补权重写法，**不新增行**）→ CSS 偏移仍 +13。
 > **教训**：extra.css 在拼接序里位于 app.js **之前**，所以它每增删 1 行，JS 偏移就整体 ±1，而 CSS 偏移不动 —— 改 extra.css 前先想清楚要不要多这一行。改完 `build/*` 一定要用 AGENTS.md §1.2 的命令重新导一遍，不要按估算改数字。
 
 ### 三条硬规则
@@ -138,7 +139,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 1007–1043 | `toggleDrawerKey`(1007) `reprobe`(1019) `delChannel`(1032) | 抽屉密钥切换（**v1.18.4 起点一次才现取原文**，走 `chKeyLive`）/ 重探测 / 删除 |
 | 1047–1159 | `mTab`/`mQ`(1047) `vModels`(1048) `drawMTable`(1096) `openModel`(1125) | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
 | 1161–1285 | `lgRange` 等(1161) `vLogs`(1162) `logRows`(1198) `drawLogTable`(1210) `clearUsage`(1234) `openLog`(1238) `copyCurl`(1276) | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填）。**v1.13.2 起渠道列显示渠道显示名（`adapt()` 解析进 `n`，id 留在 `c`），列序为 请求 ID → 渠道 → 模型，搜索判据含 `l.n`**。**v1.18.11 增「客户端」列**（模型之后，`esc(l.cl)`；点击格子跳转统计页并按该客户端标签过滤——`stFilter.client` 赋值 + `go('stats')`，行内 `stopPropagation` 不触发行点击） |
-| 1287–1409 | **数据统计页（v1.18.11）**：`stFilter`(1287) `stClients`(1288) **`vStats`(1289)** `openIpStats`(1363) `refreshStats`(1396) `banIp`(1399) `unbanIp`(1403) | **数据统计页**（监控 → 数据统计，夹在调用日志之后；生产独有，原型无此页）：来源 IP 态势。`GET /admin/api/stats` 随 `loadAll` 拉取（单独兜底）；四张全局卡（敲门数 / token / 峰值并发 / 封禁命中）+ 封禁名单 chip 行（每枚带解封 ×）+ per-IP 表（敲门 / token / 模型数 / 并发峰值 / 会话估计 ≥512 饱和 / 客户端标签 / 24h sparkline，行点击开 `openIpStats` 详情抽屉）+ 按模型聚合卡；详情抽屉带 24 小时面积图 + 封禁/解封按钮（`confirm()` 两步确认，`clearUsage` 先例）。**客户端过滤 `stFilter`（模块级，跨页保留）**：从调用日志客户端列跳进来时只留匹配来源，chip ✕ 清除。封禁/解封/刷新走 `ACTS` 的 `ban-ip`/`unban-ip`/`stats-refresh`（`data-t` 带 IP） |
+| 1287–1409 | **数据统计页（v1.18.11）**：`stFilter`(1287) `stClients`(1288) **`vStats`(1289)** `openIpStats`(1363) `refreshStats`(1396) `banIp`(1399) `unbanIp`(1403) | **数据统计页**（监控 → 数据统计，夹在调用日志之后；生产独有，原型无此页）：来源 IP 态势。`GET /admin/api/stats` 随 `loadAll` 拉取（单独兜底）；四张全局卡（敲门数 / token / 峰值并发 / 封禁命中）+ 封禁名单 chip 行（每枚带解封 ×）+ per-IP 表（敲门 / token / 模型数 / 并发峰值 / 会话估计 ≥512 饱和 / 客户端标签 / 24h sparkline，行点击开 `openIpStats` 详情抽屉）+ 按模型聚合卡；详情抽屉带 24 小时面积图 + 封禁/解封按钮（`confirm()` 两步确认，`clearUsage` 先例）。**客户端过滤 `stFilter`（模块级，跨页保留）**：从调用日志客户端列跳进来时只留匹配来源，chip ✕ 清除。封禁/解封/刷新走 `ACTS` 的 `ban-ip`/`unban-ip`/`stats-refresh`（`data-t` 带 IP）。**v1.18.12 布局整改**：KPI 四卡 `.st-kpi*`（内容居中、四卡等高）、来源明细表 `.st-fixed` + 9 列 `colgroup`（定量列宽）、数值与表头 `.t-c`（居中，替掉旧的 `t-r`）、占位符「—」走 `.t-c-ph`（只有占位符那格居中，真名仍左对齐）、分区标题 `.st-sec`（与卡片 16px 对齐）；样式见 `build/extra.css` 82–105，`.t-c` 表头补权重在设计稿 300 行 |
 | 1412–1596 | `PG` 等(1412) `pgDraft` 等(1415) `vPlayground`(1416) `drawPG`(1485) `drawRoute`(1499) `fmtUsage`(1511) `pgClear`(1514) `pgCopyCurl`(1515) `pgSend`(1521) | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
 | 1597–1801 | **密钥管理页（v1.18.5；v1.18.6 会话化）**：`SNIP`(1597) `KEY_SRC_TXT`(1646) `keyDraft`(1647) `keyReveal`(1648) `keyBusy`(1649) `keyOf`(1651) `keyCard`(1655) **`vKeys`(1680)** `armConfirm`(1725) `toggleKeyReveal`(1734) `copyKeyValue`(1742) `genLocalKey`(1751) `fillGeneratedKey`(1760) `rotateKey`(1767) `resetKeysAction`(1787) | **密钥管理页**（工具 → 密钥管理，夹在运行期设置与接入信息之间）：在线轮换 `GATEWAY_KEY` / `ADMIN_KEY`。快照只有**掩码 + 来源**（console/env/generated/none），明文点「显示」才现取一次（按需揭示端点）；**「轮换」单击直接生效**（用户明确要求，文案写明"旧密钥立即失效"）；「回到环境变量值」保留**两步确认**（`armConfirm`，6 秒不复位自动还原）——它把控制台轮换的成果整段交还给 .env；**v1.18.6 会话化**：页头页操作区挂「退出登录」按钮（`#keyLogout` → `logout()`，只杀自己那枚会话）；换管理密钥后前端**不再写任何浏览器存储**——服务端清空全部会话并在轮换响应里**补发新会话 cookie**，发起页无感继续用；页脚文案明示"所有已登录会话都会失效、重启也会掉线（内存表），重开控制台重新粘一次密钥即可"；手填草稿存 `keyDraft` 回填（状态回填约定）。唯一数据源 `GET /admin/api/keys`（随 `loadAll` 拉取，单独兜底）；**「随机生成」只在本地把 48 位随机串（四样字符齐全）填进输入框（`fillGeneratedKey`，不发请求）——用户先看到/复制新值，再点「轮换」提交 `POST /admin/api/keys` 生效**；「回到环境变量值」走 `POST /admin/api/keys/reset`。服务端 `POST /admin/api/keys/generate` 端点保留（API 可用，e2e 已测），控制台不再用它 |
 | 1803–1932 | `vAccess`(1803) `showKeyHelp`(1899) | 接入信息（端口 / 模型名照旧；**v1.18.4 起服务端只下发掩码**，密钥原文要点一次才现取：`copyGwKey` / `copyAllEndpoints`）；端点地址可直接复制；页头「密钥管理」按钮 `go('keys')` 直接跳轮换页（v1.18.5）；`showKeyHelp` 降级为**命令行备用路径**步骤清单（会提醒：控制台轮换过之后 `.env` 说了不算）。**v1.18.5 插入密钥管理页后本块被拆成两段**：`SNIP`（curl 等接入示例）在密钥块之前、`vAccess`/`showKeyHelp` 在其后 |
@@ -161,7 +162,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 > ⚠️ 原型里的 `simTest` / `REPLIES` / `hash()` / `fakeKey()` **在生产侧已全部删除**，替换为真实请求。
 > 如果你在生产代码里看到它们，说明构建源搞混了。
 
-### `build/extra.css` 区块（80 行）
+### `build/extra.css` 区块（105 行）
 
 | 行号 | 区块 |
 | --- | --- |
@@ -187,6 +188,13 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 74–76 | `.set-stat` 实时计数区 / `.set-stat b` / `.set-stat .btn`（复制指标地址） |
 | 77 | `.set-card.muted` 关闭态整卡降权（卡头开关关闭时旋钮一并禁用） |
 | 78–80 | `.set-cards` 四卡两排各两张（v1.18.8 用户拍板，≤900px 折一列；通用 `.g4` 是四连排、原型别处在用，**不能**改它的定义） |
+| 82–85 | `.st-*` 组件说明（数据统计**页**，生产独有，设计稿不含；含"本段每增删 1 行 JS 偏移 ±1"的提醒） |
+| 86–91 | `.st-kpi-row`（四卡等高）/ `.st-kpi`（内容居中）/ `.st-kpi .card-bd`（纵向居中）/ `.st-kpi-num` / `.st-kpi-unit` —— KPI 四卡（v1.18.12） |
+| 92–93 | `table.tbl.st-fixed` 来源明细表定量列宽（`table-layout:fixed` + `min-width:1000px`，配模板里的 9 列 `colgroup`） |
+| 94–96 | `table.tbl.st-models` 按模型表：模型/次数列按内容收紧（`width:1%`），占比吃掉剩余宽度 |
+| 97–101 | `.st-fixed` / `.st-models` 首末列内边距 16px（与卡片留白对齐） |
+| 102 | `.st-sec` 分区标题留白（`padding:0 16px` —— `card-bd.tight` 是 0 padding，不加就贴边框） |
+| 103–105 | `.t-c-ph` 占位符「—」自己居中（`display:block`）——列仍左对齐，只有占位符这一格居中（v1.18.12） |
 
 > **v1.9 起没有 `.aw-bar` / `.aw-legend` / `.aw-item` / `.aw-sw` / `.aw-more`** —— 那条「堆叠带 + `auto-fit` 图例」
 > 路线已整体删除（图例换行后与色带对不上，用户报的"错位"）。现在是一候选一列，见坑位 17/18。
@@ -477,7 +485,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 运行期设置页（会话粘性 / 客户端限流 / 指标端点 / thinking 回放） | **v1.18**：生产 `NAV` 343（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）+ `vSettings` 826 + 辅助段 733–892 + `build/extra.css` 的 `.set-*`（59–80）。唯一数据源 `GET/POST /admin/api/settings`：`config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；`setPayload` **只提交有改动的组**（PATCH 语义）。**v1.18.8 增第四张卡**（thinking 回放）：`SET_META`/`SET_FIELDS`/`setStat` 各加一段（**零新交互**，开关/保存全走既有路径）、卡容器 `g3`→`set-cards`（两排各两张，用户拍板；通用 `.g4` 是四连排、原型别处在用，**不能**改它）。字段契约 / 文案要点 / 验收清单见 [`console-settings-spec.md`](console-settings-spec.md)。**原型未同步**（生产独有能力，设计稿不含该页） |
 | 密钥管理页（在线轮换 GATEWAY_KEY / ADMIN_KEY） | **v1.18.5**：生产 `NAV` 343（工具 → 密钥管理，夹在运行期设置与接入信息之间）+ `vKeys` 1680 + 辅助段 1646–1801（`keyCard` / `armConfirm` / `toggleKeyReveal` / `genLocalKey` / `fillGeneratedKey` / `rotateKey` / `resetKeysAction`）。数据源 `GET /admin/api/keys`（只回掩码 + 来源）；「轮换」单击直接生效（用户要求）；「回到环境变量值」两步确认（`armConfirm`）。**v1.18.6 会话化**：换管理密钥后前端不写任何浏览器存储（服务端清空全部会话并在轮换响应里**补发新会话 cookie**，发起页无感继续）；页操作区挂「退出登录」按钮（`#keyLogout` → `logout()`）；`showKeyHelp` 步骤改为**粘贴密钥登录**（不再有 `?key=` 带参链接）。后端语义见 docs/behavior.md（密钥轮换 / 管理面会话）与 `test/key-rotation-e2e.test.js` / `test/admin-session-e2e.test.js`。**原型未同步**（生产独有能力，设计稿不含该页） |
 | 调用日志列（渠道名 / 列序 / 搜索 / 导出 / 客户端标签） | **v1.13.2**：生产 `adapt()` 59（日志条目新增 `n` = 渠道显示名，`c` 仍保留 id）+ `logRows` 1198（搜索判据 `l.m+l.n+l.c+l.id`）+ `drawLogTable` 1210（表头 请求 ID → 渠道 → 模型，渠道格 `esc(l.n)`）+ `openLog` 1238（抽屉渠道显示名）+ `exportLogs` 468（CSV 渠道列写显示名）。**v1.18.11 增「客户端」列**：`adapt()` 再解析 `cl`（`r.client`，UA 标签，服务端下发）+ `drawLogTable` 模型之后画 `esc(l.cl)` 的 chip（点击 → `stFilter.client` 赋值 + `go('stats')`，行内 `stopPropagation` 不触发行点击）+ `openLog` 抽屉补客户端键值。**原型已同步渠道列**（`console-redesign.html` 的 `vLogs` 1478 表头 / 1482 渠道格 / 1507 抽屉，就地查 `DATA.channels`；**客户端列原型未同步**，生产独有） |
-| 数据统计页（来源 IP 态势 / 封禁） | **v1.18.11**：生产 `NAV` 343（监控 → 数据统计，调用日志之后）+ `vStats` 1289 + `stFilter` 1287 / `stClients` 1288 / `openIpStats` 1363 / `refreshStats` 1396 / `banIp` 1399 / `unbanIp` 1403 + `ACTS` 的 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip`。唯一数据源 `GET /admin/api/stats`（随 `loadAll` 拉取，单独兜底）；封禁走 `POST /admin/api/bans`、解封 `DELETE /admin/api/bans/{ip}`（`confirm()` 两步确认）；行点击开 `openIpStats` 抽屉。**UA 标签是外部可控值：必须 `esc()`，且绝不进控制逻辑**。**原型未同步**（生产独有能力，设计稿不含该页）；后端语义见 `test/ip-stats-ban-e2e.test.js` |
+| 数据统计页（来源 IP 态势 / 封禁） | **v1.18.11**：生产 `NAV` 343（监控 → 数据统计，调用日志之后）+ `vStats` 1289 + `stFilter` 1287 / `stClients` 1288 / `openIpStats` 1363 / `refreshStats` 1396 / `banIp` 1399 / `unbanIp` 1403 + `ACTS` 的 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip`。唯一数据源 `GET /admin/api/stats`（随 `loadAll` 拉取，单独兜底）；封禁走 `POST /admin/api/bans`、解封 `DELETE /admin/api/bans/{ip}`（`confirm()` 两步确认）；行点击开 `openIpStats` 抽屉。**UA 标签是外部可控值：必须 `esc()`，且绝不进控制逻辑**。**原型未同步**（生产独有能力，设计稿不含该页）；后端语义见 `test/ip-stats-ban-e2e.test.js`。**v1.18.12 布局整改**（用户确认的原型 `_st_preview.html` 落地）：KPI 居中 + 列宽定量 + 占位符「—」居中（真名左对齐）+ 表头 `.t-c` 居中，样式在 `build/extra.css` 82–105，守卫在 `test/console-state.test.js` §13 |
 | 测试模型弹窗（停用渠道可测 + 结果可读） | **v1.13**：生产 `openTestModels` 2373（不再按 `!c.on` 跳过停用渠道；停用渠道带「已停用」标记 + 说明文案，全局模式启用渠道排前）+ `testRowVerdict` 2430（结果三档：通过 / **空回复** / 失败；判定为纯函数，`test/console-state.test.js` §6 跑真值表）+ `chName` 2424（结果行写渠道显示名）+ `runTests` 2437（逐条带 `channelId`，不走调度；每行带模型名与中文结论，汇总分开数三档）。后端：`/admin/api/test` 带 `channelId` 时不看 `enabled`；自动探测 `probeAll` 默认跳过停用渠道、手动「全部重探测」显式 `includeDisabled:true`（见 README「Web 控制台」一节的「自动 vs 手动的边界」）。`test/console-state.test.js` §5/§6 真跑该弹窗与结果渲染做回归。**原型未同步**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`（设计稿演示逻辑，不随生产走；原型有 3 个 demo 停用渠道，点它们仍会看到空列表） |
 | 新增交互 / 按钮（click / change 动作） | **v1.18.7**：动作进 `data-act`（change 走 `data-change`）+ 事件委托块（app.js `ACTS` 2516 + click 2566 / change 2572 两个 `document` 委托监听；模板与注册表**双向一一对应**，见 §0.2 事件委托块行）。**禁止内联 `onclick=`/`onchange=`/`onkeydown=` 属性**（v1.18.7 已全量清零；外部可控 ID 一律 `data-*` + `esc()`，绝不拼进事件代码字符串）——`test/security-headers-e2e.test.js`（内联清零 + 双向覆盖守卫）与 `test/console-state.test.js`（真实委托块桩上真跑）会拦回潮。**复用既有控件不算新增交互**（v1.18.8 第四张设置卡零 `ACTS` 改动就是范例；v1.18.11 统计页的封禁/解封按钮就是走 `data-act` + `data-t` 的标准加法） |
 
@@ -520,8 +528,8 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 10. **导入解析要容错**：`parseCodexUnits` 兼容扁平 / `credentials` / `accounts[]` 三种结构；`parseGsSessionId` 用正则从任意文本里捞 `uuid:hex`。改这里务必保留容错。
 11. **`</style>` 是 CSS 里的禁忌字面量**：HTML 解析 `<style>` 是裸文本模式，注释里出现结束标签也会**立刻闭合元素**，后面整段 CSS 会变成页面正文。写构建 banner / CSS 注释时绝不能出现它（`build/build.js` 有自检兜底，但别指望它替你找语义错误）。
 12. **`console.html` 是产物，不是源文件**：直接手改会在下次 `node build/build.js` 时被静默覆盖。改视觉去 `console-redesign.html` 的 `<style>`，改生产逻辑去 `build/app.js`，改完必须重新构建。
-13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 **+689**（JS，v1.18.8 起；v1.18–v1.18.7 曾是 +686，v1.9.1–v1.17 曾是 +666）。增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会让 JS 偏移改变（head/shell 已有构建期行数守卫）；**`extra.css` 在拼接序里位于 `app.js` 之前，它每增删 1 行 JS 偏移就整体 ±1，而 CSS 偏移不受影响**。
-14. **表格表头右对齐要压权重**：`table.tbl thead th{text-align:left}` 权重是 (0,1,3)，高于 `.t-r` 的 (0,1,0)，所以 `th` 上的 `.t-r` **默认不生效**，会出现"表头左对齐、数值右对齐"的错位。必须用 `table.tbl thead th.t-r` 这种更高权重的选择器（原型 300 行与 `.t-r` 并排写在同一行，就是为了不增行数、避免锚点整体漂移）。新增右对齐列时务必肉眼确认表头也对齐了。
+13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 **+714**（JS，v1.18.12 起；v1.18.8–v1.18.11 曾是 +689，v1.18–v1.18.7 曾是 +686，v1.9.1–v1.17 曾是 +666）。增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会让 JS 偏移改变（head/shell 已有构建期行数守卫）；**`extra.css` 在拼接序里位于 `app.js` 之前，它每增删 1 行 JS 偏移就整体 ±1，而 CSS 偏移不受影响**。
+14. **表格表头右对齐/居中要压权重**：`table.tbl thead th{text-align:left}` 权重是 (0,1,3)，高于 `.t-r`/`.t-c` 的 (0,1,0)，所以 `th` 上的 `.t-r`/`.t-c` **默认不生效**，会出现"表头左对齐、数值右对齐/居中"的错位。必须用 `table.tbl thead th.t-r` / `table.tbl thead th.t-c` 这种更高权重的选择器（原型 299 行的 `.t-r`、300 行的 `.t-c` 都把补权重规则并排写在同一行，就是为了不增行数、避免锚点整体漂移；`.t-c` 那条是 v1.18.12 数据统计页布局整改时补的）。新增右对齐/居中列时务必肉眼确认表头也对齐了。
 15. **剪贴板只在安全上下文可用**：`navigator.clipboard` 在 `http://` + 局域网 IP 下是 `undefined`，而可选链 `?.` 会把整条链**静默短路**——既不复制也不报错，看起来就是"按钮点了没反应"。`copyText` 因此用 `document.execCommand('copy')` 兜底，别删。
 16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" data-act="copy"`（v1.18.7 起事件全走委托，`onclick=` 内联属性已清零——往事件代码字符串里拼外部值的整类坑随之消失；`esc()` 仍守一切 `data-*` 属性值）。
 17. **「条 + 独立图例」必然错位，标签必须贴在自己那一段下面**：份额带的段是**单向排列**（左→右按顺序），而图例若用 `auto-fit` 网格则是「左→右、换行再左→右」——候选一多、一换行，读者就没法把图例项对回它的段。更糟的是真机上绝大多数候选健康系数 =1（色块全是同一个绿），连颜色都认不出谁是谁（v1.8.1 只修了行内基线，没修"对不上"这个根本问题）。**v1.9 的处置**：改成一候选一列（`.aw-col`，列宽 = 份额），列内上方 `.aw-seg` 色带段、下方 `.aw-cap` 直接挂名字与百分比 ——"这段是谁的"不用去别处找。**新增任何"带 + 图例"组件前先问：换行后读者还能把图例对回它的段吗？**
@@ -534,7 +542,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 **构建与产物**
 
-- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置（v1.18.8 四张卡）+ 密钥管理页（含会话语义装配守卫）+ **事件委托（真实委托块桩上真跑分发）**的自动化回归，**198 项断言**；改了任何带输入框的页面都要跑）
+- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置（v1.18.8 四张卡）+ 密钥管理页（含会话语义装配守卫）+ **事件委托（真实委托块桩上真跑分发）** + **数据统计页布局（v1.18.12：KPI 居中 / `.st-fixed` 列宽 / 占位符 `.t-c-ph` 居中）**的自动化回归，**208 项断言**；改了任何带输入框的页面都要跑）
 - [ ] `node test/security-headers-e2e.test.js` 全绿（渲染层裸插值 + 内联事件属性清零 + `ACTS` 双向覆盖守卫，**69 项断言**；改了任何渲染/交互代码都要跑）
 - [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
 - [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）

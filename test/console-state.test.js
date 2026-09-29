@@ -1220,6 +1220,49 @@ function testStats() {
   const dh = raw.drawer();
   check('来源详情抽屉：24 小时分布 + 封禁按钮 data-t 带 IP（开的是未封禁行）',
     dh.includes('24 小时分布') && dh.includes('data-act="ban-ip" data-t="198.51.100.5"'), dh && dh.slice(0, 200));
+
+  /* ── v1.18.12 布局整改守卫：KPI 居中 / 列宽定量 / 占位符居中 / 表头居中 ──
+     用户确认的原型（_st_preview.html）落进生产代码后，用这些断言把它钉住，
+     避免下次改渲染时又退回"内联字号 + auto 列宽 + 数值右对齐"的旧样子。 */
+  check('★ KPI 四卡走 .st-kpi + .st-kpi-num（居中），不再内联 font-size:22px',
+    (f.html.match(/class="card st-kpi"/g) || []).length === 4 &&
+    (f.html.match(/class="mono st-kpi-num"/g) || []).length === 4 &&
+    !f.html.includes('style="font-size:22px;font-weight:700"'));
+  check('★ 来源明细表走 .st-fixed + 9 列 colgroup（定量列宽，替掉 auto 布局的挤/空失衡）',
+    f.html.includes('class="tbl st-fixed"') && (f.html.match(/<col style="width:/g) || []).length === 9);
+  check('★ 表头居中：数值列改 t-c（来源 IP/敲门/会话/峰值并发/Token/24 小时/最近）',
+    ['来源 IP', '敲门', '会话', '峰值并发', 'Token 入/出', '24 小时', '最近']
+      .every(h => f.html.includes('<th class="t-c">' + h + '</th>')));
+  check('★ 数值单元格改 t-c，统计页旧的 t-r 已清零',
+    f.html.includes('class="t-c mono"') && !f.html.includes('class="t-r mono"'));
+  check('★ 分区标题走 .st-sec（与卡片 16px 对齐，不再贴边框）',
+    (f.html.match(/class="sec-title st-sec"/g) || []).length === 2);
+  check('★ 按模型表走 .st-models，次数/占比表头居中',
+    f.html.includes('class="tbl st-models"') &&
+    f.html.includes('<th class="t-c">次数</th>') && f.html.includes('<th class="t-c">占比</th>'));
+
+  /* 占位符「—」自己居中，真实模型名/客户端标签仍左对齐 —— 这是本次整改的核心诉求 */
+  const ph = mk({ global: full.global, ips: [
+    { ip: '10.0.0.7', calls: 9, tokIn: 0, tokOut: 0, cur: 0, peak: 1, bannedHits: 9, banned: true,
+      sessions: 512, sessSat: true, clients: [], models: [], modelCount: 0,
+      buckets: buckets.slice(), lastSeen: 1700000123000, since: 1700000000000 },
+  ], banned: ['10.0.0.7'], models: [], trustedProxy: '', since: 1700000000000 });
+  check('★ 占位符「—」走 .t-c-ph（自己居中），真实名字不套（左对齐才好看）',
+    ph.html.includes('class="muted t-c-ph">—</span>') &&
+    !f.html.includes('t-c-ph') && f.html.includes('m-a') && f.html.includes('curl'));
+
+  {
+    const built = fs.readFileSync(path.join(__dirname, '..', 'console.html'), 'utf8');
+    check('★ 产物里 .st-* 与 .t-c-ph 规则在（补在 extra.css）',
+      built.includes('.st-kpi-num{') && built.includes('table.tbl.st-fixed{') &&
+      built.includes('table.tbl.st-models th:first-child') &&
+      built.includes('.st-sec{padding:0 16px}') && built.includes('.t-c-ph{display:block;text-align:center}'));
+    check('★ 表头居中补了权重（与设计稿 .t-c 同款，否则输给表头基样式 text-align:left）',
+      built.includes('table.tbl thead th.t-c{text-align:center}'));
+    const legacy = f.html.replace(/class="card st-kpi"/g, 'class="card"').replace(/class="t-c mono"/g, 'class="t-r mono"');
+    check('对照组：旧写法（无 st-kpi / 数值 t-r）不满足守卫 → 本用例抓得住',
+      !legacy.includes('class="card st-kpi"') && legacy.includes('class="t-r mono"'));
+  }
 }
 
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */

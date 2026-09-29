@@ -78,3 +78,28 @@
 /* 四张卡两排各两张：只用 .grid 的间距与 display，列数自己定（通用 .g4 是四连排，原型别处在用，不能改它） */
 .set-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media(max-width:900px){.set-cards{grid-template-columns:1fr}}
+
+/* ── 数据统计页 .st-*（v1.18.12 布局整改：KPI 居中 / 列宽定量 / 占位符居中） ──────────
+   生产独有组件（设计稿不含），复用全站令牌，不引入新颜色。
+   注意：extra.css 在拼接序里位于 app.js 之前，本段每增删 1 行，console.html 的 JS 行号偏移
+   整体 ±1 —— 增删后必须同步 AGENTS.md §1.2 与 docs/frontend-code-map.md 的偏移量。 */
+/* ① KPI 四卡内容居中（四卡等高，避免内容长短不一时参差） */
+.st-kpi-row{align-items:stretch}
+.st-kpi{text-align:center}
+.st-kpi .card-bd{display:flex;flex-direction:column;justify-content:center}
+.st-kpi-num{font-size:22px;font-weight:700;line-height:1.35;margin:3px 0}
+.st-kpi-unit{font-size:14px;font-weight:500;color:var(--tx-3)}
+/* ② 来源明细：定量列宽（配 colgroup 百分比），替掉 auto 布局的挤/空失衡 */
+table.tbl.st-fixed{table-layout:fixed;min-width:1000px}
+/* ③ 按模型：模型/次数按内容收紧，占比吃掉剩余宽度 */
+table.tbl.st-models th:first-child,table.tbl.st-models td:first-child{width:1%;white-space:nowrap}
+table.tbl.st-models th:nth-child(2),table.tbl.st-models td:nth-child(2){width:1%;white-space:nowrap}
+/* ④ 首/末列内边距与卡片 16px 对齐；分区标题同款留白（原来贴卡片边框） */
+table.tbl.st-fixed th:first-child,table.tbl.st-fixed td:first-child,
+table.tbl.st-models th:first-child,table.tbl.st-models td:first-child{padding-left:16px}
+table.tbl.st-fixed th:last-child,table.tbl.st-fixed td:last-child,
+table.tbl.st-models th:last-child,table.tbl.st-models td:last-child{padding-right:16px}
+.st-sec{padding:0 16px}
+/* ⑤ 占位符「—」自己居中：列仍左对齐（模型名/客户端标签左对齐才好看），
+      只有这一格是占位符时才居中 —— 这就是「— 居中、真名左对齐」的实现方式 */
+.t-c-ph{display:block;text-align:center}
