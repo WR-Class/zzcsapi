@@ -3050,8 +3050,9 @@ function ipStatsSnapshot() {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   for (const [k, v] of SEC_HEADERS) res.setHeader(k, v);
-  // 管理面与探针的响应不该被任何中间层缓存（含密钥与否都别留在缓存里）
-  if (url.pathname.startsWith('/admin/api/') || url.pathname === '/healthz') res.setHeader('Cache-Control', 'no-store');
+  // 管理面、探针与 /metrics 的响应不该被任何中间层缓存（含密钥与否都别留在缓存里；
+  // /metrics 是外部复测 N-02 补上的——它的 401/404 之前漏了 no-store）
+  if (url.pathname.startsWith('/admin/api/') || url.pathname === '/healthz' || url.pathname === '/metrics') res.setHeader('Cache-Control', 'no-store');
   // Host/Origin 门（v1.18.10，V-07）：拦在一切路由之前（421/403 也带齐上面的安全头）
   if (!hostAllowedForV07(req.headers.host)) {
     return sendJson(res, 421, { error: { message: 'misdirected request: host not in allowlist (set ZZCSAPI_ALLOWED_HOSTS for proxy/public domains)', type: 'bad_request' } });

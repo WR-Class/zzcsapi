@@ -11,7 +11,9 @@
    ④ 固定子网（网桥网关 IP 恒定）+ README 写的 trustedProxy 与之逐字一致——子网漂移 =
      trustedProxy 静默失效（来源统计悄悄退回一行网桥 IP）。
    另守两条现场教训：nginx 不是 Windows 服务 → 自启脚本必须存在且幂等；
-   Windows PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1 → 脚本必须纯 ASCII（中文注释会让它语法错）。 */
+   Windows PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1 → 脚本必须纯 ASCII（中文注释会让它语法错）。
+   2026-10-04 外部复测（交付包 retest-after-fix.md）处置增补：server_tokens off（N-01，
+   Server 头不报版本号——版本号是给扫描器的免费情报）。 */
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
@@ -71,6 +73,8 @@ check('nginx client_max_body_size 有上限（网关自身不设限，这里是�
   /client_max_body_size\s+\d+m/.test(NGINX));
 check('nginx 上游长连接（proxy_http_version 1.1 + Connection ""）',
   NGINX.includes('proxy_http_version 1.1;') && NGINX.includes('proxy_set_header Connection "";'));
+check('nginx server_tokens off（Server 头不报版本号——外部复测 N-01：版本号是给扫描器的免费情报）',
+  NGINX_LIVE.includes('server_tokens off;'));
 
 /* ── 自启脚本（nginx 不是 Windows 服务：重启后不启动 = 8787 没人监听，客户端全连不上）── */
 check('自启脚本存在且幂等（已在 8787 监听时静默退出）',

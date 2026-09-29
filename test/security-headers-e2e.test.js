@@ -72,8 +72,8 @@ const freePort = () => new Promise((res, rej) => {
   const firstBranch = SRC.indexOf("url.pathname === '/'", handlerIdx);
   check('响应头在**任何分支之前**统一设置（含 401/404 与所有 API 响应）',
     setIdx > handlerIdx && setIdx < firstBranch, { setIdx, firstBranch });
-  check('管理面与 /healthz 加 no-store',
-    /url\.pathname\.startsWith\('\/admin\/api\/'\) \|\| url\.pathname === '\/healthz'\) res\.setHeader\('Cache-Control', 'no-store'\)/.test(SRC));
+  check('管理面、/healthz 与 /metrics 加 no-store（/metrics 是外部复测 N-02 补上的）',
+    /url\.pathname\.startsWith\('\/admin\/api\/'\) \|\| url\.pathname === '\/healthz' \|\| url\.pathname === '\/metrics'\) res\.setHeader\('Cache-Control', 'no-store'\)/.test(SRC));
   /* v1.18.6 第三批：CSP 从"不得偷偷加"翻成"按设计加上、值逐字核对"。
      unsafe-inline 是单文件控制台的既定代价（脚本/样式内联）；字体走小米 CDN（font.src 与 cdn-file）；
      兜底在 connect-src 'self'（XSS 偷到会话 cookie 也发不出去）与 frame-ancestors/base-uri/form-action。 */
@@ -202,6 +202,11 @@ const freePort = () => new Promise((res, rej) => {
       JSON.stringify(Object.keys(hzBody).sort()) === '["ok"]' && hzBody.ok === true, hzBody);
     const st = await fetch(`http://127.0.0.1:${GW}/admin/api/status`, { headers: { Authorization: 'Bearer ' + AD_KEY } });
     check('/admin/api/* 带 no-store（含密钥与否都不该留在任何缓存里）', st.headers.get('cache-control') === 'no-store', st.headers.get('cache-control'));
+    const mx = await fetch(`http://127.0.0.1:${GW}/metrics`);
+    await mx.text();
+    check('★ /metrics 未鉴权 401 也带 no-store（外部复测 N-02：401/404 全态都不落任何中间层缓存）',
+      mx.status === 401 && mx.headers.get('cache-control') === 'no-store',
+      { status: mx.status, cc: mx.headers.get('cache-control') });
     const stText = await st.text();
 
     const cp = await fetch(`http://127.0.0.1:${GW}/console`);

@@ -79,6 +79,26 @@ v1.18.9 起只回答"活着吗"；守卫断言在 `test/security-headers-e2e.tes
 - **双实例疑云解除**：交付包复测待办第 4 条担心"旧实例未升级导致修复等于没修"——实测当年观察到的 `::1` PID 7272 是 **wslrelay**（Docker Desktop 的 localhost 中继，不是第二个网关进程），`::` PID 9220 是 `com.docker.backend`；两者是**同一个容器端口的两条发布路径**。唯一服务实例 = zzcsapi 容器，其 `console.html` MD5 与仓库一致（54e3da…）✓
 - **复查后的追加决策（2026-09-29）**：台账里 V-07"已知未修"经用户复核改判为**加强**（有缓解 ≠ 安全）→ 第六批（v1.18.10）落地；V-11 维持接受（威胁模型边界论证见台账行）。
 
+## 外部复测处置（2026-10-04，交付包 retest-after-fix.md）
+
+> **交付包存放位置（补登记）**：本机**桌面**的 `ZZCSAPI-渗透测试交付` 文件夹（`reports/` 五件：pentest-report / remediation-guide / authenticated-readonly-audit / retest-after-fix / README；`logs/` `artifacts/` `notes/` 为证据）。此前台账只引内容不记位置，接手者要全盘搜索才能找到——2026-10-04 补记在此（含本机用户名的完整路径不写进公开仓库）。
+
+复测结论（黑盒只读，与基线逐项对比）：**V-01 / V-02（C-01/C-02） / V-03 / V-06 / V-07 / V-08 全部确认已修**；V-04 大部分（残余 = HSTS/COOP/CORP + `Server` 版本号，处置见下）；V-05 判"未修复"（**维持接受**，见下）；V-09 / V-11 不在其复测范围内（**台账既有处置不变**：V-09 是一次性引导行为，且本部署两把密钥都来自 `.env`、首启打印路径根本不激活；V-11 是 admin-only 面）；V-10 维持 RA-01。复测另注"已鉴权端点无限流"——通用 `rateLimit` 是运行期开关（默认关），记录在案不处置。新增 5 项小发现（N-01~N-05），处置：
+
+| 发现 | 处置 |
+| --- | --- |
+| N-01 `Server: nginx/1.28.0` 暴露版本号 | **已修**：`deploy/nginx-reverse-proxy.conf` 加 `server_tokens off`（守卫进 `test/reverse-proxy-config.test.js`） |
+| N-02 `/metrics` 401 无 `Cache-Control` | **已修**：server.js 响应头收口从 `/admin/api/`+`/healthz` 扩到 `/metrics`（401/404 全态 `no-store`；守卫进 `test/security-headers-e2e.test.js`）。修在网关收口而非 nginx 全局加——全局 `no-store` 会把 `/console` 壳自己的缓存策略一并改掉 |
+| N-03 HSTS / COOP / CORP 缺 | **推迟到 TLS 里程碑**（与会话 cookie 刻意无 `Secure` 同一姿势；复测报告自己也建议"对外启用 TLS 时一并添加"） |
+| N-04 CSP 引外部字体 CDN（供应链/隐私面） | **维持**（AGENTS §2 的 MiSans 官方 CDN 是刻意约定；自托管子集化是独立工作项，风险在此记录在案） |
+| N-05 内联脚本无 nonce，CSP 需 `'unsafe-inline'` | **维持**（单文件交付是项目前提；XSS 防线 = 转义纪律 + `security-headers-e2e` 守卫；脚本外置是独立工作项） |
+
+**V-05 维持接受，但修正复测报告的一处事实**：报告称"8787 入站放行规则：无（仍靠默认阻止策略兜底）"——本机实测相反，Windows 防火墙存在 nginx.exe 的**显式放行规则**（公用档；nginx 首次启动弹窗时点了允许，否则局域网客户端根本连不进来）。真实边界 = 路由器 NAT + 这条放行规则；接受理由不变：用户 2026-10-04 确认**单机家用网络**，且 `0.0.0.0:8787` 是功能需要（局域网接入 = per-IP 来源统计的前提）。将来接共享网络或上公网时，先收紧防火墙档位（仅专用网络放行）或把 nginx 收到 `listen 127.0.0.1:8787`。
+
+复测"特别提示"（nginx 层引入后改响应头要**两层一起看**，别"改了网关却被 nginx 覆盖"或反之）：已落 README「方式三」纪律清单与 `test/reverse-proxy-config.test.js` 的 conf↔compose↔README 一致性守卫。
+
+实测（2026-10-04，curl）：`Server: nginx`（无版本号）；`/metrics` 无密钥 → **401 + `Cache-Control: no-store`**。
+
 ## 其余建议的处置：刻意不做
 
 **强制密钥长度/熵（不符合就拒绝启动）与多用户/角色/审计**：本项目定位是**单用户自托管**，首启随机生成密钥、示例默认值只服务本地开发，把这两条做进来会破坏开箱即用（外部渗透测试报告的建议据此驳回，理由记在此处以免重复提）。

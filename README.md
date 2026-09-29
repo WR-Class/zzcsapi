@@ -70,7 +70,7 @@ D:\DSHXM\nginx-rt\nginx.exe -p D:\DSHXM\nginx-rt\ -c D:\DSHXM\ZZCSAPI\deploy\ngi
 - **trustedProxy 填网桥网关（172.28.137.1），不是宿主机的局域网 IP**——网关眼里"nginx 转进来的连接"源地址就是这个。compose 用 `${ZZCSAPI_SUBNET:-172.28.137.0/24}` 固定子网就是为了让它恒定：不固定则每次建网换网段，采信静默失效（统计又退回一行）。
 - **nginx 不是 Windows 服务**：重启电脑后不会自己起来，8787 没人监听 = 所有客户端连不上。用 `deploy/start-reverse-proxy.ps1`（幂等启动）登记开机自启，撤销就是删掉那条启动项——命令见脚本头部注释。
 - **别把 nginx 放进容器**：容器里看到的源地址同样会被 Docker NAT 折叠成网桥 IP，等于白搭。
-- **三条纪律**（XFF **覆写**为 `$remote_addr` 而非追加、转发口只绑回环、`proxy_buffering off` 否则 SSE 卡死）写在 [deploy/nginx-reverse-proxy.conf](deploy/nginx-reverse-proxy.conf) 头部，由 `test/reverse-proxy-config.test.js` 守着，改坏当场报错。
+- **四条纪律**（XFF **覆写**为 `$remote_addr` 而非追加、转发口只绑回环、`proxy_buffering off` 否则 SSE 卡死、`server_tokens off` 不给扫描器报版本号）写在 [deploy/nginx-reverse-proxy.conf](deploy/nginx-reverse-proxy.conf) 头部，由 `test/reverse-proxy-config.test.js` 守着，改坏当场报错。改响应头记得 **nginx 与网关两层一起看**（外部复测的特别提示：别改了网关却被 nginx 盖住，或反之）。
 - **回到默认直连模式**：`.env` 里删掉 `ZZCSAPI_PUBLISH`（或改回 `8787:8787`）→ `docker compose up -d`，并清空 `security.trustedProxy`。
 
 ### 方式二：裸 Node（18+）
@@ -150,7 +150,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 34 个测试文件 · 1674 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 34 个测试文件 · 1676 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
