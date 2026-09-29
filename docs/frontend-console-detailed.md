@@ -191,7 +191,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - 表单栅格用 `.field-row > .field`，窄屏自动换行
 - **生产侧对应实现**：`build/shell.html` 里只有**一个** `#mask`（49 行），内容由 `modal(html, wide)` 动态注入——
   渠道表单、四类导入、测试模型、模型编辑器全部复用这一个容器。
-  `#mask` **不绑 `onclick`**，与原型策略一致；`Esc` 由 `build/app.js` 2152 的全局 `keydown` 监听兜底
+  `#mask` **不绑 `onclick`**，与原型策略一致；`Esc` 由 `build/app.js` 2350 的全局 `keydown` 监听兜底
   （优先关弹窗，其次关抽屉）。
   > 早期版本曾有 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 四个独立弹窗，重构时已统一收敛掉。
   > **新增弹窗不要再建新 `.mask`**，直接用 `modal()` 注入。
@@ -1358,6 +1358,16 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **验证**：新增 `test/admin-session-e2e.test.js`（**63 项断言**：装配守卫 11（常量、`?key=` 只在客户端面块内、会话端点在 authGate 之前、登录进限流、DELETE/405、轮换清会话+补发、清扫 `unref`、CSP 存在）+ 纯函数真值表（`readSessionToken` 7 态、`sessionValid` 懒过期、`sessionCookieValue` 四旗标**刻意无 Secure**、`newSessionToken` 逐出两场景（先清过期不过度逐人 / 全活的逐最旧））+ 真链路（无凭据 401、错密钥 401 不发 cookie、登录 200 旗标齐全、只带 cookie 200、Bearer 保留、管理面 `?key=` 401 / 客户端面 200、两枚会话独立、退出只杀自己、CSP 真实下发、cookie 轮换管理密钥成功且补发新会话（旧 token 立即死、网关密钥不受牵连）、重启后会话全掉线而新 Bearer 仍活（config.auth 落库）））。`test/security-headers-e2e.test.js` 增第三批（CSP 守卫从"不得偷偷加上"翻向**逐字等于设计值**、每条真链路核 `content-security-policy`、管理面 `?key=` 401 / 客户端面 200 对照）→ **51 通过 0 失败**；`test/console-state.test.js` §11 重写为**会话语义**（api() 无 Authorization、登录门 POST session、无 `__ZZ_HAS_KEY__`、轮换后无任何浏览器存储写入）→ **172 项**；`test/key-rotation-e2e.test.js` 增轮换清会话/补发新会话语义 → **85 项**。`node build/build.js` 通过（产物 **173,707 字符**；设计 CSS 33,647 · 补充 CSS 4,587 · JS 132,093）；全量回归 **31 文件 / 0 失败**。
 
 **残留（明确记下）**：① 会话表在内存——网关重启全部掉线（重开控制台粘一次密钥即可，脚本走 Bearer 不受影响）；② 公网 TLS 部署需在反向代理层终止 TLS 并保持 `HttpOnly`/`SameSite` 语义（cookie 刻意无 `Secure`）；③ `'unsafe-inline'` 是单文件控制台的必要妥协，真正的兜底是 `connect-src 'self'`（外发被掐死）；将来若把控制台拆成外链资源，应同步收紧 CSP 并更新 `test/security-headers-e2e.test.js` 的逐字守卫。
+
+### 8.30 v1.18.7 第四批安全整改：彻底消灭内联事件处理器（2026-10-03，对象 `build/app.js` + `build/shell.html` + 产物 `console.html` + `test/security-headers-e2e.test.js` / `test/console-state.test.js` 增章）
+
+**问题**：v1.18.3 给所有内联 `onclick` 参数补了 `esc()`，堵死属性层逃逸；但仍有 16 处把渠道 ID/请求 ID 拼进 `onclick="fn('${id}')"` 的写法，依赖"ID 里不出现引号"这一现状（导入渠道理论上可构造），剩 JS 字符串层的理论风险。其余 50+ 处是零参数/静态参数内联属性——注入风险为零，但"内联事件属性"这个形态本身就该消灭：AGENTS §2 渲染层转义约束当年就预告了这次改造。
+
+**处置**：72 处内联事件属性全部清零（`build/app.js` 71 处 + `build/shell.html` 抽屉遮罩 1 处）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`，**绝不拼进事件代码字符串**），`document` 上两个委托监听统一分发；`ACTS` 表 44 个动作与模板**双向一一对应**。行为保持：点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，原 8 处 `stopPropagation` 全部拆除）；`#impMenu` 的按钮本就在 `.menu-wrap` 内，1802 行的"点外部关菜单"监听不受影响；8 秒轮询整页重绘**不用重挂监听**。登录门的 Enter 改为 `showKeyGate` 内程序化挂接；导入文件框带 `data-change="import-files"` 走同一条委托路。事件委托块登记在 app.js **2367–2431**（`ACTS` 2374 + click 2420 / change 2426 委托监听），`showKeyGate`/`logout`/启动探针/`tick`/`boot` 尾段锚点整体 **+65**（2436 / 2465 / 2469–2473 / 2475 / 2485）；JS 偏移 **+686 不变**（head/shell/extra.css/设计稿行数未动）。app.js 2439→2505 行，产物 173,707→**176,449 字符**。
+
+**验证**：`test/security-headers-e2e.test.js` 增第四批守卫（app.js / shell.html / 产物三处内联属性必须为 0、产物 `data-act` 按钮真实存在、委托接线进产物、`ACTS` 与模板双向一一对应、外部可控 ID 只走 `data-*` 属性、抽屉遮罩也走 `data-act`）→ **57 通过 0 失败**；`test/console-state.test.js` 增**事件委托**一节（把产品真实委托块原样抠出来在桩函数上真跑：click 把 `dataset.id` 送进动作函数、嵌套只触发最近那枚、未知动作与空白点击静默不炸、`openTestModels`/`openChannelForm` 参数形状保留、数值走 `+dataset.idx`、change 送 `importFiles`、双向覆盖；41 个动作函数名刻意硬编码，`ACTS` 引用未登记函数名会当场报错）→ **183 项断言**。全量回归 **31 文件 / 1470 断言 / 0 失败**。
+
+**纪律（AGENTS §2 已同步为硬约束）**：新增交互一律 `data-act` + `ACTS` 注册，禁止再写内联 `onclick=`/`onchange=`/`onkeydown=` 属性——两份守卫会拦回潮。
 
 ---
 

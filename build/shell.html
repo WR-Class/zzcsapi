@@ -41,8 +41,8 @@
   </div>
 </div>
 
-<!-- 抽屉遮罩：点击关闭抽屉（弹窗遮罩是 #mask，那个刻意不响应点击，见下方注释） -->
-<div class="scrim" id="scrim" onclick="closeDrawer()"></div>
+<!-- 抽屉遮罩：点击关闭抽屉（弹窗遮罩是 #mask，那个刻意不响应点击，见下方注释）；v1.18.7 起走 data-act 事件委托（app.js 的 ACTS），全站不再有内联事件属性 -->
+<div class="scrim" id="scrim" data-act="close-drawer"></div>
 <aside class="drawer" id="drawer"></aside>
 
 <!-- 遮罩不响应点击关闭：拖选复制时鼠标容易滑出弹窗，误触会打断操作。关闭请用右上角 ×、取消按钮或 Esc -->

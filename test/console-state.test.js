@@ -1041,6 +1041,104 @@ async function testKeys() {
   }
 }
 
+/* ══ §12 事件委托（v1.18.7）：内联事件处理器清零后的全站唯一事件入口 ══
+   内联 onclick=/onchange=/onkeydown= 属性已全部换成 data-act / data-change + document 委托。
+   本节把产品里**真实的委托块**（ACTS 表 + click/change 两个 document 监听）原样抠出来，
+   在桩函数上真跑分发：参数真的从 dataset 到达动作函数；嵌套点击只触发最近那枚
+   （行内按钮不再冒泡去触发行/卡片自己的动作——stopPropagation 成为历史）；未知动作与
+   空白点击静默不炸；change 走同一条路；数值参数走 +el.dataset.idx。另含双向覆盖守卫：
+   模板里用到的每个 data-act/data-change 都注册过，注册过的都被模板用到。
+   41 个动作函数名刻意硬编码在本节：ACTS 里新增引用了不在此列的函数名时，
+   "逐个真调"会当场 ReferenceError，逼着同步本表与产品。 */
+function testDelegation() {
+  const SHELL = fs.readFileSync(path.join(__dirname, '..', 'build', 'shell.html'), 'utf8');
+  const start = src.indexOf('const ACTS={');
+  const chgIdx = src.indexOf("document.addEventListener('change'", start);
+  const end = src.indexOf('});', chgIdx);
+  if (start < 0 || chgIdx < 0 || end < 0) throw new Error('build/app.js 里找不到事件委托块（ACTS / document 监听）');
+  const block = src.slice(start, end + 3);
+
+  const names = ['exportUsage','recheckAll','go','openChannel','openLog','openModel','toggleMenu',
+    'openImport','openTestModels','openChannelForm','toggleCh','closeDrawer','toggleDrawerKey',
+    'copyChKey','reprobe','delChannel','exportModels','copyModels','copyText','copyCurl','clearUsage',
+    'exportLogs','drawLogTable','pgClear','pgCopyCurl','copyAllEndpoints','copyGwKey','showKeyHelp',
+    'closeModal','toggleKeyField','addModelRow','probeUpstream','saveChannel','testRowModel',
+    'delModelRow','probeSelectAll','probeClearSel','probeAddSelected','importFiles','doImport','runTests'];
+  const calls = [];
+  const stubs = {}; names.forEach(n => stubs[n] = (...a) => { calls.push([n].concat(a)); });
+  const doc = {
+    listeners: {},
+    addEventListener(kind, fn) { this.listeners[kind] = fn; },
+    getElementById() { return { click() {} }; },
+  };
+  const ACTS = new Function(...names, 'document', block + '\n;return ACTS;')(
+    ...names.map(n => stubs[n]), doc);
+
+  check('委托块给 document 挂了 click 与 change 两个监听',
+    typeof doc.listeners.click === 'function' && typeof doc.listeners.change === 'function');
+  check('ACTS 注册了 44 个动作（与模板用到的动作种类数一致）', Object.keys(ACTS).length === 44,
+    Object.keys(ACTS).length);
+
+  /* 逐个真调：每个注册动作都解析得到底层函数（引用了列表外的函数名会当场炸） */
+  const probeEl = { dataset: {}, getAttribute() { return 'open-model'; } };
+  let allResolvable = true, resolveErr = '';
+  for (const k of Object.keys(ACTS)) {
+    try { ACTS[k](probeEl); } catch (e) { allResolvable = false; resolveErr = k + ': ' + e.message; break; }
+  }
+  check('ACTS 的动作逐个真调全部可达（引用未登记的函数名会当场报错）', allResolvable, resolveErr);
+
+  /* click 分发真跑：dataset 参数真的到达动作函数 */
+  const click = el => doc.listeners.click({ target: { closest: () => el } });
+  const btn = (act, dataset) => ({
+    dataset: dataset || {},
+    getAttribute(k) { return k === 'data-act' || k === 'data-change' ? act : null; },
+  });
+  calls.length = 0;
+  click(btn('open-channel', { id: 'ch-9' }));
+  check('click 分发把 dataset.id 真的送进 openChannel',
+    calls.length === 1 && calls[0][0] === 'openChannel' && calls[0][1] === 'ch-9', calls);
+  calls.length = 0;
+  click(btn('toggle-ch', { id: 'ch-9' }));          /* 渠道行里的停用开关：嵌套点击 */
+  check('嵌套点击只触发最近那枚（行内按钮不冒泡去触发行/卡片自己的动作）',
+    calls.length === 1 && calls[0][0] === 'toggleCh' && calls[0][1] === 'ch-9', calls);
+  calls.length = 0;
+  click(btn('unknown-act'));
+  doc.listeners.click({ target: { closest: () => null } });
+  check('未知动作与空白点击都静默不炸、不派发', calls.length === 0, calls);
+  calls.length = 0;
+  ACTS['open-test-models'](btn('open-test-models', { id: 'ch-2' }));
+  ACTS['open-test-models'](btn('open-test-models'));
+  check('openTestModels 的参数形状保留（有 id 带 channelId、无 id 给空对象）',
+    calls.length === 2 && JSON.stringify(calls[0][1]) === '{"channelId":"ch-2"}' &&
+    JSON.stringify(calls[1][1]) === '{}', calls);
+  calls.length = 0;
+  ACTS['open-channel-form'](btn('open-channel-form'));
+  check('openChannelForm 无 id 时传 undefined（不拼字符串）',
+    calls.length === 1 && calls[0][1] === undefined, calls);
+  calls.length = 0;
+  ACTS['test-row-model'](btn('test-row-model', { idx: '3' }));
+  check('数值参数走 +dataset.idx（"3" 变回数字 3）',
+    calls.length === 1 && calls[0][1] === 3 && typeof calls[0][1] === 'number', calls);
+
+  /* change 分发真跑：导入文件框走同一条委托路 */
+  calls.length = 0;
+  const fileEl = btn('import-files', { kind: 'codex-json' });
+  doc.listeners.change({ target: { closest: () => fileEl } });
+  check('change 分发把 dataset.kind 与元素本体送进 importFiles',
+    calls.length === 1 && calls[0][0] === 'importFiles' && calls[0][1] === 'codex-json' && calls[0][2] === fileEl, calls);
+
+  /* 双向覆盖：模板用到的都注册过、注册过的都被模板用到（含 shell.html 的遮罩） */
+  const all = src + SHELL;
+  const used = new Set([].concat(
+    [...all.matchAll(/data-act="([a-z-]+)"/g)].map(m => m[1]),
+    [...all.matchAll(/data-change="([a-z-]+)"/g)].map(m => m[1])));
+  const registered = new Set(Object.keys(ACTS));
+  const missing = [...used].filter(k => !registered.has(k));
+  const dead = [...registered].filter(k => !used.has(k));
+  check('data-act/data-change 与 ACTS 双向一一对应（缺注册或死注册都算失败）',
+    missing.length === 0 && dead.length === 0, { missing, dead });
+}
+
 /* ── 装配：被测函数与状态声明必须真实存在于产品源码，否则直接报错 ── */
 try {
   ['vModels', 'drawMTable', 'vPlayground', 'drawPG', 'drawRoute', 'adapt', 'drawChTable', 'saveChannel',
@@ -1051,6 +1149,9 @@ try {
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"', 'let setDraft=null',
    "let keyDraft={gateway:'',admin:''}"].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
+  });
+  ['const ACTS={', "document.addEventListener('change'"].forEach(s => {
+    if (!src.includes(s)) throw new Error('build/app.js 里找不到事件委托块标记 ' + s);
   });
 } catch (e) {
   console.error('✗ 装配失败：' + e.message);
@@ -1069,6 +1170,7 @@ try {
   testEmptyData();
   await testSettings();
   await testKeys();
+  testDelegation();
 
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);

@@ -30,9 +30,9 @@
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 77 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**） | ✅ §0.2 |
-| `build/app.js` | 2439 | **生产逻辑主体**：数据层 + 动作层 + 8 个页面渲染 + 管理密钥登录门（会话化，v1.18.6），真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/app.js` | 2505 | **生产逻辑主体**：数据层 + 动作层 + 8 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6），真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 52 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
-| `console.html` | ~3129 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
+| `console.html` | ~3195 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~6161 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import`、`/admin/api/session`（登录 / 退出，v1.18.6）等；含首启密钥生成、会话表与双层鉴权 | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
@@ -144,10 +144,11 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 1832–2091 | `openChannelForm`(1834) `probeUpstream`(1928) `toggleKeyField`(2028) … `saveChannel`(2044) | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换（**v1.18.4 起不回填原文**，占位符为「已配置 sk-a…1234 · 留空保持不变」；点「明文」时 `toggleKeyField` 才经 `chKeyLive` 现取一次原文、只填进输入框不落库）、保存（`weight` 随 `POST /admin/api/channels` 一起提交；**`apiKey` 留空 = 保持原密钥**） |
 | 2092–2229 | `IMPORT_META`(2093) `parseCodexUnits`(2111) `parseGsSessionId`(2119) `openImport`(2126) `importCodexRt`(2161) `importGsSession`(2166) `doImport`(2172) `importFiles`(2192) | 导入：**真实对接** `codex-import` / `genspark-import` |
 | 2230–2343 | `openTestModels`(2231) `chName`(2282) `testRowVerdict`(2288) `runTests`(2295) | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前）。**结果行必须能看懂**：每行带 `模型名` + 渠道显示名（`chName`）+ 中文结论（`testRowVerdict` 分 通过 / 空回复 / 失败 三档）+ 延迟 / token / 回复或错误原文 |
-| 2344–2367 | `drawer`(2345) `closeDrawer`(2349) `setTheme`(2357) | 抽屉 / 主题持久化 / 明暗互切 |
-| 2371 / 2400 / 2404–2408 | `showKeyGate()` `logout()` 启动探针 | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
-| 2410 | `tick()` | 时钟 |
-| 2420 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 2344–2366 | `drawer`(2345) `closeDrawer`(2349) `setTheme`(2357) | 抽屉 / 主题持久化 / 明暗互切（`#themeBtn.onclick` 与 `#globalSearch` 的 Enter 监听是程序化挂接，非内联属性） |
+| 2367–2431 | **事件委托块**：`ACTS`(2374) + click(2420) / change(2426) 两个 `document` 委托监听 | **全站唯一事件入口（v1.18.7）**：内联 `onclick=`/`onchange=`/`onkeydown=` 属性已全部清零（含 `build/shell.html` 的抽屉遮罩，改 `data-act`）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`），两个委托监听统一分发：`ACTS` 表 44 个动作与模板**双向一一对应**；8 秒轮询整页重绘**不用重挂监听**；点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，`stopPropagation` 成为历史）。登录门的 Enter 改为 `showKeyGate` 内程序化挂接（非内联属性）。**新增交互：先在 `ACTS` 注册 + 模板写 `data-act`，禁止写内联属性**（`test/security-headers-e2e.test.js` 内联清零 + 双向覆盖守卫、`test/console-state.test.js` 真实委托块桩上真跑，都会拦回潮） |
+| 2436 / 2465 / 2469–2473 | `showKeyGate()` `logout()` 启动探针 | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
+| 2475 | `tick()` | 时钟 |
+| 2485 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
@@ -450,16 +451,17 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 渠道列表排序 | 1179（渠道页）/ 1385（模型页）；生产 878 / 1081 |
 | 探测列表交互 | `renderProbeList` 1928 起整段（原型）/ 1953（生产） |
 | 图标 | `IC` 861（原型）/ 3（生产），用 `svg('name',size)` 引用 |
-| 主题持久化 key | `zzcs-theme`（原型 `setTheme` 2254 / 生产 `setTheme` 2354） |
+| 主题持久化 key | `zzcs-theme`（原型 `setTheme` 2254 / 生产 `setTheme` 2357） |
 | 生产独有组件样式 | `build/extra.css`（**不要写进设计稿**，设计稿没有这些组件） |
 | 构建逻辑 / 产物结构 | `build/build.js` |
-| 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 430 + `ovSeries` 433 + `vOverview` 487 |
-| 渠道权重（输入框 / 表格列 / 抽屉角标） | **v1.5**：生产 `openChannelForm` 1831（`f-weight`）+ `saveChannel` 2041（提交 `weight`；**v1.18.4 起 `apiKey` 留空 = 保持原密钥**）+ `drawChTable` 882（「权重 / 分流」列）+ `openChannel` 928（抽屉角标）+ `adapt()` 59（映射 `w`/`wHits`/`wShare`）；后端 `weight` 语义见 README「加权轮询」。**原型未同步**（生产独有能力，原型不必追平） |
-| 自动权重观测页 | **v1.9**：生产 `NAV` 340（资源 → 自动权重）+ `vAutoWeight` 650 + `autoWeightCard` 658 + `build/extra.css` 的 `.aw-*`（10–57）；数据来自 `/admin/api/status` 的顶层 `autoWeight`。**原型未同步**（v1.9.1：份额列标签只留渠道显示名） |
-| 运行期设置页（会话粘性 / 客户端限流 / 指标端点） | **v1.18**：生产 `NAV` 340（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）+ `vSettings` 815 + 辅助段 729–881 + `build/extra.css` 的 `.set-*`（59–77）。唯一数据源 `GET/POST /admin/api/settings`：`config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；`setPayload` **只提交有改动的组**（PATCH 语义）。字段契约 / 文案要点 / 验收清单见 [`console-settings-spec.md`](console-settings-spec.md)。**原型未同步**（生产独有能力，设计稿不含该页） |
+| 总览时间范围（24h/7d/30d） | 生产 `OV_RANGE` 429 + `ovSeries` 432 + `vOverview` 486 |
+| 渠道权重（输入框 / 表格列 / 抽屉角标） | **v1.5**：生产 `openChannelForm` 1834（`f-weight`）+ `saveChannel` 2044（提交 `weight`；**v1.18.4 起 `apiKey` 留空 = 保持原密钥**）+ `drawChTable` 881（「权重 / 分流」列）+ `openChannel` 927（抽屉角标）+ `adapt()` 59（映射 `w`/`wHits`/`wShare`）；后端 `weight` 语义见 README「加权轮询」。**原型未同步**（生产独有能力，原型不必追平） |
+| 自动权重观测页 | **v1.9**：生产 `NAV` 339（资源 → 自动权重）+ `vAutoWeight` 649 + `autoWeightCard` 657 + `build/extra.css` 的 `.aw-*`（10–57）；数据来自 `/admin/api/status` 的顶层 `autoWeight`。**原型未同步**（v1.9.1：份额列标签只留渠道显示名） |
+| 运行期设置页（会话粘性 / 客户端限流 / 指标端点） | **v1.18**：生产 `NAV` 339（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）+ `vSettings` 814 + 辅助段 728–880 + `build/extra.css` 的 `.set-*`（59–77）。唯一数据源 `GET/POST /admin/api/settings`：`config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；`setPayload` **只提交有改动的组**（PATCH 语义）。字段契约 / 文案要点 / 验收清单见 [`console-settings-spec.md`](console-settings-spec.md)。**原型未同步**（生产独有能力，设计稿不含该页） |
 | 密钥管理页（在线轮换 GATEWAY_KEY / ADMIN_KEY） | **v1.18.5**：生产 `NAV` 339（工具 → 密钥管理，夹在运行期设置与接入信息之间）+ `vKeys` 1538 + 辅助段 1494–1659（`keyCard` / `armConfirm` / `toggleKeyReveal` / `genLocalKey` / `fillGeneratedKey` / `rotateKey` / `resetKeysAction`）。数据源 `GET /admin/api/keys`（只回掩码 + 来源）；「轮换」单击直接生效（用户要求）；「回到环境变量值」两步确认（`armConfirm`）。**v1.18.6 会话化**：换管理密钥后前端不写任何浏览器存储（服务端清空全部会话并在轮换响应里**补发新会话 cookie**，发起页无感继续）；页操作区挂「退出登录」按钮（`#keyLogout` → `logout()`）；`showKeyHelp` 步骤改为**粘贴密钥登录**（不再有 `?key=` 带参链接）。后端语义见 README「行为细节」与 `test/key-rotation-e2e.test.js` / `test/admin-session-e2e.test.js`。**原型未同步**（生产独有能力，设计稿不含该页） |
-| 调用日志列（渠道名 / 列序 / 搜索 / 导出） | **v1.13.2**：生产 `adapt()` 59（日志条目新增 `n` = 渠道显示名，`c` 仍保留 id）+ `logRows` 1187（搜索判据 `l.m+l.n+l.c+l.id`）+ `drawLogTable` 1199（表头 请求 ID → 渠道 → 模型，渠道格 `esc(l.n)`）+ `openLog` 1224（抽屉渠道显示名）+ `exportLogs` 464（CSV 渠道列写显示名）。**原型已同步**（`console-redesign.html` 的 `vLogs` 1478 表头 / 1482 渠道格 / 1507 抽屉，就地查 `DATA.channels`） |
-| 测试模型弹窗（停用渠道可测 + 结果可读） | **v1.13**：生产 `openTestModels` 2228（不再按 `!c.on` 跳过停用渠道；停用渠道带「已停用」标记 + 说明文案，全局模式启用渠道排前）+ `testRowVerdict` 2285（结果三档：通过 / **空回复** / 失败；判定为纯函数，`test/console-state.test.js` §6 跑真值表）+ `chName` 2279（结果行写渠道显示名）+ `runTests` 2292（逐条带 `channelId`，不走调度；每行带模型名与中文结论，汇总分开数三档）。后端：`/admin/api/test` 带 `channelId` 时不看 `enabled`；自动探测 `probeAll` 默认跳过停用渠道、手动「全部重探测」显式 `includeDisabled:true`（见 README「自动 vs 手动的边界」）。`test/console-state.test.js` §5/§6 真跑该弹窗与结果渲染做回归。**原型未同步**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`（设计稿演示逻辑，不随生产走；原型有 3 个 demo 停用渠道，点它们仍会看到空列表） |
+| 调用日志列（渠道名 / 列序 / 搜索 / 导出） | **v1.13.2**：生产 `adapt()` 59（日志条目新增 `n` = 渠道显示名，`c` 仍保留 id）+ `logRows` 1186（搜索判据 `l.m+l.n+l.c+l.id`）+ `drawLogTable` 1198（表头 请求 ID → 渠道 → 模型，渠道格 `esc(l.n)`）+ `openLog` 1223（抽屉渠道显示名）+ `exportLogs` 463（CSV 渠道列写显示名）。**原型已同步**（`console-redesign.html` 的 `vLogs` 1478 表头 / 1482 渠道格 / 1507 抽屉，就地查 `DATA.channels`） |
+| 测试模型弹窗（停用渠道可测 + 结果可读） | **v1.13**：生产 `openTestModels` 2231（不再按 `!c.on` 跳过停用渠道；停用渠道带「已停用」标记 + 说明文案，全局模式启用渠道排前）+ `testRowVerdict` 2288（结果三档：通过 / **空回复** / 失败；判定为纯函数，`test/console-state.test.js` §6 跑真值表）+ `chName` 2282（结果行写渠道显示名）+ `runTests` 2295（逐条带 `channelId`，不走调度；每行带模型名与中文结论，汇总分开数三档）。后端：`/admin/api/test` 带 `channelId` 时不看 `enabled`；自动探测 `probeAll` 默认跳过停用渠道、手动「全部重探测」显式 `includeDisabled:true`（见 README「自动 vs 手动的边界」）。`test/console-state.test.js` §5/§6 真跑该弹窗与结果渲染做回归。**原型未同步**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`（设计稿演示逻辑，不随生产走；原型有 3 个 demo 停用渠道，点它们仍会看到空列表） |
+| 新增交互 / 按钮（click / change 动作） | **v1.18.7**：动作进 `data-act`（change 走 `data-change`）+ 事件委托块（app.js `ACTS` 2374 + click 2420 / change 2426 两个 `document` 委托监听；模板与注册表**双向一一对应**，见 §0.2 事件委托块行）。**禁止内联 `onclick=`/`onchange=`/`onkeydown=` 属性**（v1.18.7 已全量清零；外部可控 ID 一律 `data-*` + `esc()`，绝不拼进事件代码字符串）——`test/security-headers-e2e.test.js`（内联清零 + 双向覆盖守卫）与 `test/console-state.test.js`（真实委托块桩上真跑）会拦回潮 |
 
 ---
 
@@ -503,7 +505,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 **+686**（JS，v1.18 起；v1.9.1–v1.17 曾是 +666）。增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会让 JS 偏移改变（head/shell 已有构建期行数守卫）；**`extra.css` 在拼接序里位于 `app.js` 之前，它每增删 1 行 JS 偏移就整体 ±1，而 CSS 偏移不受影响**。
 14. **表格表头右对齐要压权重**：`table.tbl thead th{text-align:left}` 权重是 (0,1,3)，高于 `.t-r` 的 (0,1,0)，所以 `th` 上的 `.t-r` **默认不生效**，会出现"表头左对齐、数值右对齐"的错位。必须用 `table.tbl thead th.t-r` 这种更高权重的选择器（原型 300 行与 `.t-r` 并排写在同一行，就是为了不增行数、避免锚点整体漂移）。新增右对齐列时务必肉眼确认表头也对齐了。
 15. **剪贴板只在安全上下文可用**：`navigator.clipboard` 在 `http://` + 局域网 IP 下是 `undefined`，而可选链 `?.` 会把整条链**静默短路**——既不复制也不报错，看起来就是"按钮点了没反应"。`copyText` 因此用 `document.execCommand('copy')` 兜底，别删。
-16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" onclick="copyText(this.dataset.t,this)"`。
+16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" data-act="copy"`（v1.18.7 起事件全走委托，`onclick=` 内联属性已清零——往事件代码字符串里拼外部值的整类坑随之消失；`esc()` 仍守一切 `data-*` 属性值）。
 17. **「条 + 独立图例」必然错位，标签必须贴在自己那一段下面**：份额带的段是**单向排列**（左→右按顺序），而图例若用 `auto-fit` 网格则是「左→右、换行再左→右」——候选一多、一换行，读者就没法把图例项对回它的段。更糟的是真机上绝大多数候选健康系数 =1（色块全是同一个绿），连颜色都认不出谁是谁（v1.8.1 只修了行内基线，没修"对不上"这个根本问题）。**v1.9 的处置**：改成一候选一列（`.aw-col`，列宽 = 份额），列内上方 `.aw-seg` 色带段、下方 `.aw-cap` 直接挂名字与百分比 ——"这段是谁的"不用去别处找。**新增任何"带 + 图例"组件前先问：换行后读者还能把图例对回它的段吗？**
 18. **按比例分列宽用 `flex-grow`，别用 `width:calc(x%)`**：`.aw-split` 用 `gap:8px` 给列间真间隙，列上写 `flex-basis:0` + `flex-grow:var(--w)` —— 间隙由布局先让出、余量再按份额分，各列宽度仍**严格成比例**，也不会被 100% 撑破。手写 `width:calc(x% - Npx)` 一旦候选数变化就立刻失准。配套两条：列要 `min-width:0`、列内文字要 `overflow:hidden;text-overflow:ellipsis`，否则长渠道名会把列撑宽、把比例撑歪（全量信息放 `title`）。
 19. **新起类名之前先 grep 它的定义——`.mask` 是弹窗遮罩，不是"掩码"**：设计稿把"被遮罩的密钥值"写成 `<span class="mask mono">`，于是它连同 `.mask{position:fixed;inset:0;z-index:80;opacity:0}` 一起吃下 —— 这个值变成**铺满视口、透明、脱离文档流**的元素：文本在 DOM 里（`textContent` 有值）却永远不显示，行里只剩「当前值 / 显示 / 复制」和一块空白。密钥管理页（v1.18.5 新增）与**接入信息页的 `GATEWAY_KEY` 行**一起中招，且从设计稿一路带过来，长期没人发现。**v1.18.6 处置**：该值改用独立类 `.ep-key .kval`（原型 `<style>` 337 + 原型 markup 1700 + `build/app.js` 的 `keyCard` / `vAccess`，共 4 处），`.mask` 回归"只做弹窗遮罩"。教训：**CSS 类名没有命名空间，复用前先 `Select-String -Pattern '^\.<名字>\{'` 确认它没被别处定义**；`test/console-state.test.js` §11 已加守卫（源码不得出现 `class="mask mono"`、产物不得有 `.ep-key .mask` 规则、**且 `.mask` 必须仍是那条弹窗遮罩**——防止用"给遮罩改名"蒙混过关）。
@@ -514,7 +516,8 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 **构建与产物**
 
-- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置 + 密钥管理页（含会话语义装配守卫）的自动化回归，**172 项断言**；改了任何带输入框的页面都要跑）
+- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置 + 密钥管理页（含会话语义装配守卫）+ **事件委托（真实委托块桩上真跑分发）**的自动化回归，**183 项断言**；改了任何带输入框的页面都要跑）
+- [ ] `node test/security-headers-e2e.test.js` 全绿（渲染层裸插值 + 内联事件属性清零 + `ACTS` 双向覆盖守卫，**57 项断言**；改了任何渲染/交互代码都要跑）
 - [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
 - [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）
 - [ ] 产物里 `</style>` 恰好 1 次：`(Select-String -Path console.html -Pattern '</style>' -SimpleMatch).Count`
