@@ -53,6 +53,7 @@ GATEWAY_KEY=xxx  node server.js    # 客户端必须带 Bearer xxx
 ADMIN_KEY=yyy    node server.js    # 控制台 + /admin/* 必须带 Bearer yyy
 ZZCSAPI_NOAUTH=1 node server.js    # 本地开发：完全关闭鉴权（仅限本机自用）
 ZZCSAPI_BIND=0.0.0.0 node server.js  # 绑定地址，缺省 127.0.0.1（裸跑时对外提供服务的必填项）
+ZZCSAPI_ALLOWED_HOSTS=a.com,b.com node server.js  # Host 门白名单域名（逗号分隔）。默认放行 localhost 与回环/私网 IP 字面量；反代/公网域名必须在此登记，否则 421（v1.18.10 渗透整改 V-07：拦 DNS 重绑定）
 ```
 
 **密钥从哪来（分享/分发友好）**：
@@ -116,7 +117,7 @@ http://127.0.0.1:8787/console
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
 | [测试清单](docs/tests.md) | 32 个测试文件 · 1548 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
-| [安全整改记录](docs/security-hardening.md) | 渗透测试四批整改（v1.18.3–v1.18.7）与刻意不做的处置及理由 |
+| [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
 | [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | 设置页的施工图：字段契约、四张卡结构、必须守住的交互细节、验收清单 |
@@ -284,7 +285,7 @@ node sec-audit.js
 查这些：① 哪些口匿名可达（应只有 `/healthz`、`/console`）② 示例默认密钥是否仍可用 ③ 控制台版本指纹 ④ 安全响应头 / CORS
 ⑤ 三态鉴权覆盖面 ⑥ 密钥泄露面 ⑦ 路径穿越与私有文件暴露。
 
-整改现状：渗透测试四批问题（v1.18.3–v1.18.7）**全部已修**，另有两条建议**刻意不做**（单用户自托管定位，理由在案）——完整过程与每批的守卫测试见 [安全整改记录](docs/security-hardening.md)。**给公网部署者**：请在可信网络或反代后暴露，公网入口务必加 TLS。
+整改现状：渗透测试发现**全部有归宿**——六批已修（v1.18.3–v1.18.10，含 V-07 Host/Origin 门与 V-08 探针精简）、其余逐项处置台账在案（V-09/V-11 风险接受的理由、V-05 compose 内成文注释、刻意不做的两条）——完整过程、复查记录与每批的守卫测试见 [安全整改记录](docs/security-hardening.md)。**给公网部署者**：请在可信网络或反代后暴露，公网入口务必加 TLS，反代/公网域名记得登记 `ZZCSAPI_ALLOWED_HOSTS`（否则 421）。
 
 ## 行为细节（摘要）
 

@@ -48,6 +48,7 @@
   「工具 → 密钥管理」页有**退出登录**按钮（`DELETE /admin/api/session`，只杀自己那枚 token）；轮换 / 重置管理密钥会清空全部会话（见上条）。
   脚本 / CI **不受影响**：管理面始终保留 `Authorization: Bearer ADMIN_KEY` 通道，两种鉴权可并存。
 - **鉴权写法**：网关密钥接受 `Authorization: Bearer <key>`、`?key=<key>`，以及**原生 SDK 的默认头**——Gemini 的 `x-goog-api-key`、Anthropic 的 `x-api-key`（仅对 `/v1/*` `/anthropic/*` `/gemini/*`；**管理面只认 `Bearer` 或会话 cookie——v1.18.6 起 `?key=` 已从管理面拆除**，客户端密钥语义不得混进管理面）。OpenAI SDK 走 Bearer，本来就通。
+- **Host/Origin 门（v1.18.10，渗透整改 V-07 第六批）**：一切路由之前先过两道门——① `Host` 必须是 `localhost`、回环/私网/链路本地 IP 字面量（127.x / 10.x / 192.168.x / 172.16–31.x / 169.254.x / ::1 / fe80、fd00 段——**按裸 IP 访问控制台与 API 的常态天然通过**），或在 `ZZCSAPI_ALLOWED_HOSTS`（逗号分隔）显式登记；其余一律 **421**（DNS 重绑定页面必须带着攻击者的域名来，正好被拦死；**反代/公网域名部署必须登记，公网默认拒是刻意姿势**）。HTTP/1.0 无 `Host` 放行（重绑定必须带域名，空 Host 无从伪装）。② 带 `Origin` 且与 `Host` 不同源的请求一律 **403**（本网关不开 CORS、控制台是同源应用；**服务器间脚本不带 `Origin`，零影响**；与 `SameSite=Strict` 叠加，跨源写操作双保险）。守卫在 `test/security-headers-e2e.test.js`（421/403/放行三态 + 装配位置）。
 - **别名区分大小写不敏感**，upstream 透传原样。
 
 ## 出站与流式写路径（v1.16：两处实测出来的开销）
