@@ -673,8 +673,8 @@ table.tbl tbody tr:last-child td{border-bottom:0}
   </div>
 </div>
 
-<!-- 抽屉遮罩：点击关闭抽屉（弹窗遮罩是 #mask，那个刻意不响应点击，见下方注释） -->
-<div class="scrim" id="scrim" onclick="closeDrawer()"></div>
+<!-- 抽屉遮罩：点击关闭抽屉（弹窗遮罩是 #mask，那个刻意不响应点击，见下方注释）；v1.18.7 起走 data-act 事件委托（app.js 的 ACTS），全站不再有内联事件属性 -->
+<div class="scrim" id="scrim" data-act="close-drawer"></div>
 <aside class="drawer" id="drawer"></aside>
 
 <!-- 遮罩不响应点击关闭：拖选复制时鼠标容易滑出弹窗，误触会打断操作。关闭请用右上角 ×、取消按钮或 Esc -->
@@ -1190,8 +1190,8 @@ function vOverview(v){
       <div class="tabs" id="rangeTabs">
         ${Object.keys(OV_RANGE).map(r=>`<button class="tab${ovRange===r?' on':''}" data-r="${r}">${OV_RANGE[r].tab}</button>`).join('')}
       </div>
-      <button class="btn" onclick="exportUsage()">${svg('download',14)}导出</button>
-      <button class="btn primary" onclick="recheckAll(this)">${svg('test',14)}重新探测</button>
+      <button class="btn" data-act="export-usage">${svg('download',14)}导出</button>
+      <button class="btn primary" data-act="recheck-all">${svg('test',14)}重新探测</button>
     </div>
   </div>
 
@@ -1227,14 +1227,14 @@ function vOverview(v){
   <div class="grid g12">
     <div class="card c7">
       <div class="card-hd"><h3>渠道流量与健康</h3><span class="sub">按请求量排序</span>
-        <div class="r"><button class="btn ghost sm" onclick="go('channels')">全部渠道 ${svg('arrowUp',12)}</button></div>
+        <div class="r"><button class="btn ghost sm" data-act="go" data-page="channels">全部渠道 ${svg('arrowUp',12)}</button></div>
       </div>
       <div class="card-bd tight tbl-wrap">
         <table class="tbl">
           <thead><tr><th>渠道</th><th>状态</th><th class="t-r">延迟</th><th class="t-r">请求</th><th>成功率</th><th class="t-r">趋势</th></tr></thead>
           <tbody>${DATA.channels.slice(0,7).map(c=>{
             const rate=pct(c.req-c.err,c.req);
-            return `<tr class="clickable" onclick="openChannel('${esc(c.id)}')">
+            return `<tr class="clickable" data-act="open-channel" data-id="${esc(c.id)}">
               <td><div class="cell-main"><span class="avatar">${esc(c.name.slice(0,2))}</span>
                 <div style="min-width:0"><div class="cell-name">${esc(c.name)}</div><div class="cell-sub">${esc(c.id)} · ${esc(protoLabel[c.proto])}</div></div></div></td>
               <td><span class="pill ${c.status}"><span class="dot ${c.status}"></span>${stTxt[c.status]}</span></td>
@@ -1248,12 +1248,12 @@ function vOverview(v){
     </div>
     <div class="card c5">
       <div class="card-hd"><h3>热门模型</h3><span class="sub">按请求量</span>
-        <div class="r"><button class="btn ghost sm" onclick="go('models')">全部模型 ${svg('arrowUp',12)}</button></div>
+        <div class="r"><button class="btn ghost sm" data-act="go" data-page="models">全部模型 ${svg('arrowUp',12)}</button></div>
       </div>
       <div class="card-bd">
         <div class="bars">${DATA.models.slice(0,8).map(m=>{
           const max=DATA.models[0].req||1;
-          return `<div class="bar-row" data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)" style="cursor:pointer">
+          return `<div class="bar-row" data-m="${esc(m.name)}" data-act="open-model" style="cursor:pointer">
             <span class="bar-name">${esc(m.name)}</span><span class="bar-val">${nf(m.req)}</span>
             <span class="bar-track"><i style="width:${(m.req/max*100).toFixed(1)}%"></i></span>
           </div>`}).join('')}</div>
@@ -1263,12 +1263,12 @@ function vOverview(v){
 
   <div class="card" style="margin-top:16px">
     <div class="card-hd"><h3>近期调用</h3><span class="sub">最近 8 条</span>
-      <div class="r"><button class="btn ghost sm" onclick="go('logs')">查看全部 ${svg('arrowUp',12)}</button></div>
+      <div class="r"><button class="btn ghost sm" data-act="go" data-page="logs">查看全部 ${svg('arrowUp',12)}</button></div>
     </div>
     <div class="card-bd tight tbl-wrap">
       <table class="tbl">
         <thead><tr><th>时间</th><th>模型</th><th>渠道</th><th>协议</th><th>状态</th><th class="t-r">耗时</th><th class="t-r">输入</th><th class="t-r">输出</th></tr></thead>
-        <tbody>${DATA.logs.slice(0,8).map(l=>`<tr class="clickable" onclick="openLog('${esc(l.id)}')">
+        <tbody>${DATA.logs.slice(0,8).map(l=>`<tr class="clickable" data-act="open-log" data-id="${esc(l.id)}">
           <td class="mono" style="font-size:12px">${l.t}</td>
           <td class="cell-name">${esc(l.m)}</td>
           <td><span class="mono" style="font-size:12px">${l.c}</span></td>
@@ -1294,19 +1294,19 @@ function vChannels(v){
       <div class="page-sub">${DATA.channels.length} 个渠道 · 已启用 ${DATA.channels.filter(c=>c.on).length} · 支持 ${PROTO_ORDER.length} 种协议</div></div>
     <div class="page-actions">
       <div class="menu-wrap">
-        <button class="btn" onclick="event.stopPropagation();toggleMenu('impMenu')">${svg('zap',14)}导入${svg('chev',12)}</button>
+        <button class="btn" data-act="toggle-imp-menu">${svg('zap',14)}导入${svg('chev',12)}</button>
         <div class="menu" id="impMenu">
           <div class="hd">Codex</div>
-          <button onclick="openImport('codex-rt')">${svg('zap',14)}Codex RT<span class="d">粘贴</span></button>
-          <button onclick="openImport('codex-json')">${svg('file',14)}Codex JSON<span class="d">文件</span></button>
+          <button data-act="open-import" data-kind="codex-rt">${svg('zap',14)}Codex RT<span class="d">粘贴</span></button>
+          <button data-act="open-import" data-kind="codex-json">${svg('file',14)}Codex JSON<span class="d">文件</span></button>
           <div class="sep"></div>
           <div class="hd">Genspark</div>
-          <button onclick="openImport('gs-session')">${svg('cookie',14)}Genspark 会话<span class="d">粘贴</span></button>
-          <button onclick="openImport('gs-json')">${svg('file',14)}Genspark JSON<span class="d">文件</span></button>
+          <button data-act="open-import" data-kind="gs-session">${svg('cookie',14)}Genspark 会话<span class="d">粘贴</span></button>
+          <button data-act="open-import" data-kind="gs-json">${svg('file',14)}Genspark JSON<span class="d">文件</span></button>
         </div>
       </div>
-      <button class="btn" onclick="openTestModels()">${svg('test',14)}测试模型</button>
-      <button class="btn primary" onclick="openChannelForm()">${svg('plus',14)}添加渠道</button>
+      <button class="btn" data-act="open-test-models">${svg('test',14)}测试模型</button>
+      <button class="btn primary" data-act="open-channel-form">${svg('plus',14)}添加渠道</button>
     </div>
   </div>
 
@@ -1319,7 +1319,7 @@ function vChannels(v){
     <div class="search" style="min-width:230px;margin-left:0">
       ${svg('filter',14)}<input id="chQ" placeholder="按名称 / ID / 协议过滤…" value="${chQ}">
     </div>
-    <button class="btn ml-auto" onclick="recheckAll(this)">${svg('test',14)}全部重探测</button>
+    <button class="btn ml-auto" data-act="recheck-all">${svg('test',14)}全部重探测</button>
   </div>
 
   <div class="card"><div class="card-bd tight tbl-wrap" id="chTable"></div></div>`;
@@ -1581,7 +1581,7 @@ function drawChTable(){
       // ponytail: 下面「→ 有效优先级」角标表达式与 openChannel 抽屉处内联重复——为保 code-map 行号锚点刻意不抽 helper，下次动这两处时再抽
       const rate=c.req?pct(c.req-c.err,c.req):null;
       return `<tr class="clickable">
-        <td><button class="switch ${c.on?'on':''}" onclick="event.stopPropagation();toggleCh('${esc(c.id)}')" title="${c.on?'停用':'启用'}"></button></td>
+        <td><button class="switch ${c.on?'on':''}" data-act="toggle-ch" data-id="${esc(c.id)}" title="${c.on?'停用':'启用'}"></button></td>
         <td><div class="cell-main"><span class="avatar">${esc(c.name.slice(0,2))}</span>
           <div style="min-width:0"><div class="cell-name">${esc(c.name)}</div><div class="cell-sub">${esc(c.id)}</div></div></div></td>
         <td><span class="chip ${esc(c.proto)}">${esc(protoLabel[c.proto]||c.proto)}</span></td>
@@ -1593,9 +1593,9 @@ function drawChTable(){
         <td class="t-r mono">${nf(c.req)} <span class="muted">/ ${c.err?`<span style="color:var(--err)">${nf(c.err)}</span>`:0}</span></td>
         <td>${rate===null?'<span class="muted mono">—</span>':`<div class="row" style="gap:8px"><div class="proto-bar" style="flex:1"><i style="width:${rate}%;background:${rate>90?'var(--ok)':rate>70?'var(--warn)':'var(--err)'}"></i></div><span class="mono" style="font-size:11px">${rate.toFixed(0)}%</span></div>`}</td>
         <td class="t-r"><div class="row" style="justify-content:flex-end;gap:6px">
-          <button class="btn ghost sm" onclick="event.stopPropagation();openTestModels({channelId:'${esc(c.id)}'})">测试</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannelForm('${esc(c.id)}')">编辑</button>
-          <button class="btn ghost sm" onclick="event.stopPropagation();openChannel('${esc(c.id)}')">详情</button>
+          <button class="btn ghost sm" data-act="open-test-models" data-id="${esc(c.id)}">测试</button>
+          <button class="btn ghost sm" data-act="open-channel-form" data-id="${esc(c.id)}">编辑</button>
+          <button class="btn ghost sm" data-act="open-channel" data-id="${esc(c.id)}">详情</button>
         </div></td>
       </tr>`}).join('')}
     </tbody></table>`;
@@ -1622,7 +1622,7 @@ function openChannel(id){
       </div>
       <div class="ml-auto row" style="gap:8px">
         <span class="chip ${esc(c.proto)}">${esc(protoLabel[c.proto]||c.proto)}</span>
-        <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button>
+        <button class="icon-btn" data-act="close-drawer">${svg('x',15)}</button>
       </div>
     </div>
     <div class="drawer-bd">
@@ -1650,8 +1650,8 @@ function openChannel(id){
         <dt>Base URL</dt><dd class="mono">${esc(chBaseUrl(c))}</dd>
         <dt>密钥</dt><dd class="mono row" style="gap:6px">
           <span id="chKeyTx" data-plain="0">${esc(chKey(c.id)||'—')}</span>
-          <button class="icon-btn" id="chKeyBtn" style="width:22px;height:22px" title="明文显示" onclick="toggleDrawerKey('${esc(c.id)}',this)">${svg('eye',12)}</button>
-          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" onclick="copyChKey('${esc(c.id)}',this)">${svg('copy',12)}</button>
+          <button class="icon-btn" id="chKeyBtn" style="width:22px;height:22px" title="明文显示" data-act="toggle-drawer-key" data-id="${esc(c.id)}">${svg('eye',12)}</button>
+          <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" data-act="copy-ch-key" data-id="${esc(c.id)}">${svg('copy',12)}</button>
         </dd>
         <dt>协议</dt><dd class="mono">${esc(c.proto)}</dd>
         <dt>模型数</dt><dd class="mono">${c.models} 个别名</dd>
@@ -1671,11 +1671,11 @@ function openChannel(id){
       </div>
     </div>
     <div class="drawer-ft">
-      <button class="btn primary" onclick="openTestModels({channelId:'${esc(c.id)}'})">${svg('test',14)}测试模型</button>
-      <button class="btn" onclick="reprobe('${esc(c.id)}')">${svg('test',14)}重探测</button>
-      <button class="btn" onclick="closeDrawer();openChannelForm('${esc(c.id)}')">${svg('edit',14)}编辑</button>
-      <button class="btn ml-auto" onclick="toggleCh('${esc(c.id)}');openChannel('${esc(c.id)}')">${c.on?'停用':'启用'}</button>
-      <button class="btn danger" onclick="delChannel('${esc(c.id)}')">${svg('trash',14)}删除</button>
+      <button class="btn primary" data-act="open-test-models" data-id="${esc(c.id)}">${svg('test',14)}测试模型</button>
+      <button class="btn" data-act="reprobe" data-id="${esc(c.id)}">${svg('test',14)}重探测</button>
+      <button class="btn" data-act="drawer-edit-channel" data-id="${esc(c.id)}">${svg('edit',14)}编辑</button>
+      <button class="btn ml-auto" data-act="drawer-toggle-open" data-id="${esc(c.id)}">${c.on?'停用':'启用'}</button>
+      <button class="btn danger" data-act="del-channel" data-id="${esc(c.id)}">${svg('trash',14)}删除</button>
     </div>`);
 }
 async function toggleDrawerKey(id,btn){
@@ -1729,8 +1729,8 @@ function vModels(v){
     <div><h1 class="page-title">聚合模型</h1>
       <div class="page-sub">对外暴露 ${DATA.meta.models} 个模型 · OpenAI / Anthropic / Gemini 三套端点共用同一份别名表</div></div>
     <div class="page-actions">
-      <button class="btn" onclick="exportModels()">${svg('download',14)}导出清单</button>
-      <button class="btn primary" onclick="copyModels()">${svg('copy',14)}复制 /v1/models</button>
+      <button class="btn" data-act="export-models">${svg('download',14)}导出清单</button>
+      <button class="btn primary" data-act="copy-models">${svg('copy',14)}复制 /v1/models</button>
     </div>
   </div>
 
@@ -1782,7 +1782,7 @@ function drawMTable(){
     <tbody>${rows.map(m=>{
       const single=m.chans.length===1;
       const isLive=live(m);
-      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} data-m="${esc(m.name)}" onclick="openModel(this.dataset.m)">
+      return `<tr class="clickable"${isLive?'':' style="opacity:.62"'} data-m="${esc(m.name)}" data-act="open-model">
         <td><div class="cell-main"><span class="avatar">${svg('layers',13)}</span>
           <div style="min-width:0"><div class="cell-name mono" style="font-size:12.5px">${esc(m.name)}</div>
           <div class="cell-sub">${single?'单点依赖':'多源冗余'}</div></div></div></td>
@@ -1803,7 +1803,7 @@ function openModel(name){
       <span class="avatar" style="width:34px;height:34px;border-radius:9px">${svg('layers',15)}</span>
       <div style="min-width:0"><h3 style="font-size:16px" class="mono">${esc(m.name)}</h3>
       <div class="cell-sub">${m.chans.length} 个来源渠道</div></div>
-      <div class="ml-auto"><button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
+      <div class="ml-auto"><button class="icon-btn" data-act="close-drawer">${svg('x',15)}</button></div>
     </div>
     <div class="drawer-bd">
       <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px">
@@ -1823,7 +1823,7 @@ function openModel(name){
       </div>
       <div class="sec-title">调用示例</div>
       <div class="code"><div class="code-hd"><span class="fname">curl</span>
-        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t='curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d "{\\"model\\":\\"${esc(m.name)}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"'>${svg('copy',13)}</button>
+        <button class="btn ghost sm copy" data-act="copy" data-t='curl http://127.0.0.1:8787/v1/chat/completions -H "Authorization: Bearer $GATEWAY_KEY" -H "Content-Type: application/json" -d "{\\"model\\":\\"${esc(m.name)}\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"hi\\"}]}"'>${svg('copy',13)}</button>
       </div><pre>curl http://127.0.0.1:8787/v1/chat/completions \
   -H <span class="s">"Authorization: Bearer $GATEWAY_KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
@@ -1839,8 +1839,8 @@ function vLogs(v){
     <div><h1 class="page-title">调用日志</h1>
       <div class="page-sub">保留最近 200 条明细 · 累计 ${nf(DATA.meta.total)} 次请求 / ${nf(DATA.meta.errors)} 次失败</div></div>
     <div class="page-actions">
-      <button class="btn" onclick="clearUsage()">清空</button>
-      <button class="btn primary" onclick="exportLogs()">${svg('download',14)}导出 CSV</button>
+      <button class="btn" data-act="clear-usage">清空</button>
+      <button class="btn primary" data-act="export-logs">${svg('download',14)}导出 CSV</button>
     </div>
   </div>
 
@@ -1856,7 +1856,7 @@ function vLogs(v){
         <select class="select" id="lgOk"><option value="all">全部</option><option value="ok">仅成功</option><option value="bad">仅失败</option></select></div>
       <div class="field" style="flex:1;min-width:200px"><label>搜索</label>
         <input class="input" id="lgQ" placeholder="模型名 / 渠道名 / 渠道 ID / 请求 ID…"></div>
-      <button class="btn" style="align-self:flex-end" onclick="drawLogTable()">${svg('filter',14)}应用筛选</button>
+      <button class="btn" style="align-self:flex-end" data-act="apply-log-filter">${svg('filter',14)}应用筛选</button>
     </div>
   </div></div>
 
@@ -1914,7 +1914,7 @@ function openLog(id){
       <div class="cell-sub">${esc(l.t)}</div></div>
       <div class="ml-auto row" style="gap:8px">
         <span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span>
-        <button class="icon-btn" onclick="closeDrawer()">${svg('x',15)}</button></div>
+        <button class="icon-btn" data-act="close-drawer">${svg('x',15)}</button></div>
     </div>
     <div class="drawer-bd">
       <dl class="kv">
@@ -1927,7 +1927,7 @@ function openLog(id){
       ${l.ok?'':'<div class="sec-title">失败原因</div><div class="card" style="padding:12px;border-color:color-mix(in srgb,var(--err) 30%,transparent)"><span class="mono" style="font-size:12px;color:var(--err)">'+esc(l.note||'上游返回失败，网关已自动切换到下一候选渠道')+'</span></div>'}
       <div class="sec-title">请求体</div>
       <div class="code"><div class="code-hd"><span class="fname">request.json</span>
-        <button class="btn ghost sm copy" onclick="copyText(this.dataset.t,this)" data-t="${esc(JSON.stringify({model:l.m,messages:[{role:'user',content:'…'}],stream:true}))}">${svg('copy',13)}</button></div>
+        <button class="btn ghost sm copy" data-act="copy" data-t="${esc(JSON.stringify({model:l.m,messages:[{role:'user',content:'…'}],stream:true}))}">${svg('copy',13)}</button></div>
         <pre>{ <span class="k">"model"</span>: <span class="s">"${esc(l.m)}"</span>,
   <span class="k">"messages"</span>: [{ <span class="k">"role"</span>: <span class="s">"user"</span>, <span class="k">"content"</span>: <span class="s">"…"</span> }],
   <span class="k">"stream"</span>: <span class="s">true</span> }</pre></div>
@@ -1938,8 +1938,8 @@ data: {<span class="k">"usage"</span>:{<span class="k">"prompt_tokens"</span>:${
 data: [DONE]</pre></div>
     </div>
     <div class="drawer-ft">
-      <button class="btn primary" data-t="${esc(l.m)}" onclick="copyCurl(this.dataset.t,this)">${svg('copy',14)}复制 cURL</button>
-      <button class="btn" onclick="copyText('${esc(l.id)}',this)">复制请求 ID</button>
+      <button class="btn primary" data-t="${esc(l.m)}" data-act="copy-curl">${svg('copy',14)}复制 cURL</button>
+      <button class="btn" data-act="copy" data-t="${esc(l.id)}">复制请求 ID</button>
     </div>`);
 }
 /* 复制一条可直接跑的 cURL；$GATEWAY_KEY 保持占位，避免把真实密钥写进剪贴板 */
@@ -1964,8 +1964,8 @@ function vPlayground(v){
     <div><h1 class="page-title">Playground</h1>
       <div class="page-sub">直接调试网关路由 · 请求走 /v1/chat/completions，与客户端调用完全一致</div></div>
     <div class="page-actions">
-      <button class="btn" onclick="pgClear()">清空会话</button>
-      <button class="btn primary" onclick="pgCopyCurl()">${svg('copy',14)}复制 cURL</button>
+      <button class="btn" data-act="pg-clear">清空会话</button>
+      <button class="btn primary" data-act="pg-copy-curl">${svg('copy',14)}复制 cURL</button>
     </div>
   </div>
 
@@ -2363,8 +2363,8 @@ function vAccess(v){
     <div><h1 class="page-title">接入信息</h1>
       <div class="page-sub">网关地址与密钥 · 三套协议端点共用同一个 GATEWAY_KEY</div></div>
     <div class="page-actions">
-      <button class="btn" onclick="go('keys')">${svg('key',14)}密钥管理</button>
-      <button class="btn primary" onclick="copyAllEndpoints(this)">${svg('copy',14)}复制全部</button>
+      <button class="btn" data-act="go" data-page="keys">${svg('key',14)}密钥管理</button>
+      <button class="btn primary" data-act="copy-all-endpoints">${svg('copy',14)}复制全部</button>
     </div>
   </div>
 
@@ -2372,10 +2372,10 @@ function vAccess(v){
     ${eps.map(x=>`<div class="card"><div class="card-bd ep">
       <div class="row"><span class="chip ${esc(x.p)}">${esc(x.t)}</span><span class="dot ok ml-auto"></span></div>
       <div class="ep-url"><span style="flex:1;min-width:0">${x.u}</span>
-        <button class="btn ghost sm" data-t="${esc(x.u)}" onclick="copyText(this.dataset.t,this)">${svg('copy',12)}复制</button></div>
+        <button class="btn ghost sm" data-t="${esc(x.u)}" data-act="copy">${svg('copy',12)}复制</button></div>
       <div class="muted" style="font-size:11.5px">${esc(x.note)}</div>
       <div class="ep-key"><span>GATEWAY_KEY</span><span class="kval mono">${esc(gwKey||'—')}</span>
-        <button class="btn ghost sm ml-auto" onclick="copyGwKey(this)">${svg('copy',13)}复制</button></div>
+        <button class="btn ghost sm ml-auto" data-act="copy-gw-key">${svg('copy',13)}复制</button></div>
     </div></div>`).join('')}
   </div>
 
@@ -2398,7 +2398,7 @@ function vAccess(v){
       <div class="card-bd tight tbl-wrap">
         <table class="tbl"><thead><tr><th>客户端</th><th>Base URL</th><th>模型名</th></tr></thead><tbody>
           ${[['DSH（OpenAI 兼容）',u.openai||base+'/v1',m1],['DSH（Anthropic 兼容）',u.anthropic||base+'/anthropic',m2],['Cursor',u.openai||base+'/v1','自定义别名'],['Cline',u.openai||base+'/v1','自定义别名']]
-            .map(r=>`<tr><td class="cell-name">${r[0]}</td><td class="mono" style="font-size:12px"><span style="display:inline-flex;align-items:center;gap:7px">${r[1]}<button class="btn ghost sm" data-t="${esc(r[1])}" onclick="copyText(this.dataset.t,this)" title="复制地址">${svg('copy',12)}</button></span></td><td class="mono" style="font-size:12px">${esc(r[2])}</td></tr>`).join('')}
+            .map(r=>`<tr><td class="cell-name">${r[0]}</td><td class="mono" style="font-size:12px"><span style="display:inline-flex;align-items:center;gap:7px">${r[1]}<button class="btn ghost sm" data-t="${esc(r[1])}" data-act="copy" title="复制地址">${svg('copy',12)}</button></span></td><td class="mono" style="font-size:12px">${esc(r[2])}</td></tr>`).join('')}
         </tbody></table>
       </div>
     </div>
@@ -2425,7 +2425,7 @@ function vAccess(v){
           ?'ADMIN_KEY / GATEWAY_KEY 仍是公开可猜的默认串，建议轮换成随机值：改 .env 的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY（推荐），或删掉 config.json 里的 adminKey / gatewayKey 后重启（会自动重新生成）。主机端口是否收敛到 127.0.0.1 见 docker-compose.yml。'
           :'ADMIN_KEY 与 GATEWAY_KEY 均非仓库默认值（首启自动生成或你自定义的设置）。'}</div>
       </div>
-      <button class="btn ml-auto" onclick="showKeyHelp()">${insecure?'查看轮换步骤':'查看'}</button>
+      <button class="btn ml-auto" data-act="show-key-help">${insecure?'查看轮换步骤':'查看'}</button>
     </div>
   </div>`;
   })()}`;
@@ -2452,7 +2452,7 @@ function showKeyHelp(){
   modal(`
     <div class="m-hd"><span class="m-ico">${svg('key',14)}</span><h2>轮换密钥</h2>
       <span class="chip ml-auto" style="margin-right:8px">只读</span>
-      <button class="icon-btn" onclick="closeModal()">${svg('x',15)}</button></div>
+      <button class="icon-btn" data-act="close-modal">${svg('x',15)}</button></div>
     <div class="m-bd">
       <div class="card" style="padding:11px 13px;border-color:color-mix(in srgb,var(--warn) 30%,transparent)">
         <div class="row" style="gap:9px;align-items:flex-start">
@@ -2466,12 +2466,12 @@ function showKeyHelp(){
         <div class="field">
           <span class="help" style="display:block;margin-bottom:6px">${i+1}. ${s.t}</span>
           <div class="code"><div class="code-hd"><span class="fname">step ${i+1}</span>
-            <button class="btn ghost sm copy" data-t="${esc(s.c)}" onclick="copyText(this.dataset.t,this)">${svg('copy',13)}复制</button></div>
+            <button class="btn ghost sm copy" data-t="${esc(s.c)}" data-act="copy">${svg('copy',13)}复制</button></div>
           <pre>${esc(s.c)}</pre></div>
         </div>`).join('')}
       <div class="field"><span class="help">⚠ 只改 GATEWAY_KEY 不影响已登录的控制台；改 ADMIN_KEY 后所有已登录的会话全部作废，每个浏览器都要用新值重新粘一次。</span></div>
     </div>
-    <div class="m-ft"><button class="btn ghost ml-auto" onclick="closeModal()">关闭</button></div>`);
+    <div class="m-ft"><button class="btn ghost ml-auto" data-act="close-modal">关闭</button></div>`);
 }
 
 /* ═══════════════════════════ 弹窗：通用容器 ═══════════════════════════ */
@@ -2527,7 +2527,7 @@ function openChannelForm(id){
     <div class="m-hd">
       <span class="m-ico">${svg(c?'edit':'plus',14)}</span>
       <h2>${c?'编辑渠道 · '+esc(c.name||c.id):'添加渠道'}</h2>
-      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+      <button class="icon-btn ml-auto" data-act="close-modal">${svg('x',15)}</button>
     </div>
     <div class="m-bd">
       <div class="field-row">
@@ -2555,14 +2555,14 @@ function openChannelForm(id){
       <div class="field"><label>API Key</label>
         <div class="row" style="gap:8px">
           <input class="input" id="f-key" type="password" value="" placeholder="${c?'已配置 ' + esc(chKey(c.id)||'（未设置）') + ' · 留空保持不变':'sk-… 或 notion 的 token_v2'}">
-          <button class="btn ghost sm" id="f-key-btn" style="flex:0 0 auto" onclick="toggleKeyField()">${svg('eye',13)}明文</button>
+          <button class="btn ghost sm" id="f-key-btn" style="flex:0 0 auto" data-act="toggle-key-field">${svg('eye',13)}明文</button>
         </div>
         <span class="help" id="f-key-help">${pm.key}</span></div>
       <div class="field">
         <label>模型 <span class="help" id="modelsCount">${modalModels.length} 个</span></label>
         <div class="probe-bar">
-          <button class="btn ghost sm" onclick="addModelRow()">${svg('plus',13)}添加一行</button>
-          <button class="btn ghost sm" id="f-probe" onclick="probeUpstream()">${svg('test',13)}从上游探测更多</button>
+          <button class="btn ghost sm" data-act="add-model-row">${svg('plus',13)}添加一行</button>
+          <button class="btn ghost sm" id="f-probe" data-act="probe-upstream">${svg('test',13)}从上游探测更多</button>
           <span class="status-line ml-auto" id="probeStatus"></span>
         </div>
         <div class="models-box" id="modelsEditor"></div>
@@ -2571,8 +2571,8 @@ function openChannelForm(id){
       <div class="field"><label class="toggle"><input type="checkbox" id="f-autoAlias" ${c&&c.autoAlias?'checked':''}> 自动路由上游所有模型 <span class="help">（不勾则只暴露上表所列）</span></label></div>
     </div>
     <div class="m-ft">
-      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
-      <button class="btn primary" onclick="saveChannel()">${svg('check',13)}保存渠道</button>
+      <button class="btn ghost ml-auto" data-act="close-modal">取消</button>
+      <button class="btn primary" data-act="save-channel">${svg('check',13)}保存渠道</button>
     </div>`);
   renderModelRows();
   $('#f-proto').onchange=e=>{
@@ -2592,8 +2592,8 @@ function renderModelRows(){
     ? `<div class="model-row head"><div>对外名称 alias</div><div>${upLabel}</div><div></div><div></div></div>`+modalModels.map((r,i)=>`<div class="model-row" data-i="${i}">
         <input data-k="alias" value="${esc(r.alias)}" placeholder="alias">
         <input data-k="upstream" value="${esc(r.upstream)}" placeholder="upstream model">
-        <button class="tst" title="测试此模型" onclick="testRowModel(${i})">测</button>
-        <button class="del" title="删除" onclick="delModelRow(${i})">×</button>
+        <button class="tst" title="测试此模型" data-act="test-row-model" data-idx="${i}">测</button>
+        <button class="del" title="删除" data-act="del-model-row" data-idx="${i}">×</button>
       </div>`).join('')
     : '<div class="model-empty">还没有模型<br><span class="help">点「添加一行」手动加，或「从上游探测更多」批量拉取</span></div>';
   $('#modelsCount').textContent=modalModels.length+' 个';
@@ -2657,9 +2657,9 @@ function renderProbeList(){
       </label>`}).join('')}</div>
     <div class="pp-ft">
       <span class="sel" id="probeSelCnt"></span>
-      <button class="btn ghost sm ml-auto" onclick="probeSelectAll()">全选</button>
-      <button class="btn ghost sm" onclick="probeClearSel()">清空</button>
-      <button class="btn primary sm" id="probeAddBtn" onclick="probeAddSelected()">${svg('plus',13)}加入所选</button>
+      <button class="btn ghost sm ml-auto" data-act="probe-select-all">全选</button>
+      <button class="btn ghost sm" data-act="probe-clear-sel">清空</button>
+      <button class="btn primary sm" id="probeAddBtn" data-act="probe-add-selected">${svg('plus',13)}加入所选</button>
     </div>`;
   const qi=$('#probeQ',box);
   qi.oninput=()=>{probeQ=qi.value;filterProbeRows()};
@@ -2822,7 +2822,7 @@ function openImport(kind){
          <span>点击选择文件（可多选批量导入）</span>
          <span class="d-sub">${esc(m.accept)}</span>
        </label>
-       <input type="file" id="impFile" class="hide" accept="${m.accept}" multiple onchange="importFiles('${kind}',this)">
+       <input type="file" id="impFile" class="hide" accept="${m.accept}" multiple data-change="import-files" data-kind="${kind}">
        <div class="field"><span class="help">${m.hint}</span></div>
        <div class="field"><span class="help">⚠ ${m.warn}</span></div>
        <div class="field"><span class="status-line" id="impStatus"></span></div>
@@ -2831,14 +2831,14 @@ function openImport(kind){
     <div class="m-hd">
       <span class="m-ico">${svg(m.ico,14)}</span>
       <h2>${m.title}</h2>
-      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+      <button class="icon-btn ml-auto" data-act="close-modal">${svg('x',15)}</button>
     </div>
     <div class="m-bd">${body}</div>
     <div class="m-ft">
-      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
+      <button class="btn ghost ml-auto" data-act="close-modal">取消</button>
       ${m.mode==='paste'
-        ? `<button class="btn primary" id="impGo" onclick="doImport('${kind}')">${svg('upload',13)}导入</button>`
-        : `<button class="btn primary" onclick="document.getElementById('impFile').click()">${svg('upload',13)}选择文件</button>`}
+        ? `<button class="btn primary" id="impGo" data-act="do-import" data-kind="${kind}">${svg('upload',13)}导入</button>`
+        : `<button class="btn primary" data-act="pick-import-file">${svg('upload',13)}选择文件</button>`}
     </div>`);
   if(m.mode==='paste')setTimeout(()=>$('#impText')?.focus(),60);
 }
@@ -2934,7 +2934,7 @@ function openTestModels(opts){
       <span class="m-ico">${svg('test',14)}</span>
       <h2>测试模型</h2>
       <span class="help">${chId?'· 渠道 '+esc(chId):'· 完整调度'}</span>
-      <button class="icon-btn ml-auto" onclick="closeModal()">${svg('x',15)}</button>
+      <button class="icon-btn ml-auto" data-act="close-modal">${svg('x',15)}</button>
     </div>
     <div class="m-bd">
       <div class="probe-bar">
@@ -2953,8 +2953,8 @@ function openTestModels(opts){
         <div class="test-out" id="testOut"></div></div>
     </div>
     <div class="m-ft">
-      <button class="btn ghost ml-auto" onclick="closeModal()">取消</button>
-      <button class="btn primary" id="testRun" onclick="runTests()" ${total?'':'disabled'}>${svg('send',13)}运行测试</button>
+      <button class="btn ghost ml-auto" data-act="close-modal">取消</button>
+      <button class="btn primary" id="testRun" data-act="run-tests" ${total?'':'disabled'}>${svg('send',13)}运行测试</button>
     </div>`,true);
   const all=$('#testAll');
   all.onchange=()=>$$('#testList input[type=checkbox]').forEach(c=>c.checked=all.checked);
@@ -3051,6 +3051,71 @@ $('#globalSearch').addEventListener('keydown',e=>{
   if(e.key==='Enter'){const q=e.target.value.trim();if(!q)return;chQ=q;go('channels');toast('已在渠道中搜索：'+q,'ok')}
 });
 
+/* ═════════════════════════ 事件委托：全站唯一事件入口（v1.18.7） ═════════════════════════
+   内联事件属性（onclick=/onchange=/onkeydown=）已全量清零：动作进 data-act、参数走 data-*，
+   document 上的委托监听统一分发——8 秒轮询整页重绘不用重挂；点击从目标向上找最近的 [data-act]，
+   行内按钮天然只触发自己（行/卡片的 data-act 不会再被按钮冒泡触发，stopPropagation 成为历史）。
+   新增交互：在 ACTS 里加一行 + 模板里写 data-act，别再写内联属性
+   （test/security-headers-e2e.test.js 的回潮守卫会拦）。change 走同一条路（目前仅导入文件框）。 */
+const ACTS={
+  'export-usage':()=>exportUsage(),
+  'recheck-all':el=>recheckAll(el),
+  'go':el=>go(el.dataset.page),
+  'open-channel':el=>openChannel(el.dataset.id),
+  'open-log':el=>openLog(el.dataset.id),
+  'open-model':el=>openModel(el.dataset.m),
+  'toggle-imp-menu':()=>toggleMenu('impMenu'),
+  'open-import':el=>openImport(el.dataset.kind),
+  'open-test-models':el=>openTestModels(el.dataset.id?{channelId:el.dataset.id}:{}),
+  'open-channel-form':el=>openChannelForm(el.dataset.id||undefined),
+  'toggle-ch':el=>toggleCh(el.dataset.id),
+  'close-drawer':()=>closeDrawer(),
+  'toggle-drawer-key':el=>toggleDrawerKey(el.dataset.id,el),
+  'copy-ch-key':el=>copyChKey(el.dataset.id,el),
+  'reprobe':el=>reprobe(el.dataset.id),
+  'drawer-edit-channel':el=>{closeDrawer();openChannelForm(el.dataset.id)},
+  'drawer-toggle-open':el=>{toggleCh(el.dataset.id);openChannel(el.dataset.id)},
+  'del-channel':el=>delChannel(el.dataset.id),
+  'export-models':()=>exportModels(),
+  'copy-models':()=>copyModels(),
+  'copy':el=>copyText(el.dataset.t,el),
+  'copy-curl':el=>copyCurl(el.dataset.t,el),
+  'clear-usage':()=>clearUsage(),
+  'export-logs':()=>exportLogs(),
+  'apply-log-filter':()=>drawLogTable(),
+  'pg-clear':()=>pgClear(),
+  'pg-copy-curl':()=>pgCopyCurl(),
+  'copy-all-endpoints':el=>copyAllEndpoints(el),
+  'copy-gw-key':el=>copyGwKey(el),
+  'show-key-help':()=>showKeyHelp(),
+  'close-modal':()=>closeModal(),
+  'toggle-key-field':()=>toggleKeyField(),
+  'add-model-row':()=>addModelRow(),
+  'probe-upstream':()=>probeUpstream(),
+  'save-channel':()=>saveChannel(),
+  'test-row-model':el=>testRowModel(+el.dataset.idx),
+  'del-model-row':el=>delModelRow(+el.dataset.idx),
+  'probe-select-all':()=>probeSelectAll(),
+  'probe-clear-sel':()=>probeClearSel(),
+  'probe-add-selected':()=>probeAddSelected(),
+  'import-files':el=>importFiles(el.dataset.kind,el),
+  'pick-import-file':()=>document.getElementById('impFile').click(),
+  'do-import':el=>doImport(el.dataset.kind),
+  'run-tests':()=>runTests(),
+};
+document.addEventListener('click',e=>{
+  const el=e.target&&e.target.closest?e.target.closest('[data-act]'):null;
+  if(!el)return;
+  const fn=ACTS[el.getAttribute('data-act')];
+  if(fn)fn(el);
+});
+document.addEventListener('change',e=>{
+  const el=e.target&&e.target.closest?e.target.closest('[data-change]'):null;
+  if(!el)return;
+  const fn=ACTS[el.getAttribute('data-change')];
+  if(fn)fn(el);
+});
+
 /* 登录门（v1.18.6 会话化）：管理密钥只在这里出现一次——POST /admin/api/session 换回
    HttpOnly + SameSite=Strict 的会话 cookie 后即被丢弃，不落 localStorage、不进地址栏、JS 读不到。
    之后所有管理面调用只靠 cookie；会话过期/被轮换清掉时 api() 收到 401 重新弹这扇门。 */
@@ -3063,13 +3128,13 @@ function showKeyGate(){
       <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
       <span style="font-size:17px;font-weight:600">管理密钥</span></div>
     <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY<br>验证通过后会换成会话（12 小时有效），密钥本身不会被浏览器存下来。</div>
-    <input id="zz-gate-input" type="password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box"
-      onkeydown="if(event.key==='Enter'){document.getElementById('zz-gate-btn').click()}">
+    <input id="zz-gate-input" type="password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box">
     <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>
     <button id="zz-gate-btn" class="btn" style="width:100%;margin-top:6px">进入控制台</button>
   </div>`;
   document.body.appendChild(g);
   const input=g.querySelector('#zz-gate-input');input.focus();
+  input.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('zz-gate-btn').click()});
   const attempt=async()=>{
     const k=input.value;if(!k.trim())return;
     const errEl=g.querySelector('#zz-gate-err');errEl.textContent='';

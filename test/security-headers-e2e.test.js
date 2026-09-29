@@ -10,6 +10,8 @@
  *      真正的兜底是 connect-src 'self'（偷到 cookie 也发不出去）与 frame-ancestors 'none'。
  *   ③ 第三批（v1.18.6）：管理面 ?key= 鉴权已拆除（渗透报告点名"密钥进浏览器历史"），
  *      浏览器改走会话 cookie（见 test/admin-session-e2e.test.js）；客户端面 ?key= 保留（Gemini SDK 另一模式）。
+ *   ④ 第四批（v1.18.7）：内联事件处理器（onclick=/onchange=/onkeydown= 属性）全量清零——
+ *      动作进 data-act、参数走 data-*、document 委托分发；外部可控 ID 不再拼进事件代码字符串。
  *
  * 安全约束：动态空闲端口；配置/用量在系统临时目录（绝不动仓库 config.json/usage.json）。
  * 跑法：node test/security-headers-e2e.test.js      （退出码非 0 表示有回归）
@@ -83,6 +85,33 @@ const freePort = () => new Promise((res, rej) => {
     /connect-src 'self'/.test(cspEntry ? cspEntry[1] : '') &&
     /frame-ancestors 'none'/.test(cspEntry ? cspEntry[1] : '') &&
     /base-uri 'self'/.test(cspEntry ? cspEntry[1] : ''));
+
+  /* ── 第四批（v1.18.7）：内联事件处理器清零——动作走 data-act 委托 ── */
+  const SHELL = fs.readFileSync(path.join(ROOT, 'build', 'shell.html'), 'utf8');
+  const PROD = fs.readFileSync(path.join(ROOT, 'console.html'), 'utf8');
+  const inlineAttrRe = /on(?:click|change|keydown|input|submit)="/;
+  check('app.js / shell.html / 产物 console.html 里内联事件属性全部为 0（onclick=/onchange=/onkeydown=…）',
+    !inlineAttrRe.test(APP) && !inlineAttrRe.test(SHELL) && !inlineAttrRe.test(PROD),
+    { app: inlineAttrRe.test(APP), shell: inlineAttrRe.test(SHELL), prod: inlineAttrRe.test(PROD) });
+  check('产物里 data-act 按钮真实存在（不是空壳委托）', (PROD.match(/data-act="/g) || []).length >= 60,
+    (PROD.match(/data-act="/g) || []).length);
+  check('委托接线进了产物（ACTS 表 + document 的 click/change 两个监听）',
+    PROD.includes('const ACTS={') && /document\.addEventListener\('click'/.test(PROD) && /document\.addEventListener\('change'/.test(PROD));
+  const actsBlock = APP.slice(APP.indexOf('const ACTS={'), APP.indexOf('};', APP.indexOf('const ACTS={')));
+  const actsKeys = new Set([...actsBlock.matchAll(/'([a-z-]+)':/g)].map((m) => m[1]));
+  const usedNames = new Set([
+    ...[...(APP + SHELL).matchAll(/data-act="([a-z-]+)"/g)].map((m) => m[1]),
+    ...[...(APP + SHELL).matchAll(/data-change="([a-z-]+)"/g)].map((m) => m[1]),
+  ]);
+  const missingActs = [...usedNames].filter((k) => !actsKeys.has(k));
+  const deadActs = [...actsKeys].filter((k) => !usedNames.has(k));
+  check('ACTS 与模板双向一一对应（用到的都注册了，注册的都用到了）',
+    missingActs.length === 0 && deadActs.length === 0, { missingActs, deadActs });
+  check('外部可控 ID/请求 ID 只走 data-* 属性（不再拼进事件代码字符串）',
+    (APP.match(/data-act="[a-z-]+" data-(?:id|t)="\$\{esc\((?:c|l)\.id\)\}"/g) || []).length >= 14 &&
+    !/onclick="[^"]*\$\{esc\((?:c|l)\.id\)\}/.test(APP));
+  check('抽屉遮罩（shell.html）也走 data-act，不再是 onclick=',
+    SHELL.includes('id="scrim" data-act="close-drawer"'));
 
   /* ── 第二批（v1.18.4）的装配守卫：密钥默认不下发、原文按需取、失败限流 ── */
   check('两处「渠道列表」下发掩码，写 config.json 的那处仍保留原文（否则写盘会把密钥覆盖成掩码）',
