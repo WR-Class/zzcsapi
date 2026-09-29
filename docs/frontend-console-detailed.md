@@ -247,9 +247,10 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ### 4.11 运行期设置页 `.set-*`（生产独有，设计稿不含）
 
-「工具 → 运行期设置」页上的三张开关卡（v1.18）。一页三卡：**卡头开关 + 卡体旋钮 + 生效角标 + 实时计数**；
-关闭时整卡降权（`.set-card.muted`，旋钮一并 `disabled`）。样式全部在 `build/extra.css`（第 59–77 行），
-复用全站令牌，**不引入新颜色**。
+「工具 → 运行期设置」页上的四张开关卡（v1.18 三张；v1.18.8 增第四张「thinking 回放」）。一页四卡：**卡头开关 + 卡体旋钮 + 生效角标 + 实时计数**；
+关闭时整卡降权（`.set-card.muted`，旋钮一并 `disabled`）。样式全部在 `build/extra.css`（第 59–80 行），
+复用全站令牌，**不引入新颜色**；四卡容器 `.grid.set-cards`——**两排各两张**（用户拍板，≤900px 折一列；
+不是通用 `.g4` 的四连排，那条是原型别处也在用的工具类，改它会殃及无辜）。
 
 | 类 | 职责 |
 | --- | --- |
@@ -404,19 +405,21 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   `NAV`（`build/app.js` 339）加一项、`go()`（362）与 `render()`（161）**两张分发表都要加** `settings:vSettings`
   —— 只加一张会出现"能进页但 8 秒轮询不刷新"（v1.18 之前自动权重页就栽在 `render()` 表漏页上，见 §8.22）。
 - 结构：页头（标题 + 副标题「改完立即生效、立即落库，无需重启容器」+ 右侧「还原 / 保存设置」）→ 错误条 `.set-err`
-  → `.grid.g3` 里三张 `.set-card`（会话粘性 / 客户端限流 / 指标端点）。
+  → `.grid.set-cards` 里四张 `.set-card`（会话粘性 / 客户端限流 / 指标端点 / thinking 回放，两排各两张）。
 - 数据源**唯一**：`GET/POST /admin/api/settings`。`loadAll()`（139）把 `settings` 一起拉回来写进 `RAW.settings`，
   **单独 `.catch(()=>null)` 兜底**（端点挂了不能拖垮整页）。`RAW.settings` 缺失时页面显示「设置接口不可用」，不白屏。
-- 三张卡的**唯一真源**是 `SET_GROUPS`（729）/ `SET_META`（730）/ `SET_FIELDS`（738）：加字段只改这三处，
-  `setCard()`（790）按声明生成行，`setPayload()`（768）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
+- 四张卡的**唯一真源**是 `SET_GROUPS`（729）/ `SET_META`（730）/ `SET_FIELDS`（740）：加字段只改这三处，
+  `setCard()`（797）按声明生成行，`setPayload()`（774）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
+  第四张卡（v1.18.8）走同一条声明路：`SET_META` 的「thinking 回放」条目 + `SET_FIELDS` 的
+  `ttlSec`/`maxEntries` 两旋钮 + `setStat()`（789）读 `status.thinkingReplay`（缓存条数 / 学习 / 修复命中 / 未命中 / 作废）。
 - **只提交有改动的组 / 字段**（PATCH 语义，`setPayload`）：没带的不动、不归零；留空的数字不下发（留空 ≠ 0）。
   没改动时「保存设置」按钮 `disabled`。
-- **400 原文直显**：`api()`（215）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（856）取 `e.body.error`
+- **400 原文直显**：`api()`（215）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（863）取 `e.body.error`
   写进 `.set-err` —— 后端已点名到字段，照抄给用户就能直接改。
 - 提交期间按钮 `disabled` + 文案变「保存中…」（`setSaving` 幂等，避免连点造成两次写入）。
-- **实时计数**来自 `status` 段：粘性命中/未命中/学习条数、在飞/峰值/限速拒绝/并发拒绝、`/metrics` 是否匿名可抓
-  —— 停在页面等轮询就会跟着刷新。
-- 样式见 §4.11 的 `.set-*`（`build/extra.css` 59–77）。
+- **实时计数**来自 `status` 段：粘性命中/未命中/学习条数、在飞/峰值/限速拒绝/并发拒绝、`/metrics` 是否匿名可抓、
+  thinking 回放缓存条数/学习/修复命中/未命中/作废（v1.18.8）——停在页面等轮询就会跟着刷新。
+- 样式见 §4.11 的 `.set-*`（`build/extra.css` 59–80）。
 - **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
 
 ### 5.10 密钥管理 `vKeys`（生产独有，原型无此页，v1.18.5）
@@ -425,9 +428,9 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   `NAV`（`build/app.js` 339）加一项、`go()`（362）与 `render()`（161）**两张分发表都要加** `keys:vKeys`——只加一张会出现"能进页但 8 秒轮询不刷新"（同 §5.9 的教训）。
 - 数据源唯一：`GET /admin/api/keys`，随 `loadAll()`（139）一起拉，**单独 `.catch(()=>null)` 兜底**（端点挂了显示「密钥接口不可用」，不白屏、不拖垮整页）。
   响应里**只有掩码与来源**（`gatewayKey`/`adminKey` 各带 `masked`/`set`/`source`，外加 `rotatedAt`/`keysInsecure`/`minLen`/`noAuth`）。
-- 两张密钥卡（`keyCard` 1513）：当前值掩码 + 来源角标（控制台轮换 / 环境变量 / 首启生成）+ 「显示」「复制」按钮 + 手填输入框 + 「随机生成」「轮换」。
+- 两张密钥卡（`keyCard` 1520）：当前值掩码 + 来源角标（控制台轮换 / 环境变量 / 首启生成）+ 「显示」「复制」按钮 + 手填输入框 + 「随机生成」「轮换」。
   **「随机生成」只在本地把 48 位随机串（大小写字母+数字+特殊字符四样齐全，与服务端 `genKey` 同规格）填进输入框（`fillGeneratedKey`，用 `crypto.getRandomValues`，不发任何请求）——用户先看到/复制新值，再点「轮换」才提交生效**（服务端 `/admin/api/keys/generate` 端点保留给 API 调用方，控制台不走它）。
-- **明文绝不进页面快照**：点「显示」才经 `GET /admin/api/admin-key` / `GET /admin/api/gateway-key` 现取一次（`toggleKeyReveal` 1592），只存内存 `keyReveal`，再点「隐藏」即清。
+- **明文绝不进页面快照**：点「显示」才经 `GET /admin/api/admin-key` / `GET /admin/api/gateway-key` 现取一次（`toggleKeyReveal` 1599），只存内存 `keyReveal`，再点「隐藏」即清。
 - **换管理密钥后的自我保命（v1.18.6 会话语义）**（`rotateKey` 1625）：成功后**前端什么都不用做也不再写任何浏览器存储**——
   服务端在轮换响应里**补发一枚新会话 cookie**（`Set-Cookie`，换管理密钥会清空全部旧会话，但发起轮换的这个浏览器当场拿到新会话），
   发起页无感继续用；其它标签页/设备拿旧 key（或旧会话）立即 401 弹回登录门，页面文案明示。
@@ -565,7 +568,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | `pgSend` | `POST /v1/chat/completions` | 支持 `stream` |
 | Playground 生图 | `POST /v1/images/generations` | 需上游支持图像接口 |
 | （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
-| 「运行期设置」页（**v1.18 已实现**，见 §5.9） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：三张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
+| 「运行期设置」页（**v1.18 已实现**，见 §5.9；v1.18.8 增第四组） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`（v1.18.8 增）四组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：四张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
 | 「密钥管理」页（**v1.18.5 已实现**，见 §5.10） | `GET /admin/api/keys` · `POST /admin/api/keys` · `POST /admin/api/keys/generate` · `POST /admin/api/keys/reset` · `GET /admin/api/admin-key` | **v1.18.5 新增**：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY。GET 只回**掩码 + 来源**（console / env / generated / none）；POST 立即生效并写入 `config.json` 的 `auth` 段（控制台「随机生成」是本地填框，不走 generate 端点）（**优先级高于环境变量**），**旧密钥立即失效**；新明文只在响应的 `newKeys` 里回这一次；reset 删掉 `auth` 段把控制权交还给环境变量 |
 | 登录门 / 「退出登录」（**v1.18.6 已实现**，见 §8.29） | `POST /admin/api/session` · `DELETE /admin/api/session` | **v1.18.6 新增**：管理密钥登录门换会话——POST body `{key}` 交一次 `ADMIN_KEY` 换回 `HttpOnly + SameSite=Strict` 会话 cookie（`zz_session`，12 小时，**刻意无 `Secure`**：http 本地/局域网部署，加了反而种不下去）；端点在管理面鉴权闸门**之前**（登录时手里还没有会话），登录失败计入 admin 失败限流（NOAUTH 放行）；DELETE 只杀自己那枚 token 并过期 cookie，其余方法 405。轮换/重置管理密钥会清空全部会话，轮换响应**补发新会话**给发起轮换的浏览器 |
 
@@ -1368,6 +1371,20 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **验证**：`test/security-headers-e2e.test.js` 增第四批守卫（app.js / shell.html / 产物三处内联属性必须为 0、产物 `data-act` 按钮真实存在、委托接线进产物、`ACTS` 与模板双向一一对应、外部可控 ID 只走 `data-*` 属性、抽屉遮罩也走 `data-act`）→ **57 通过 0 失败**；`test/console-state.test.js` 增**事件委托**一节（把产品真实委托块原样抠出来在桩函数上真跑：click 把 `dataset.id` 送进动作函数、嵌套只触发最近那枚、未知动作与空白点击静默不炸、`openTestModels`/`openChannelForm` 参数形状保留、数值走 `+dataset.idx`、change 送 `importFiles`、双向覆盖；41 个动作函数名刻意硬编码，`ACTS` 引用未登记函数名会当场报错）→ **183 项断言**。全量回归 **31 文件 / 1470 断言 / 0 失败**。
 
 **纪律（AGENTS §2 已同步为硬约束）**：新增交互一律 `data-act` + `ACTS` 注册，禁止再写内联 `onclick=`/`onchange=`/`onkeydown=` 属性——两份守卫会拦回潮。
+
+---
+
+### 8.31 v1.18.8 thinking 回放缓存落地 + 「运行期设置」第四张卡（2026-10-03，对象 `server.js` 回放块 + `build/app.js` 设置卡 + 产物 `console.html` + `test/thinking-replay-e2e.test.js` 新增 + 五份既有测试同步 + 全套文档）
+
+**背景（三次决策）**：v1.17 只落设计稿（"往用户请求里回注历史内容"风险先行）；v1.18 前置验证（`test/thinking-fidelity.test.js`）发现跨协议路径**产不出** thinking 块、400 不可达，判定"现有实现下无收益"不实现；v1.18.8 用户拍板——项目已开源，**会弄丢 `signature` 的客户端是真实受益人群**（同协议直通上，部分框架重序列化时丢掉不认识的字段，上游按规矩 400）。设计稿随实现改写为 as-built 记录（[`thinking-replay-design.md`](thinking-replay-design.md) §9 第三次决策）。
+
+**处置（后端，`server.js`）**：`METRICS_CFG` 之后新增 thinking 回放块——`normReplayCfg` / `REPLAY` 表 / `replaySessionKeyFor`（复用粘性键推导但**不受粘性开关牵连**）/ `replayBlockKey`（`会话键|渠道|模型|sha1(thinking)前24位` 四元键）/ `replayLearn`（只学带签名的对）/ `replaySignature` / `replayStale` / `repairThinkingBody`（**只修丢字段的、没坏返回 null 一个字节不动**）/ `thinkingPairsFromAnthropic` / `thinkingStreamScan`（流式分片攒整）/ `replayStatus`。三处接线：直通选路唯一注入（anthropic 才修）、非流式直通 + 流式侧扫**旁路学习**（不改转发字节）、4xx 透传点名 `signature|thinking` 即作废整组。设置系统升为**四组**（`persistConfig` 白名单、`applyRuntimeSettings`、`runtimeSettingsView`、settings 端点 groups、`/admin/api/status`、`/metrics` gauge+六事件）。
+
+**处置（前端，`build/app.js` + `build/extra.css`）**：第四张卡完全走既有声明路——`SET_GROUPS` 增 `thinkingReplay`（729，行内追加）、`SET_META` 增「thinking 回放」条目（730）、`SET_FIELDS` 增 `ttlSec`/`maxEntries` 两旋钮（740）、`setStat()` 增回放计数行（789）、`vSettings` 副标题与卡序更新（821）、卡容器 `.grid.g3`→`.grid.set-cards`（用户过目时拍板：**四张卡不要一排四连，要两排各两张**——初版借用通用 `.g4` 四连排被否；`.g4` 是原型别处也在用的工具类不能改它的定义，故在 `.set-*` 自家地盘 `build/extra.css` 78–80 行新加 `.set-cards` 两列规则 + ≤900px 折一列）。**零新交互**：开关走既有 `setToggle`、保存走既有 `setSave`/`saveSettings`，无新 `ACTS`、无内联属性。锚点漂移：`SET_META` 内 +2、`SET_FIELDS` 内 +2、`setStat` +2 ⇒ app.js 其后整体 **+7**（`setPayload` 774 / `setStat` 789 / `setCard` 797 / `vSettings` 821 / `saveSettings` 863 / `keyCard` 1520 / `toggleKeyReveal` 1599 / `fillGeneratedKey` 1625；事件委托块 `ACTS` 等 2367–2431 → 2374–2438）；`extra.css` 77→**80 行** ⇒ **JS 偏移 +686 → +689**（CSS 偏移仍 +13；三点实测复核：`const IC` 3→产物 692、`autoWeightCard` 657→1346、`tick` 2482→3171）。app.js 2505→**2512 行**，产物 176,449→**177,314 字符 / 3205 行**。
+
+**验证**：`node --check server.js` 通过；新增 `test/thinking-replay-e2e.test.js`（**64 项**：§0 装配守卫 12 + §1 纯函数真值表 + §2 真链路——对照轮关=400 复现、开启后逐字段补回、跨会话/渠道/模型三组反向、流式学习照修、完好客户端一字不动、4xx 作废、跨渠道不借）；既有测试同步：`thinking-fidelity`（36，`signature` 守卫改写为区域守卫）、`same-protocol-passthrough`（44，选路/非流式守卫重锚 + 修复注入守卫）、`settings-api-e2e`（68，四组 + 第四组真链路）、`metrics-e2e`（45，回放 gauge+六事件）、`console-state`（185，四张卡 + 第四组 PATCH）、`weighted-rr`（31，persistConfig 窗口放宽 1400→1900）。全量 **32 文件 / 1548 断言 / 0 失败**（v1.18.7 基线 31/1470）。
+
+**纪律（AGENTS §2 已同步为硬约束）**：thinking 回放六条配套纪律（只回放真签过的、四元键不跨、没坏不碰、4xx 作废、默认关、学习走旁路）；改回放路径后必跑 `test/thinking-replay-e2e.test.js` 与 `test/thinking-fidelity.test.js`。
 
 ---
 

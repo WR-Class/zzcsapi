@@ -35,6 +35,11 @@
     "enabled": true,
     "public": false
   },
+  "thinkingReplay": {
+    "enabled": false,
+    "ttlSec": 3600,
+    "maxEntries": 2048
+  },
   "auth": {
     "gatewayKey": "",
     "adminKey": ""

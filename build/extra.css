@@ -56,10 +56,10 @@
 /* 份额为 0 的候选列宽就是 0，画在列里等于看不见，单独一行交代它为什么没分到 */
 .aw-zero{margin-top:8px;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
 
-/* ── 运行期设置页 .set-*（v1.18：会话粘性 / 客户端限流 / 指标端点的读写面板） ─────────
+/* ── 运行期设置页 .set-*（v1.18：会话粘性 / 客户端限流 / 指标端点；v1.18.8 增 thinking 回放） ─────────
    生产独有组件（设计稿不含），复用全站令牌，不引入新颜色。
-   一页三卡，卡头开关、卡体旋钮 + 生效角标 + 实时计数；关闭时整卡降权（.muted）且旋钮禁用。
-   钳制提示（.set-eff）用中性色 —— 它不是错误，只是"生效值与你填的不同"。 */
+   一页四卡，两排各两张（用户拍板，v1.18.8；不是通用 .g4 的四连排）；卡头开关、卡体旋钮 + 生效角标 + 实时计数；
+   关闭时整卡降权（.muted）且旋钮禁用。钳制提示（.set-eff）用中性色 —— 它不是错误，只是"生效值与你填的不同"。 */
 .set-err{display:none;margin:-4px 0 14px;padding:9px 12px;border-radius:var(--r-sm);font-size:12px;line-height:1.6;
   color:var(--err);background:color-mix(in srgb,var(--err) 12%,transparent);border:1px solid color-mix(in srgb,var(--err) 30%,transparent)}
 .set-err.on{display:block}
@@ -75,3 +75,6 @@
 .set-stat b{color:var(--tx);font-weight:600}
 .set-stat .btn{margin-left:8px}
 .set-card.muted .set-desc,.set-card.muted .set-row>label{color:var(--tx-3)}
+/* 四张卡两排各两张：只用 .grid 的间距与 display，列数自己定（通用 .g4 是四连排，原型别处在用，不能改它） */
+.set-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:900px){.set-cards{grid-template-columns:1fr}}
