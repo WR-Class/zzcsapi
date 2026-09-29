@@ -390,29 +390,51 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 三套协议（OpenAI / Anthropic / Gemini）的 baseURL、密钥、示例代码，代码片段用 `.code` + 页签切换（`vAccess` 1680 内）。
 
 - **原型**：地址与密钥是文件内写死的演示值
-- **生产**：`vAccess`（`build/app.js` 1487）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey`、模型名，
-  按当前 `location.origin` 拼端点 URL；`showKeyHelp()`（`build/app.js` 1581）给**只读**的密钥轮换步骤（每条命令可单独复制）；
+- **生产**：`vAccess`（`build/app.js` 1658）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey` 掩码、模型名，
+  按当前 `location.origin` 拼端点 URL；页头「密钥管理」按钮 `go('keys')` 直接跳**在线轮换页**（v1.18.5，见 §5.10）；
+  `showKeyHelp()`（`build/app.js` 1754）降级为**命令行备用路径**步骤清单（每条命令可单独复制，且会提醒"控制台轮换过之后 .env 说了不算"）；
   端点地址行与客户端配置表 Base URL 列均带复制按钮
 
 ### 5.9 运行期设置 `vSettings`（生产独有，原型无此页）
 
-- 位置：「工具」组第二个页签，**夹在 Playground 与接入信息之间**（工具组顺序：Playground / **运行期设置** / 接入信息）。
-  `NAV`（`build/app.js` 337）加一项、`go()`（359）与 `render()`（158）**两张分发表都要加** `settings:vSettings`
+- 位置：「工具」组第二个页签（工具组顺序：Playground / **运行期设置** / **密钥管理** / 接入信息）。
+  `NAV`（`build/app.js` 340）加一项、`go()`（363）与 `render()`（161）**两张分发表都要加** `settings:vSettings`
   —— 只加一张会出现"能进页但 8 秒轮询不刷新"（v1.18 之前自动权重页就栽在 `render()` 表漏页上，见 §8.22）。
 - 结构：页头（标题 + 副标题「改完立即生效、立即落库，无需重启容器」+ 右侧「还原 / 保存设置」）→ 错误条 `.set-err`
   → `.grid.g3` 里三张 `.set-card`（会话粘性 / 客户端限流 / 指标端点）。
 - 数据源**唯一**：`GET/POST /admin/api/settings`。`loadAll()`（139）把 `settings` 一起拉回来写进 `RAW.settings`，
   **单独 `.catch(()=>null)` 兜底**（端点挂了不能拖垮整页）。`RAW.settings` 缺失时页面显示「设置接口不可用」，不白屏。
-- 三张卡的**唯一真源**是 `SET_GROUPS`（726）/ `SET_META`（727）/ `SET_FIELDS`（735）：加字段只改这三处，
-  `setCard()`（787）按声明生成行，`setPayload()`（765）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
+- 三张卡的**唯一真源**是 `SET_GROUPS`（730）/ `SET_META`（731）/ `SET_FIELDS`（739）：加字段只改这三处，
+  `setCard()`（791）按声明生成行，`setPayload()`（769）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
 - **只提交有改动的组 / 字段**（PATCH 语义，`setPayload`）：没带的不动、不归零；留空的数字不下发（留空 ≠ 0）。
   没改动时「保存设置」按钮 `disabled`。
-- **400 原文直显**：`api()`（211）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（853）取 `e.body.error`
+- **400 原文直显**：`api()`（214）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（857）取 `e.body.error`
   写进 `.set-err` —— 后端已点名到字段，照抄给用户就能直接改。
 - 提交期间按钮 `disabled` + 文案变「保存中…」（`setSaving` 幂等，避免连点造成两次写入）。
 - **实时计数**来自 `status` 段：粘性命中/未命中/学习条数、在飞/峰值/限速拒绝/并发拒绝、`/metrics` 是否匿名可抓
   —— 停在页面等轮询就会跟着刷新。
 - 样式见 §4.11 的 `.set-*`（`build/extra.css` 59–77）。
+- **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
+
+### 5.10 密钥管理 `vKeys`（生产独有，原型无此页，v1.18.5）
+
+- 位置：「工具」组第三个页签，**夹在运行期设置与接入信息之间**（工具组顺序：Playground / 运行期设置 / **密钥管理** / 接入信息）。
+  `NAV`（`build/app.js` 340）加一项、`go()`（363）与 `render()`（161）**两张分发表都要加** `keys:vKeys`——只加一张会出现"能进页但 8 秒轮询不刷新"（同 §5.9 的教训）。
+- 数据源唯一：`GET /admin/api/keys`，随 `loadAll()`（139）一起拉，**单独 `.catch(()=>null)` 兜底**（端点挂了显示「密钥接口不可用」，不白屏、不拖垮整页）。
+  响应里**只有掩码与来源**（`gatewayKey`/`adminKey` 各带 `masked`/`set`/`source`，外加 `rotatedAt`/`keysInsecure`/`minLen`/`noAuth`）。
+- 两张密钥卡（`keyCard` 1514）：当前值掩码 + 来源角标（控制台轮换 / 环境变量 / 首启生成）+ 「显示」「复制」按钮 + 手填输入框 + 「随机生成」「轮换」。
+  **「随机生成」只在本地把 48 位随机串（大小写字母+数字+特殊字符四样齐全，与服务端 `genKey` 同规格）填进输入框（`fillGeneratedKey`，用 `crypto.getRandomValues`，不发任何请求）——用户先看到/复制新值，再点「轮换」才提交生效**（服务端 `/admin/api/keys/generate` 端点保留给 API 调用方，控制台不走它）。
+- **明文绝不进页面快照**：点「显示」才经 `GET /admin/api/admin-key` / `GET /admin/api/gateway-key` 现取一次（`toggleKeyReveal` 1591），只存内存 `keyReveal`，再点「隐藏」即清。
+- **换管理密钥后的自我保命**（`rotateKey` 1606）：成功后先把响应 `newKeys.adminKey` 同时写进 `sessionStorage` **和** `localStorage` 的 `adminKey` 再刷新——
+  `api()` 每次请求现读 sessionStorage，不换的话下一次 8 秒轮询就 401 → 弹回登录门，**等于轮换者把自己踢出去**。其它标签页/设备拿旧 key 会 401，页面文案明示。
+- **「轮换」单击直接生效**（用户明确要求，最初的"点两下确认"被否掉；页面上方警示条与按钮旁文案都写明"旧密钥立即失效"）。「随机生成」只是本地填框，不算危险动作。
+  「回到环境变量值」保留两步确认（`armConfirm` 1582，第一次点击变成「确认…」，6 秒不复位自动还原）——它会把控制台轮换的成果整段交还给 .env。
+  无论手填还是随机生成后点「轮换」，生效的那一刻所有拿旧 key 的调用方就开始 401。
+- 手填草稿存 `keyDraft`（1506）并在模板回填（8 秒轮询重绘约定，见代码地图 §0.2「状态回填约定」）；成功/失败后清空。
+- 「回到环境变量值」（`resetKeysAction` 1630 → `POST /admin/api/keys/reset`）：删掉 `config.json` 的 `auth` 段，把密钥控制权交还给环境变量。
+- 后端语义：优先级链 `config.auth`（控制台轮换）**>** 环境变量 **>** 首启生成；准入规则 8–128 位可见 ASCII、禁 `change-me`、两把不得相同，**管理密钥另需大小写字母+数字+特殊字符四样齐全**（v1.18.5 从"16 位"放宽并加了管理密钥复杂度门槛）；
+  轮换即清管理面失败计数。细节与真链路验证见 `test/key-rotation-e2e.test.js`（75 项断言）与 README「行为细节」。
+- 接入信息页的「轮换密钥」按钮从"只读步骤弹窗"改为 `go('keys')` 直达本页；`showKeyHelp` 降级为命令行备用路径（见 §5.8）。
 - **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
 
 ---
@@ -540,6 +562,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | Playground 生图 | `POST /v1/images/generations` | 需上游支持图像接口 |
 | （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
 | 「运行期设置」页（**v1.18 已实现**，见 §5.9） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：三张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
+| 「密钥管理」页（**v1.18.5 已实现**，见 §5.10） | `GET /admin/api/keys` · `POST /admin/api/keys` · `POST /admin/api/keys/generate` · `POST /admin/api/keys/reset` · `GET /admin/api/admin-key` | **v1.18.5 新增**：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY。GET 只回**掩码 + 来源**（console / env / generated / none）；POST 立即生效并写入 `config.json` 的 `auth` 段（控制台「随机生成」是本地填框，不走 generate 端点）（**优先级高于环境变量**），**旧密钥立即失效**；新明文只在响应的 `newKeys` 里回这一次；reset 删掉 `auth` 段把控制权交还给环境变量 |
 
 **回填时的注意事项**：
 
@@ -1288,6 +1311,20 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **残留（明确记下，别当成已解决）**：① 渠道密钥一旦被揭示，仍会出现在浏览器内存与剪贴板里——这是"用户主动点击"必然的代价，不是漏洞；② 揭示端点没有单独的频率限制（管理面整体的失败限流挡的是**爆破**，不是"管理员自己反复刷"）；③ CSP 仍未加（需按真实资源单独设计 + 浏览器验证）。
 
 **验证**：`node test/security-headers-e2e.test.js` 新增「第二批」一节——两处渠道列表只下发掩码而写盘构造保留原文、`POST` 留空即保持原密钥（含真链路往返）、`/admin/api/config` 不再交出 `adminKey` 且新增 `keysInsecure`、两个揭示端点仍需 admin、鉴权改 `timingSafeEqual`、9 处鉴权点全走 `authGate`、连续失败到阈值转 429 + `Retry-After` 且客户端面不受牵连；全量回归；8788 灰度实例实测。`node build/build.js` 通过（产物 **165,769 字符 / 187,743 字节**）。
+
+### 8.27 v1.18.5 密钥管理页：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY（2026-10-02，对象 `server.js` + `build/app.js` + 产物 `console.html` + 新增 `test/key-rotation-e2e.test.js`）
+
+**问题（用户原话："就这个轮换密钥不能做成可编辑的？不能只是让你修改吧？"）**：`GATEWAY_KEY` / `ADMIN_KEY` 只来自环境变量（`.env` → compose → 进程），容器里改不了 `.env`，"轮换"只能手改文件 + 重开容器；控制台的「轮换密钥」按钮点开的只是一张**只读**步骤清单。
+
+**设计决策（用户拍板）**：① 优先级链 `config.auth`（控制台轮换）**> 环境变量 >** 首启生成——不这样做，重启就把轮换结果顶回去（看起来改了、其实没生效）；代价是 `.env` 从"唯一真源"降级为"初始值"，所以页面必须显示每把密钥的**来源**、并提供「回到环境变量值」。② **旧密钥立即失效，不设宽限期**。③ 新页放「工具」组，夹在运行期设置与接入信息之间。
+
+**后端（`server.js`）**：启动时 `applyManagedKeys()`（在 `resolveGeneratedKeys()` 之前）让 `config.auth` 压过环境变量；`persistConfig` 白名单加 `auth`（否则保存任意渠道就把轮换结果抹掉）。新增 5 个端点：`GET /admin/api/keys`（掩码 + 来源 + `keysInsecure` + `rotatedAt`）、`GET /admin/api/admin-key`（与 v1.18.4 的 gateway-key 揭示端点对称）、`POST /admin/api/keys`（手填轮换，`normNewKey` 准入：8–128 位可见 ASCII、禁 `change-me`、两把不得相同，管理密钥另需大小写字母+数字+特殊字符四样齐全（`genKey` 也改为产出四样齐全的 48 位串，否则随机生成的管理密钥过不了自己的门槛），**被拒的值不生效也不落库**）、`POST /admin/api/keys/generate`（随机生成 48 位 hex，`target: gateway|admin|both`）、`POST /admin/api/keys/reset`（删 `auth` 段，NOAUTH 下不凭空造密钥）。轮换即清 `AUTH_FAIL` 失败计数（旧密钥的失败不该让新密钥继续吃 429）。`keysInsecure` 收敛成 `keysInsecureNow()` 一个判据（`/admin/api/config` 与 `/admin/api/keys` 共用）。新明文只在轮换响应的 `newKeys` 里回给调用方这一次。
+
+**前端（`build/app.js` 1495–1644）**：新页 `vKeys`（1539）——见 §5.10。三个硬约束：**换管理密钥后同步更新 sessionStorage + localStorage 的 `adminKey`**（否则下一次轮询 401 把自己踢出控制台）；「轮换」单击直接生效（用户明确要求，最初的"点两下确认"被否掉）；「回到环境变量值」保留两步确认（`armConfirm`）；**「随机生成」本地填框（`fillGeneratedKey` + `crypto.getRandomValues`），用户先看到/复制再点「轮换」生效**（最初是"点随机生成即轮换"，用户反馈"框里什么都没生成"后改）；手填草稿跨 8 秒轮询重绘保留（`keyDraft` 回填）。接入信息页「轮换密钥」按钮改 `go('keys')` 直达；`showKeyHelp` 改口径为命令行备用路径。
+
+**验证**：`test/key-rotation-e2e.test.js`（**75 项断言**，真起临时网关）——装配守卫（优先级链方向、`auth` 白名单、4 个端点都在 `handleAdminApi` 内、`keysInsecureNow` 唯一判据、轮换清计数、NOAUTH 安全）+ `normNewKey` 真值表 + 真链路（6 种非法值 400 且不生效不落库、旧密钥立即 401 / 新密钥立即 200、`keysInsecure` 由真变假、重启后 `config.auth` 仍压过 env、随机生成三态（48 位四样字符齐全）、reset 回环境变量且盘上 `auth` 段消失）。`test/console-state.test.js` 新增 §11（**161 项断言**总）：含"随机生成只填草稿不发请求 + 轮换提交框内值"的回归：双路由表注册、NAV 位置、掩码与来源渲染、草稿跨轮询、**换管理密钥后浏览器存值同步更新**、按需揭示端点、两步确认守卫。`node build/build.js` 通过（产物 **173,165 字符 / 197,075 字节**）；全量回归 **30 文件 / 0 失败**。
+
+**残留（明确记下）**：① 轮换动作只落一行 `[keys]` 日志，无专门审计流水（单用户自托管定位，够用）；② 其它标签页/设备上的旧管理密钥在轮换后立即 401，需要重新输入一次——页面上已写明，这是"立即失效"的必然代价。
 
 ---
 

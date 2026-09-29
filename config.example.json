@@ -35,6 +35,10 @@
     "enabled": true,
     "public": false
   },
+  "auth": {
+    "gatewayKey": "",
+    "adminKey": ""
+  },
   "channels": [
     {
       "id": "vendor-a-openai",

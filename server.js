@@ -809,6 +809,109 @@ function cooldownMsFor(ch, kind, retryAfterMs) {
   return Math.min(max, base * Math.pow(2, n - 1));
 }
 
+// ─── 密钥轮换（v1.18.5）────────────────────────────────────────────────────────
+// 背景：密钥原来只来自环境变量（.env → compose → 进程），容器里改不了 .env，
+// 于是"轮换"只能手改文件 + 重开容器。现在控制台可以直接轮换。
+//
+// 优先级链（前者压后者）：
+//   ① config.auth.gatewayKey / config.auth.adminKey —— 控制台轮换出来的值
+//   ② 环境变量 GATEWAY_KEY / ADMIN_KEY
+//   ③ config.gatewayKey / config.adminKey —— 首启自动生成并写回的值（旧机制，保持兼容）
+//   ④ 随机生成并写回（见下面 resolveGeneratedKeys）
+//
+// ① 为什么必须压过 ②：否则 .env 里还写着旧值，一重启就把轮换结果顶掉，控制台看起来"改了却没生效"。
+// 代价是 .env 从"唯一真源"降级为"初始值"，所以控制台必须显示当前值的来源、并提供「回到环境变量值」。
+const KEY_MIN_LEN = 8, KEY_MAX_LEN = 128;
+function genKey() {  // 48 位随机串，四样字符齐全（管理密钥的复杂度门槛对"随机生成"同样成立，否则生成出来的自己都过不了 normNewKey）
+  const pools = ['abcdefghjkmnpqrstuvwxyz', 'ABCDEFGHJKMNPQRSTUVWXYZ', '23456789', '-_.!@#%*+'];
+  const all = pools.join('');
+  const pick = (s) => s[crypto.randomInt(s.length)];
+  const chars = pools.map(pick);
+  while (chars.length < 48) chars.push(pick(all));
+  for (let i = chars.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }  // 洗牌，免得前四位永远是"四类各一"
+  return chars.join('');
+}
+function managedAuth() { return (config && config.auth) || {}; }
+function keySourceOf(kind) {
+  const managed = managedAuth()[kind === 'gateway' ? 'gatewayKey' : 'adminKey'];
+  if (managed) return 'console';
+  if (process.env[kind === 'gateway' ? 'GATEWAY_KEY' : 'ADMIN_KEY']) return 'env';
+  const legacy = config && (kind === 'gateway' ? config.gatewayKey : config.adminKey);
+  if (legacy) return 'generated';
+  return (kind === 'gateway' ? GATEWAY_KEY : ADMIN_KEY) ? 'generated' : 'none';
+}
+function keysInsecureNow() {
+  return /change-me/i.test(GATEWAY_KEY || '') || /change-me/i.test(ADMIN_KEY || '');
+}
+function applyManagedKeys() {  // 启动时调用：让控制台轮换过的值压过环境变量
+  const a = managedAuth();
+  if (a.gatewayKey) GATEWAY_KEY = String(a.gatewayKey);
+  if (a.adminKey) ADMIN_KEY = String(a.adminKey);
+}
+/* 新密钥的准入规则。宁可在这里挡住，也不要把"体检一眼就报不安全"的值放进配置：
+   太短（可被枚举）、带空格或中文（HTTP 头里会被截断/编码，表现为时好时坏的 401）、
+   change-me（示例默认串）、两个密钥相同（轮换时按错一个就整体失守）。
+   管理密钥额外要求大小写字母 + 数字 + 特殊字符四样齐全——它是控制台与管理面的唯一门锁，
+   复杂度必须高于"可被字典撞开"的底线；网关密钥只要求最低长度（用户拍板，v1.18.5 从 16 放宽到 8）。 */
+function normNewKey(raw, label, other, kind) {
+  const k = String(raw == null ? '' : raw).trim();
+  if (!k) return { error: label + '不能为空' };
+  if (k.length < KEY_MIN_LEN) return { error: label + '太短：至少 ' + KEY_MIN_LEN + ' 位（建议直接用「随机生成」）' };
+  if (k.length > KEY_MAX_LEN) return { error: label + '太长：最多 ' + KEY_MAX_LEN + ' 位' };
+  if (!/^[\x21-\x7e]+$/.test(k)) return { error: label + '只能包含可见 ASCII 字符（不能有空格、中文或控制字符）' };
+  if (/change-me/i.test(k)) return { error: label + '不能包含 change-me（那是示例默认串，体检会判为不安全）' };
+  if (kind === 'admin') {
+    const missing = [];
+    if (!/[a-z]/.test(k)) missing.push('小写字母');
+    if (!/[A-Z]/.test(k)) missing.push('大写字母');
+    if (!/[0-9]/.test(k)) missing.push('数字');
+    if (!/[^a-zA-Z0-9]/.test(k)) missing.push('特殊字符');
+    if (missing.length) return { error: label + '复杂度不够：还需包含' + missing.join('、') + '（管理密钥要求大小写字母 + 数字 + 特殊字符四样齐全）' };
+  }
+  if (other && k === other) return { error: '网关密钥与管理密钥不能相同' };
+  return { key: k };
+}
+function resetAuthFailCounters() {   // 轮换即清零：旧密钥造成的失败不该让新密钥继续吃 429
+  AUTH_FAIL.admin = { n: 0, until: 0 };
+  AUTH_FAIL.gateway = { n: 0, until: 0 };
+}
+function rotateKeys(patch) {         // patch 里的值必须已经过 normNewKey
+  const next = { ...managedAuth() };
+  if (patch.gatewayKey !== undefined) next.gatewayKey = patch.gatewayKey;
+  if (patch.adminKey !== undefined) next.adminKey = patch.adminKey;
+  next.updatedAt = new Date().toISOString();
+  config.auth = next;
+  if (patch.gatewayKey !== undefined) GATEWAY_KEY = patch.gatewayKey;
+  if (patch.adminKey !== undefined) ADMIN_KEY = patch.adminKey;
+  resetAuthFailCounters();
+  persistConfig();
+  return next;
+}
+function resetManagedKeys() {        // 丢掉控制台的覆盖，回到「环境变量 → 首启生成」
+  delete config.auth;
+  if (!NOAUTH) {
+    const envG = process.env.GATEWAY_KEY || '', envA = process.env.ADMIN_KEY || '';
+    GATEWAY_KEY = envG || config.gatewayKey || GATEWAY_KEY || genKey();
+    ADMIN_KEY = envA || config.adminKey || ADMIN_KEY || genKey();
+  } else {
+    GATEWAY_KEY = process.env.GATEWAY_KEY || '';
+    ADMIN_KEY = process.env.ADMIN_KEY || '';
+  }
+  resetAuthFailCounters();
+  persistConfig();
+}
+function keysView() {
+  const a = managedAuth();
+  return {
+    gatewayKey: { masked: maskSecret(GATEWAY_KEY), set: !!GATEWAY_KEY, source: keySourceOf('gateway') },
+    adminKey: { masked: maskSecret(ADMIN_KEY), set: !!ADMIN_KEY, source: keySourceOf('admin') },
+    rotatedAt: a.updatedAt || null,
+    keysInsecure: keysInsecureNow(),
+    minLen: KEY_MIN_LEN,
+    noAuth: NOAUTH,
+  };
+}
+
 // 首启密钥生成（见鉴权块注释的优先级链）。NOAUTH 开着就不生成——那是显式选择的零鉴权开发模式。
 // 独立写回 config.json（而非走 persistConfig）：persistConfig 依赖 channels 初始化顺序，且会重建对象。
 function resolveGeneratedKeys() {
@@ -838,6 +941,7 @@ function resolveGeneratedKeys() {
     console.log('════════════════════════════════════════════════════');
   }
 }
+applyManagedKeys();
 resolveGeneratedKeys();
 
 // ─── Codex 常量（必须在任何探测/请求路径之前初始化，否则 TDZ 报错）───
@@ -2770,6 +2874,9 @@ function persistConfig() {
     // 首启生成的密钥随配置一起持久化（env 显式提供的密钥不落盘——config.adminKey 保持未设置）
     adminKey: config.adminKey || undefined,
     gatewayKey: config.gatewayKey || undefined,
+    // 控制台轮换过的密钥（v1.18.5）：**必须在白名单里**，否则随后保存任意一个渠道就会把轮换结果
+    // 从 config.json 里抹掉——表现是"重启后密钥又变回 .env 的值"，且用户完全不知道为什么。
+    auth: (config && config.auth) || undefined,
     channels: Array.from(channels.values()).map((ch) => ({
       id: ch.def.id,
       name: ch.def.name,
@@ -3223,7 +3330,7 @@ async function handleAdminApi(req, res, url) {
       adminKeyRequired: !!ADMIN_KEY,
       // 控制台原来自己拿两个密钥去 /change-me/i 判断"还是不是默认串"，现在密钥不下发了，
       // 由服务端算好这一个布尔给它（同样是"看出风险"，但不泄漏值）。
-      keysInsecure: /change-me/i.test(GATEWAY_KEY || '') || /change-me/i.test(ADMIN_KEY || ''),
+      keysInsecure: keysInsecureNow(),
       urls: {
         openai: `${base}/v1`,
         anthropic: `${base}/anthropic`,
@@ -3326,6 +3433,57 @@ async function handleAdminApi(req, res, url) {
     persistConfig();                 // 立即落库（重启后仍是这个值）
     console.log(`[settings] 控制台更新了 ${touched.join(' / ')}: ` + JSON.stringify(runtimeSettingsView()));
     return sendJson(res, 200, { ok: true, updated: touched, ...runtimeSettingsView() });
+  }
+
+  // ─── 密钥管理（v1.18.5）：控制台轮换网关密钥 / 管理密钥 ───────────────────────
+  // 一律只给掩码 + 来源；原文只在「刚轮换完」那一次响应里回给调用方（管理面鉴权 + no-store）。
+  if (req.method === 'GET' && url.pathname === '/admin/api/keys') {
+    return sendJson(res, 200, { ok: true, ...keysView() });
+  }
+  // 按需揭示管理密钥：与 /admin/api/gateway-key 对称，供控制台「显示 / 复制」用
+  if (req.method === 'GET' && url.pathname === '/admin/api/admin-key') {
+    return sendJson(res, 200, { ok: true, adminKey: ADMIN_KEY || '' });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/keys') {
+    const body = await safeReadJson(req);
+    if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'body must be a JSON object' });
+    const patch = {};
+    for (const field of ['gatewayKey', 'adminKey']) {
+      if (body[field] === undefined) continue;
+      const label = field === 'adminKey' ? '管理密钥' : '网关密钥';
+      // 与"另一把"比较时优先用同一次请求里已经改好的值（允许一次请求同时换两把）
+      const other = field === 'adminKey'
+        ? (patch.gatewayKey !== undefined ? patch.gatewayKey : GATEWAY_KEY)
+        : (patch.adminKey !== undefined ? patch.adminKey : ADMIN_KEY);
+      const r = normNewKey(body[field], label, other, field === 'adminKey' ? 'admin' : 'gateway');
+      if (r.error) return sendJson(res, 400, { error: r.error });
+      patch[field] = r.key;
+    }
+    if (!Object.keys(patch).length) return sendJson(res, 400, { error: '没有要改的密钥：body 里给 gatewayKey 或 adminKey' });
+    rotateKeys(patch);
+    console.log('[keys] 控制台轮换了 ' + Object.keys(patch).map((f) => (f === 'adminKey' ? '管理密钥' : '网关密钥')).join(' / ')
+      + '（旧密钥已立即失效）');
+    // 新值放在 newKeys 里，**必须在 keysView() 之后**——keysView().gatewayKey 是个对象，
+    // 写在前面会被它整个覆盖掉，控制台就拿不到刚轮换出来的值去更新自己了。
+    return sendJson(res, 200, { ok: true, ...keysView(), newKeys: patch });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/keys/generate') {
+    const body = (await safeReadJson(req)) || {};
+    const target = (body.target === 'gateway' || body.target === 'admin') ? body.target : 'both';
+    const patch = {};
+    if (target !== 'admin') patch.gatewayKey = genKey();
+    if (target !== 'gateway') patch.adminKey = genKey();
+    // 极低概率撞成同一把（48 位 hex）也兜一下：撞了就再抽一次
+    if (patch.gatewayKey && patch.gatewayKey === patch.adminKey) patch.adminKey = genKey();
+    rotateKeys(patch);
+    console.log('[keys] 控制台随机生成了 ' + (target === 'both' ? '网关密钥 + 管理密钥' : (target === 'gateway' ? '网关密钥' : '管理密钥'))
+      + '（旧密钥已立即失效）');
+    return sendJson(res, 200, { ok: true, ...keysView(), newKeys: patch });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/keys/reset') {
+    resetManagedKeys();
+    console.log('[keys] 控制台放弃了轮换值，回到「环境变量 → 首启生成」');
+    return sendJson(res, 200, { ok: true, ...keysView() });
   }
 
   // 按需揭示单个渠道的上游密钥（v1.18.4）：管理面默认只下发掩码，原文要点名索取。
@@ -5912,7 +6070,7 @@ function healAfterProbe(ch, ok, realCompletion) {
 // ─────────────────────────── 启动 ───────────────────────────
 server.listen(PORT, process.env.ZZCSAPI_BIND || '127.0.0.1', () => {
   console.log(`[zzcsapi] listening on http://127.0.0.1:${PORT}`);
-  console.log(`[zzcsapi] auth: gateway=${GATEWAY_KEY ? 'on' : 'off'} admin=${ADMIN_KEY ? 'on' : 'off'}`);
+  console.log(`[zzcsapi] auth: gateway=${GATEWAY_KEY ? 'on' : 'off'}(${keySourceOf('gateway')}) admin=${ADMIN_KEY ? 'on' : 'off'}(${keySourceOf('admin')})`);
   console.log(`[zzcsapi] channels: ${Array.from(channels.values()).map((c) => `${c.def.id}/${c.def.protocol}(${c.aliasMap.size})`).join(', ')}`);
   console.log(`[zzcsapi] aggregated: openai=[${aggregateModels('openai').join(', ')}] anthropic=[${aggregateModels('anthropic').join(', ')}] gemini=[${aggregateModels('gemini').join(', ')}]`);
 });

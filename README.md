@@ -197,7 +197,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 146 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显）
+node test/console-state.test.js           # 161 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -226,6 +226,7 @@ node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus
 node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（网关从不向客户端产出 thinking 块 → "无签名块触发 400"不可达；直通是签名唯一活路）
 node test/settings-api-e2e.test.js        # 58 项断言：运行期设置端点（窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
 node test/security-headers-e2e.test.js    # 48 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文）
+node test/key-rotation-e2e.test.js         # 75 项断言：控制台轮换密钥（优先级链 config.auth>env>首启生成 + 旧密钥立即失效 + 非法值不落库 + 重启后仍生效 + 回到环境变量值）：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文）
 ```
 
 它守住的是**「视口内输入控件的值必须跨重绘保留」**这条约定：控制台每 8 秒轮询一次，
@@ -738,6 +739,11 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/admin/api/config`                 | GET  | admin       | 接入信息（URL / 端口 + **只给密钥掩码**与 `keysInsecure`；v1.18.4 起不再交出任何密钥原文） |
 | `/admin/api/channels/{id}/key`      | GET  | admin       | **按需揭示（v1.18.4）**：取单个渠道的上游密钥原文（控制台「显示 / 复制密钥」用） |
 | `/admin/api/gateway-key`            | GET  | admin       | **按需揭示（v1.18.4）**：取网关 `GATEWAY_KEY` 原文（Playground 直连 `/v1` 与接入信息卡复制用） |
+| `/admin/api/admin-key`              | GET  | admin       | **按需揭示（v1.18.5）**：取管理 `ADMIN_KEY` 原文（控制台「密钥管理」页显示 / 复制用） |
+| `/admin/api/keys`                   | GET  | admin       | **密钥管理（v1.18.5）**：两把密钥的**掩码 + 来源**（console/env/generated/none）+ `keysInsecure` + `rotatedAt`，绝不含明文 |
+| `/admin/api/keys`                   | POST | admin       | **控制台轮换密钥（v1.18.5）**：body `{gatewayKey?, adminKey?}`，立即生效并写入 `config.json` 的 `auth` 段（**优先级高于环境变量**），**旧密钥立即失效**；新明文只在响应 `newKeys` 里回这一次 |
+| `/admin/api/keys/generate`          | POST | admin       | 随机生成新密钥（48 位，大小写字母+数字+特殊字符四样齐全）：body `{target: "gateway"\|"admin"\|"both"}`（缺省 both） |
+| `/admin/api/keys/reset`             | POST | admin       | 删掉 `config.json` 的 `auth` 段，回到「环境变量 → 首启生成」的取值链 |
 | `/admin/api/settings`               | GET/POST | admin   | **运行期设置（v1.18）**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关。GET 返回 `config`（用户填的原值）/ `effective`（钳制后生效值）/ `status`（实时计数）；POST 是 PATCH 语义（只带要改的组与字段），**立即生效 + 立即落库**，未知字段/类型不符一律 400 并点名字段 |
 | `/metrics`                          | GET  | admin（`metrics.public:true` 时匿名） | **Prometheus 文本格式（v1.17）**：请求/渠道/令牌/耗时/熔断分档/粘性/限流/进程指标；`metrics.enabled:false` 时返回 404 |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
@@ -818,6 +824,7 @@ node sec-audit.js
   · 流式失败细节见上文「流式失败」。
 - **图片（多模态）**：三条客户端协议统一把图片转成内部 `image_url` block —— Gemini 的 `inlineData`（base64，`mimeType` 缺省 `image/png`）与 `fileData`（`fileUri` 直链）、Anthropic 的 `image`（`source.type='base64'` 与 `source.type='url'` 两种都认）都会被识别；**部件顺序保留**（先图后问 vs 先问后图对视觉模型有语义）。带图请求只走 `openai` / `anthropic` / `gemini` 三种协议的渠道，见「含图请求的候选裁剪」。
 - **冷启动**：第一次请求时 `status=unknown` 仍然会被选中（health 探测在后台进行）。
+- **密钥轮换（v1.18.5，控制台可在线轮换）**：`GATEWAY_KEY` / `ADMIN_KEY` 的生效值按 `config.json` 的 `auth` 段（控制台轮换）**> 环境变量 >** 首启自动生成取值——控制台说了算，重启不会被 `.env` 顶回去。控制台「工具 → 密钥管理」页可手填或随机生成新密钥，点一下「轮换」**立即生效、旧密钥立即失效**（无宽限期）；页面上每把密钥标注来源（控制台轮换 / 环境变量 / 首启生成），「回到环境变量值」删除 `auth` 段把控制权交还给 `.env`。新密钥准入：8–128 位可见 ASCII、禁 `change-me`、两把不得相同；**管理密钥另需大小写字母+数字+特殊字符四样齐全**（它是控制台的唯一门锁），被拒的值**不生效也不落库**。换管理密钥后，发起轮换的那个页面会**自动**把浏览器里存的 ADMIN_KEY 换成新值；其它标签页 / 设备 / 脚本里的旧值立即 401，需要重新输入一次。
 - **鉴权写法**：网关密钥接受 `Authorization: Bearer <key>`、`?key=<key>`，以及**原生 SDK 的默认头**——Gemini 的 `x-goog-api-key`、Anthropic 的 `x-api-key`（仅对 `/v1/*` `/anthropic/*` `/gemini/*`；**管理面只认 Bearer / `?key=`**，客户端密钥语义不得混进管理面）。OpenAI SDK 走 Bearer，本来就通。
 - **别名区分大小写不敏感**，upstream 透传原样。
 

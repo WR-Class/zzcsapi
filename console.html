@@ -823,14 +823,17 @@ function adapt() {
 }
 
 async function loadAll() {
-  const [st, us, cfg, settings] = await Promise.all([
+  const [st, us, cfg, settings, keys] = await Promise.all([
     api('/admin/api/status'),
     api('/admin/api/usage').catch(() => null),
     api('/admin/api/config').catch(() => null),
     /* 运行期设置单独兜底：这个端点挂了也不能把整页拉取拖垮（其余三份照常刷新） */
     api('/admin/api/settings').catch(() => null),
+    /* 密钥管理页同理单独兜底 */
+    api('/admin/api/keys').catch(() => null),
   ]);
-  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg, auto:(st && st.autoWeight) || null, settings:settings || RAW.settings };
+  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg, auto:(st && st.autoWeight) || null,
+          settings:settings || RAW.settings, keys:keys || RAW.keys };
   CFG = cfg || CFG;
   adapt();
   loaded = true;
@@ -843,7 +846,7 @@ async function loadAll() {
    所以进页面之前先记下来，出页面之后再还原。 */
 function render() {
   const v = $('#viewport'); if (!v) return;
-  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, playground:vPlayground, access:vAccess, settings:vSettings }[page];
+  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, playground:vPlayground, access:vAccess, settings:vSettings, keys:vKeys }[page];
   if (!fn) return;
   const top = v.scrollTop;
   const act = document.activeElement;
@@ -1031,6 +1034,7 @@ const NAV=[
   {sec:'工具'},
   {id:'playground',label:'Playground',icon:'terminal'},
   {id:'settings',label:'运行期设置',icon:'sliders'},
+  {id:'keys',label:'密钥管理',icon:'key'},
   {id:'access',label:'接入信息',icon:'book'}
 ];
 let page='overview';
@@ -1048,7 +1052,7 @@ function go(p){
   renderRail();
   const v=$('#viewport');
   v.innerHTML='';
-  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,playground:vPlayground,access:vAccess,settings:vSettings}[p]||vOverview)(v);
+  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,playground:vPlayground,access:vAccess,settings:vSettings,keys:vKeys}[p]||vOverview)(v);
   v.firstElementChild?.classList.add('page');
   // 现在滚动容器是 .viewport 自己，scrollIntoView 不会生效，必须直接归零
   v.scrollTop=0;
@@ -2174,6 +2178,174 @@ resp = client.chat.completions.create(
 });
 <span class="k">for await</span> (<span class="k">const</span> chunk <span class="k">of</span> stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? <span class="s">''</span>);`
 };
+/* ═══════════════════════════ 页面：密钥管理（v1.18.5）═══════════════════════
+   密钥原来只来自环境变量（.env → compose → 进程），容器里改不了 .env，
+   于是"轮换"只能手改文件 + 重开容器。这一页把它做成点得动的。
+
+   实现要点（每一处都对应一个真实的坑）：
+     · 轮换结果写进 config.json 的 auth 段，**优先级高于 .env**——否则重启就把轮换顶回去；
+     · 管理密钥换掉后，必须**同时**把 sessionStorage 与 localStorage 里的值换新，
+       因为 api() 每次请求都现读 sessionStorage；不换下一次轮询就 401 → 弹回登录门（等于把自己踢出去）；
+     · 明文一律现取（GET /admin/api/admin-key、/admin/api/gateway-key），页面快照里只有掩码；
+     · 旧密钥**立即**失效（不设宽限期，这是明确选择），所以按钮要点两下确认。 */
+const KEY_SRC_TXT={console:'控制台轮换',env:'环境变量',generated:'首启生成',none:'未设置（鉴权关闭）'};
+let keyDraft={gateway:'',admin:''};      // 手填草稿：跨 8 秒轮询保留（同 .viewport 回填约定）
+let keyReveal={gateway:'',admin:''};     // 现取到的明文，只活在内存里
+let keyBusy=false;
+
+function keyOf(kind){
+  const k=RAW.keys||{};
+  return (kind==='gateway'?k.gatewayKey:k.adminKey)||{masked:'—',set:false,source:'none'};
+}
+function keyCard(kind){
+  const o=keyOf(kind), label=kind==='gateway'?'网关密钥':'管理密钥';
+  const scope=kind==='gateway'?'调用 /v1 · /anthropic · /gemini 的客户端用它':'打开控制台与调用 /admin/* 用它';
+  const plain=keyReveal[kind];
+  return `<div class="card c6">
+    <div class="card-hd"><h3>${label}</h3><span class="sub">${esc(scope)} · 来源：${esc(KEY_SRC_TXT[o.source]||'—')}</span></div>
+    <div class="card-bd">
+      <div class="ep-key" style="margin-bottom:12px"><span>当前值</span>
+        <span class="mask mono" id="kr_${kind}">${esc(plain||o.masked||'—')}</span>
+        <button class="btn ghost sm ml-auto" id="ke_${kind}">${svg(plain?'eyeOff':'eye',13)}${plain?'隐藏':'显示'}</button>
+        <button class="btn ghost sm" id="kc_${kind}">${svg('copy',13)}复制</button></div>
+      <div class="field">
+        <span class="help" style="display:block;margin-bottom:6px">换新值：${kind==='admin'?'至少 8 位，且要同时包含大小写字母、数字和特殊字符':'至少 8 位可见 ASCII 字符（不要空格或中文）'}，或直接随机生成</span>
+        <div class="row" style="gap:8px;align-items:flex-start">
+          <input class="input" id="ki_${kind}" type="text" autocomplete="off" spellcheck="false"
+            placeholder="粘贴新的${label}，或点「随机生成」" value="${esc(keyDraft[kind])}" style="flex:1">
+          <button class="btn" id="kg_${kind}">${svg('zap',13)}随机生成</button>
+          <button class="btn primary" id="ks_${kind}">${svg('check',13)}轮换</button>
+        </div>
+      </div>
+      <div class="help">⚠ 轮换后<b>旧密钥立即失效</b>：${kind==='gateway'
+        ?'所有调用方（应用 / 脚本里存的 key）必须马上换成新值'
+        :'其它标签页与设备要用新值重新登录一次（这一页会自动更新自己）'}。</div>
+    </div></div>`;
+}
+function vKeys(v){
+  const k=RAW.keys;
+  if(!k){
+    v.innerHTML=`<div class="page-hd"><div><h1 class="page-title">密钥管理</h1>
+      <div class="page-sub">轮换 GATEWAY_KEY 与 ADMIN_KEY</div></div></div>
+      <div class="card"><div class="card-bd"><div class="empty">密钥接口不可用（GET /admin/api/keys 没有返回数据）</div></div></div>`;
+    return;
+  }
+  const bad=!!k.keysInsecure;
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">密钥管理</h1>
+      <div class="page-sub">轮换 GATEWAY_KEY 与 ADMIN_KEY · 改完立即生效，不用重开容器</div></div>
+    <div class="page-actions">
+      <button class="btn" id="keyReset">${svg('x',14)}回到环境变量值</button>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:16px;border-color:color-mix(in srgb,${bad?'var(--warn)':'var(--ok)'} 30%,transparent)">
+    <div class="row" style="gap:9px;align-items:flex-start">
+      <span style="color:${bad?'var(--warn)':'var(--ok)'}">${svg(bad?'warn':'check',15)}</span>
+      <span class="help" style="margin:0">${bad
+        ?'当前密钥仍是示例默认串（含 <b>change-me</b>）——<b>建议立刻换一对新的</b>：点「随机生成」填进框内，再点「轮换」生效。'
+        :'当前密钥不是示例默认值。'}${k.rotatedAt?'<br>控制台最近一次轮换：'+esc(String(k.rotatedAt).replace('T',' ').slice(0,19)):''}</span>
+    </div>
+  </div>
+  <div class="grid g12">${keyCard('gateway')}${keyCard('admin')}</div>
+  <div class="card" style="margin-top:16px"><div class="card-bd">
+    <div class="help" style="margin:0"><b>谁说了算</b>：控制台轮换出来的值写在 <span class="mono">config.json</span> 的
+    <span class="mono">auth</span> 段，<b>优先级高于 .env</b>；轮换之后改 .env 不再影响生效值，
+    点「回到环境变量值」才会把控制权交还给它。「来源」角标显示当前值是从哪来的。<br>
+    页面快照里只有掩码，明文一律点「显示」时现取一次；轮换响应里的新值只回给发起轮换的这个页面。</div>
+  </div></div>`;
+  for(const kind of ['gateway','admin']){
+    const inp=$(`#ki_${kind}`,v);
+    if(inp) inp.oninput=e=>{keyDraft[kind]=e.target.value;};
+    const eye=$(`#ke_${kind}`,v); if(eye) eye.onclick=()=>toggleKeyReveal(kind);
+    const cp=$(`#kc_${kind}`,v); if(cp) cp.onclick=()=>copyKeyValue(kind,cp);
+    const g=$(`#kg_${kind}`,v); if(g) g.onclick=()=>fillGeneratedKey(kind);
+    const s=$(`#ks_${kind}`,v); if(s) s.onclick=()=>rotateKey(kind,keyDraft[kind],s);
+  }
+  const r=$('#keyReset',v); if(r) r.onclick=()=>resetKeysAction(r);
+}
+/* 危险动作点两下确认（旧密钥立即失效，误点一次就能让所有调用方 401） */
+function armConfirm(btn,what){
+  if(!btn) return true;
+  if(btn.dataset.arm==='1') return true;
+  btn.dataset.arm='1';
+  const old=btn.innerHTML;
+  btn.innerHTML=svg('warn',13)+'确认'+(what||'');
+  setTimeout(()=>{ if(btn.isConnected){btn.dataset.arm='0';btn.innerHTML=old;} },6000);
+  return false;
+}
+async function toggleKeyReveal(kind){
+  if(keyReveal[kind]){ keyReveal[kind]=''; render(); return; }
+  try{
+    const r=await api(kind==='gateway'?'/admin/api/gateway-key':'/admin/api/admin-key');
+    keyReveal[kind]=(kind==='gateway'?r.gatewayKey:r.adminKey)||'';
+    render();
+  }catch(e){ /* api() 已经 toast 过了 */ }
+}
+async function copyKeyValue(kind,btn){
+  try{
+    if(!keyReveal[kind]) await toggleKeyReveal(kind);
+    if(!keyReveal[kind]){ toast('没取到密钥原文','bad'); return; }
+    copyText(keyReveal[kind],btn);
+  }catch(e){ /* api() 已经 toast 过了 */ }
+}
+/* 随机生成只在本地填进输入框（与服务端 genKey 同规格：48 位、大小写字母+数字+特殊字符四样齐全），
+   不直接轮换——用户要先看到/复制新值，再点「轮换」确认生效 */
+function genLocalKey(){
+  const pools=['abcdefghjkmnpqrstuvwxyz','ABCDEFGHJKMNPQRSTUVWXYZ','23456789','-_.!@#%*+'];
+  const all=pools.join('');
+  const b=new Uint8Array(48); crypto.getRandomValues(b);
+  const chars=pools.map((p,i)=>p[b[i]%p.length]);          // 每池先保底一个
+  for(let i=4;i<48;i++) chars.push(all[b[i]%all.length]);
+  for(let i=47;i>0;i--){ const j=b[(i+13)%48]% (i+1); const t=chars[i]; chars[i]=chars[j]; chars[j]=t; }  // 洗牌
+  return chars.join('');
+}
+function fillGeneratedKey(kind){
+  const k=genLocalKey();
+  keyDraft[kind]=k;
+  const inp=$(`#ki_${kind}`);
+  if(inp) inp.value=k;
+  toast('已生成并填入框内——确认无误后点「轮换」生效（旧值届时立即失效）');
+}
+async function rotateKey(kind,value,btn){
+  if(keyBusy) return;
+  if(!String(value||'').trim()){ toast('先填新密钥，或点「随机生成」','warn'); return; }
+  const label=kind==='gateway'?'网关密钥':'管理密钥';
+  // 用户明确要求：轮换单击直接生效（页面上方与按钮旁均已写明"旧密钥立即失效"）
+  keyBusy=true;
+  const old=btn.innerHTML; btn.disabled=true; btn.innerHTML=svg('clock',13)+'执行中…';
+  try{
+    const body=kind==='gateway'?{gatewayKey:value}:{adminKey:value};
+    const r=await api('/admin/api/keys',{method:'POST',body:JSON.stringify(body)});
+    const fresh=((r&&r.newKeys)||{})[kind==='gateway'?'gatewayKey':'adminKey']||'';
+    // 换的是管理密钥：浏览器里存的那把必须跟着换，否则下一次轮询就 401 → 弹回登录门（等于把自己踢出去）
+    if(kind==='admin'&&fresh){
+      try{ sessionStorage.setItem('adminKey',fresh); localStorage.setItem('adminKey',fresh); }catch(e){}
+    }
+    keyDraft[kind]=''; keyReveal[kind]='';
+    toast(`${label}已轮换（旧值已立即失效）`);
+    await reload();
+    render();
+  }catch(e){
+    btn.disabled=false; btn.innerHTML=old; btn.dataset.arm='0';   // api() 已经 toast 过错误原文
+  }finally{ keyBusy=false; }
+}
+async function resetKeysAction(btn){
+  if(keyBusy) return;
+  if(!armConfirm(btn,'交还控制权')) return;
+  keyBusy=true;
+  const old=btn.innerHTML; btn.disabled=true; btn.innerHTML=svg('clock',13)+'执行中…';
+  try{
+    await api('/admin/api/keys/reset',{method:'POST',body:'{}'});
+    keyDraft={gateway:'',admin:''}; keyReveal={gateway:'',admin:''};
+    toast('已回到「环境变量 → 首启生成」的密钥');
+    await reload();
+    render();
+  }catch(e){
+    btn.disabled=false; btn.innerHTML=old; btn.dataset.arm='0';
+  }finally{ keyBusy=false; }
+}
+
 function vAccess(v){
   /* 全部取自 /admin/api/config，不写死端口与密钥：CFG.urls 由服务端按实际 PORT 拼好 */
   const u=(CFG&&CFG.urls)||{};
@@ -2193,7 +2365,7 @@ function vAccess(v){
     <div><h1 class="page-title">接入信息</h1>
       <div class="page-sub">网关地址与密钥 · 三套协议端点共用同一个 GATEWAY_KEY</div></div>
     <div class="page-actions">
-      <button class="btn" onclick="showKeyHelp()">${svg('key',14)}轮换密钥</button>
+      <button class="btn" onclick="go('keys')">${svg('key',14)}密钥管理</button>
       <button class="btn primary" onclick="copyAllEndpoints(this)">${svg('copy',14)}复制全部</button>
     </div>
   </div>
@@ -2287,8 +2459,9 @@ function showKeyHelp(){
       <div class="card" style="padding:11px 13px;border-color:color-mix(in srgb,var(--warn) 30%,transparent)">
         <div class="row" style="gap:9px;align-items:flex-start">
           <span style="color:var(--warn)">${svg('warn',15)}</span>
-          <span class="help" style="margin:0">ADMIN_KEY 与 GATEWAY_KEY 由服务端环境变量下发，<b>本页只能看，改不了</b>。
-            请按下面的步骤在<b>宿主机</b>执行，改完必须重启容器才生效。</span>
+          <span class="help" style="margin:0">想<b>在线轮换</b>请去侧栏「工具 → 密钥管理」，点一下就生效、不用重启容器。
+            下面这套是<b>命令行</b>做法，适合没有控制台、或想改 <span class="mono">.env</span> 里那个"初始值"的情况
+            ——注意：如果之前用控制台轮换过，<b>.env 说了不算</b>，得先「回到环境变量值」。</span>
         </div>
       </div>
       ${steps.map((s,i)=>`
