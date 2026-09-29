@@ -269,6 +269,21 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 2. **`setDirty` 时 8 秒轮询绝不覆盖草稿**（`syncSettingsDraft` 的唯一判据），否则用户填一半就被轮询清掉——
    与 §4 顶部的「状态回填约定」同源。
 
+### 4.12 数据统计页 `.st-*`（生产独有，设计稿不含，v1.18.12）
+
+「监控 → 数据统计」页的版式组件（v1.18.11 建页时散用内联样式；v1.18.12 用户看了原型 `_st_preview.html` 拍板整改后收编成类）。
+样式全部在 `build/extra.css`（第 82–105 行），复用全站令牌。
+
+| 类 | 职责 |
+| --- | --- |
+| `.st-kpi-row` / `.st-kpi` / `.st-kpi-num` / `.st-kpi-unit` | 四张全局 KPI 卡：**内容整体居中**（替掉 v1.18.11 的内联 `font-size:22px`——数字是视觉锚点，居中+统一字号才不散）；四卡 `flex:1` 等宽等高 |
+| `table.tbl.st-fixed` + `colgroup` 9 列 | 来源明细表**定量列宽**（11%/7%/15%/6%/8%/14%/16%/13%/10%）——auto 布局下"IP 长/会话空"会把客户端标签列挤变形，定量列宽才稳 |
+| `.st-sec` | 分区标题（来源明细 / 按模型）`padding:0 16px`，与卡片内边距对齐，不再贴卡片边框 |
+| `table.tbl.st-models th:first-child` | 按模型表首列（模型名）不居中，其余列居中——与来源明细表同款分区样式 |
+| `.t-c-ph` | 占位符「—」专用居中（`display:block;text-align:center`）；**真实模型名/客户端标签不套**——真名左对齐、只有占位符居中，一眼分得清"没数据"和"有数据" |
+
+配套纪律：表头 `.t-c` 与数值列 `.t-c` 居中**必须补权重**（`table.tbl thead th.t-c{text-align:center}`，照抄 `.t-r` 的写法并排写进设计稿同一行，不增行——否则输给 `th{left}` 基样式，表头左对齐数值居中就错位了）。守卫在 `test/console-state.test.js` §13（KPI 类名计数 / colgroup 9 列 / 表头 t-c / 占位符 t-c-ph / 产物 CSS 存在性 + 旧写法对照组）。
+
 ---
 
 ## 5. 页面详解
@@ -375,8 +390,9 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   生产在 `adapt()` 里把显示名解析进每条日志的 `n` 字段（`n:(chans.find(c=>c.id===r.channelId)||{}).name||r.channelId||'—'`），
   渲染层直接用 `esc(l.n)`。**渠道 id 仍保留在 `l.c`**，供筛选、导出与排障。
 - **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1210）。
-- **客户端列（v1.18.11）**：模型之后新增「客户端」列——UA 自报家门的标签（codex CLI / Claude Code / curl 等；无 UA 或未识别显示 `—`）。
-  格子是 chip，点击 → 跳「数据统计」页并**按该客户端标签过滤**（`stFilter.client` 赋值 + `go('stats')`；行内 `stopPropagation` 不触发行点击）。空值 `—` 不可点。
+- **客户端列（v1.18.11；v1.18.13 跳转升级）**：模型之后新增「客户端」列——UA 自报家门的标签（codex CLI / Claude Code / curl 等；无 UA 或未识别显示 `—`）。
+  格子是 chip（自带 `data-cl="${esc(l.cl)}"`），点击 → 跳「数据统计」页**按该客户端标签过滤**并**直接弹开最活跃来源的详情抽屉**（多个来源共用同一标签时弹敲门最多的那个，其余来源都在过滤后的表里；统计里没有该标签时不弹，只落过滤页）。行内 `stopPropagation` 不触发行点击。空值 `—` 不可点。
+  标签取 chip 自带的 `data-cl`（`esc()` 过的属性），**绝不按 NodeList 索引对 `rows[i]` 取值**——无标签的行不渲染 chip，按索引取会错位（v1.18.13 修掉的潜伏 bug）。
   客户端标签是**外部可控值**（服务端只截断不消毒）→ 渲染必须 `esc(l.cl)`。标签只做显示，**绝不进任何控制逻辑的判定**（详见 §5.11）。
 - **搜索**：搜索框同时匹配模型名 / 渠道名 / 渠道 ID / 请求 ID（`logRows()` 判据 `l.m + l.n + l.c + l.id`，生产锚点 1198）——
   按名字搜比按 id 自然，老习惯按 id 也仍然命中。
@@ -452,17 +468,17 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 来源 IP 态势页——回答"密钥是不是被人放进了中转站在转卖"这个问题（监控 → 数据统计，紧随调用日志之后；`NAV` 生产锚点 343，`zap` 图标复用 `IC` 现有的）。
 
-- **位置与注册**：`NAV`（343）「监控」组、调用日志之后；`go()`（367）与 `render()`（165）**两张分发表都注册了** `stats:vStats`（生产锚点 `vStats` 1289）。
-- **数据源唯一**：`GET /admin/api/stats`，随 `loadAll()`（141）一起拉、**单独 `.catch(()=>null)` 兜底**（端点挂了或旧版网关显示「统计端点不可达」，不白屏、不拖垮整页）；`adapt()` 把它放进 `DATA.stats`。手动刷新按钮走 `refreshStats()`（1396，只拉 stats 一条并重绘）。
+- **位置与注册**：`NAV`（343）「监控」组、调用日志之后；`go()`（367）与 `render()`（165）**两张分发表都注册了** `stats:vStats`（生产锚点 `vStats` 1297）。
+- **数据源唯一**：`GET /admin/api/stats`，随 `loadAll()`（141）一起拉、**单独 `.catch(()=>null)` 兜底**（端点挂了或旧版网关显示「统计端点不可达」，不白屏、不拖垮整页）；`adapt()` 把它放进 `DATA.stats`。手动刷新按钮走 `refreshStats()`（1404，只拉 stats 一条并重绘）。
 - **页面结构**（自上而下）：
   - **四张全局卡**（敲门总数 / token 输入+输出 / 全局峰值并发 vs 单来源峰值 / 封禁命中）——**全局峰值远高于任何单来源峰值 = 中转站在轮换出口**的指纹，四张卡的文案把这层对比写明了。
   - **封禁名单行**：每枚封禁 IP 一个 chip（已封禁标记 + 解封 × 按钮，`data-act="unban-ip" data-t="<ip>"`，`confirm()` 两步确认）。
-  - **per-IP 表**：IP / 敲门数（含被 401/429 拒掉的——刷鉴权也是指纹）/ token / 模型数 / 并发峰值 / 会话估计（**上限 512 饱和后显示 `≥512`**，不下发裸数字）/ 客户端标签（多个 chip）/ 24 小时 sparkline。**行点击开 `openIpStats`（1363）详情抽屉**（行 `.clickable`，`tr.onclick` 直挂，`vLogs` 的先例）。
+  - **per-IP 表**：IP / 敲门数（含被 401/429 拒掉的——刷鉴权也是指纹）/ token / 模型数 / 并发峰值 / 会话估计（**上限 512 饱和后显示 `≥512`**，不下发裸数字）/ 客户端标签（多个 chip）/ 24 小时 sparkline。**行点击开 `openIpStats`（1371）详情抽屉**（行 `.clickable`，`tr.onclick` 直挂，`vLogs` 的先例）。**v1.18.12 版式**：表走 `.st-fixed` + 9 列 `colgroup` 定量列宽；表头与数值列 `.t-c` 居中（KPI 四卡 `.st-kpi` 内容居中、占位符「—」走 `.t-c-ph`，真名左对齐——见 §4.12）。
   - **按模型聚合卡**：全局视角哪几个模型在被谁打。
   - trustedProxy 模式显示「反代采信：x.x.x.x」条（直连模式不显示）。
 - **`openIpStats(ip)` 详情抽屉**：per-IP 键值（敲门 / 封禁命中 / token / 会话 / 首末见）+ 客户端标签 chips 带计数 + 模型 chips 带计数 + **24 小时分布面积图**（`areaChart` 复用，本地时区整点桶）+ 底部**封禁/解封按钮**（未封禁 IP 显示「封禁该来源」，已封禁显示「解封该来源」；`confirm()` 两步确认——`clearUsage` 的先例，不用 armed 状态）。
-- **客户端过滤 `stFilter`（1287，模块级、跨页保留）**：调用日志客户端列跳进来（或统计页内点 chip）时只留匹配来源；页头显示「客户端：X ✕」chip，✕ 清除（`data-act="clear-st-filter"`）。无匹配时空态文案点明是"该客户端"的空态（区别于全网关刚清零）。
-- **封禁/解封动作**：`banIp`（1399）/`unbanIp`（1403）走 `POST /admin/api/bans` / `DELETE /admin/api/bans/{ip}`，成功后 `refreshStats()`；按钮一律 `data-act` + `data-t`（IP 经服务端字面量校验，渲染仍 `esc()`）。
+- **客户端过滤 `stFilter`（1295，模块级、跨页保留）**：调用日志客户端列跳进来（或统计页内点 chip）时只留匹配来源；**v1.18.13 起从调用日志跳进来还会直接弹开最活跃匹配来源的抽屉**（`ips` 按敲门数降序 → `hit[0]`，抽屉里的客户端标签 chips 带计数——"这个客户端属于哪个 IP、用了多少次"当场就有答案）；页头显示「客户端：X ✕」chip，✕ 清除（`data-act="clear-st-filter"`）。无匹配时空态文案点明是"该客户端"的空态（区别于全网关刚清零），**且不误弹任何抽屉**。
+- **封禁/解封动作**：`banIp`（1407）/`unbanIp`（1411）走 `POST /admin/api/bans` / `DELETE /admin/api/bans/{ip}`，成功后 `refreshStats()`；按钮一律 `data-act` + `data-t`（IP 经服务端字面量校验，渲染仍 `esc()`）。
 - **转义与安全**：客户端标签是外部可控值（UA 截断，不消毒）→ 一律 `esc()`；IP 是服务端校验过的字面量，仍照 `esc()` 纪律过一遍。
 - **后端语义**：统计**内存态**（重启清零、留存有界：IP 512 / 会话 512 / 标签 8 / 模型 64）；封禁**只拦客户端面**（管理面/控制台/健康检查永远可达——解封按钮永远不会把自己锁在门外）；`X-Forwarded-For` 只在 `config.security.trustedProxy` 登记的来源上采信第一跳。详见 docs/behavior.md「来源 IP 态势统计与封禁」与 `test/ip-stats-ban-e2e.test.js`（62 项）。
 - **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
@@ -1433,6 +1449,28 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **验证**：`node --check server.js` 通过；新增 `test/ip-stats-ban-e2e.test.js`（**62 项**：§0 装配守卫 11 + §1 纯函数真值表 + §2 真链路——预置封禁 403、XFF 三来源、401 算敲门、token/模型/标签/会话记账、并行峰值 ≥2 且归零、封禁端点全语义、封禁落库且渠道不丢、重启统计清零封禁仍在 + §3 无 trustedProxy 对照）；`console-state` 增 **§13 数据统计页**一节（198 项总量）；`security-headers-e2e` 内联清零 + ACTS 双向覆盖守卫放行（69 项）。全量 **33 文件 / 1635 断言 / 0 失败**（v1.18.8 基线 32/1548）。
 
 **纪律（AGENTS §2 已同步为硬约束）**：来源 IP 态势与封禁六条配套纪律（只拦客户端面、单漏斗、persistConfig 白名单含 security、内存态有界 + trustedProxy 采信门槛、settle 同路径、UA 标签不进控制逻辑）；改统计/封禁/trustedProxy 采信路径后必跑 `test/ip-stats-ban-e2e.test.js`，改统计页渲染后加跑 `test/console-state.test.js`（§13 一节）。
+
+### 8.33 v1.18.12 数据统计页布局整改：KPI 居中 / 列宽定量 / 占位符「—」居中（2026-10-04，对象 `build/app.js` + `build/extra.css` + `console-redesign.html` + 产物 `console.html` + `test/console-state.test.js`；**本条为补记——原始提交 38c80b8 漏同步本文档，v1.18.13 轮补上**）
+
+**问题**：v1.18.11 的统计页是照渠道表格的老套路写的——KPI 数字走内联 `font-size:22px`、来源明细表用 auto 列宽、占位符「—」和真实值混在一起左对齐。用户过目后拍板整改（基于确认过的原型 `_st_preview.html`）：**数字是视觉锚点要居中、列宽要定量、占位符要和真名一眼分得开**。
+
+**根因**：建页时复用了渠道表格的通用样式，但统计页的数据形状不同——IP 长短悬殊、会话列大量空值（`≥512` 饱和前常空）、客户端标签是可变长 chip，auto 布局下列宽互相挤；占位符「—」与真实模型名/标签共用左对齐，"没数据"和"有数据"视觉上分不开。
+
+**处置**：`extra.css` 80 → **105 行**（`.st-kpi*` 居中 KPI 卡、`table.tbl.st-fixed` + 9 列 colgroup 定量列宽、`.st-sec` 分区标题、`table.tbl.st-models` 按模型表、`.t-c-ph` 占位符专用居中）；设计稿只在既有 `.t-c` 行**就地追加**表头补权重 `table.tbl thead th.t-c{text-align:center}`（不增行，照抄 `.t-r` 写法——否则表头输给 `th{left}` 基样式，表头左对齐数值居中又错位）；`vStats()` 就地改类名与 `<table>` 同行内联 colgroup，**app.js 净零行**（锚点不动，JS 偏移 +689 → **+714**，产物 3343 → **3368 行**）。
+
+**验证**：`test/console-state.test.js` §13 增**布局守卫**（198 → **208 项**：KPI 类名计数、colgroup 9 列、表头 `t-c` 七列、数值 `t-r` 清零、`.t-c-ph` 只套占位符、产物 CSS 存在性 + 旧写法对照组）→ 全绿；全量 33 文件 / 1645 断言 / 0 失败。
+
+### 8.34 v1.18.13 客户端 chip 跳转直开抽屉 + 索引错位修复（2026-10-04，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` §13 + 两份前端文档 + tests/AGENTS/README 计数）
+
+**问题**：用户报「调用日志我点击客户端跳转到了数据统计，但是我如何知道这个客户端是属于哪个 IP 的？能不能点击后跳转过去后直接打开那个抽屉框？」——跳过去只看到过滤后的列表，还要自己再点一次行才知道详情。
+
+**根因**：跳转链路只做了"过滤"（`stFilter.client` + `go('stats')`）没做"定位"——客户端标签 → 来源 IP 的映射其实就在 `DATA.stats.ips[]` 里（每个 IP 的 `clients[]`），跳过去顺手弹开匹配来源的抽屉就是答案。顺带发现一颗**潜伏雷**：绑定按 NodeList 索引对 `rows[i]` 取标签——**无标签的行不渲染 chip**，第一行无标签时点第二行的 chip 会套用第一行的**空标签**（过滤悄悄失效，跳到全量列表）。
+
+**处置（`build/app.js`）**：chip 模板带 `data-cl="${esc(l.cl)}"`（标签走 `dataset` 取，**绝不按 NodeList 索引对 `rows[i]` 取**）；点击后 `stFilter.client` + `go('stats')` + **直接弹开最活跃匹配来源的抽屉**（`ips` 按敲门数降序 → `hit[0]`；多个来源共用同一标签时弹敲门最多的，其余都在过滤后的表里；统计里没有该标签时不弹，不误开别的 IP）。绑定块 2 → 10 行（净增 8），`drawLogTable`(1210) 之后锚点整体 +8，app.js 2650 → **2658 行**、产物 3368 → **3376 行**（extra.css/设计稿零改动，偏移仍 +714）。
+
+**验证**：`test/console-state.test.js` §13 增**跳转链路**一节（在 DOM 桩里**真跑 `drawLogTable` 的 chip 绑定**：chip 自带 `data-cl`、渲染数 = 有标签行数、点击后过滤词来自 dataset（**索引错位回归对照**：第 1 行无标签时过滤词是 `codex CLI` 不是空）、`go` 到统计页 + 弹最活跃来源抽屉、`stopPropagation` 不连坐行点击、无匹配时不误弹 + 源码守卫防错位回潮；208 → **215 项**）→ 全绿；`security-headers-e2e` 69/0。全量 **33 文件 / 1652 断言 / 0 失败**。
+
+**纪律（随本轮补记 8.33 的教训）**：`$$(…)` 的 NodeList 索引**不等于** `rows` 索引——有条件渲染（无标签行不出 chip）时按 `rows[i]` 取值必错位，点击参数一律走元素自带 `data-*` 属性（已写进 `docs/frontend-code-map.md` §0.1 历史教训）。
 
 ---
 

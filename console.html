@@ -1932,7 +1932,7 @@ function drawLogTable(){
       <td class="mono muted" style="font-size:11.5px">${esc(l.id)}</td>
       <td class="cell-name">${esc(l.n)}</td>
       <td class="cell-name">${esc(l.m)}</td>
-      <td>${l.cl?`<span class="chip clickable cell-client" title="查看该客户端的来源统计">${esc(l.cl)}</span>`:'<span class="muted">—</span>'}</td>
+      <td>${l.cl?`<span class="chip clickable cell-client" data-cl="${esc(l.cl)}" title="查看该客户端的来源统计">${esc(l.cl)}</span>`:'<span class="muted">—</span>'}</td>
       <td><span class="chip ${esc(l.p)}">${esc(protoLabel[l.p]||l.p)}</span></td>
       <td><span class="pill ${l.ok?'ok':'down'}"><span class="dot ${l.ok?'ok':'down'}"></span>${l.ok?'成功':'失败'}</span></td>
       <td class="t-r mono">${fMs(l.ms)}</td>
@@ -1942,8 +1942,16 @@ function drawLogTable(){
     </tr>`).join('')}</tbody>
   </table>`;
   $$('#lgTable tbody tr',box).forEach((tr,i)=>tr.onclick=()=>openLog(rows[i].id));
-  /* 客户端标签格：点击跳「数据统计」并按该客户端过滤（stopPropagation 免得同时开请求详情） */
-  $$('#lgTable .cell-client',box).forEach((el,i)=>el.onclick=(e)=>{e.stopPropagation();stFilter.client=rows[i].cl;go('stats')});
+  /* 客户端标签格：点击跳「数据统计」按该客户端过滤，并直接弹开最活跃来源的详情抽屉——
+     「这个客户端属于哪个 IP」当场就有答案（多个来源共用同一标签时弹敲门最多的那个，其余都在过滤后的表里）。
+     标签取 chip 自带的 data-cl（esc 过），绝不按 NodeList 索引对 rows——无标签的行不渲染 chip，按索引取会错位。 */
+  $$('#lgTable .cell-client',box).forEach(el=>el.onclick=(e)=>{
+    e.stopPropagation();
+    stFilter.client=el.dataset.cl||'';
+    go('stats');
+    const hit=((DATA.stats&&DATA.stats.ips)||[]).filter(r=>stClients(r).some(c=>c.k===stFilter.client));
+    if(hit.length)openIpStats(hit[0].ip);
+  });
 }
 async function clearUsage(){
   if(!confirm('确定清空全部用量统计与最近调用记录吗？会写入 usage.json，不可撤销。'))return;

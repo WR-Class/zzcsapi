@@ -1221,6 +1221,52 @@ function testStats() {
   check('来源详情抽屉：24 小时分布 + 封禁按钮 data-t 带 IP（开的是未封禁行）',
     dh.includes('24 小时分布') && dh.includes('data-act="ban-ip" data-t="198.51.100.5"'), dh && dh.slice(0, 200));
 
+  /* ── v1.18.13：调用日志客户端 chip → 跳数据统计 + 直接弹开最活跃来源的抽屉 ──
+     用户报「跳过去之后不知道这个客户端属于哪个 IP」——现在点击后过滤 + 弹抽屉一步到位。
+     另修一颗雷：旧绑定按 NodeList 索引对 rows 取标签——无标签的行不渲染 chip，索引错位，
+     第 1 行无标签时点第 2 行的 chip 会套用第 1 行的空标签（过滤悄悄失效）。标签改从 chip 自带 data-cl 取。 */
+  {
+    const stFilterJump = { client: '' };
+    let goPage = null, drawerIp = null, stopProp = false, logOpened = null;
+    const DATAJ = {
+      logs: [
+        { t: '10-01 08:00', ts: Date.now(), id: 'r-1', n: '主渠道', m: 'm-x', c: 'ch-a', p: 'openai', ok: true, ms: 12, i: 1, o: 2, cl: '' },
+        { t: '10-01 08:01', ts: Date.now(), id: 'r-2', n: '主渠道', m: 'm-x', c: 'ch-a', p: 'openai', ok: true, ms: 12, i: 1, o: 2, cl: 'codex CLI' },
+        { t: '10-01 08:02', ts: Date.now(), id: 'r-3', n: '备用渠道', m: 'm-y', c: 'ch-b', p: 'openai', ok: true, ms: 12, i: 1, o: 2, cl: 'curl' },
+      ],
+      stats: { ips: [
+        { ip: '203.0.113.7', calls: 10, clients: [{ k: 'codex CLI', n: 10 }] },
+        { ip: '198.51.100.5', calls: 2, clients: [{ k: 'codex CLI', n: 2 }] },
+      ] },
+    };
+    const box = mkEl('lgTable');
+    let chips = [];
+    const fnJump = new Function('$', '$$', 'DATA', 'esc', 'svg', 'nf', 'fMs', 'protoLabel', 'stFilter', 'stClients', 'openLog', 'go', 'openIpStats',
+      "let lgRange='7d', lgCh='', lgOk='all', lgQ='';\n" + extract('logRows') + '\n' + extract('stClients') + '\n' + extract('drawLogTable') + '\nreturn drawLogTable;'
+    )(() => box, (sel) => (sel.indexOf('.cell-client') >= 0 ? chips : []), DATAJ, esc, svg, nf, () => '12 ms', { openai: 'OpenAI' },
+      stFilterJump, (r) => (r && r.clients) || [], (id) => { logOpened = id; }, (p) => { goPage = p; }, (ip) => { drawerIp = ip; });
+    fnJump();
+    check('★ 客户端 chip 自带 data-cl 属性（模板渲染，esc 过），只有标签行才有 chip',
+      box.innerHTML.includes('data-cl="codex CLI"') && box.innerHTML.includes('data-cl="curl"'));
+    /* 桩里模拟浏览器解析：data-cl 从渲染出的 HTML 解析回 dataset（真实浏览器由解析器完成），
+       再跑一遍 drawLogTable 让绑定真的挂到这些 chip 上 */
+    chips = [...box.innerHTML.matchAll(/data-cl="([^"]*)"/g)].map(m => ({ dataset: { cl: m[1] }, onclick: null }));
+    check('★ 渲染出的 chip 数 = 有标签的行数（3 行日志只有 2 个 chip）', chips.length === 2, chips.length);
+    fnJump();
+    chips[0].onclick({ stopPropagation() { stopProp = true; } });
+    check('★ 索引错位回归：第 1 行无标签，点第 2 行的 chip → 过滤词是 codex CLI 不是空（旧写法按 rows[i] 取到第 1 行的空标签）',
+      stFilterJump.client === 'codex CLI', stFilterJump.client);
+    check('★ 跳转 + 弹抽屉一步到位：go 到统计页，抽屉弹最活跃来源（两个来源共用该标签 → 弹敲门最多的 203.0.113.7）',
+      goPage === 'stats' && drawerIp === '203.0.113.7', goPage + ' / ' + drawerIp);
+    check('★ 行点击不被连坐：stopPropagation 生效，请求详情抽屉没开', stopProp === true && logOpened === null);
+    drawerIp = null;
+    chips[1].onclick({ stopPropagation() {} });
+    check('★ 统计里没有该标签的来源时：只过滤不弹抽屉（不误开别的 IP）',
+      stFilterJump.client === 'curl' && drawerIp === null);
+    check('★ 源码守卫：绑定取 dataset 不按索引对 rows（防错位回潮）',
+      src.includes("stFilter.client=el.dataset.cl||''") && !src.includes('stFilter.client=rows[i].cl'));
+  }
+
   /* ── v1.18.12 布局整改守卫：KPI 居中 / 列宽定量 / 占位符居中 / 表头居中 ──
      用户确认的原型（_st_preview.html）落进生产代码后，用这些断言把它钉住，
      避免下次改渲染时又退回"内联字号 + auto 列宽 + 数值右对齐"的旧样子。 */
@@ -1272,7 +1318,7 @@ try {
    'chName', 'testRowVerdict', 'areaChart', 'sparkline', 'drawer',
    'vSettings', 'setCard', 'setHint', 'setPayload', 'setToggle', 'syncSettingsDraft', 'saveSettings',
    'vKeys', 'keyCard', 'toggleKeyReveal', 'rotateKey', 'resetKeysAction',
-   'vStats', 'stClients', 'openIpStats', 'vLogs', 'drawLogTable'].forEach(extract);
+   'vStats', 'stClients', 'openIpStats', 'vLogs', 'drawLogTable', 'logRows'].forEach(extract);
   ["let mTab='all', mQ=''", "let pgDraft=''", 'id="f-weight"', 'let setDraft=null',
    "let keyDraft={gateway:'',admin:''}", "let stFilter={client:''}"].forEach(s => {
     if (!src.includes(s)) throw new Error('build/app.js 里找不到状态声明 / 关键标记 ' + s);
