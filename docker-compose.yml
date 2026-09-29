@@ -19,6 +19,9 @@ services:
       # 想固定自己的密钥：仓库根建 .env 写 ZZCSAPI_ADMIN_KEY=... / ZZCSAPI_GATEWAY_KEY=...（.env 不入仓库）
       ADMIN_KEY: ${ZZCSAPI_ADMIN_KEY:-}
       GATEWAY_KEY: ${ZZCSAPI_GATEWAY_KEY:-}
+      # Host 门白名单（v1.18.10 渗透整改 V-07）：默认放行 localhost 与回环/私网 IP 字面量（按裸 IP 访问即常态）；
+      # 反代域名 / 公网域名必须在此登记（逗号分隔），否则 421。不登记就别有公网域名入口。
+      # ZZCSAPI_ALLOWED_HOSTS: zz.example.com
       ZZCSAPI_CONFIG: /app/config.json
     volumes:
       - ./config.json:/app/config.json

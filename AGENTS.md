@@ -144,6 +144,15 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
   ⑥ 默认关闭（零状态零表项），设置走「运行期设置」第四组 `thinkingReplay`（`persistConfig` 白名单必含，否则一次渠道保存就抹掉）。
   改动回放学习 / 修复 / 作废路径后跑 `node test/thinking-replay-e2e.test.js` 与 `node test/thinking-fidelity.test.js`
   （后者的 `signature` 区域守卫会拦住任何往跨协议转换器里塞签名的回潮）。
+- **Host/Origin 门（v1.18.10 起为硬约束）**：一切路由分支**之前**先过两道门（在 `/console` 静态壳分支与 `try` 之前，
+  421/403 也要带齐 `SEC_HEADERS`）。① `Host` 必须是 `localhost` / 回环与私网与链路本地 **IP 字面量**
+  （127.x、10.x、192.168.x、172.16–31.x、169.254.x、0.x、::1、fe80、fd00 段——按裸 IP 访问是本项目常态，**别改成域名白名单默认拒**，
+  那会把所有者自己的局域网访问全 421 掉）或 `ZZCSAPI_ALLOWED_HOSTS`（逗号分隔）登记的域名；其余 **421**（DNS 重绑定被拦死；
+  公网域名默认拒、显式登记才放行是刻意姿势）。HTTP/1.0 无 `Host` 放行（重绑定必须带域名）。② 带 `Origin` 且与 `Host`
+  不同源一律 **403**（本网关不开 CORS；脚本不带 Origin 零影响）。配套纪律，破坏任一条都是真 bug：① 门不得放进 `try` 之后的
+  路由分支里（放行判定必须先于一切路由，含 `/console` 壳）；② **不给任何面开 CORS**（`Access-Control-Allow-Origin` 不许出现）；
+  ③ `Origin: null` / 解析失败按跨源拒。改动网关入口 / 响应头 / 鉴权时跑 `node test/security-headers-e2e.test.js`
+  （第六批一节守 421/403/放行三态 + 装配位置 + `ZZCSAPI_ALLOWED_HOSTS` 注入）。
 
 ---
 
@@ -166,7 +175,7 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/runtime-settings.md` | 运行期四组开关**详解**（v1.18.8 从 README 拆出）：会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义、旋钮、钳制与 `GET/POST /admin/api/settings` 用法；含 `/metrics` 全量指标清单。改四组开关语义时同步本文 |
 | `docs/behavior.md` | 行为细节**详解**（v1.18.8 从 README 拆出）：上游 4xx 兜底判据、流式失败、协议转换与有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测数字。改网关行为语义时同步本文 |
 | `docs/tests.md` | 测试清单（v1.18.8 从 README 拆出）：32 个测试文件 · 1548 项断言的全量命令与每条守的是什么、「改什么 → 必跑什么」速查表、测试哲学（现抠真实源码 / e2e 姊妹 / 临时目录纪律）。**新增测试时登记进本文** |
-| `docs/security-hardening.md` | 安全整改记录（v1.18.8 从 README 拆出）：2026-10-02 本机实测结论、外部渗透测试四批整改（v1.18.3–v1.18.7）逐批内容与守卫测试、刻意不做的两条处置及理由、公网部署者提示。改鉴权 / 静态文件 / 响应头时配合 `sec-audit.js` 与本文 |
+| `docs/security-hardening.md` | 安全整改记录（v1.18.8 从 README 拆出）：2026-10-02 本机实测结论、外部渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账（已修/接受/部分成文，含理由）、复查记录（附录 B 脚本复测结果与双实例疑云解除）、公网部署者提示。改鉴权 / 静态文件 / 响应头时配合 `sec-audit.js` 与本文 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |
 | `sec-audit.js`（仓库根，非 test/） | **安全体检（只读）**：`node sec-audit.js` 体检本机，`ZZ_BASE=http://host:port` 体检远端，`ZZ_TRY_DEFAULTS=1` 额外试仓库里公开的示例默认密钥。查匿名可达面、默认密钥、控制台版本指纹、安全响应头/CORS、无/错/对三态鉴权覆盖面、密钥泄露面（网关密钥 + 上游 apiKey 会不会从 `/metrics`／管理面／错误体漏出）、路径穿越与私有文件暴露。**报告一律脱敏，绝不回显密钥**；加了密钥才做后三项。改动鉴权、静态文件、响应头或控制台时必跑 |
 | `test/console-state.test.js` | 前端自动化回归（`node test/console-state.test.js`，零依赖）：**视口内输入控件的值必须跨轮询重绘保留**；从 `build/app.js` 现抠真实渲染函数在最小 DOM 桩里跑。另含渠道表单**权重**一节（`adapt()` 接 `weight`/`weightedHits`/`weightedShare` → 表格显示「权重 / 分流」→ `saveChannel` 报文带 `weight`、负数与非数字在前端就挡下）与**自动权重观测**一节（`adapt()` 接 `autoH`/`autoFailRate`/`autoSamples`/`autoLatMs`/`autoSpeedRatio` 与 `DATA.auto` → `autoWeightCard()` 画出预测份额与"当前 x%"对照、卡头明示"当前分流一字未动"、单候选/空集给空状态；另有抽屉文案与 `vChannels` 挂载的结构守卫）与**停用渠道的手动测试**一节（在最小 DOM 桩里真跑 `openTestModels`：指定停用渠道必须列得出它自己的模型、只列这一条、带「已停用」标记与"不参与自动探测"说明、运行按钮不灰；全局模式含停用渠道但启用排前；`runTests` 每条带 `channelId` 的结构守卫；对照组证明旧写法下是 0 个模型）与**测试结果可读性**一节（`testRowVerdict` 真值表：有回复=通过、2xx 但空=**空回复**、其余=失败，含"缺 `ok` 字段不当作成功"；在 DOM 桩里**真跑 `runTests`**（桩 HTTP + 桩 `document` + 现抠的真实 `fMs`）断言每行带模型名、渠道显示名、中文结论、三种样式、空回复的原因文案、失败行带 HTTP 码与上游原文、成功行带回复与 token、汇总分三档；并含"旧写法只写渠道名已消失"的对照与 `esc` 结构守卫）与**调用日志渠道名**一节（表头「渠道」紧跟「请求 ID」、渠道格显示渠道显示名而不是 id、按名字/按 id 都能搜、`adapt()` 把显示名解析进 `n` 且保留 `c`；对照组证明"渠道格写 id、排在模型后面"的旧写法抓得住）与**运行期设置**一节（v1.18：在最小 DOM 桩里真跑 `vSettings`/`setPayload`/`saveSettings` —— `config` 回填表单而 `effective` 只作「生效：」角标、有改动后草稿跨 8 秒轮询重绘不被覆盖（含"旧写法无条件覆盖草稿"的对照组）、POST 只发有改动的组/字段且留空数字不下发、400 的 `error` 原文直显进错误条且失败不清脏；v1.18.8 增补**第四张卡**：`mkRaw` 桩带 `thinkingReplay` 三段（config/effective/status）、四张卡都渲染、字段齐（开关 + 缓存时长 + 最多缓存条数、回填 config 原值）、第四组同样 PATCH 语义（开着才进 payload、组内只带 enabled、没动不出现））与**零数据（全新部署）**一节（v1.18.1，用户报「渠道管理点详情无反应」：在最小 DOM 桩里**真跑 `openChannel`**，零数据与满数据两组都必须不抛、抽屉要真画出来、有数据仍画得出曲线；`areaChart`/`sparkline` 对空数组返回占位图、单点输入不出 `NaN`；含"渲染函数的桩数据必须再跑一遍空的"这条教训与两条结构守卫）。**密钥管理**一节（v1.18.5：双路由表注册、NAV 位置、掩码与来源渲染、手填草稿跨轮询、**随机生成只本地填框不发请求**、轮换提交框内值、按需揭示、reset 两步确认守卫、**轮换单击直接生效**；v1.18.6 增补**会话语义**：管理密钥不落任何浏览器存储、`api()` 不再注入 `Authorization`、登录门走 `POST /admin/api/session`、`?key=` 通道已拆除、轮换后无任何存储写入）。与**事件委托**一节（v1.18.7：把产品里真实的委托块——`ACTS` 表 + `document` 的 click/change 两个监听——原样抠出来在桩函数上真跑分发：click 把 `dataset.id` 送进动作函数、嵌套点击只触发最近那枚（行内按钮不冒泡触发行/卡片动作）、未知动作与空白点击静默不炸、`openTestModels`/`openChannelForm` 参数形状保留、数值走 `+dataset.idx`、change 把 `dataset.kind` 送进 `importFiles`、`data-act`/`data-change` 与 `ACTS` 双向一一对应；41 个动作函数名刻意硬编码在用例里，`ACTS` 引用了未登记的函数名会当场报错）。新增带输入框的页面时补用例；新增交互时先在 `ACTS` 注册（本节与 `test/security-headers-e2e.test.js` 的守卫都会拦内联回潮） |
@@ -208,5 +217,8 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
   第四批一节（v1.18.7）另守：app.js / shell.html / 产物 console.html 里内联事件属性（onclick=/onchange=/onkeydown=…）必须为 0、
   产物里 `data-act` 按钮真实存在、委托接线（`ACTS` 表 + `document` 的 click/change 两个监听）进了产物、
   `ACTS` 与模板双向一一对应（缺注册与死注册都算失败）、外部可控 ID/请求 ID 只走 `data-*` 属性（不再拼进事件代码字符串）、
-  抽屉遮罩（shell.html）也走 `data-act`
+  抽屉遮罩（shell.html）也走 `data-act`。
+  第六批一节（v1.18.10）另守：Host 白名单三态——陌生域名与公网 IP 字面量 → **421**、`ZZCSAPI_ALLOWED_HOSTS` 登记域名与
+  localhost/回环/私网 IP 字面量 → 200（裸 IP 访问的常态不误伤）；跨源 `Origin` 的写请求 → **403**（揣着正确管理密钥也拒）；
+  同源 / 无 `Origin` 照常（客户端面验证，admin 限流窗口不连坐）；装配位置必须在 `/console` 分支等一切路由之前
 | `test/admin-session-e2e.test.js` | 后端端到端回归（`node test/admin-session-e2e.test.js`，零依赖）：**管理面会话 cookie**（v1.18.6，渗透第三批）。含装配守卫（会话常量齐、`checkAuth` admin 会话分支在 Bearer 之前、`?key=` 只允许出现在 `kind !== 'admin'` 块内、会话端点在 authGate 分支之前、登录计入 admin 失败限流且 NOAUTH 放行、DELETE 只杀自己 + 过期 cookie、`rotateKeys`/`resetManagedKeys` 清空全部会话、keys 路由给发起轮换的浏览器补发新会话、清扫定时器 `unref`、CSP 存在性）；纯函数真值表（`readSessionToken` cookie 解析 7 态、`sessionValid` 活/过期懒删/不存在/无 cookie、`sessionCookieValue` 四旗标且**刻意无 `Secure`**、`newSessionToken` 逐出——表满先清过期不过度逐人、全是活的逐最旧一枚）；真链路（临时网关）：无凭据 401、错密钥登录 401 且不下发 cookie、正确登录 200 + `expiresInSec` + 旗标齐全、只带 cookie 管理面 200、Bearer 保留、管理面 `?key=` 401 / 客户端面 `?key=` 200、两次登录两枚独立会话、退出只杀自己 + 405、CSP 真实随响应下发、cookie 轮换管理密钥成功且补发新会话（旧 token 立即 401、新 token 立即 200、旧 Bearer 401 / 新 Bearer 200、网关密钥不受牵连）、重启后会话全部掉线而新 Bearer 仍活（config.auth 落库）、落库原文核对。**改会话 / 登录门 / 管理面鉴权 / cookie 语义时必跑** |

@@ -152,7 +152,7 @@ const freePort = () => new Promise((res, rej) => {
 
   const gw = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     cwd: ROOT,
-    env: { ...process.env, ZZCSAPI_CONFIG: cfgPath, ZZCSAPI_USAGE: path.join(TMP, 'usage.json'), GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' },
+    env: { ...process.env, ZZCSAPI_CONFIG: cfgPath, ZZCSAPI_USAGE: path.join(TMP, 'usage.json'), GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1', ZZCSAPI_ALLOWED_HOSTS: 'my-proxy.example' },
     stdio: 'ignore',
   });
   let up2 = false;
@@ -277,6 +277,44 @@ const freePort = () => new Promise((res, rej) => {
     const gwStill = await fetch(`${B}/v1/models`, { headers: { Authorization: 'Bearer ' + GW_KEY } });
     check('限流只作用于刚被爆破的那一类：客户端面照常可用', gwStill.status === 200);
     await gwStill.text();
+
+    /* ─────────── 3. 第六批（v1.18.10）V-07：Host/Origin 门 ─────────── */
+    console.log('\n3. 第六批：Host 白名单 421 与跨源 Origin 403');
+    const rawReq = (method, p, headers, body) => new Promise((resolve) => {
+      const r = http.request({ host: '127.0.0.1', port: GW, method, path: p, headers }, (res2) => {
+        let b = ''; res2.on('data', (c) => { b += c; });
+        res2.on('end', () => resolve({ status: res2.statusCode, text: b }));
+      });
+      r.on('error', () => resolve({ status: 0, text: '' }));
+      r.end(body);
+    });
+    const hostCases = [
+      ['evil.example', 421, '陌生域名（DNS 重绑定页面的必经形态）'],
+      ['8.8.8.8:8787', 421, '公网 IP 字面量默认拒'],
+      ['my-proxy.example', 200, 'ZZCSAPI_ALLOWED_HOSTS 登记的域名放行'],
+      ['localhost:8787', 200, 'localhost'],
+      ['192.168.1.50:8787', 200, '私网 IPv4 192.168/16（局域网裸 IP 访问的常态）'],
+      ['10.9.9.9:8787', 200, '私网 IPv4 10/8'],
+      ['172.20.1.5:8787', 200, '私网 IPv4 172.16/12'],
+    ];
+    for (const [hh, want, why] of hostCases) {
+      const r = await rawReq('GET', '/healthz', { Host: hh });
+      check(`★ Host ${hh} → ${want}（${why}）`, r.status === want, r);
+    }
+    const xo = await rawReq('POST', '/admin/api/session',
+      { Host: `127.0.0.1:${GW}`, Origin: 'http://evil.example', 'Content-Type': 'application/json' },
+      JSON.stringify({ key: AD_KEY }));
+    check('★ 跨源 Origin 的写请求 → 403（即使揣着正确管理密钥也拒——与 SameSite=Strict 叠加的双保险）', xo.status === 403, xo);
+    const so = await rawReq('GET', '/v1/models',
+      { Host: `127.0.0.1:${GW}`, Origin: `http://127.0.0.1:${GW}`, Authorization: 'Bearer ' + GW_KEY });
+    check('同源 Origin 照常放行（200——客户端面，admin 限流窗口不连坐）', so.status === 200, so);
+    const no = await rawReq('GET', '/v1/models',
+      { Host: `127.0.0.1:${GW}`, Authorization: 'Bearer ' + GW_KEY });
+    check('不带 Origin 的脚本调用照常（200——服务器间集成零影响）', no.status === 200, no);
+    check('装配守卫：Host/Origin 门定义齐，且在 /console 静态壳等一切路由分支之前调用',
+      SRC.includes('function hostAllowedForV07(') && SRC.includes('function originSameAsHost(') &&
+      SRC.indexOf('hostAllowedForV07(req.headers.host)') > -1 &&
+      SRC.indexOf('hostAllowedForV07(req.headers.host)') < SRC.indexOf("url.pathname === '/console'"));
   } finally {
     try { gw.kill(); } catch { }
     // 假上游也要关掉：否则它监听的句柄会让本进程的事件循环一直不退出

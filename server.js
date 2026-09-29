@@ -2881,11 +2881,47 @@ const SEC_HEADERS = [
   ['Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"],
 ];
 
+/* Host/Origin 门（v1.18.10，渗透整改 V-07 第六批）：拦在一切路由之前。
+   - Host 白名单：localhost、回环/私网/链路本地 IP 字面量（127.x / 10.x / 192.168.x / 172.16-31.x /
+     169.254.x / 0.x / ::1 / fe80 与 fd00 开头的 IPv6），以及 ZZCSAPI_ALLOWED_HOSTS 显式登记的域名
+     （反代/公网域名场景，逗号分隔）。其余一律 421——DNS 重绑定页面必须带着攻击者的域名来
+     （Host: evil.example），正好被这道门拦死；公网部署者被默认拒，显式登记才放行。
+   - Origin 门：浏览器跨源请求必带 Origin；与 Host 不同源一律 403（本网关不开 CORS、
+     控制台是同源应用）。服务器间脚本从不带 Origin，零影响；与 SameSite=Strict 叠加，跨源写双保险。 */
+const ALLOWED_HOST_NAMES = new Set(
+  String(process.env.ZZCSAPI_ALLOWED_HOSTS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+);
+function hostAllowedForV07(hostPort) {
+  const h = String(hostPort || '').toLowerCase().replace(/:\d+$/, '');
+  if (!h) return true;                                  // HTTP/1.0 无 Host：重绑定必须带域名，空 Host 无从伪装
+  if (h === 'localhost' || ALLOWED_HOST_NAMES.has(h)) return true;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {                 // IPv4 字面量：回环 + 私网 + 链路本地 + 0.0.0.0
+    const o = h.split('.').map(Number);
+    return o[0] === 0 || o[0] === 10 || o[0] === 127
+      || (o[0] === 172 && o[1] >= 16 && o[1] <= 31)
+      || (o[0] === 192 && o[1] === 168)
+      || (o[0] === 169 && o[1] === 254);
+  }
+  return h === '::1' || h === '[::1]'                   // IPv6 回环（含方括号形式）
+    || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h);  // ULA（fdxx）/ 链路本地（fe8x–febx）
+}
+function originSameAsHost(origin, hostPort) {
+  try { return new URL(origin).host === String(hostPort || '').toLowerCase(); }
+  catch { return false; }                                // Origin: null / 垃圾值一律视为跨源
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   for (const [k, v] of SEC_HEADERS) res.setHeader(k, v);
   // 管理面与探针的响应不该被任何中间层缓存（含密钥与否都别留在缓存里）
   if (url.pathname.startsWith('/admin/api/') || url.pathname === '/healthz') res.setHeader('Cache-Control', 'no-store');
+  // Host/Origin 门（v1.18.10，V-07）：拦在一切路由之前（421/403 也带齐上面的安全头）
+  if (!hostAllowedForV07(req.headers.host)) {
+    return sendJson(res, 421, { error: { message: 'misdirected request: host not in allowlist (set ZZCSAPI_ALLOWED_HOSTS for proxy/public domains)', type: 'bad_request' } });
+  }
+  if (req.headers.origin && !originSameAsHost(req.headers.origin, req.headers.host)) {
+    return sendJson(res, 403, { error: { message: 'cross-origin request refused (this gateway serves no CORS)', type: 'bad_request' } });
+  }
   try {
     // 控制台 HTML 壳：零机密（密钥不落页面，数据全走 /admin/api），放行壳本身、
     // 由前端登录门负责收 key、由 /admin/api 的每次调用强制 Bearer——「页面能开 ≠ 有权限」
