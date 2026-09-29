@@ -891,6 +891,41 @@ async function testKeys() {
       (src.match(/keys:vKeys/g) || []).length === 2);
   }
 
+  {
+    /* 状态横幅必须自带内边距：.card 只有 overflow:hidden、没有 padding，
+       内容直接塞 .row 会贴着边框（v1.18.6 修的"框怪怪的"就是这个）。 */
+    check('★ 密钥状态横幅走 card-bd（.card 自身无 padding，漏了会贴边框）',
+      /class="card-bd row" style="gap:9px/.test(KEY_SRC));
+    const legacyKey = KEY_SRC.replace('class="card-bd row" style="gap:9px', 'class="row" style="gap:9px');
+    check('对照组：漏 card-bd 的旧写法不满足该守卫 → 本用例抓得住"内容贴边框"回归',
+      !/class="card-bd row" style="gap:9px/.test(legacyKey));
+  }
+
+  {
+    /* 密钥值的 span 原本写的是 class="mask mono"，而 .mask 是**弹窗遮罩**
+       （position:fixed;inset:0;opacity:0，见设计稿 modal 区块）——套上来密钥值就成了
+       一个铺满视口、透明、脱离文档流的元素：行里只剩「当前值 / 显示 / 复制」，值看不见。
+       这个类名冲突设计稿里就带着（接入信息页的 GATEWAY_KEY 一起中招），v1.18.6 修。 */
+    check('★ 密钥值走 .kval，不得再借用弹窗遮罩的 .mask 类名',
+      KEY_SRC.includes('class="kval mono"') && !/class="mask mono"/.test(KEY_SRC));
+    check('★ 接入信息页的 GATEWAY_KEY 值同样走 .kval（同一个冲突，两处一起修）',
+      src.includes('<span>GATEWAY_KEY</span><span class="kval mono">') &&
+      !/<span>GATEWAY_KEY<\/span><span class="mask mono">/.test(src));
+    const legacyVal = KEY_SRC.replace('class="kval mono"', 'class="mask mono"');
+    check('对照组：旧写法 class="mask mono" 不满足该守卫 → 本用例抓得住"密钥值整行不可见"回归',
+      /class="mask mono"/.test(legacyVal));
+  }
+
+  {
+    /* 光看源码不够：类名冲突是 CSS 层面的，产物里必须真的没有 .ep-key .mask 规则、
+       且 .mask 仍是那条弹窗遮罩（否则守卫会在"把遮罩改名"这种改法下失效）。 */
+    const built = fs.readFileSync(path.join(__dirname, '..', 'console.html'), 'utf8');
+    check('★ 产物里 .ep-key .kval 有样式，且 .ep-key .mask 规则已消失',
+      built.includes('.ep-key .kval{') && !built.includes('.ep-key .mask{'));
+    check('★ .mask 仍是弹窗遮罩（position:fixed + inset:0 + opacity:0 一条不少）',
+      /\.mask\{[^}]*position:fixed[^}]*opacity:0/.test(built));
+  }
+
   const mkRaw = () => ({ keys: {
     gatewayKey: { masked: 'sk-a…1234', set: true, source: 'env' },
     adminKey: { masked: 'admi…7890', set: true, source: 'console' },

@@ -506,6 +506,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" onclick="copyText(this.dataset.t,this)"`。
 17. **「条 + 独立图例」必然错位，标签必须贴在自己那一段下面**：份额带的段是**单向排列**（左→右按顺序），而图例若用 `auto-fit` 网格则是「左→右、换行再左→右」——候选一多、一换行，读者就没法把图例项对回它的段。更糟的是真机上绝大多数候选健康系数 =1（色块全是同一个绿），连颜色都认不出谁是谁（v1.8.1 只修了行内基线，没修"对不上"这个根本问题）。**v1.9 的处置**：改成一候选一列（`.aw-col`，列宽 = 份额），列内上方 `.aw-seg` 色带段、下方 `.aw-cap` 直接挂名字与百分比 ——"这段是谁的"不用去别处找。**新增任何"带 + 图例"组件前先问：换行后读者还能把图例对回它的段吗？**
 18. **按比例分列宽用 `flex-grow`，别用 `width:calc(x%)`**：`.aw-split` 用 `gap:8px` 给列间真间隙，列上写 `flex-basis:0` + `flex-grow:var(--w)` —— 间隙由布局先让出、余量再按份额分，各列宽度仍**严格成比例**，也不会被 100% 撑破。手写 `width:calc(x% - Npx)` 一旦候选数变化就立刻失准。配套两条：列要 `min-width:0`、列内文字要 `overflow:hidden;text-overflow:ellipsis`，否则长渠道名会把列撑宽、把比例撑歪（全量信息放 `title`）。
+19. **新起类名之前先 grep 它的定义——`.mask` 是弹窗遮罩，不是"掩码"**：设计稿把"被遮罩的密钥值"写成 `<span class="mask mono">`，于是它连同 `.mask{position:fixed;inset:0;z-index:80;opacity:0}` 一起吃下 —— 这个值变成**铺满视口、透明、脱离文档流**的元素：文本在 DOM 里（`textContent` 有值）却永远不显示，行里只剩「当前值 / 显示 / 复制」和一块空白。密钥管理页（v1.18.5 新增）与**接入信息页的 `GATEWAY_KEY` 行**一起中招，且从设计稿一路带过来，长期没人发现。**v1.18.6 处置**：该值改用独立类 `.ep-key .kval`（原型 `<style>` 337 + 原型 markup 1700 + `build/app.js` 的 `keyCard` / `vAccess`，共 4 处），`.mask` 回归"只做弹窗遮罩"。教训：**CSS 类名没有命名空间，复用前先 `Select-String -Pattern '^\.<名字>\{'` 确认它没被别处定义**；`test/console-state.test.js` §11 已加守卫（源码不得出现 `class="mask mono"`、产物不得有 `.ep-key .mask` 规则、**且 `.mask` 必须仍是那条弹窗遮罩**——防止用"给遮罩改名"蒙混过关）。
 
 ---
 
@@ -513,7 +514,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 **构建与产物**
 
-- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置 + 密钥管理页的自动化回归，**161 项断言**；改了任何带输入框的页面都要跑）
+- [ ] `node test/console-state.test.js` 全绿（视口内输入控件状态回填 + 表单权重 + 自动权重观测页 + 运行期设置 + 密钥管理页的自动化回归，**168 项断言**；改了任何带输入框的页面都要跑）
 - [ ] `node build/build.js` 成功，无「`</style>` 出现 N 次」报错
 - [ ] `git diff console.html` 只包含本次预期改动（若为空说明忘了构建）
 - [ ] 产物里 `</style>` 恰好 1 次：`(Select-String -Path console.html -Pattern '</style>' -SimpleMatch).Count`

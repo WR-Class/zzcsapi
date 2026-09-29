@@ -197,7 +197,7 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 161 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显）
+node test/console-state.test.js           # 168 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换同步浏览器凭据）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）

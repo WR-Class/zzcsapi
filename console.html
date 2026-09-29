@@ -347,7 +347,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .ep{padding:15px 16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2);display:flex;flex-direction:column;gap:11px}
 .ep-url{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12.5px;color:var(--tx);word-break:break-all}
 .ep-key{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12px;color:var(--tx-2)}
-.ep-key .mask{letter-spacing:.08em}
+.ep-key .kval{letter-spacing:.08em}/* 千万别写回 .mask：那个类名是弹窗遮罩（position:fixed;inset:0;opacity:0），套上来会让密钥值整行不可见。见 docs/frontend-code-map.md §7 */
 
 /* playground */
 .pg{display:grid;grid-template-columns:1fr 316px;gap:16px;align-items:start}
@@ -2205,7 +2205,7 @@ function keyCard(kind){
     <div class="card-hd"><h3>${label}</h3><span class="sub">${esc(scope)} · 来源：${esc(KEY_SRC_TXT[o.source]||'—')}</span></div>
     <div class="card-bd">
       <div class="ep-key" style="margin-bottom:12px"><span>当前值</span>
-        <span class="mask mono" id="kr_${kind}">${esc(plain||o.masked||'—')}</span>
+        <span class="kval mono" id="kr_${kind}">${esc(plain||o.masked||'—')}</span>
         <button class="btn ghost sm ml-auto" id="ke_${kind}">${svg(plain?'eyeOff':'eye',13)}${plain?'隐藏':'显示'}</button>
         <button class="btn ghost sm" id="kc_${kind}">${svg('copy',13)}复制</button></div>
       <div class="field">
@@ -2240,7 +2240,7 @@ function vKeys(v){
     </div>
   </div>
   <div class="card" style="margin-bottom:16px;border-color:color-mix(in srgb,${bad?'var(--warn)':'var(--ok)'} 30%,transparent)">
-    <div class="row" style="gap:9px;align-items:flex-start">
+    <div class="card-bd row" style="gap:9px;align-items:flex-start">
       <span style="color:${bad?'var(--warn)':'var(--ok)'}">${svg(bad?'warn':'check',15)}</span>
       <span class="help" style="margin:0">${bad
         ?'当前密钥仍是示例默认串（含 <b>change-me</b>）——<b>建议立刻换一对新的</b>：点「随机生成」填进框内，再点「轮换」生效。'
@@ -2376,7 +2376,7 @@ function vAccess(v){
       <div class="ep-url"><span style="flex:1;min-width:0">${x.u}</span>
         <button class="btn ghost sm" data-t="${esc(x.u)}" onclick="copyText(this.dataset.t,this)">${svg('copy',12)}复制</button></div>
       <div class="muted" style="font-size:11.5px">${esc(x.note)}</div>
-      <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">${esc(gwKey||'—')}</span>
+      <div class="ep-key"><span>GATEWAY_KEY</span><span class="kval mono">${esc(gwKey||'—')}</span>
         <button class="btn ghost sm ml-auto" onclick="copyGwKey(this)">${svg('copy',13)}复制</button></div>
     </div></div>`).join('')}
   </div>

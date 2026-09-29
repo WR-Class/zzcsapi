@@ -195,6 +195,9 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   （优先关弹窗，其次关抽屉）。
   > 早期版本曾有 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 四个独立弹窗，重构时已统一收敛掉。
   > **新增弹窗不要再建新 `.mask`**，直接用 `modal()` 注入。
+  > **`.mask` 是"弹窗遮罩"专用类名，别拿它当"掩码"用**：它带 `position:fixed;inset:0;opacity:0`，
+  > 任何非弹窗元素套上它都会**脱离文档流且透明**（密钥值曾因此整行看不见，v1.18.6 改用 `.ep-key .kval`）。
+  > 见 [frontend-code-map.md](./frontend-code-map.md) §7 坑位 19。
 
 ### 4.7 抽屉 `.scrim / .drawer`
 
@@ -1325,6 +1328,18 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **验证**：`test/key-rotation-e2e.test.js`（**75 项断言**，真起临时网关）——装配守卫（优先级链方向、`auth` 白名单、4 个端点都在 `handleAdminApi` 内、`keysInsecureNow` 唯一判据、轮换清计数、NOAUTH 安全）+ `normNewKey` 真值表 + 真链路（6 种非法值 400 且不生效不落库、旧密钥立即 401 / 新密钥立即 200、`keysInsecure` 由真变假、重启后 `config.auth` 仍压过 env、随机生成三态（48 位四样字符齐全）、reset 回环境变量且盘上 `auth` 段消失）。`test/console-state.test.js` 新增 §11（**161 项断言**总）：含"随机生成只填草稿不发请求 + 轮换提交框内值"的回归：双路由表注册、NAV 位置、掩码与来源渲染、草稿跨轮询、**换管理密钥后浏览器存值同步更新**、按需揭示端点、两步确认守卫。`node build/build.js` 通过（产物 **173,165 字符 / 197,075 字节**）；全量回归 **30 文件 / 0 失败**。
 
 **残留（明确记下）**：① 轮换动作只落一行 `[keys]` 日志，无专门审计流水（单用户自托管定位，够用）；② 其它标签页/设备上的旧管理密钥在轮换后立即 401，需要重新输入一次——页面上已写明，这是"立即失效"的必然代价。
+
+---
+
+### 8.28 v1.18.6 密钥值整行看不见：`.mask` 类名冲突（2026-10-02，对象 `console-redesign.html` + `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `README.md`）
+
+**问题（用户原话："页面新增了一个密钥管理，但是界面元素貌似不是很对……这行字所在的框感觉怪怪的，位置不对还是什么问题？"）**：密钥管理页两张卡里的「当前值」行**掩码值根本看不见**——行内只剩「当前值」与「显示 / 复制」两个按钮，中间空一块。同一个毛病也一直在**接入信息页的 `GATEWAY_KEY` 行**上（从设计稿就带着，长期没人报）。同一句反馈里还有更直观的另一半：状态横幅的 `div` 漏了 `card-bd`（`.card` 只有 `overflow:hidden`、没有 `padding`），内容直接塞 `.row` 会**贴着边框**。
+
+**根因（类名冲突，不是布局问题）**：设计稿把"被遮罩的密钥值"写成 `<span class="mask mono">`，而 `.mask` 是**弹窗遮罩**（`position:fixed;inset:0;z-index:80;display:grid;place-items:center;opacity:0;pointer-events:none`）。`.ep-key .mask{letter-spacing:.08em}` 只补了字距，其余属性全部继承自遮罩那条规则 —— 于是这个值变成一个**铺满视口、透明、脱离文档流**的元素：文本在 DOM 里（`textContent` 有值）却永远不显示，`.ep-key` 行里自然空一块。浏览器实测：`position:"fixed"`、`opacity:"0"`、`zIndex:"80"`、`getBoundingClientRect()` 约等于整个视口（1703×1198）。
+
+**处置**：① 把"被遮罩的值"改用独立类 `.ep-key .kval`——原型 `<style>` 337、原型演示 markup 1700、`build/app.js` 的 `keyCard`（1522）与 `vAccess`（1693），共 4 处；`.mask` 回归"只做弹窗遮罩"。**只改选择器名、不增删行**，因此 `console.html` 的行号偏移不变（CSS +13 / JS +686）。② 状态横幅补 `class="card-bd row"`。
+
+**验证**：`test/console-state.test.js` §11 新增 5 条断言（**168 项**总）：源码里 `class="mask mono"` 必须为 0、密钥值与接入信息页的 `GATEWAY_KEY` 都走 `class="kval mono"`、产物里 `.ep-key .kval{` 在而 `.ep-key .mask{` 不在、**且 `.mask` 仍必须是那条弹窗遮罩**（防止用"给遮罩改名"蒙混过关），外加一条"旧写法不满足守卫"的对照组。浏览器实测（本地静态托管 + 打桩后端，见 §11 构建管线）：修复前该元素 `opacity:0 / position:fixed / rect≈视口`、值不可见；修复后两张卡的掩码值均正常可见。`node build/build.js` 通过（产物 **173,929 字符**；设计 CSS 33,647 · 补充 CSS 4,587 · JS 132,315）。
 
 ---
 

@@ -334,7 +334,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .ep{padding:15px 16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel-2);display:flex;flex-direction:column;gap:11px}
 .ep-url{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12.5px;color:var(--tx);word-break:break-all}
 .ep-key{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:12px;color:var(--tx-2)}
-.ep-key .mask{letter-spacing:.08em}
+.ep-key .kval{letter-spacing:.08em}/* 千万别写回 .mask：那个类名是弹窗遮罩（position:fixed;inset:0;opacity:0），套上来会让密钥值整行不可见。见 docs/frontend-code-map.md §7 */
 
 /* playground */
 .pg{display:grid;grid-template-columns:1fr 316px;gap:16px;align-items:start}
@@ -1697,7 +1697,7 @@ function vAccess(v){
       <div class="row"><span class="chip ${x.p}">${x.t}</span><span class="dot ok ml-auto"></span></div>
       <div class="ep-url">${x.u}</div>
       <div class="muted" style="font-size:11.5px">${x.note}</div>
-      <div class="ep-key"><span>GATEWAY_KEY</span><span class="mask mono">zz-gw-••••••••••••</span>
+      <div class="ep-key"><span>GATEWAY_KEY</span><span class="kval mono">zz-gw-••••••••••••</span>
         <button class="btn ghost sm ml-auto" onclick="copyText('zz-gw-your-key-here',this)">${svg('copy',13)}复制</button></div>
     </div></div>`).join('')}
   </div>
