@@ -1,6 +1,6 @@
 # 控制台「运行期设置」页 · 前端实现规格（交给前端执行者）
 
-> 面向对象：拿到本文件就动手改前端的人（或 AI）。后端契约已实现并有测试守着（`test/settings-api-e2e.test.js`，58 项断言）。
+> 面向对象：拿到本文件就动手改前端的人（或 AI）。后端契约已实现并有测试守着（`test/settings-api-e2e.test.js`，68 项断言）。
 > **你只改前端**：`build/app.js`（必要的话 `build/shell.html` / `build/extra.css`），改完**必须** `node build/build.js`。
 > 本文件由后端侧维护，接口字段以本文件为准；若发现契约与实测不符，先停下来问，不要在前端"猜一个字段名"。
 
@@ -8,8 +8,10 @@
 
 ## 0. 一句话目标
 
-让用户能在控制台里开关并调参三组运行期设置——**会话粘性 / 客户端限流 / 指标端点**——
-以前只能改 `config.json` + 重启（v1.17 的遗留缺口）。改完**立即生效、立即落库**，无需重启容器。
+让用户能在控制台里开关并调参四组运行期设置——**会话粘性 / 客户端限流 / 指标端点 / thinking 回放**
+（前三组 v1.18；第四组 `thinkingReplay` v1.18.8 增，同协议直通的 thinking 签名修复，见
+`docs/thinking-replay-design.md`）——以前只能改 `config.json` + 重启（v1.17 的遗留缺口）。
+改完**立即生效、立即落库**，无需重启容器。
 
 ## 1. 放在哪
 
@@ -28,14 +30,20 @@
 {
   "config":   { "sessionAffinity": { "enabled": false, "ttlSec": 3600, "maxEntries": 2000, "deriveFromBody": false },
                 "rateLimit": { "enabled": false, "rpm": 0, "burst": 0, "maxConcurrent": 0 },
-                "metrics": { "enabled": true, "public": false } },
+                "metrics": { "enabled": true, "public": false },
+                "thinkingReplay": { "enabled": false, "ttlSec": 3600, "maxEntries": 2048 } },
   "effective":{ "sessionAffinity": { "enabled": false, "ttlSec": 3600, "maxEntries": 2000, "deriveFromBody": false },
                 "rateLimit": { "enabled": false, "rpm": 0, "burst": 0, "maxConcurrent": 0 },
-                "metrics": { "enabled": true, "public": false } },
+                "metrics": { "enabled": true, "public": false },
+                "thinkingReplay": { "enabled": false, "ttlSec": 3600, "maxEntries": 2048 } },
   "status":   { "affinity": { "enabled": false, "entries": 0, "hits": 0, "misses": 0, "learned": 0, "evicted": 0, "expired": 0, "reordered": 0 },
                 "rateLimit": { "enabled": false, "rpm": 0, "burst": 0, "maxConcurrent": 0, "tokens": 0, "inflight": 0, "peakInflight": 0, "limitedRate": 0, "limitedConcurrent": 0, "released": 0 } }
 }
 ```
+
+> v1.18.8 起第四组 `thinkingReplay` 的实时计数在 `status.thinkingReplay`
+> （`enabled / ttlSec / maxEntries / entries / learned / hits / misses / evicted / expired / stale`），
+> `/admin/api/status` 里同名投影。
 
 **`config` 与 `effective` 的区别必须都展示**（这是这一页最容易做错的地方）：
 
@@ -62,12 +70,14 @@
 ### 2.3 实时状态从哪来
 
 - `/admin/api/settings` 里的 `status` 段已经带了粘性/限流的实时计数；
-- `/admin/api/status` 里也有 `affinity` / `rateLimit` / `metrics` 三段（同一份数据的另一种投影），
+- `/admin/api/status` 里也有 `affinity` / `rateLimit` / `metrics` / `thinkingReplay` 四段（同一份数据的另一种投影），
   所以**现有 8 秒轮询**已经足够刷新"实时计数"，不必为它再加一个定时器。
 
 ## 3. 页面结构（建议）
 
-三张卡片，一张一组；卡片头 = 标题 + 开关（`toggle`）；卡片体 = 旋钮 + 生效值角标 + 实时计数 + 一句"它到底在做什么"。
+四张卡片，一张一组；卡片头 = 标题 + 开关（`toggle`）；卡片体 = 旋钮 + 生效值角标 + 实时计数 + 一句"它到底在做什么"。
+**布局**：两排各两张（用户拍板，v1.18.8）——卡容器 `.grid.set-cards`（`build/extra.css`），窄屏 ≤900px 折一列；
+**不要**用通用 `.g4`（那是四连排工具类，原型别处也在用，改它的定义会殃及无辜）。
 
 **① 会话粘性**（`sessionAffinity`）
 
@@ -89,6 +99,17 @@
 - 当 `enabled=false` 时，`/metrics` 返回 **404**；本页可以顺手给一个"打开"按钮 + 一行抓取地址提示。
 - `public=true` 时**匿名可抓**，旁边给一句提醒：此端点正文**不含任何密钥**，但会把渠道 **id** 暴露给能访问该端口的人。
 - 建议放一个只读的"当前指标名一览"或"复制抓取地址"按钮（地址取 `location.origin + '/metrics'`）。
+
+**④ thinking 回放**（`thinkingReplay`，v1.18.8）
+
+- 开关：`enabled`（**默认关**——关着就是零行为零缓存，对现状没有任何影响）。
+- 旋钮：`ttlSec`（秒，30–604800，默认 3600）、`maxEntries`（16–100000，默认 2048）。
+- 文案要点（照 `docs/thinking-replay-design.md` 的边界写，不要自己发挥）：只把**上游自己签过的**那枚签名
+  补回客户端**弄丢**的 thinking 块（同协议直通路径）；**只回放缓存里真有的**——从不生成、从不猜测；
+  会话/渠道/模型/块哈希四元键**绝不跨**（A 家签名过不了 B 家校验）；改写过的 thinking 文本不配旧签名；
+  完好请求**一个字段不动**；上游因签名 4xx 时这组记录立即作废；`redacted_thinking` 不存不修。
+- 实时计数（`status.thinkingReplay`）：缓存条数 / 学习 / 修复命中 / 未命中 / 淘汰 / 过期 / 作废——
+  长期只有 misses 没有 hits 时应考虑**退役**这个开关（设计稿 §6 的护栏）。
 
 页面底部：`保存`（主按钮）+ `还原`（把表单恢复成最近一次 GET 的值）。保存成功 → 轻提示（沿用现有 toast）→
 用响应体里的 `config/effective/status` 直接回填并重绘（不用等下一次轮询）。
@@ -118,7 +139,7 @@
 
 ```powershell
 node build/build.js          # console.html 是构建产物，禁止手改
-node test/console-state.test.js   # 103 项断言，退出码非 0 = 有回归
+node test/console-state.test.js   # 185 项断言，退出码非 0 = 有回归
 ```
 
 ## 6. 文档同步（AGENTS §1 强制，漏了算改动未完成）
@@ -139,6 +160,8 @@ node test/console-state.test.js   # 103 项断言，退出码非 0 = 有回归
    - 打开限流、`rpm=60, burst=1`，保存 → **不重启**，连发两次 chat：第 1 次 200、第 2 次 **429 且带 `Retry-After`**；
    - 关掉 `/metrics` → 立刻用浏览器访问 `/metrics` 得 **404**；再打开 → 200；
    - 打开粘性后，带同一个 `X-Session-Id` 连发几次 → `/admin/api/status` 里 `affinity.hits` 在涨；
+   - **第四张卡（thinking 回放）显示默认关**；打开后 `status.thinkingReplay.entries` 有计数（或保持 0——没有
+     同协议直通流量时它就是 0，这正是"没坏不碰"的表现）；
    - **刷新整个浏览器页面**后，表单显示的是刚才保存的值（证明落库生效）。
 4. 故意把 `ttlSec` 填 `5` 保存：输入框仍显示 5，旁边提示 `生效：30`。
 5. 故意构造一个非法请求（例如用 devtools 直接 POST `{"rateLimit":{"rpmm":1}}`）：页面显示后端原文错误，而不是"保存失败"。

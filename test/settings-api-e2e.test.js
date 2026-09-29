@@ -4,7 +4,8 @@
  *
  * 为什么需要它：v1.17 把会话粘性 / 客户端限流 / /metrics 三个开关做进了后端，但**控制台改不了**——
  * 渠道级 upsert 只管渠道字段，`/admin/api/config` 又是只读的。于是有了
- * `GET/POST /admin/api/settings` 这个**窄口**：只认这三组，每组走与启动路径**同一个** norm* 函数。
+ * `GET/POST /admin/api/settings` 这个**窄口**：只认这四组（v1.18.8 增 thinkingReplay 第四组），
+ * 每组走与启动路径**同一个** norm* 函数。
  *
  * 这份用例守的三件事，每件都对应一种真实翻车方式：
  *   ① 钳制一致：控制台存的与启动读的必须是同一套规则（否则"填 5 秒"重启后变 3600，成了悬案）；
@@ -39,9 +40,9 @@ const freePort = () => new Promise((res, rej) => {
   s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); });
 });
 
-// 现抠三个 norm* 函数（控制台路径与启动路径共用的那一份）
+// 现抠四个 norm* 函数（控制台路径与启动路径共用的那一份）
 function makeNorms() {
-  const src = ['normAffinityCfg', 'normRateCfg', 'normMetricsCfg'].map((n) => {
+  const src = ['normAffinityCfg', 'normRateCfg', 'normMetricsCfg', 'normReplayCfg'].map((n) => {
     const i = SRC.indexOf('function ' + n + '(');
     if (i < 0) throw new Error('找不到 ' + n);
     let depth = 0, started = false;
@@ -51,7 +52,7 @@ function makeNorms() {
     }
     throw new Error('花括号不配对 ' + n);
   });
-  return new Function(src.join('\n') + '\nreturn { normAffinityCfg, normRateCfg, normMetricsCfg };')();
+  return new Function(src.join('\n') + '\nreturn { normAffinityCfg, normRateCfg, normMetricsCfg, normReplayCfg };')();
 }
 
 (async () => {
@@ -66,24 +67,25 @@ function makeNorms() {
     apiFnIdx > 0 && getIdx > apiFnIdx && (apiFnEnd < 0 || getIdx < apiFnEnd), { apiFnIdx, getIdx, apiFnEnd });
   check('管理面统一鉴权：/admin/api/ 前缀先 checkAuth(admin) 再进 handleAdminApi',
     /url\.pathname\.startsWith\('\/admin\/api\/'\)[\s\S]{0,140}authGate\(req, res, 'admin'\)[\s\S]{0,40}handleAdminApi\(req, res, url\)/.test(SRC) && gateIdx > 0);
-  check('只认三组开关（白名单写死，不做通用 config 写入）',
-    /const groups = \['sessionAffinity', 'rateLimit', 'metrics'\];/.test(SRC));
+  check('只认四组开关（白名单写死，不做通用 config 写入）',
+    /const groups = \['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay'\];/.test(SRC));
   check('未知字段一律 400（不静默忽略）', /unknown field \$\{g\}\.\$\{k\}/.test(SRC));
   check('布尔字段类型不对 → 400', /must be a boolean/.test(SRC));
   check('数字字段负数/非数字 → 400', /must be a finite number >= 0/.test(SRC));
   check('空报文（什么都没带）→ 400，不会变成"空更新也算成功"', /nothing to update/.test(SRC));
   check('PATCH 语义：只合并带到的字段（没带的不会归零）', /\.\.\.\(\(config && config\[g\]\) \|\| \{\}\), \.\.\.v \}/.test(SRC));
   check('启动路径与控制台路径共用同一份 norm*（各函数至少被调用 2 次：初始化 + apply）',
-    (SRC.match(/normAffinityCfg\(/g) || []).length >= 3 && (SRC.match(/normRateCfg\(/g) || []).length >= 3 && (SRC.match(/normMetricsCfg\(/g) || []).length >= 3);
+    (SRC.match(/normAffinityCfg\(/g) || []).length >= 3 && (SRC.match(/normRateCfg\(/g) || []).length >= 3 && (SRC.match(/normMetricsCfg\(/g) || []).length >= 3 && (SRC.match(/normReplayCfg\(/g) || []).length >= 3);
   check('保存后立即生效（applyRuntimeSettings 在同一个分支里被调用）',
     /applyRuntimeSettings\(\);[\s\S]{0,80}persistConfig\(\);/.test(SRC));
   check('保存后立即落库（不靠"下次保存渠道时顺手带上"）', /return sendJson\(res, 200, \{ ok: true, updated: touched/.test(SRC));
-  check('三组开关仍在 persistConfig 白名单里（否则存了也会被别的保存动作抹掉）',
+  check('四组开关仍在 persistConfig 白名单里（否则存了也会被别的保存动作抹掉）',
     /sessionAffinity: \(config && config\.sessionAffinity\) \|\| undefined/.test(SRC) &&
     /rateLimit: \(config && config\.rateLimit\) \|\| undefined/.test(SRC) &&
-    /metrics: \(config && config\.metrics\) \|\| undefined/.test(SRC));
-  check('不碰渠道/冷却/加权状态（只重算三个运行期常量）',
-    /applyRuntimeSettings[\s\S]{0,420}?^\}/m.test(SRC) && !/applyRuntimeSettings[\s\S]{0,400}recordFailure/.test(SRC));
+    /metrics: \(config && config\.metrics\) \|\| undefined/.test(SRC) &&
+    /thinkingReplay: \(config && config\.thinkingReplay\) \|\| undefined/.test(SRC));
+  check('不碰渠道/冷却/加权状态（只重算四个运行期常量）',
+    /applyRuntimeSettings[\s\S]{0,520}?^\}/m.test(SRC) && !/applyRuntimeSettings[\s\S]{0,500}recordFailure/.test(SRC));
 
   /* ─────────────────────────── 1. 钳制真值表 ─────────────────────────── */
   console.log('\n1. 钳制与默认值（现抠真实源码）');
@@ -105,6 +107,12 @@ function makeNorms() {
     check('/metrics 默认开（唯一默认开的开关）', N.normMetricsCfg(undefined).enabled === true && N.normMetricsCfg({}).enabled === true);
     check('/metrics 明确 false 才关；public 只认严格 true',
       N.normMetricsCfg({ enabled: false }).enabled === false && N.normMetricsCfg({ public: 'true' }).public === false && N.normMetricsCfg({ public: true }).public === true);
+    check('回放默认关闭（第四组也是"不配就是老行为"）', N.normReplayCfg(undefined).enabled === false && N.normReplayCfg({}).enabled === false);
+    check('回放 ttlSec 低于 30 被抬到 30、非法/缺失 → 默认 1 小时、上限 7 天',
+      N.normReplayCfg({ ttlSec: 5 }).ttlMs === 30000 && N.normReplayCfg({ ttlSec: 0 }).ttlMs === 3600000 &&
+      N.normReplayCfg({ ttlSec: 'x' }).ttlMs === 3600000 && N.normReplayCfg({ ttlSec: 99999999 }).ttlMs === 7 * 86400 * 1000);
+    check('回放 maxEntries 区间 [16, 100000] 且默认 2048',
+      N.normReplayCfg({ maxEntries: 1 }).maxEntries === 16 && N.normReplayCfg({ maxEntries: 200000 }).maxEntries === 100000 && N.normReplayCfg({}).maxEntries === 2048);
   }
 
   /* ─────────────────────────── 2. 真链路 ─────────────────────────── */
@@ -180,10 +188,12 @@ function makeNorms() {
 
     const s0 = await getSettings();
     check('GET 返回 config / effective / status 三段', s0.status === 200 && !!s0.body.config && !!s0.body.effective && !!s0.body.status, Object.keys(s0.body || {}));
-    check('初始：三组都是默认值（粘性关、限流关、指标开）',
-      s0.body.effective.sessionAffinity.enabled === false && s0.body.effective.rateLimit.enabled === false && s0.body.effective.metrics.enabled === true);
+    check('初始：四组都是默认值（粘性关、限流关、指标开、回放关）',
+      s0.body.effective.sessionAffinity.enabled === false && s0.body.effective.rateLimit.enabled === false && s0.body.effective.metrics.enabled === true && s0.body.effective.thinkingReplay.enabled === false);
     check('初始 config 段可直接回填表单（ttlSec=3600、maxEntries=2000）',
       s0.body.config.sessionAffinity.ttlSec === 3600 && s0.body.config.sessionAffinity.maxEntries === 2000);
+    check('初始 config 段有回放默认（ttlSec=3600、maxEntries=2048）',
+      s0.body.config.thinkingReplay.ttlSec === 3600 && s0.body.config.thinkingReplay.maxEntries === 2048, s0.body.config.thinkingReplay);
 
     // 参数校验（每一条都对应"静默忽略会让用户以为生效了"）
     check('未知分组 → 400', (await postSettings({ nope: {} })).status === 400);
@@ -231,12 +241,27 @@ function makeNorms() {
     check('关闭 /metrics → 端点立即 404（不重启）', (await postSettings({ metrics: { enabled: false } })).status === 200 && (await fetch(`http://127.0.0.1:${GW}/metrics`, { headers: H() })).status === 404);
     check('重新打开 → 立即又能抓', (await postSettings({ metrics: { enabled: true } })).status === 200 && (await fetch(`http://127.0.0.1:${GW}/metrics`, { headers: H() })).status === 200);
 
-    // ⑤ 落库 + 重启后仍是这个值
+    // ⑤ 第四组 thinkingReplay：打开即生效、PATCH 语义、字段白名单
+    check('回放未知字段（tttlSec 拼错）→ 400 且错误信息点名字段',
+      (await postSettings({ thinkingReplay: { tttlSec: 5 } })).body.error === 'unknown field thinkingReplay.tttlSec');
+    const t1 = await postSettings({ thinkingReplay: { enabled: true, maxEntries: 64 } });
+    check('POST 打开回放 → 200 且回带 updated 列表含 thinkingReplay', t1.status === 200 && t1.body.updated.includes('thinkingReplay'), t1.body && t1.body.updated);
+    const stT = await statusOf();
+    check('/admin/api/status 里的 thinkingReplay 也跟着动了（enabled=true、entries=0 零状态）',
+      stT.thinkingReplay && stT.thinkingReplay.enabled === true && stT.thinkingReplay.entries === 0, stT.thinkingReplay);
+    const t2 = await postSettings({ thinkingReplay: { ttlSec: 5 } });
+    check('PATCH：只改 ttlSec，enabled 原样保留；填 5 时 config 保留 5、effective 钳到 30',
+      t2.body.effective.thinkingReplay.enabled === true && t2.body.effective.thinkingReplay.ttlSec === 30 &&
+      t2.body.config.thinkingReplay.ttlSec === 5, { cfg: t2.body.config.thinkingReplay, eff: t2.body.effective.thinkingReplay });
+
+    // ⑥ 落库 + 重启后仍是这个值
     const onDisk = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     check('落库：sessionAffinity.enabled=true 写进 config.json', onDisk.sessionAffinity && onDisk.sessionAffinity.enabled === true, onDisk.sessionAffinity);
     check('落库：rateLimit 保留被 PATCH 过的字段（enabled=false, rpm=60, burst=1）',
       onDisk.rateLimit && onDisk.rateLimit.rpm === 60 && onDisk.rateLimit.burst === 1 && onDisk.rateLimit.enabled === false, onDisk.rateLimit);
     check('落库：metrics 没被顺手抹掉', onDisk.metrics && onDisk.metrics.enabled === true, onDisk.metrics);
+    check('落库：thinkingReplay 也写进 config.json（enabled=true、ttlSec=5 原样保留）',
+      onDisk.thinkingReplay && onDisk.thinkingReplay.enabled === true && onDisk.thinkingReplay.ttlSec === 5, onDisk.thinkingReplay);
     check('落库：渠道仍在（保存设置不会动渠道列表）', Array.isArray(onDisk.channels) && onDisk.channels.length === 2);
     await stopGw();
     if (!await spawnGw('2')) throw new Error('重启版网关未起来');
@@ -245,6 +270,8 @@ function makeNorms() {
       s2b.body.effective.sessionAffinity.enabled === true && s2b.body.effective.sessionAffinity.ttlSec === 30 && s2b.body.effective.rateLimit.rpm === 60,
       { a: s2b.body.effective.sessionAffinity, r: s2b.body.effective.rateLimit });
     check('重启后限流仍是关的（存的是 enabled:false）', s2b.body.effective.rateLimit.enabled === false);
+    check('重启后回放仍是开的且 ttlSec 仍钳在 30（存的是 5）',
+      s2b.body.effective.thinkingReplay.enabled === true && s2b.body.effective.thinkingReplay.ttlSec === 30, s2b.body.effective.thinkingReplay);
     const after = await chat();
     check('重启后普通请求照常 200（设置面板不会把网关改坏）', after.status === 200, after.status);
   } catch (e) {

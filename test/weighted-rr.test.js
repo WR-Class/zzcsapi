@@ -182,7 +182,7 @@ console.log('\n9. 装配守卫（改 server.js 时这些必须一起改）');
     /out\.sort\(/.test(csBody) && /return applyWeightedPick\(out\);/.test(csBody)
     && csBody.indexOf('out.sort(') < csBody.indexOf('return applyWeightedPick(out);'));
   check('三处候选对象都写了 weight 字段', (SRC.match(/weight: Number\(ch\.def\.weight\) > 0/g) || []).length >= 4, (SRC.match(/weight: Number\(ch\.def\.weight\) > 0/g) || []).length);
-  check('persistConfig 持久化 weight（否则控制台保存会抹掉权重）', /persistConfig[\s\S]{0,1400}?weight: ch\.def\.weight \?\? undefined/.test(SRC));
+  check('persistConfig 持久化 weight（否则控制台保存会抹掉权重）', /persistConfig[\s\S]{0,1900}?weight: ch\.def\.weight \?\? undefined/.test(SRC));
   check('upsert 未传 weight 时保留旧值', /prevDef[\s\S]{0,400}?body\.weight !== undefined/.test(SRC));
   check('validateChannelDef 校验 weight', /weight must be a finite number/.test(SRC));
   check('status 暴露 weightedHits / weightedShare', /weightedHits: wstats\.channels/.test(SRC) && /weightedShare: wstats\.channels/.test(SRC));

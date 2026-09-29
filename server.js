@@ -548,8 +548,8 @@ const AFFINITY = new Map();        // key → { channelId, ts }（Map 迭代序=
 const AFFINITY_STAT = { hits: 0, misses: 0, learned: 0, evicted: 0, expired: 0, reordered: 0 };
 const AFFINITY_HEADERS = ['x-session-id', 'x-claude-code-session-id', 'x-conversation-id', 'x-zzcsapi-session'];
 
-function affinityKeyFor(req, body) {
-  if (!AFFINITY_CFG.enabled) return '';
+function affinityKeyFor(req, body, ignoreEnabled) {
+  if (!ignoreEnabled && !AFFINITY_CFG.enabled) return '';
   const h = (req && req.headers) || {};
   for (const name of AFFINITY_HEADERS) {
     const v = h[name];
@@ -698,14 +698,154 @@ function normMetricsCfg(raw) {
 }
 const METRICS_CFG = normMetricsCfg(config && config.metrics);
 
-// 运行期重新套用这三组设置（控制台保存后**立即生效**，不必重启）。
+// ─────────────────────────── thinking 回放缓存（v1.18.8）───────────────────────────
+// 做什么：Anthropic 同协议直通路径上，客户端把上一轮的 thinking 块**丢了 signature** 再送回来时
+//   （部分开源 agent 框架重新序列化消息时会丢掉不认识的字段；Anthropic 规定回传的 thinking 块
+//   必须带有效签名，否则 400），把网关记得的那枚**上游自己签的**签名补回去再转上游。
+// 为什么现在做：v1.18 前置验证时判定"对本仓现有链路无收益"（跨协议路径根本不产出 thinking 块、
+//   完好客户端走直通天然合法）；但项目开源给任意客户端用，"会弄丢签名的客户端"是真实存在的
+//   受益人群（设计稿 §1.4 的重启前提），用户拍板为这类用户实现（设计稿 §9 第三次决策）。
+// 边界（刻得越窄越好——这条缓存是全仓唯一一处"往用户请求里回写历史内容"的地方）：
+//   · 只在 **Anthropic 客户端 → Anthropic 渠道（同协议直通）** 这一条路上学/修——
+//     跨协议路径照旧整块丢弃 thinking（OpenAI 上游明确要求不回传 reasoning）；
+//   · 只回放**上游自己签过的**签名：从不生成、从不猜测、从不跨渠道（签名与上游账号绑定，
+//     渠道 A 的签名过不了渠道 B 的校验）；键 = 会话键 + 渠道 + 模型 + 块哈希，四元都不许跨；
+//   · 取不到会话键就不回放（没有会话边界就没有安全边界）；会话键与粘性同一套推导但
+//     **不受粘性开关牵连**（回放开、粘性关是完全合法的组合）；
+//   · 请求里**没有缺签名的 thinking 块（或一条都没命中）就一个字节都不动**——
+//     完好客户端的直通保真不变（修复只在"客户端已经弄坏了报文"的前提下出手）；
+//   · 上游因签名问题回 4xx 时，这组会话/渠道/模型的记录立即作废（同一条坏记录不许反复引发 4xx）；
+//   · 默认**关闭**（enabled:false = 零行为零状态，与 v1.17 三组开关同一风格）。
+function normReplayCfg(raw) {
+  const c = (raw && typeof raw === 'object') ? raw : {};
+  const pickInt = (v, lo, hi, dflt) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) && n > 0 ? Math.max(lo, Math.min(hi, n)) : dflt;
+  };
+  return {
+    enabled: c.enabled === true,
+    ttlMs: pickInt(c.ttlSec, 30, 7 * 86_400, 3600) * 1000,
+    maxEntries: pickInt(c.maxEntries, 16, 100_000, 2048),
+  };
+}
+const REPLAY_CFG = normReplayCfg(config && config.thinkingReplay);
+const REPLAY = new Map();    // `${sessionKey}|${channelId}|${model}|${sha1(thinking)前24位}` → { signature, ts }
+const REPLAY_STAT = { learned: 0, hits: 0, misses: 0, evicted: 0, expired: 0, stale: 0 };
+
+// 会话键与粘性同一套推导（显式头 → 正文标识 → 可选正文哈希），第三个参数跳过粘性开关的门槛
+function replaySessionKeyFor(req, body) {
+  if (!REPLAY_CFG.enabled) return '';
+  return affinityKeyFor(req, body, true);
+}
+
+function replayBlockKey(sessionKey, channelId, model, thinking) {
+  return `${sessionKey}|${channelId}|${String(model || '').toLowerCase().trim()}|${crypto.createHash('sha1').update(String(thinking)).digest('hex').slice(0, 24)}`;
+}
+
+// 学习：只存上游真签过的（没签名的存了也没用）；超限淘汰最旧（Map 迭代序=插入序）
+function replayLearn(sessionKey, channelId, model, pairs) {
+  if (!REPLAY_CFG.enabled || !sessionKey || !channelId || !Array.isArray(pairs)) return;
+  for (const p of pairs) {
+    if (!p || !p.thinking || !p.signature) continue;
+    const k = replayBlockKey(sessionKey, channelId, model, p.thinking);
+    if (!REPLAY.has(k) && REPLAY.size >= REPLAY_CFG.maxEntries) {
+      const oldest = REPLAY.keys().next().value;
+      if (oldest !== undefined) { REPLAY.delete(oldest); REPLAY_STAT.evicted++; }
+    }
+    REPLAY.set(k, { signature: String(p.signature), ts: Date.now() });
+    REPLAY_STAT.learned++;
+  }
+}
+
+// 查一枚签名：过期懒删（不额外起定时器）；命中/未命中都计数（长期 0 命中 = 该退役的信号）
+function replaySignature(sessionKey, channelId, model, thinking) {
+  if (!REPLAY_CFG.enabled) return '';
+  const k = replayBlockKey(sessionKey, channelId, model, thinking);
+  const rec = REPLAY.get(k);
+  if (!rec) { REPLAY_STAT.misses++; return ''; }
+  if (Date.now() - rec.ts > REPLAY_CFG.ttlMs) {
+    REPLAY.delete(k);
+    REPLAY_STAT.expired++;
+    return '';
+  }
+  REPLAY_STAT.hits++;
+  return rec.signature;
+}
+
+// 作废：上游因签名问题 4xx 后，这组会话/渠道/模型下的记录全部删除
+function replayStale(sessionKey, channelId, model) {
+  if (!REPLAY_CFG.enabled || !sessionKey) return;
+  const prefix = `${sessionKey}|${channelId}|${String(model || '').toLowerCase().trim()}|`;
+  for (const k of Array.from(REPLAY.keys())) {
+    if (k.startsWith(prefix)) { REPLAY.delete(k); REPLAY_STAT.stale++; }
+  }
+}
+
+// 修复入口：客户端原始报文的 assistant 消息里找「缺签名的 thinking 块」，命中缓存就补。
+// 没有缺签名的块（或一条都没命中）返回 null —— 直通继续用原始报文，一个字段都不动。
+function repairThinkingBody(sessionKey, channelId, model, raw) {
+  if (!REPLAY_CFG.enabled || !sessionKey || !raw || typeof raw !== 'object' || !Array.isArray(raw.messages)) return null;
+  let touched = 0;
+  const messages = raw.messages.map((m) => {
+    if (!m || m.role !== 'assistant' || !Array.isArray(m.content)) return m;
+    const content = m.content.map((b) => {
+      if (b && b.type === 'thinking' && b.thinking && !b.signature) {
+        const sig = replaySignature(sessionKey, channelId, model, b.thinking);
+        if (sig) { touched++; return { ...b, signature: sig }; }
+      }
+      return b;
+    });
+    return { ...m, content };
+  });
+  return touched ? { ...raw, messages } : null;
+}
+
+// 直通响应（Anthropic 报文）里的 thinking 对——只收「带签名的」
+function thinkingPairsFromAnthropic(j) {
+  if (!j || !Array.isArray(j.content)) return null;
+  const out = [];
+  for (const b of j.content) {
+    if (b && b.type === 'thinking' && b.thinking && b.signature) out.push({ thinking: b.thinking, signature: b.signature });
+  }
+  return out.length ? out : null;
+}
+
+// 直通流式旁路扫描（与 usage 扫描同一个旁路位，不影响转发的字节）：
+// content_block_start（thinking）→ thinking_delta / signature_delta 累积 → content_block_stop 收口；
+// 没走到 stop 的块不收（上游截流时宁可不学，不学半截）。JSON 解析失败静默跳过（与 usage 扫描同款）。
+function thinkingStreamScan(line, acc) {
+  if (line.indexOf('content_block') < 0 && line.indexOf('_delta') < 0) return acc || null;
+  const data = line.startsWith('data:') ? line.slice(5).trim() : line.trim();
+  if (!data || data === '[DONE]') return acc || null;
+  let j; try { j = JSON.parse(data); } catch { return acc || null; }
+  const out = acc || { open: new Map(), done: [] };
+  const idx = Number(j.index);
+  if (j.type === 'content_block_start' && j.content_block && j.content_block.type === 'thinking') {
+    out.open.set(idx, { text: '', sig: '' });
+  } else if (j.type === 'content_block_delta' && out.open.has(idx) && j.delta) {
+    if (j.delta.type === 'thinking_delta' && j.delta.thinking) out.open.get(idx).text += j.delta.thinking;
+    if (j.delta.type === 'signature_delta' && j.delta.signature) out.open.get(idx).sig = j.delta.signature;
+  } else if (j.type === 'content_block_stop' && out.open.has(idx)) {
+    const b = out.open.get(idx);
+    out.open.delete(idx);
+    if (b.text && b.sig) out.done.push({ thinking: b.text, signature: b.sig });
+  }
+  return out;
+}
+
+function replayStatus() {
+  return { enabled: REPLAY_CFG.enabled, ttlSec: Math.round(REPLAY_CFG.ttlMs / 1000), maxEntries: REPLAY_CFG.maxEntries, entries: REPLAY.size, ...REPLAY_STAT };
+}
+
+// 运行期重新套用这四组设置（控制台保存后**立即生效**，不必重启）。
 // 为什么值得做成热生效：限流/粘性/指标都是"调一下就想马上看效果"的旋钮，
 // 要求重启容器才能验证，等于把试验成本抬到"每次都要断一次线上服务"。
-// 注意只重算这三个收口常量，不碰渠道、不碰冷却、不碰 SWRR 状态。
+// 注意只重算这四个收口常量，不碰渠道、不碰冷却、不碰 SWRR 状态、不碰 REPLAY 表内容（旋钮变了条目自然过期）。
 function applyRuntimeSettings() {
   Object.assign(AFFINITY_CFG, normAffinityCfg(config && config.sessionAffinity));
   Object.assign(RATE_CFG, normRateCfg(config && config.rateLimit));
   Object.assign(METRICS_CFG, normMetricsCfg(config && config.metrics));
+  Object.assign(REPLAY_CFG, normReplayCfg(config && config.thinkingReplay));
 }
 
 // 给控制台表单用的视图：raw 是"要回填进输入框的值"，effective 是"钳制之后真正生效的值"。
@@ -731,15 +871,22 @@ function runtimeSettingsView() {
         enabled: !(raw.metrics?.enabled === false),
         public: raw.metrics?.public === true,
       },
+      thinkingReplay: {
+        enabled: raw.thinkingReplay?.enabled === true,
+        ttlSec: Number.isFinite(Number(raw.thinkingReplay?.ttlSec)) ? Number(raw.thinkingReplay.ttlSec) : REPLAY_CFG.ttlMs / 1000,
+        maxEntries: Number.isFinite(Number(raw.thinkingReplay?.maxEntries)) ? Number(raw.thinkingReplay.maxEntries) : REPLAY_CFG.maxEntries,
+      },
     },
     effective: {
       sessionAffinity: { enabled: AFFINITY_CFG.enabled, ttlSec: Math.round(AFFINITY_CFG.ttlMs / 1000), maxEntries: AFFINITY_CFG.maxEntries, deriveFromBody: AFFINITY_CFG.deriveFromBody },
       rateLimit: { enabled: RATE_CFG.enabled, rpm: RATE_CFG.rpm, burst: RATE_CFG.burst, maxConcurrent: RATE_CFG.maxConcurrent },
       metrics: { enabled: METRICS_CFG.enabled, public: METRICS_CFG.public },
+      thinkingReplay: { enabled: REPLAY_CFG.enabled, ttlSec: Math.round(REPLAY_CFG.ttlMs / 1000), maxEntries: REPLAY_CFG.maxEntries },
     },
     status: {
       affinity: affinityStatus(),
       rateLimit: rateStatus(),
+      thinkingReplay: replayStatus(),
     },
   };
 }
@@ -801,6 +948,10 @@ function renderMetrics() {
   L.push(`zzcsapi_affinity_entries ${AFFINITY.size}`);
   head('zzcsapi_affinity_events_total', 'counter', '会话粘性事件（命中/未命中/学习/淘汰/过期/重排）');
   for (const k of ['hits', 'misses', 'learned', 'evicted', 'expired', 'reordered']) L.push(`zzcsapi_affinity_events_total{event="${k}"} ${AFFINITY_STAT[k]}`);
+  head('zzcsapi_thinking_replay_entries', 'gauge', 'thinking 回放缓存里的记录数');
+  L.push(`zzcsapi_thinking_replay_entries ${REPLAY.size}`);
+  head('zzcsapi_thinking_replay_events_total', 'counter', 'thinking 回放事件（学习/修复命中/未命中/淘汰/过期/作废）');
+  for (const k of ['learned', 'hits', 'misses', 'evicted', 'expired', 'stale']) L.push(`zzcsapi_thinking_replay_events_total{event="${k}"} ${REPLAY_STAT[k]}`);
   head('zzcsapi_rate_limit_events_total', 'counter', '限流事件（速率拒绝/并发拒绝/放行结束）');
   for (const [k, v] of [['rate_rejected', RATE_STAT.limitedRate], ['concurrent_rejected', RATE_STAT.limitedConcurrent], ['released', RATE_STAT.released]]) {
     L.push(`zzcsapi_rate_limit_events_total{event="${k}"} ${v}`);
@@ -2927,10 +3078,12 @@ function channelStatusAll() {
       anthropic: aggregateModels('anthropic'),
       gemini: aggregateModels('gemini'),
     },
-    // v1.17 运行时观测：会话粘性（命中/学习/淘汰）与客户端限流（在飞/拒绝）当前状态
+    // v1.17 运行时观测：会话粘性（命中/学习/淘汰）与客户端限流（在飞/拒绝）当前状态；
+    // v1.18.8 增 thinking 回放（学习/修复/作废）当前状态
     affinity: affinityStatus(),
     rateLimit: rateStatus(),
     metrics: { enabled: METRICS_CFG.enabled, public: METRICS_CFG.public },
+    thinkingReplay: replayStatus(),
   };
 }
 
@@ -2951,6 +3104,8 @@ function persistConfig() {
     sessionAffinity: (config && config.sessionAffinity) || undefined,
     rateLimit: (config && config.rateLimit) || undefined,
     metrics: (config && config.metrics) || undefined,
+    // v1.18.8 的 thinking 回放开关同理（第四组）：不进白名单就会被任一次渠道保存抹掉
+    thinkingReplay: (config && config.thinkingReplay) || undefined,
     // 首启生成的密钥随配置一起持久化（env 显式提供的密钥不落盘——config.adminKey 保持未设置）
     adminKey: config.adminKey || undefined,
     gatewayKey: config.gatewayKey || undefined,
@@ -3477,7 +3632,7 @@ async function handleAdminApi(req, res, url) {
   // ── 运行期设置读写（v1.18：给控制台用的开关面板）─────────────
   // 为什么需要它：渠道级 upsert 改不了这三组开关，`/admin/api/config` 又是只读的，
   // 于是控制台在 v1.17 里只能"看得见、改不了"（状态由 /admin/api/status 暴露）。
-  // 这里给一个**窄口**：只认 sessionAffinity / rateLimit / metrics 三组，
+  // 这里给一个**窄口**：只认 sessionAffinity / rateLimit / metrics / thinkingReplay 四组，
   // 每组走与启动路径同一个 norm* 函数（钳制规则完全一致），写 config → 持久化 → 立即生效。
   // 刻意不做成"通用 config 写入"：那等于给控制台一个能改坏任何配置的口子，
   // 而它的每个调用点都得自己保证字段合法——窄口 + 白名单字段是这里唯一可靠的做法。
@@ -3487,16 +3642,17 @@ async function handleAdminApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/admin/api/settings') {
     const body = await safeReadJson(req);
     if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'invalid json body' });
-    const groups = ['sessionAffinity', 'rateLimit', 'metrics'];
+    const groups = ['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay'];
     const touched = groups.filter((g) => body[g] !== undefined);
-    if (!touched.length) return sendJson(res, 400, { error: 'nothing to update: expected one of sessionAffinity / rateLimit / metrics' });
+    if (!touched.length) return sendJson(res, 400, { error: 'nothing to update: expected one of sessionAffinity / rateLimit / metrics / thinkingReplay' });
     for (const g of touched) {
       const v = body[g];
       if (v === null || typeof v !== 'object' || Array.isArray(v)) return sendJson(res, 400, { error: g + ' must be an object' });
       // 只接受白名单字段，且类型必须对——写错一个字段名不会被静默忽略（否则"我明明关了"会变成悬案）
       const allowed = g === 'sessionAffinity' ? ['enabled', 'ttlSec', 'maxEntries', 'deriveFromBody']
         : g === 'rateLimit' ? ['enabled', 'rpm', 'burst', 'maxConcurrent']
-          : ['enabled', 'public'];
+          : g === 'thinkingReplay' ? ['enabled', 'ttlSec', 'maxEntries']
+            : ['enabled', 'public'];
       for (const k of Object.keys(v)) {
         if (!allowed.includes(k)) return sendJson(res, 400, { error: `unknown field ${g}.${k}` });
         if (k === 'enabled' || k === 'deriveFromBody' || k === 'public') {
@@ -4372,6 +4528,8 @@ async function handleAnthropicRequest(req, res, url) {
       candidates,
       // 粘性键用**客户端原始报文**推导（这里 body 是转换后的 OpenAI 体，会话标识在原始体里）
       affinityKey: affinityKeyFor(req, body),
+      // thinking 回放会话键（v1.18.8）：同一套推导，但不受粘性开关牵连（回放开、粘性关是合法组合）
+      replayKey: replaySessionKeyFor(req, body),
       requestedModel: requested,
       isStream,
       // 同协议直通（v1.15）：选中 anthropic 协议渠道时，出站直接用客户端原始报文、响应原样回传
@@ -4543,7 +4701,11 @@ async function dispatchRequest(opts) {
     const chProto = (chDef && chDef.protocol) || 'openai';
     const native = (chProto === 'anthropic' || chProto === 'gemini')
       ? ((opts.clientProto && opts.clientProto === chProto)
-        ? passthroughChannelOpts(chProto, opts.rawClientBody)   // 同协议直通：不翻译（v1.15）
+        // 同协议直通：不翻译（v1.15）；v1.18.8 thinking 回放——客户端丢了签名的 thinking 块先按缓存补签，
+        // 没有缺签名的块（或一条都没命中）时传原始报文，直通保真一个字段都不动
+        ? passthroughChannelOpts(chProto, (chProto === 'anthropic'
+          ? repairThinkingBody(opts.replayKey, c.channelId, requestedModel, opts.rawClientBody)
+          : null) || opts.rawClientBody)
         : nativeChannelOpts(chProto, requestedModel))
       : null;
     // ★ 同渠道重试（perChannel）：一次请求内对**同一家**最多再试 PER_CHANNEL_RETRIES 次，
@@ -4554,6 +4716,7 @@ async function dispatchRequest(opts) {
       result = await tryChannel({
         res, url, body, candidate: c, isStream: stream,
         encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
+        replayKey: opts.replayKey,   // v1.18.8 thinking 回放：学习/作废要用（修复已在选路处做过）
         ...(native || {}),
         // 流式的"开场/收尾"钩子也必须转发：漏掉它们时 message_start 与收尾事件就不会发出
         // （历史上这里漏了 streamPrelude，导致 Anthropic 流式一直没有 message_start）
@@ -4697,6 +4860,11 @@ async function tryChannel(opts) {
     // 详见 shouldPassThrough4xx 的注释（渠道声明过期的模型 / 参数方言不同，换一家往往就能成）。
     if (shouldPassThrough4xx(resp.status, opts.hasMoreCandidates)) {
       // 客户端错误：直接把上游响应转发
+      // v1.18.8 thinking 回放：直通 anthropic 且报错文案指向签名/thinking 时，这组记录作废（stale）——
+      // 同一条坏记录（比如客户端把自己的 thinking 文本改了）不许反复引发 4xx
+      if (passthrough === 'anthropic' && opts.replayKey && /signature|thinking/i.test(text)) {
+        replayStale(opts.replayKey, candidate.channelId, opts.requestedModel);
+      }
       const ct = (resp.headers && resp.headers.get('content-type')) || '';
       res.writeHead(resp.status, { 'Content-Type': ct || 'application/json' });
       res.end(text);
@@ -4776,6 +4944,7 @@ async function tryChannel(opts) {
     let nativeStream = null;
     if (typeof opts.makeStreamTranslator === 'function' && !passthrough) nativeStream = opts.makeStreamTranslator(candidate);
     let passthroughUsage = null;   // 直通流式：从上游原始事件里读真实 usage
+    let replayScan = null;         // v1.18.8 直通流式旁路：攒 thinking 块（只攒上游签过的，不影响转发字节）
     // 非直通：一次 drain 里的所有输出合并成一次 write（v1.16）。
     // 旧写法每行一次 write，"数据行 + 分隔空行"被拆成两次 —— 实测上游 11 个 TCP 事件
     // 会变成客户端 24 次写。合并后字节完全相同，写次数与上游分帧对齐。
@@ -4832,6 +5001,7 @@ async function tryChannel(opts) {
         const line = scanBuf.slice(0, i);
         scanBuf = scanBuf.slice(i + 1);
         passthroughUsage = nativeStreamUsageScan(passthrough, line, passthroughUsage);
+        if (passthrough === 'anthropic') replayScan = thinkingStreamScan(line, replayScan);
         streamOutText += sseDeltaText(line) || line;
       }
     };
@@ -4855,6 +5025,7 @@ async function tryChannel(opts) {
         scanBuf += decoder.decode();   // 冲掉解码器里残留的多字节字符
         if (scanBuf.length) {
           passthroughUsage = nativeStreamUsageScan(passthrough, scanBuf, passthroughUsage);
+          if (passthrough === 'anthropic') replayScan = thinkingStreamScan(scanBuf, replayScan);
           streamOutText += sseDeltaText(scanBuf) || scanBuf;
         }
       } else {
@@ -4872,6 +5043,11 @@ async function tryChannel(opts) {
       const post = opts.streamEpilogue();
       if (post) res.write(post);
     }
+    // v1.18.8 thinking 回放学习点（直通流式）：攒完的带签名 thinking 块顺手记下——
+    // 只在直通 anthropic + 有会话键时记；没走到 content_block_stop 的半截块不记
+    if (passthrough === 'anthropic' && opts.replayKey && replayScan && replayScan.done.length) {
+      replayLearn(opts.replayKey, candidate.channelId, opts.requestedModel, replayScan.done);
+    }
     res.end();
     recordUsage({
       model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
@@ -4887,7 +5063,16 @@ async function tryChannel(opts) {
     //   这条分支**必须**跳过下面的 translateResponse/onSuccessNonStream，否则等于刚省掉的翻译又加回来。
     if (passthrough) {
       let realUsage = null;
-      try { realUsage = nativeUsageToOpenAI(passthrough, JSON.parse(rawText)); } catch { /* 非 JSON 上游 */ }
+      let parsed = null;
+      try { parsed = JSON.parse(rawText); } catch { /* 非 JSON 上游 */ }
+      if (parsed) {
+        realUsage = nativeUsageToOpenAI(passthrough, parsed);
+        // v1.18.8 thinking 回放学习点（直通非流式）：上游自己签过的 thinking 块顺手记下——
+        // 只记带签名的、只记直通 anthropic、只记拿得到会话键的（三缺一就不学）
+        if (passthrough === 'anthropic' && opts.replayKey) {
+          replayLearn(opts.replayKey, candidate.channelId, opts.requestedModel, thinkingPairsFromAnthropic(parsed));
+        }
+      }
       recordUsage({
         model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
         inputTokens: estimateTokens(messagesText(body && body.messages)),

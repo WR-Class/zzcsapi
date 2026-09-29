@@ -7,18 +7,22 @@
  *   先得把**现状**钉死。逐行核对后发现的事实与最初的假设不一致，本用例就是这份事实的
  *   可执行版本——它锁的不是"某个 bug"，而是**当前刻意设计的行为地图**：
  *
- *     · server.js 里 `signature` 出现 **0 次**：网关既不保存、也不校验、也不伪造签名；
+ *     · server.js 里 `signature` 曾出现 **0 次**（网关不保存/校验/伪造签名）；v1.18.8 起它只活在
+ *       **thinking 回放块**与 **4xx 作废分支**两处（docs/thinking-replay-design.md §9 第三次决策：
+ *       同协议直通上把上游自己签的那枚补回客户端弄丢的地方——跨协议转换器仍一个都不碰）；
  *     · Anthropic 客户端请求 → 内部 OpenAI 格式：`thinking` / `redacted_thinking` **刻意丢弃**
  *       （OpenAI 上游没有签名校验需求，回塞 content 反而污染上下文）；
  *     · 原生 Anthropic 上游 → 内部：thinking 的**文本**进 `reasoning_content`，**签名丢掉**；
  *     · 内部 → 原生 Anthropic 出站：**不产出** `thinking` 块（即使消息上挂着 `reasoning_content`）；
  *     · 内部 → Anthropic 客户端（非流式 + 流式）：**一样不产出** `thinking` 块；
- *     · 因此"客户端回传无签名 thinking 块 → 上游签名校验 400"**不可达**：客户端根本收不到
- *       （唯一能收到的是 v1.15 同协议直通，那条路是逐字节转发，签名原样活着）。
+ *     · 因此**跨协议**路上"客户端回传无签名 thinking 块 → 上游 400"**不可达**（客户端根本收不到）；
+ *       唯一能收到的是 v1.15 同协议直通——那条路 v1.18.8 起有回放缓存把丢失的签名补回去
+ *       （只补上游真签过的，完整回归见 test/thinking-replay-e2e.test.js）。
  *
- *   于是设计稿的结论从"收益窄"进一步收窄为"**在现有实现下无收益**"（见 §7 与设计稿 §9）。
- *   如果哪天真的实现了 thinking 回放（改动上面任一行），**本用例会失败** ——
- *   那时请连同 docs/thinking-replay-design.md 一起更新，而不是把断言删掉了事。
+ *   v1.18 前置验证的结论"在现有实现下无收益"对**跨协议**路径仍然成立（本用例锁住的地图没变）；
+ *   v1.18.8 按设计稿 §9 第三次决策为"同协议直通 + 会弄丢签名的客户端"实现了回放，
+ *   本用例的守卫随之从"`signature` 出现 0 次"改写成"它只活在回放块与 4xx 作废分支里"——
+ *   再往任一转换器里加 `signature`，本用例仍会失败。
  *
  * 怎么测的：从 server.js **按花括号配对抠出真实函数源码**（不是复制副本）在沙箱里跑。
  * 跑法：node test/thinking-fidelity.test.js      （零依赖，退出码非 0 表示保真度地图变了）
@@ -77,8 +81,16 @@ const THINK = '我在推理：先查天气再决定要不要带伞。';
 
 /* ═══════ 0. 装配守卫（源码级：地图的每一条都要能找到出处） ═══════ */
 G('0. 装配守卫（这份地图的每条结论都对应 server.js 里的一段真实代码）');
-check('server.js 里 `signature` 出现 0 次（网关从不保存/校验/伪造签名）',
-  (src.match(/signature/g) || []).length === 0, (src.match(/signature/g) || []).length);
+check('server.js 里 `signature` 只活在回放块与 4xx 作废分支里（跨协议转换器一个都不碰，v1.18.8 改写原"0 次"守卫）',
+  (() => {
+    const hits = [...src.matchAll(/signature/g)].map((m) => m.index);
+    const rStart = src.indexOf('thinking 回放缓存（v1.18.8）');
+    const rEnd = src.indexOf('// 运行期重新套用这四组设置');
+    const outside = hits.filter((i) => i < rStart || i >= rEnd);
+    // 区域外只允许一处：tryChannel 4xx 透传分支里判"报错文案是否指向签名/thinking"的正则
+    return hits.length > 0 && outside.length === 1 &&
+      /\/signature\|thinking\/i\.test\(text\)/.test(src.slice(Math.max(0, outside[0] - 80), outside[0] + 80));
+  })(), (src.match(/signature/g) || []).length);
 check('入站转换里"刻意丢弃 thinking"的解释性注释还在（删了注释就没人知道这是设计而非漏写）',
   /刻意丢弃的块[\s\S]{0,200}thinking \/ redacted_thinking/.test(SRC_OF.anthropicToOpenAI));
 check('入站转换把 thinking 文本塞进 content 的代码不存在（只有注释里提到它）',
@@ -93,8 +105,11 @@ check('原生 Anthropic 上游 → 内部：确实把 thinking 文本搬进 reas
   /reasoning \+= b\.thinking/.test(SRC_OF.anthropicToOaiResponse) && /message\.reasoning_content = reasoning/.test(SRC_OF.anthropicToOaiResponse));
 check('原生 Anthropic 上游（流式）→ 内部：thinking_delta 搬进 reasoning_content',
   /d\.type === 'thinking_delta'[\s\S]{0,160}reasoning_content/.test(SRC_OF.createAnthropicToOaiStream));
-check('签名的唯一活路仍是 v1.15 同协议直通（逐字节转发，不经任何转换）',
-  /passthroughChannelOpts/.test(src) && /rawClientBody/.test(src) && /passthroughWrite/.test(src));
+check('签名的唯一活路仍是 v1.15 同协议直通（逐字节转发，不经任何转换）；v1.18.8 的回放缓存只是把上游真签过的那枚补回客户端弄丢的地方（不生成、不猜测）',
+  /passthroughChannelOpts/.test(src) && /rawClientBody/.test(src) && /passthroughWrite/.test(src) &&
+  /function repairThinkingBody\(/.test(src) &&
+  (src.match(/repairThinkingBody\(/g) || []).length === 2 &&   // 定义 + 直通选路处注入，别处不许碰
+  SRC_OF.anthropicToOpenAI.indexOf('repairThinkingBody') < 0);
 
 /* ═══════ 1. Anthropic 客户端 → 内部：thinking 与签名一起静默丢弃 ═══════ */
 G('1. Anthropic 客户端请求 → 内部 OpenAI 格式（跨协议入站）');
@@ -218,15 +233,16 @@ G('6. 内部 → Anthropic 客户端（流式）：不产出 thinking 块、不�
   check('message_start 里也不预先声明 thinking 内容块', !/"content":\[\{[^}]*thinking/.test(raw));
 }
 
-/* ═══════ 7. 结论：可达的失败模式只有一条，且缓存治不了 ═══════ */
+/* ═══════ 7. 结论：跨协议路不可达；同协议直通路 v1.18.8 已有回放 ═══════ */
 G('7. 结论（把设计决策写进测试，免得下次凭印象重来）');
 check('地图上"网关会把 thinking 块发给客户端"的路径数 = 0（除直通外）',
   !/thinking/.test(SRC_OF.openAIToAnthropicResponse) && !/thinking/.test(SRC_OF.createAnthropicStreamConverter));
-check('因此"客户端回传无签名 thinking → 上游 400"这条路不可达（客户端手里根本没有我们给的块）', true);
-check('唯一真会 400 的场景是"客户端自带的签名跨到了另一个 Anthropic 渠道"（签名与上游账号绑定）',
-  (src.match(/signature/g) || []).length === 0);   // 网关不碰签名 ⇒ 也无从修复，原样转发是它唯一正确的行为
-check('所以 v1.18 的 thinking 回放缓存**在现有实现下没有收益**：要么先让跨协议回程真的产出 thinking，要么放弃',
-  !/thinkingReplay|THINKING_REPLAY/.test(src));
+check('**跨协议**路上"客户端回传无签名 thinking → 上游 400"不可达（客户端手里根本没有我们给的块）', true);
+check('唯一真会 400 的场景是"客户端自带的签名跨到了另一个 Anthropic 渠道"（签名与上游账号绑定）——回放缓存**也不救**（键含渠道，A 家的签名不借给 B 家）',
+  /REPLAY = new Map\(\)/.test(src) && /channelId/.test(src.slice(src.indexOf('function replayBlockKey('), src.indexOf('function replayLearn('))));
+check('v1.18.8 按 §9 第三次决策实现了回放：thinkingReplay 第四组设置 + 学习/修复/作废三入口齐全（完整回归在 test/thinking-replay-e2e.test.js）',
+  /thinkingReplay: \(config && config\.thinkingReplay\) \|\| undefined/.test(src) &&
+  /function replayLearn\(/.test(src) && /function replayStale\(/.test(src) && /function replayStatus\(/.test(src));
 
 console.log('\n' + '─'.repeat(58));
 console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);

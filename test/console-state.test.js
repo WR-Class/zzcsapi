@@ -711,16 +711,19 @@ function testSettings() {
         sessionAffinity: { enabled: false, ttlSec: 5, maxEntries: 2000, deriveFromBody: false },
         rateLimit: { enabled: false, rpm: 60, burst: 0, maxConcurrent: 0 },
         metrics: { enabled: true, public: false },
+        thinkingReplay: { enabled: false, ttlSec: 90, maxEntries: 2048 },
       },
       effective: {
         sessionAffinity: { enabled: false, ttlSec: 30, maxEntries: 2000, deriveFromBody: false },
         rateLimit: { enabled: false, rpm: 60, burst: 60, maxConcurrent: 0 },
         metrics: { enabled: true, public: false },
+        thinkingReplay: { enabled: false, ttlSec: 90, maxEntries: 2048 },
       },
       status: {
         affinity: { entries: 3, hits: 2, misses: 1, learned: 4 },
         rateLimit: { inflight: 0, peakInflight: 2, limitedRate: 0, limitedConcurrent: 0 },
         metrics: {},
+        thinkingReplay: { entries: 2, hits: 1, misses: 1, learned: 3, stale: 0 },
       },
     },
   });
@@ -743,8 +746,11 @@ function testSettings() {
     const { dom, api } = build(SET_SRC, mkRaw(), async () => ({}), []);
     api.vSettings(dom.root);
     const html = dom.root.innerHTML;
-    check('首渲染：三张卡都在（会话粘性 / 客户端限流 / 指标端点）',
-      html.includes('会话粘性') && html.includes('客户端限流') && html.includes('指标端点'));
+    check('首渲染：四张卡都在（会话粘性 / 客户端限流 / 指标端点 / thinking 回放）',
+      html.includes('会话粘性') && html.includes('客户端限流') && html.includes('指标端点') && html.includes('thinking 回放'));
+    check('第四张卡（thinking 回放）字段齐全：开关 + 缓存时长 + 最多缓存条数，回填 config 原值',
+      html.includes('id="setTg_thinkingReplay"') && html.includes('id="set_thinkingReplay_ttlSec"') &&
+      html.includes('id="set_thinkingReplay_maxEntries"') && /value="2048"/.test(html));
     check('★ 表单回填 config 原值（ttlSec=5），而不是 effective 的 30',
       html.includes('value="5"') && !html.includes('value="30"'));
     check('★ 同时给出钳制后的生效值角标（ttlSec 5 → 生效：30），避免"我填的 5 怎么没生效"',
@@ -795,12 +801,12 @@ function testSettings() {
     const { dom, api } = build(SET_SRC, mkRaw(), async () => ({}), []);
     const v = dom.root;
     api.vSettings(v);
-    check('★ 无改动 → payload 为空（不会把三组原样回写）', Object.keys(api.setPayload()).length === 0);
+    check('★ 无改动 → payload 为空（不会把四组原样回写）', Object.keys(api.setPayload()).length === 0);
 
     api.setToggle('rateLimit');   /* 只开限流这一组 */
     let p = api.setPayload();
-    check('★ 只带被改的组（rateLimit），没动的 sessionAffinity / metrics 不出现',
-      !!p.rateLimit && !p.sessionAffinity && !p.metrics);
+    check('★ 只带被改的组（rateLimit），没动的 sessionAffinity / metrics / thinkingReplay 不出现',
+      !!p.rateLimit && !p.sessionAffinity && !p.metrics && !p.thinkingReplay);
     check('★ 组内只带被改的字段（enabled），其余字段不跟着回写',
       Object.keys(p.rateLimit).length === 1 && p.rateLimit.enabled === true);
 
@@ -816,6 +822,12 @@ function testSettings() {
 
     api.setToggle('rateLimit');   /* 再点一次 = 还原成原值 */
     check('改回原值后该组不再出现在 payload（不是"改过就必发"）', api.setPayload().rateLimit === undefined);
+
+    api.setToggle('thinkingReplay');   /* 第四组同样的 PATCH 语义 */
+    p = api.setPayload();
+    check('第四组（thinking 回放）开着才进 payload，组内只带 enabled',
+      !!p.thinkingReplay && Object.keys(p.thinkingReplay).length === 1 && p.thinkingReplay.enabled === true);
+    api.setToggle('thinkingReplay');
   }
 
   /* ── 10.4 保存成功：落库回读 + 清脏；400 失败：error 原文直显 ── */
@@ -827,6 +839,7 @@ function testSettings() {
         sessionAffinity: { enabled: true, ttlSec: 120, maxEntries: 2000, deriveFromBody: false },
         rateLimit: { enabled: false, rpm: 60, burst: 0, maxConcurrent: 0 },
         metrics: { enabled: true, public: false },
+        thinkingReplay: { enabled: true, ttlSec: 120, maxEntries: 2048 },
       };
       const { dom, api } = build(SET_SRC, raw, async (path, opt) => {
         sent.push({ path, body: JSON.parse(opt.body) });
@@ -838,8 +851,8 @@ function testSettings() {
       dom.$('#set_sessionAffinity_ttlSec', v).oninput({ target: { value: '120' } });
       await api.saveSettings();
       check('保存走 POST /admin/api/settings', sent.length === 1 && sent[0].path === '/admin/api/settings');
-      check('★ 报文只含被改的 sessionAffinity 组（PATCH 语义）',
-        !!sent[0].body.sessionAffinity && !sent[0].body.rateLimit && !sent[0].body.metrics);
+      check('★ 报文只含被改的 sessionAffinity 组（PATCH 语义，第四组没动就不出现）',
+        !!sent[0].body.sessionAffinity && !sent[0].body.rateLimit && !sent[0].body.metrics && !sent[0].body.thinkingReplay);
       check('保存成功后清脏、草稿与服务端对齐',
         api.setDirty === false && raw.settings.config.sessionAffinity.ttlSec === 120);
       check('给出成功提示', /设置已保存/.test(toasts.map((t) => t[0]).join('')));

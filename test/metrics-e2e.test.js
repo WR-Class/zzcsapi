@@ -191,6 +191,9 @@ function makeLabelFn() {
     check('会话粘性 gauge 与事件计数都在', val(m0.text, 'zzcsapi_affinity_entries') === 0 && val(m0.text, 'zzcsapi_affinity_events_total', 'event="hits"') !== null);
     check('限流事件计数都在（含 released=0 的零值，不是缺行）',
       ['rate_rejected', 'concurrent_rejected', 'released'].every((e) => val(m0.text, 'zzcsapi_rate_limit_events_total', `event="${e}"`) !== null));
+    check('thinking 回放 gauge 与六个事件计数都在（v1.18.8，默认关也是零值行不是缺行）',
+      val(m0.text, 'zzcsapi_thinking_replay_entries') === 0 &&
+      ['learned', 'hits', 'misses', 'evicted', 'expired', 'stale'].every((e) => val(m0.text, 'zzcsapi_thinking_replay_events_total', `event="${e}"`) !== null));
 
     // 真流量：第 1 家 503 → 兜底到第 2 家成功；粘性开启后第 2 发直接落第 2 家
     const s1 = await chat();

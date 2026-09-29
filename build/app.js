@@ -726,7 +726,7 @@ function autoWeightCard(){
    （ttlSec 填 5 → 生效 30）。只显示一个就会变成"我明明填了 5，怎么没生效"的悬案。
    草稿 setDraft 与 config 分离：没改动时跟随服务端刷新，一旦改动（setDirty）就不被 8 秒轮询覆盖。 */
 let setDraft=null, setDirty=false, setSaving=false, setError='';
-const SET_GROUPS=['sessionAffinity','rateLimit','metrics'];
+const SET_GROUPS=['sessionAffinity','rateLimit','metrics','thinkingReplay'];
 const SET_META={
   sessionAffinity:{title:'会话粘性',icon:'cookie',
     desc:'同一会话尽量落到同一家渠道。只改「谁是第一位」——粘住的渠道不在候选 / 冷却 / 已 down 时一动不动；命中也不影响加权份额统计。'},
@@ -734,6 +734,8 @@ const SET_META={
     desc:'整机限流（不按 IP）。超限回 429 + Retry-After；闸门在鉴权之前，连刷鉴权的流量也挡；/healthz、管理面、/metrics 不受影响。'},
   metrics:{title:'指标端点',icon:'gauge',
     desc:'Prometheus 文本格式的 /metrics。默认开、需 admin key；public 打开后匿名可抓。'},
+  thinkingReplay:{title:'thinking 回放',icon:'clock',
+    desc:'Anthropic 同协议直通上，客户端把上一轮 thinking 块丢了 signature 再送回来时（部分框架重序列化会丢不认识的字段），按缓存补回上游自己签的那枚。只回放缓存里真有的签名——从不生成、从不跨渠道；取不到会话键就不回放；默认关。'},
 };
 const SET_FIELDS={
   sessionAffinity:[
@@ -750,6 +752,10 @@ const SET_FIELDS={
   metrics:[
     {k:'public',label:'允许匿名抓取',bool:true,
       warn:'匿名可抓会把渠道 id 暴露给能访问该端口的人（正文不含任何密钥）。'},
+  ],
+  thinkingReplay:[
+    {k:'ttlSec',label:'缓存时长',unit:'秒',ph:'3600',range:'范围 30 – 604800 秒'},
+    {k:'maxEntries',label:'最多缓存条数',unit:'条',ph:'2048',range:'范围 16 – 100000'},
   ],
 };
 function setGroupCfg(g){const s=RAW.settings||{};return {cfg:((s.config||{})[g])||{},eff:((s.effective||{})[g])||{}};}
@@ -784,6 +790,7 @@ function setStat(g,on,d,stt){
   if(!on) return '<span class="muted">未启用</span>';
   if(g==='sessionAffinity') return `记忆 <b>${nf(stt.entries||0)}</b> 条 · 命中 <b>${nf(stt.hits||0)}</b> · 未命中 <b>${nf(stt.misses||0)}</b> · 学习 <b>${nf(stt.learned||0)}</b>`;
   if(g==='rateLimit') return `在飞 <b>${nf(stt.inflight||0)}</b> · 峰值 <b>${nf(stt.peakInflight||0)}</b> · 限速拒绝 <b>${nf(stt.limitedRate||0)}</b> · 并发拒绝 <b>${nf(stt.limitedConcurrent||0)}</b>`;
+  if(g==='thinkingReplay') return `缓存 <b>${nf(stt.entries||0)}</b> 条 · 学习 <b>${nf(stt.learned||0)}</b> · 修复命中 <b>${nf(stt.hits||0)}</b> · 未命中 <b>${nf(stt.misses||0)}</b> · 作废 <b>${nf(stt.stale||0)}</b>`;
   return `已启用（${d.public?'<b>匿名可抓</b>':'需 admin key'}）
     <button class="btn ghost sm" id="setCopyMetrics" data-t="${esc(metricsUrl())}">${svg('copy',12)}复制抓取地址</button>`;
 }
@@ -814,7 +821,7 @@ function setCard(g){
 function vSettings(v){
   if(!RAW.settings||!RAW.settings.config){
     v.innerHTML=`<div class="page-hd"><div><h1 class="page-title">运行期设置</h1>
-      <div class="page-sub">会话粘性 / 客户端限流 / 指标端点 · 改完立即生效，无需重启</div></div></div>
+      <div class="page-sub">会话粘性 / 客户端限流 / 指标端点 / thinking 回放 · 改完立即生效，无需重启</div></div></div>
       <div class="card"><div class="card-bd"><div class="empty">设置接口不可用（GET /admin/api/settings 没有返回数据）</div></div></div>`;
     return;
   }
@@ -822,14 +829,14 @@ function vSettings(v){
   v.innerHTML=`
   <div class="page-hd">
     <div><h1 class="page-title">运行期设置</h1>
-      <div class="page-sub">会话粘性 / 客户端限流 / 指标端点 · 改完立即生效、立即落库，无需重启容器</div></div>
+      <div class="page-sub">会话粘性 / 客户端限流 / 指标端点 / thinking 回放 · 改完立即生效、立即落库，无需重启容器</div></div>
     <div class="page-actions">
       <button class="btn" id="setReset">${svg('x',14)}还原</button>
       <button class="btn primary" id="setSave">${svg('check',14)}保存设置</button>
     </div>
   </div>
   <div class="set-err${setError?' on':''}" id="setErr">${esc(setError)}</div>
-  <div class="grid g3">${SET_GROUPS.map(setCard).join('')}</div>`;
+  <div class="grid set-cards">${SET_GROUPS.map(setCard).join('')}</div>`;
   $('#setReset',v).onclick=resetSettings;
   $('#setSave',v).onclick=saveSettings;
   const cp=$('#setCopyMetrics',v); if(cp) cp.onclick=function(){copyText(this.dataset.t,this)};

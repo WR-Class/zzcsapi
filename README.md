@@ -192,13 +192,13 @@ build/extra.css   (设计稿没覆盖的生产独有组件，全部复用设计�
 | [控制台前端详细设计文档](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | **动代码前过目**：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查）、前端独立审查 |
 | [同类网关内部机制对比](docs/gateway-comparison.md) | **定位与取舍参考**：本项目 vs new-api / one-api / sub2api / CLIProxyAPI 的内部机制、性能、全面性对照（只比机制，不比多用户/账户管理），含本机实测数字与各家的源码级证据 |
-| [thinking 回放缓存设计稿](docs/thinking-replay-design.md) | **已验证无收益，暂不实现**：一次"先验证再动手"的完整记录——跨协议下 thinking 与签名的**保真度地图**（逐函数出处）、为什么"客户端回传无签名块触发 400"不可达、唯一会 400 的场景为何回放缓存也治不了、以及将来要重启必须先满足什么 |
-| [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | **交给前端执行者的施工图**：`/admin/api/settings` 的字段契约（`config` vs `effective` 为什么都要显示）、三张卡的结构与文案要点、必须守住的交互细节（只提交有改动的组、跨轮询保留输入、400 原文要显示）、要改哪些文件与 AGENTS 强制同步清单、可逐条执行的验收清单 |
+| [thinking 回放缓存设计与实现记录](docs/thinking-replay-design.md) | 三次决策的完整记录（v1.17 只落设计 → v1.18 前置验证判定"跨协议路径无收益不实现" → v1.18.8 为开源后的其他客户端实现**同协议直通**的签名修复）：跨协议 thinking/签名**保真度地图**（逐函数出处）、为什么跨协议"客户端回传无签名块触发 400"不可达、签名跨渠道为什么连缓存也治不了、同协议直通"客户端丢签名"场景的 as-built 边界（四元键、只回放上游真签过的、没坏不碰、4xx 作废、默认关）与验收映射 |
+| [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | **交给前端执行者的施工图**：`/admin/api/settings` 的字段契约（`config` vs `effective` 为什么都要显示）、四张卡的结构与文案要点、必须守住的交互细节（只提交有改动的组、跨轮询保留输入、400 原文要显示）、要改哪些文件与 AGENTS 强制同步清单、可逐条执行的验收清单 |
 
 改完前端跑一遍自动化回归（零依赖，一条命令）：
 
 ```bash
-node test/console-state.test.js           # 183 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换、**会话语义（密钥不落任何浏览器存储）**；**事件委托：真实委托块在桩上真跑分发——dataset 参数到达动作函数、嵌套只触发最近那枚、未知动作不炸、change 走同一条路、ACTS 双向覆盖**）
+node test/console-state.test.js           # 185 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜；运行期设置页：草稿跨轮询保留、**四张卡（v1.18.8 增 thinking 回放）**、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换、**会话语义（密钥不落任何浏览器存储）**；**事件委托：真实委托块在桩上真跑分发——dataset 参数到达动作函数、嵌套只触发最近那枚、未知动作不炸、change 走同一条路、ACTS 双向覆盖**）
 node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
@@ -216,16 +216,17 @@ node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
-node test/same-protocol-passthrough.test.js # 43 项断言：同协议直通（Anthropic/Gemini 客户端 → 同协议渠道不翻译；thinking/cache_control/seed 原样到达、响应逐字节一致、真实 token 仍记录、跨协议仍走转换）
+node test/same-protocol-passthrough.test.js # 44 项断言：同协议直通（Anthropic/Gemini 客户端 → 同协议渠道不翻译；thinking/cache_control/seed 原样到达、响应逐字节一致、真实 token 仍记录、跨协议仍走转换、v1.18.8 修复只注入同协议直通且没坏不碰）
 node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）
 node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 node test/outbound-http-client.test.js    # 32 项断言：出站长连接客户端（fetch 形状真值表 + 20 次请求 0 条新连接、对照 agent:false 建 20 条）+ 直通流式逐字节一致（含 CRLF 与跨片帧）
 node test/session-affinity-e2e.test.js    # 67 项断言：会话粘性（键推导真值表 + 过期/淘汰 + 冷却/down 不硬塞 + 同会话 8 次落同一家 + 上游挂了重新粘 + 关闭时零状态）
 node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令牌桶真值表 + 429 带 Retry-After + 按时间回填 + 并发闸门 + 管理面不受影响 + 关闭时零影响）
-node test/metrics-e2e.test.js             # 44 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态）
-node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（网关从不向客户端产出 thinking 块 → "无签名块触发 400"不可达；直通是签名唯一活路）
-node test/settings-api-e2e.test.js        # 58 项断言：运行期设置端点（窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
+node test/metrics-e2e.test.js             # 45 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态 + thinking 回放 gauge 与六事件）
+node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（跨协议双向都不产出 thinking 块 → 跨协议"无签名块触发 400"不可达；`signature` 只活在回放块与 4xx 作废分支；直通仍是唯一活路，回放只补上游真签过的）
+node test/thinking-replay-e2e.test.js      # 64 项断言：thinking 回放缓存（v1.18.8，同协议直通签名修复）——复现失败（关=400）→ 开=补回原签名（逐字段）→ 跨会话/渠道/模型绝不回放（三组反向）→ 过期/淘汰/作废计数 → 流式分片攒对照样修 → 完好客户端一字不动 → 设置第四组/status/metrics 暴露
+node test/settings-api-e2e.test.js        # 68 项断言：运行期设置端点（四组窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
 node test/security-headers-e2e.test.js    # 57 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文 + **CSP 逐字等于设计稿（v1.18.6）** + 管理面 ?key= 已停用 / 客户端面保留 + **内联事件属性必须为 0 且 ACTS 与模板双向一一对应（v1.18.7）**）
 node test/key-rotation-e2e.test.js         # 85 项断言：控制台轮换密钥（优先级链 config.auth>env>首启生成 + 旧密钥立即失效 + 非法值不落库 + 重启后仍生效 + 回到环境变量值）
 node test/admin-session-e2e.test.js        # 63 项断言：管理面会话 cookie（v1.18.6）——登录门换 HttpOnly+SameSite=Strict 会话、会话单独鉴权管理面、Bearer 通道保留、管理面 ?key= 拆除 / 客户端面保留、退出只杀自己、轮换清全会话并补发新会话、重启全部掉线、逐出先清过期
@@ -400,13 +401,13 @@ KV cache，订阅类渠道也不会因为来回换家反复触发风控。
 **③ `/metrics`（Prometheus 文本格式，零依赖）**
 
 - 默认要 admin key（`Authorization: Bearer <ADMIN_KEY>`）；放进 Prometheus 抓取就配 `"metrics": { "public": true }`（此时匿名可抓，正文里依然**没有任何密钥**——有专门断言守着）。
-- 指标：`zzcsapi_requests_total{route,status}`、`zzcsapi_channel_requests_total{channel,ok}`、`zzcsapi_channel_tokens_total{channel,direction}`、`zzcsapi_channel_latency_ms_{sum,count}`、`zzcsapi_channels{state}`（ok/down/cooldown/probation/disabled 五档）、`zzcsapi_affinity_entries` 与 `zzcsapi_affinity_events_total`、`zzcsapi_rate_limit_events_total`、`zzcsapi_inflight_requests`、`zzcsapi_uptime_seconds`、`zzcsapi_process_resident_memory_bytes`、`zzcsapi_swrr_hits_total`。
+- 指标：`zzcsapi_requests_total{route,status}`、`zzcsapi_channel_requests_total{channel,ok}`、`zzcsapi_channel_tokens_total{channel,direction}`、`zzcsapi_channel_latency_ms_{sum,count}`、`zzcsapi_channels{state}`（ok/down/cooldown/probation/disabled 五档）、`zzcsapi_affinity_entries` 与 `zzcsapi_affinity_events_total`、`zzcsapi_rate_limit_events_total`、`zzcsapi_thinking_replay_entries` 与 `zzcsapi_thinking_replay_events_total{event}`（learned/hits/misses/evicted/expired/stale 六事件，v1.18.8）、`zzcsapi_inflight_requests`、`zzcsapi_uptime_seconds`、`zzcsapi_process_resident_memory_bytes`、`zzcsapi_swrr_hits_total`。
 - 渠道标签用**渠道 id**（控制台里显示的是 name）；token/耗时来自 `recordUsage`，与用量统计**同一处收口**，不会出现"指标好看、用量难看"的分叉。
 - 诚实边界：这是**进程内**计数（重启清零，不是持久化时间序列）；单机自用够用，要长期趋势请让 Prometheus 去拉。
 
-> **这三个开关怎么改（v1.18）**：容器里直接改 `config.json` 仍然可以（`/admin/api/status` 里能看到生效后的实时状态：
-> `affinity` / `rateLimit` / `metrics` 三段）；v1.18 起还可以**运行期改、立即生效、立即落库**——`GET/POST /admin/api/settings`
-> （窄口：只认这三组，字段白名单 + 严格类型，写错字段名/类型一律 400 并点名字段）。
+> **这四个开关怎么改（v1.18 起，v1.18.8 增第四组）**：容器里直接改 `config.json` 仍然可以（`/admin/api/status` 里能看到生效后的实时状态：
+> `affinity` / `rateLimit` / `metrics` / `thinkingReplay` 四段）；也可以**运行期改、立即生效、立即落库**——`GET/POST /admin/api/settings`
+> （窄口：只认这四组，字段白名单 + 严格类型，写错字段名/类型一律 400 并点名字段）。
 > 控制台页面按 [`docs/console-settings-spec.md`](docs/console-settings-spec.md) 的规格实现（该规格已交付前端侧，后端契约已冻结并有测试守着）。
 > 会话粘性、客户端限流的**设计边界与验收标准**写在测试里（`test/session-affinity-e2e.test.js` / `test/rate-limit-e2e.test.js`），改调度或网关入口时请先跑它们。
 
@@ -748,7 +749,7 @@ IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
 | `/admin/api/keys/reset`             | POST | admin       | 删掉 `config.json` 的 `auth` 段，回到「环境变量 → 首启生成」的取值链 |
 | `/admin/api/session`                | POST | 匿名（登录门） | **控制台会话登录（v1.18.6）**：body `{key}` 交一次 `ADMIN_KEY`，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）；**在 admin 鉴权闸门之前**（登录时手里还没有会话），登录失败计入 admin 失败限流（30 次/分钟） |
 | `/admin/api/session`                | DELETE | 会话 cookie | **控制台退出登录（v1.18.6）**：只杀自己那枚 token + 过期 cookie（`Max-Age=0`）；其余方法 405 |
-| `/admin/api/settings`               | GET/POST | admin   | **运行期设置（v1.18）**：读写 `sessionAffinity` / `rateLimit` / `metrics` 三组开关。GET 返回 `config`（用户填的原值）/ `effective`（钳制后生效值）/ `status`（实时计数）；POST 是 PATCH 语义（只带要改的组与字段），**立即生效 + 立即落库**，未知字段/类型不符一律 400 并点名字段 |
+| `/admin/api/settings`               | GET/POST | admin   | **运行期设置（v1.18 起，v1.18.8 增第四组）**：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay` 四组开关。GET 返回 `config`（用户填的原值）/ `effective`（钳制后生效值）/ `status`（实时计数）；POST 是 PATCH 语义（只带要改的组与字段），**立即生效 + 立即落库**，未知字段/类型不符一律 400 并点名字段 |
 | `/metrics`                          | GET  | admin（`metrics.public:true` 时匿名） | **Prometheus 文本格式（v1.17）**：请求/渠道/令牌/耗时/熔断分档/粘性/限流/进程指标；`metrics.enabled:false` 时返回 404 |
 | `/admin/status` / `/admin/recheck`  | */POST | admin    | 旧版兼容路径                          |
 | `/v1/models`                        | GET  | gateway     | OpenAI 聚合模型                       |
@@ -821,10 +822,14 @@ node sec-audit.js
   · 流式：Anthropic 原生 SSE 事件与 Gemini `alt=sse` 分片都会**逐行翻译成 OpenAI 分片**，再交给该路由既有的流式转换器；上游异常断流时由收尾逻辑补 `finish_reason` + `[DONE]`（客户端不会一直等）。
   · 上游错误体不翻译（原样透传状态码与消息），避免 400 被伪装成"成功但空"。
   · 有损点（**仅跨协议时**）：`tool_choice:"none"` 在 Anthropic 侧无对应语义（改为去掉 tools）；`cache_control`/`top_k`/thinking 签名在跨格式时丢弃。同协议（Anthropic 客户端 → Anthropic 渠道、Gemini 客户端 → Gemini 渠道）自 v1.15 起走**同协议直通**，一趟转换都没有，上面这些丢件不再发生（见前文「同协议直通（v1.15）」）。
-  · **思维链（thinking）的真实边界（v1.18 核对，有测试守着）**：跨协议时**双向**都不带思维链——入站 `thinking`/`redacted_thinking` 整块丢弃，
-    回程也**不向客户端产出** `thinking` 块（`server.js` 里 `signature` 出现 **0 次**：既不保存、不校验，也**绝不伪造**）。
+  · **思维链（thinking）的真实边界（v1.18 核对、v1.18.8 增补，有测试守着）**：**跨协议**时**双向**都不带思维链——入站 `thinking`/`redacted_thinking` 整块丢弃，
+    回程也**不向客户端产出** `thinking` 块（`server.js` 里 `signature` 只活在 thinking 回放块与 4xx 作废分支两处，跨协议转换器一个都不碰：既不保存、不校验，也**绝不伪造**）。
     所以 Anthropic 客户端配 OpenAI 协议的渠道时，**看不到思维链、也不会因此报错**；想要思维链就走同协议的 Anthropic 渠道（直通，签名原样活着）。
-    完整地图与"为什么不做 thinking 回放缓存"：`test/thinking-fidelity.test.js` + [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)
+    完整地图：`test/thinking-fidelity.test.js` + [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)
+- **thinking 回放缓存（v1.18.8，默认关）**：同协议直通（Anthropic 客户端 → Anthropic 渠道）上，客户端把上一轮 `thinking` 块的 `signature` **弄丢**再送回来时（部分开源 agent 框架重新序列化消息时会丢掉不认识的字段），网关按缓存把**上游自己签的那枚**签名补回去再转上游。
+  · 边界刻到最窄：**只回放缓存里真有的签名**（从不生成、从不猜测）；键是 `会话键|渠道|模型|块哈希` 四元组，**绝不跨会话/跨渠道/跨模型**（签名与上游账号绑定，渠道 A 的签名过不了渠道 B 的校验，这条 400 连缓存也治不了）；取不到会话键就不回放；**客户端改写过 thinking 文本的块不配旧签名**（块哈希不认）；请求里没有缺签名的块就**一个字段都不动**（完好客户端的直通保真不变）；上游因签名问题 4xx 时这组记录**立即作废**（`stale` 计数）。
+  · `redacted_thinking` 不存不修（它没有签名字段）。开关走「运行期设置」第四组 `thinkingReplay`（`enabled` / `ttlSec` 30–604800 默认 3600 / `maxEntries` 16–100000 默认 2048），状态与计数在 `/admin/api/status` 的 `thinkingReplay` 段，事件在 `/metrics`。
+  · 设计与三次决策的完整记录：[`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)；回归是 `test/thinking-replay-e2e.test.js`（64 项，含"先复现真实失败"的对照轮）。
 - **工具调用（Anthropic tool_use ↔ OpenAI tool_calls）**：双向全字段映射，客户端可混用两套说法——
   · 请求侧：`tools[].input_schema` → `function.parameters`；`tool_choice` 的 `auto/any/tool/none` → `auto/required/{function}/none`；`disable_parallel_tool_use` → `parallel_tool_calls:false`；`stop_sequences` → `stop`；`system`（字符串或 block 数组）→ `system` 消息。
   · 会话侧：`tool_use` 块 → `assistant.tool_calls`（`input` 对象 ↔ `arguments` JSON 串）；`tool_result` → `role:"tool"`（`tool_call_id` 配对）。`is_error:true` 无对应字段，前缀 `[tool_error]` 显式告诉模型"这个工具失败了"（否则它会把失败信息当正常结果继续编）。
@@ -853,4 +858,5 @@ node sec-audit.js
 ## 计划中
 
 - **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。下一步才是把健康系数折进候选份额真正生效——需要同时解决「自动份额与手填权重并存谁优先」「护栏（地板/上限）被反复触碰时如何告警」「份额变化要不要写日志」三个问题。**当前刻意再等等：线上观测时间还不够长**。
-- **thinking 回放缓存**：已前置验证并判定**现有实现下无收益、暂不实现**（网关从不向客户端产出 thinking 块，唯一会 400 的场景回放缓存也治不了）；想重启先满足 [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md) §1.4 的前提，事实的可执行版本是 `test/thinking-fidelity.test.js`。
+
+（thinking 回放缓存已于 v1.18.8 实现并从本节移除——见「行为细节 · thinking 回放缓存」与 [`docs/thinking-replay-design.md`](docs/thinking-replay-design.md)。）

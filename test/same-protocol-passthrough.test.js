@@ -121,9 +121,13 @@ function makeFakeUpstream() {
       && !/passthroughChannelOpts[\s\S]{0,900}?makeStreamTranslator:/.test(SRC));
     check('★ anthropic 直通只改 model，其余字段原样带出去',
       /encodeOutgoing: \(b, c\) => \(proto === 'anthropic' \? \{ \.\.\.raw, model: c\.upstream \} : raw\)/.test(SRC));
-    check('★ 选路：只有客户端协议 === 渠道协议才直通，否则仍走原生转换',
-      /opts\.clientProto && opts\.clientProto === chProto\)\s*\n\s*\? passthroughChannelOpts/.test(SRC)
+    check('★ 选路：只有客户端协议 === 渠道协议才直通（v1.18.8 直通前先做 thinking 签名修复——没坏就不碰），否则仍走原生转换',
+      /opts\.clientProto && opts\.clientProto === chProto\)/.test(SRC)
+      && /\? passthroughChannelOpts\(chProto, \(chProto === 'anthropic'\s*\?\s*repairThinkingBody/.test(SRC)
       && /: nativeChannelOpts\(chProto, requestedModel\)/.test(SRC));
+    check('★ v1.18.8 修复只注入同协议直通（gemini 直通与跨协议原生转换都不碰报文）',
+      (SRC.match(/repairThinkingBody\(/g) || []).length === 2   // 定义 + 唯一注入点
+      && !/\? repairThinkingBody/.test(SRC.slice(SRC.indexOf(': nativeChannelOpts('))));
     check('★ 探测/健康路径不受影响（直通只在 dispatchRequest 选路处生效）',
       (SRC.match(/passthroughChannelOpts\(/g) || []).length === 2);
     const tc = extract('tryChannel');
@@ -131,9 +135,9 @@ function makeFakeUpstream() {
       && /if \(typeof opts\.makeStreamTranslator === 'function' && !passthrough\)/.test(tc)
       && /if \(typeof opts\.streamPrelude === 'function' && !passthrough\)/.test(tc)
       && /if \(typeof opts\.streamEpilogue === 'function' && !passthrough\)/.test(tc));
-    check('★ 非流式直通：原样写回，且**跳过** onSuccessNonStream（不能既直通又转换）',
-      /if \(passthrough\) \{[\s\S]{0,700}?res\.end\(rawText\);\s*\n\s*return 'success';/.test(tc)
-      && /passthrough\) \{[\s\S]{0,700}?await onSuccessNonStream\(shim, candidate\)/.test(tc) === false);
+    check('★ 非流式直通：原样写回，且**跳过** onSuccessNonStream（不能既直通又转换；v1.18.8 在原样写回前只旁路学 thinking 对，不动转发字节）',
+      /if \(passthrough\) \{[\s\S]{0,1300}?res\.end\(rawText\);\s*\n\s*return 'success';/.test(tc)
+      && /passthrough\) \{[\s\S]{0,1300}?await onSuccessNonStream\(shim, candidate\)/.test(tc) === false);
     check('★ 两条客户端路由都把原始报文交出来（rawClientBody）',
       (SRC.match(/clientProto: 'anthropic'/g) || []).length === 1
       && (SRC.match(/clientProto: 'gemini'/g) || []).length === 1
