@@ -158,7 +158,7 @@
    详见 [`docs/thinking-replay-design.md`](thinking-replay-design.md)。集群/多实例一致性同样属于"不做"（与单点自用定位不符），不是"没做"。
 3. **v1.17 三个开关还没进控制台**：只能改 `config.json`（`/admin/api/status` 里能看到实时状态）。
 4. **流式写放大已在 v1.16 修掉，但非直通路径仍是"逐行解析"**：跨协议转换无法避免解析，与 new-api/one-api 同源。
-5. **出站连接池上限 128、`identity` 编码**：v1.16 引入的取舍，见 README §出站与流式写路径。
+5. **出站连接池上限 128、`identity` 编码**：v1.16 引入的取舍，见 docs/behavior.md「出站与流式写路径」。
 6. **指标是进程内计数**（重启清零），不是持久化时间序列——要长期趋势得让 Prometheus 去拉。
 
 ---

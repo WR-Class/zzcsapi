@@ -36,7 +36,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'zzcsapi-cd-e2e-'));
 const GW_KEY = 'cd-gw', AD_KEY = 'cd-admin';
 
 /* 测试用的冷却参数：全部取允许范围内的最小值，跑得快且每一步都能验算
-   （真实的默认值见 README「熔断冷却」：5s / 10min、5min / 6h、1min） */
+   （真实的默认值见 docs/scheduling.md「熔断冷却」：5s / 10min、5min / 6h、1min） */
 const CD = { transientBaseMs: 1000, transientMaxMs: 4000, hardBaseMs: 10000, hardMaxMs: 60000, rateLimitBaseMs: 2000 };
 
 let pass = 0, fail = 0;

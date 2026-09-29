@@ -440,7 +440,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - 手填草稿存 `keyDraft`（1505）并在模板回填（8 秒轮询重绘约定，见代码地图 §0.2「状态回填约定」）；成功/失败后清空。
 - 「回到环境变量值」（`resetKeysAction` 1645 → `POST /admin/api/keys/reset`）：删掉 `config.json` 的 `auth` 段，把密钥控制权交还给环境变量（同时清空全部会话）。
 - 后端语义：优先级链 `config.auth`（控制台轮换）**>** 环境变量 **>** 首启生成；准入规则 8–128 位可见 ASCII、禁 `change-me`、两把不得相同，**管理密钥另需大小写字母+数字+特殊字符四样齐全**（v1.18.5 从"16 位"放宽并加了管理密钥复杂度门槛）；
-  轮换即清管理面失败计数。细节与真链路验证见 `test/key-rotation-e2e.test.js`（75 项断言）与 README「行为细节」。
+  轮换即清管理面失败计数。细节与真链路验证见 `test/key-rotation-e2e.test.js`（75 项断言）与 docs/behavior.md「密钥轮换」。
 - 接入信息页的「轮换密钥」按钮从"只读步骤弹窗"改为 `go('keys')` 直达本页；`showKeyHelp` 降级为命令行备用路径（见 §5.8）。
 - **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
 
@@ -1222,7 +1222,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 | # | 现象 | 根因 |
 | --- | --- | --- |
 | 1 | 复制出来的"token"根本不是 JWT | 新版 CodeBuddy 把该字段加密了：`{"$wbEncrypted":1,"envelope":{"suite":1,"keyId":…,"ciphertext":…}}`（AES-GCM 密文）；而表单提示仍写「auth 文件里 auth.accessToken 的 JWT」，等于指了一条死路 |
-| 2 | 真实失败原因是额度用尽，界面却说 `non-SSE response` | 后端探测侧用 `text.startsWith('{')`（**没 trim**）判 JSON，响应体以换行/BOM 开头就被当成"未知响应"，上游明说的重置时刻被整段吞掉（后端修复见 README「workbuddy」一节与 `test/workbuddy-quota.test.js`） |
+| 2 | 真实失败原因是额度用尽，界面却说 `non-SSE response` | 后端探测侧用 `text.startsWith('{')`（**没 trim**）判 JSON，响应体以换行/BOM 开头就被当成"未知响应"，上游明说的重置时刻被整段吞掉（后端修复见 docs/protocols.md「workbuddy」一节与 `test/workbuddy-quota.test.js`） |
 
 **处置**：`PROTO_META.workbuddy.key` 提示改写（原型 1781 / 生产 1454），明说"该字段已是 envelope、不是 JWT，填了会被当场拒；需从客户端实际请求里取明文 token"。
 

@@ -23,11 +23,12 @@
 | `build/shell.html`（生产 body 骨架） | 重新构建；`docs/frontend-code-map.md` §0.2 结构表 |
 | `build/extra.css`（生产独有组件样式） | 重新构建；`docs/frontend-console-detailed.md` §4 组件规范 |
 | `build/head.html`（head / 字体 CDN） | 重新构建；`docs/frontend-console-detailed.md` §2.2 |
-| `build/build.js`（组装逻辑 / 自检） | `README.md`「前端代码文档」+ `docs/frontend-code-map.md` §0.2 |
+| `build/build.js`（组装逻辑 / 自检） | `README.md` §前端构建管线 + `docs/frontend-code-map.md` §0.2 |
 | `server.js` 新增/修改端点 | `README.md` 端点总表 + `docs/frontend-console-detailed.md` §7 原型→生产映射表 |
-| `server.js` 调度 / 排序 / 优先级算法 | `README.md` §调度顺序（含「有效优先级」公式、生效条件与数据来源字段） |
-| 新增/修改渠道协议 | `README.md` 协议说明表 + `console-redesign.html` 的 `PROTO_META`/`PROTO_ORDER` + `build/app.js` 同名字典 + 两份前端文档 |
-| 新增文档 | 登记到 `README.md` 的「前端代码文档」章节和本文件 §3 文档索引 |
+| `server.js` 调度 / 排序 / 优先级算法 | `README.md` §调度顺序（摘要，含「有效优先级」公式）+ `docs/scheduling.md`（全量语义、生效条件与数据来源字段） |
+| 新增/修改渠道协议 | `README.md` 协议说明表 + `docs/protocols.md`（详解）+ `console-redesign.html` 的 `PROTO_META`/`PROTO_ORDER` + `build/app.js` 同名字典 + 两份前端文档 |
+| 新增文档 | 登记到 `README.md` 的「文档」章节和本文件 §3 文档索引 |
+| 新增测试 | 登记到 `docs/tests.md` 的全量清单与「改什么 → 必跑什么」表、本文件 §3 对应测试行 |
 | 新增配置项 / 环境变量 | `README.md` + `config.example.json` |
 
 ### 1.2 ⚠️ 行号锚点会漂移（最容易腐烂的一环）
@@ -150,7 +151,7 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 
 | 文档 | 内容 |
 | --- | --- |
-| `README.md` | 后端协议、渠道配置、端点总表、部署方式 |
+| `README.md` | 项目总览、特性、快速开始、端点总表、部署方式、协议/调度摘要（v1.18.8 起细节拆进 docs/，README 只留速查 + 链接） |
 | `docs/frontend-code-map.md` | 前端代码地图：行号锚点、CSS/z-index 全景、JS 索引、数据契约、修改路由表、坑位清单 |
 | `docs/frontend-console-detailed.md` | 控制台前端详细设计：设计系统、布局、组件、页面、交互流程、原型→生产映射、变更日志 |
 | `docs/arena-protocol.md` | Arena 协议（已撤渠道，留档） |
@@ -160,6 +161,12 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/gateway-comparison.md` | 同类网关内部机制对比（本项目 vs new-api / one-api / sub2api / CLIProxyAPI）：只比内部机制/性能/全面性，**不比多用户与账户管理**；含本机实测数字（v1.15 → v1.16 的出站与流式写路径）、各家源码级证据与"未找到证据"清单、复现方法 |
 | `docs/thinking-replay-design.md` | thinking 回放缓存**设计与实现记录**（v1.18.8 **已实现**：同协议直通的签名修复，为开源后会弄丢 `signature` 的客户端而做）：三次决策的完整过程（v1.17 只落设计 → v1.18 前置验证判定"跨协议路径无收益不实现" → v1.18.8 用户拍板重启）、跨协议 thinking/签名保真度地图（逐函数出处）、as-built 边界（四元键、只回放上游真签过的、没坏不碰、4xx 作废、默认关）与验收映射。事实的可执行版本是 `test/thinking-fidelity.test.js`，行为回归是 `test/thinking-replay-e2e.test.js` |
 | `docs/console-settings-spec.md` | 控制台「运行期设置」页（会话粘性 / 客户端限流 / 指标端点 / thinking 回放开关，v1.18.8 起四组）**交给前端执行者的实现规格**：`GET/POST /admin/api/settings` 的字段契约（`config` 用户原值 vs `effective` 钳制后生效值——两个都必须显示）、四张卡的结构与文案要点、必须守住的交互细节（只提交有改动的组、跨轮询保留输入、400 原文要显示、**新页必须同时注册进 `go()` 与 `render()` 两张表**）、要改哪些文件与 AGENTS 强制同步清单、可逐条执行的验收清单 |
+| `docs/protocols.md` | 协议与渠道**详解**（v1.18.8 从 README 拆出）：协议速查表之外的全量细节——原生出站与同协议直通（3×3 矩阵、有损点清单）、三条客户端路由的工具调用方向（Gemini 按函数名 FIFO 配对、无状态退文本）、notion-agent / workbuddy / genspark / codex 渠道配置要点、`proxy` 字段、图片统一转换。改协议细节时同步本文 |
+| `docs/scheduling.md` | 调度**详解**（v1.18.8 从 README 拆出）：调度顺序 8 步全量语义、同渠道重试、熔断冷却分级（三曲线 + 半愈合 + `Retry-After` + 503/502 带原因）、加权轮询（smooth WRR）、自动权重（观测版：健康系数/抗振荡三件套/四护栏/后台节拍）、有效优先级、含图请求的候选裁剪。改调度算法时同步本文 |
+| `docs/runtime-settings.md` | 运行期四组开关**详解**（v1.18.8 从 README 拆出）：会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义、旋钮、钳制与 `GET/POST /admin/api/settings` 用法；含 `/metrics` 全量指标清单。改四组开关语义时同步本文 |
+| `docs/behavior.md` | 行为细节**详解**（v1.18.8 从 README 拆出）：上游 4xx 兜底判据、流式失败、协议转换与有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测数字。改网关行为语义时同步本文 |
+| `docs/tests.md` | 测试清单（v1.18.8 从 README 拆出）：32 个测试文件 · 1548 项断言的全量命令与每条守的是什么、「改什么 → 必跑什么」速查表、测试哲学（现抠真实源码 / e2e 姊妹 / 临时目录纪律）。**新增测试时登记进本文** |
+| `docs/security-hardening.md` | 安全整改记录（v1.18.8 从 README 拆出）：2026-10-02 本机实测结论、外部渗透测试四批整改（v1.18.3–v1.18.7）逐批内容与守卫测试、刻意不做的两条处置及理由、公网部署者提示。改鉴权 / 静态文件 / 响应头时配合 `sec-audit.js` 与本文 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |
 | `sec-audit.js`（仓库根，非 test/） | **安全体检（只读）**：`node sec-audit.js` 体检本机，`ZZ_BASE=http://host:port` 体检远端，`ZZ_TRY_DEFAULTS=1` 额外试仓库里公开的示例默认密钥。查匿名可达面、默认密钥、控制台版本指纹、安全响应头/CORS、无/错/对三态鉴权覆盖面、密钥泄露面（网关密钥 + 上游 apiKey 会不会从 `/metrics`／管理面／错误体漏出）、路径穿越与私有文件暴露。**报告一律脱敏，绝不回显密钥**；加了密钥才做后三项。改动鉴权、静态文件、响应头或控制台时必跑 |
 | `test/console-state.test.js` | 前端自动化回归（`node test/console-state.test.js`，零依赖）：**视口内输入控件的值必须跨轮询重绘保留**；从 `build/app.js` 现抠真实渲染函数在最小 DOM 桩里跑。另含渠道表单**权重**一节（`adapt()` 接 `weight`/`weightedHits`/`weightedShare` → 表格显示「权重 / 分流」→ `saveChannel` 报文带 `weight`、负数与非数字在前端就挡下）与**自动权重观测**一节（`adapt()` 接 `autoH`/`autoFailRate`/`autoSamples`/`autoLatMs`/`autoSpeedRatio` 与 `DATA.auto` → `autoWeightCard()` 画出预测份额与"当前 x%"对照、卡头明示"当前分流一字未动"、单候选/空集给空状态；另有抽屉文案与 `vChannels` 挂载的结构守卫）与**停用渠道的手动测试**一节（在最小 DOM 桩里真跑 `openTestModels`：指定停用渠道必须列得出它自己的模型、只列这一条、带「已停用」标记与"不参与自动探测"说明、运行按钮不灰；全局模式含停用渠道但启用排前；`runTests` 每条带 `channelId` 的结构守卫；对照组证明旧写法下是 0 个模型）与**测试结果可读性**一节（`testRowVerdict` 真值表：有回复=通过、2xx 但空=**空回复**、其余=失败，含"缺 `ok` 字段不当作成功"；在 DOM 桩里**真跑 `runTests`**（桩 HTTP + 桩 `document` + 现抠的真实 `fMs`）断言每行带模型名、渠道显示名、中文结论、三种样式、空回复的原因文案、失败行带 HTTP 码与上游原文、成功行带回复与 token、汇总分三档；并含"旧写法只写渠道名已消失"的对照与 `esc` 结构守卫）与**调用日志渠道名**一节（表头「渠道」紧跟「请求 ID」、渠道格显示渠道显示名而不是 id、按名字/按 id 都能搜、`adapt()` 把显示名解析进 `n` 且保留 `c`；对照组证明"渠道格写 id、排在模型后面"的旧写法抓得住）与**运行期设置**一节（v1.18：在最小 DOM 桩里真跑 `vSettings`/`setPayload`/`saveSettings` —— `config` 回填表单而 `effective` 只作「生效：」角标、有改动后草稿跨 8 秒轮询重绘不被覆盖（含"旧写法无条件覆盖草稿"的对照组）、POST 只发有改动的组/字段且留空数字不下发、400 的 `error` 原文直显进错误条且失败不清脏；v1.18.8 增补**第四张卡**：`mkRaw` 桩带 `thinkingReplay` 三段（config/effective/status）、四张卡都渲染、字段齐（开关 + 缓存时长 + 最多缓存条数、回填 config 原值）、第四组同样 PATCH 语义（开着才进 payload、组内只带 enabled、没动不出现））与**零数据（全新部署）**一节（v1.18.1，用户报「渠道管理点详情无反应」：在最小 DOM 桩里**真跑 `openChannel`**，零数据与满数据两组都必须不抛、抽屉要真画出来、有数据仍画得出曲线；`areaChart`/`sparkline` 对空数组返回占位图、单点输入不出 `NaN`；含"渲染函数的桩数据必须再跑一遍空的"这条教训与两条结构守卫）。**密钥管理**一节（v1.18.5：双路由表注册、NAV 位置、掩码与来源渲染、手填草稿跨轮询、**随机生成只本地填框不发请求**、轮换提交框内值、按需揭示、reset 两步确认守卫、**轮换单击直接生效**；v1.18.6 增补**会话语义**：管理密钥不落任何浏览器存储、`api()` 不再注入 `Authorization`、登录门走 `POST /admin/api/session`、`?key=` 通道已拆除、轮换后无任何存储写入）。与**事件委托**一节（v1.18.7：把产品里真实的委托块——`ACTS` 表 + `document` 的 click/change 两个监听——原样抠出来在桩函数上真跑分发：click 把 `dataset.id` 送进动作函数、嵌套点击只触发最近那枚（行内按钮不冒泡触发行/卡片动作）、未知动作与空白点击静默不炸、`openTestModels`/`openChannelForm` 参数形状保留、数值走 `+dataset.idx`、change 把 `dataset.kind` 送进 `importFiles`、`data-act`/`data-change` 与 `ACTS` 双向一一对应；41 个动作函数名刻意硬编码在用例里，`ACTS` 引用了未登记的函数名会当场报错）。新增带输入框的页面时补用例；新增交互时先在 `ACTS` 注册（本节与 `test/security-headers-e2e.test.js` 的守卫都会拦内联回潮） |

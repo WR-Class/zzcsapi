@@ -7,7 +7,7 @@
 > **整改记录（2026-09-27，v0.7）**：PT01 / PT03 / PT05 / PT06 / PT07 已全部完成整改（PT03 取方案 (c) 彻底撤 arena，含 chromium 全家桶移除、镜像 1.31GB→203MB，`docs/arena-protocol.md` 留档）；前端独立审查的清理类发现 PT08/PT10/PT11/PT13/PT14/PT15/PT16/PT17/PT18/PT20/PT21 同批落地，详见 §前端独立审查 各条状态。处置明细见 [frontend-console-detailed.md §8.7](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v0.8）**：**PT02 已取方案 (b) 完成整改**——proxy 对全部 openai 系协议真实生效（探测/测试/聊天经 curl `-x` 转发），实测含死端口拒绝、Clash 探测、流式 SSE 完整回放；PT09/PT12/PT19 登记进 detailed §9 后续可做；**PT04（探测双路径）仍待下次动探测逻辑时顺带收敛**。处置明细见 [frontend-console-detailed.md §8.8](./frontend-console-detailed.md)。
 > **整改记录（2026-09-27，v1.0）**：PT01 同主题的**分发场景加固**——原 compose 里写死的固定默认密钥（`ADMIN_KEY`/`GATEWAY_KEY` 都给了公共字符串）等于把每个部署的管理密钥公开在仓库里（谁拿到项目谁就知道），且 `checkAuth` 存在"空 key 就放行"。现改为：默认留空 → **首启自动生成 48 位随机密钥**（打印到容器日志并写回 config.json）+ 控制台「输入管理密钥」登录门（壳页面放行、管理 API 仍每次校验、密钥记忆由 sessionStorage 升为 localStorage）。明细见 [frontend-console-detailed.md §8.10](./frontend-console-detailed.md)。
-> **整改记录（2026-09-27，v1.1）**：做「Gemini 多模态（图片）适配」时**顺带实测出 PT23 / PT24 / PT25**——PT23 让 Gemini / Anthropic 两条客户端协议的**非流式请求从来就是 502**，PT24 让**原生 Gemini / Anthropic SDK 直连一律 401**，PT25 让 **Anthropic 的 url 型图片源变成一张空图**（静默丢图的第三种写法）；三个都与会话本次目标无关，但同批修复并各自加了回归。同批落地：Gemini `inlineData`/`fileData` + Anthropic `image`(base64/url) 图片入站转换 + 三条客户端协议共用的「图片能力门」（`IMAGE_CAPABLE_PROTOCOLS`，防止静默丢图）；新增零依赖回归 `test/gemini-multimodal.test.js`（40 项断言）与 `test/gemini-multimodal-e2e.test.js`（22 项断言，真起假上游 + 临时网关）。明细见 §PT23 / §PT24 / §PT25 与 README「含图请求的候选裁剪」。
+> **整改记录（2026-09-27，v1.1）**：做「Gemini 多模态（图片）适配」时**顺带实测出 PT23 / PT24 / PT25**——PT23 让 Gemini / Anthropic 两条客户端协议的**非流式请求从来就是 502**，PT24 让**原生 Gemini / Anthropic SDK 直连一律 401**，PT25 让 **Anthropic 的 url 型图片源变成一张空图**（静默丢图的第三种写法）；三个都与会话本次目标无关，但同批修复并各自加了回归。同批落地：Gemini `inlineData`/`fileData` + Anthropic `image`(base64/url) 图片入站转换 + 三条客户端协议共用的「图片能力门」（`IMAGE_CAPABLE_PROTOCOLS`，防止静默丢图）；新增零依赖回归 `test/gemini-multimodal.test.js`（40 项断言）与 `test/gemini-multimodal-e2e.test.js`（22 项断言，真起假上游 + 临时网关）。明细见 §PT23 / §PT24 / §PT25 与 docs/scheduling.md「含图请求的候选裁剪」。
 
 ## 结论
 
@@ -148,7 +148,7 @@
 - 最小修复：`oaiBody.stream = isStream;`（非流式动作仍为 `false`）。
 - 最小回归：`test/streaming-e2e.test.js` §6。
 
-> **整改记录（2026-09-27，v1.2）**：做「Anthropic tool_use 完整转换」时，端到端脚本先把**三个流式缺陷**顶了出来（PT26 首块字节被吞 ⇒ 快上游下三条协议流式全空；PT27 Anthropic 流式转换无状态 + prelude 未转发 ⇒ 流式工具调用必碎、`message_start` 缺失；PT28 Gemini 流式没带 `stream` ⇒ 上游回非流式整包），三个都先修才可能让"流式工具调用"真的可用。同批落地工具转换补全：`tool_choice` 的 `none`、`disable_parallel_tool_use` → `parallel_tool_calls`、`is_error` → `[tool_error]` 标记、**工具结果里的图片改挂紧随的 user 消息**（OpenAI 的 `tool` 消息只允许文本部件）、`tool_use.id` 走 `sanitizeToolId` 保证往返配对、`finish_reason`/`cache_read_input_tokens` 映射。新增零依赖回归 `test/anthropic-tools.test.js`（60 项）、`test/anthropic-tools-e2e.test.js`（30 项，两轮工具回合）、`test/streaming-e2e.test.js`（19 项）。真机验证：流式工具调用收到 `stop_reason=tool_use` 且参数分片拼回 `{"city":"上海"}`；回传 `tool_result` 后模型用工具结果作答；**工具结果里带一张上红下蓝的图，模型答出 "red blue"**（侧门打通）。明细见 §PT26 / §PT27 / §PT28 与 README「工具调用」「流式（SSE）」。
+> **整改记录（2026-09-27，v1.2）**：做「Anthropic tool_use 完整转换」时，端到端脚本先把**三个流式缺陷**顶了出来（PT26 首块字节被吞 ⇒ 快上游下三条协议流式全空；PT27 Anthropic 流式转换无状态 + prelude 未转发 ⇒ 流式工具调用必碎、`message_start` 缺失；PT28 Gemini 流式没带 `stream` ⇒ 上游回非流式整包），三个都先修才可能让"流式工具调用"真的可用。同批落地工具转换补全：`tool_choice` 的 `none`、`disable_parallel_tool_use` → `parallel_tool_calls`、`is_error` → `[tool_error]` 标记、**工具结果里的图片改挂紧随的 user 消息**（OpenAI 的 `tool` 消息只允许文本部件）、`tool_use.id` 走 `sanitizeToolId` 保证往返配对、`finish_reason`/`cache_read_input_tokens` 映射。新增零依赖回归 `test/anthropic-tools.test.js`（60 项）、`test/anthropic-tools-e2e.test.js`（30 项，两轮工具回合）、`test/streaming-e2e.test.js`（19 项）。真机验证：流式工具调用收到 `stop_reason=tool_use` 且参数分片拼回 `{"city":"上海"}`；回传 `tool_result` 后模型用工具结果作答；**工具结果里带一张上红下蓝的图，模型答出 "red blue"**（侧门打通）。明细见 §PT26 / §PT27 / §PT28 与 docs/behavior.md「工具调用」「流式（SSE）」。
 
 ### PT29 中：渠道保存走白名单重建对象 —— 配置里的新字段会被静默抹掉 —— ✅ v1.3 已整改
 
@@ -256,7 +256,7 @@
   好处是"原生"与"客端协议"两个维度可独立演进。顺手修掉排查中顶出来的 PT31（候选链协议过滤）与 PT32（Gemini 结束帧被丢）。
   有损点诚实登记：Anthropic 的 `tool_choice:"none"` 无对应语义（改为去掉 tools）、`cache_control`/`top_k`/thinking 签名跨格式丢弃、
   同协议不做直通（**已作废：v1.15 起同协议改走直通**，`cache_control`/`top_k`/thinking/多段 system/`seed` 等不再跨格式丢弃，
-  见 README「同协议直通（v1.15）」与 `test/same-protocol-passthrough.test.js`）；上游错误体**不翻译**（否则 400 会被伪装成"成功但空"的 200）。图片能力门随之从 `['openai']` 扩到
+  见 docs/protocols.md「同协议直通（v1.15）」与 `test/same-protocol-passthrough.test.js`）；上游错误体**不翻译**（否则 400 会被伪装成"成功但空"的 200）。图片能力门随之从 `['openai']` 扩到
   `['openai','anthropic','gemini']`（原生渠道带图有等价表达：`image` 块 / `inlineData`・`fileData`），
   并按 AGENTS.md 同步了 `test/gemini-multimodal.test.js` 的白名单断言与两处错误文案断言。新增零依赖回归
   `test/native-channels.test.js`（78 项）与 `test/native-channels-e2e.test.js`（33 项，真起原生 Anthropic / Gemini 假上游，

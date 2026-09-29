@@ -2211,7 +2211,7 @@ function geminiToOpenAI(body, model) {
   const fccMode = String(fcc.mode || '').toUpperCase();
   const allowed = fcc.allowedFunctionNames || fcc.allowed_function_names || [];
   // ANY + 白名单 = "只准调这几个"：OpenAI 只有"强制某一个"这一种表达能力，
-  // 于是把工具集**也跟着收窄**（比只写 required 更接近原意），多于一个时退化成 required（有损，README 已记）。
+  // 于是把工具集**也跟着收窄**（比只写 required 更接近原意），多于一个时退化成 required（有损，docs/protocols.md 已记）。
   for (const d of decls) {
     if (fccMode === 'ANY' && allowed.length && !allowed.includes(d.name)) continue;
     tools.push({
@@ -3065,7 +3065,7 @@ function channelStatusAll() {
     // 自动权重观测总览：旋钮现值 + 每个"多候选模型"的预测份额（静默版的核心产出）
     autoWeight: {
       enabled: AUTO_W.enabled,
-      effective: false, // 观测版恒为 false：只算不生效，见 README「自动权重（观测版）」
+      effective: false, // 观测版恒为 false：只算不生效，见 docs/scheduling.md「自动权重」
       knobs: { ...AUTO_W },
       at: AUTO_LAST_AT || null,
       // 后台节拍计数：观测的 EWMA/死区是"一拍一算"的，而触发点原来只有"有人拉 /admin/api/status"，
@@ -3247,7 +3247,7 @@ function effPriority(ch) {
  * 本版**只算与只显示**：pickWeighted 仍旧只认 ch.def.weight，一行都不碰真实路由。
  * 理由：自动权重天然有反馈回路（份额改流量 → 流量改统计 → 统计改份额），
  * 先让人对着真实数据看它算得对不对，确认无误再打开开关让它生效。
- * 因此 `enabled` 目前是**预留字段**——就算置 true，本版也不改分流（README 里写明了）。
+ * 因此 `enabled` 目前是**预留字段**——就算置 true，本版也不改分流（docs/scheduling.md 里写明了）。
  *
  * 健康系数 h（0 到 1，地板 AUTO_FLOOR）由两个已有信号合成，不引入新统计：
  *   1) 成功率：复用滚动窗口 ch.roll（bumpRoll 已在每次请求里维护，120 样本自动减半）
