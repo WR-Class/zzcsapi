@@ -228,7 +228,7 @@ thinking 回放修复）。矩阵表、工具调用四方向、各渠道配置�
 
 | 路径 | 方法 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| `/healthz` | GET | 无 | 网关自身存活探针 |
+| `/healthz` | GET | 无 | 网关自身存活探针（只回 `{ok:true}`，v1.18.9 起不带渠道数/密钥状态——渗透整改 V-08） |
 | `/console` | GET | admin | Web 控制台 HTML |
 | `/admin/api/status` | GET | admin | 渠道详细状态（控制台用；含 `weight`/`weightedShare`/自动权重观测/`effectivePriority` 等字段） |
 | `/admin/api/usage` | GET | admin | 用量统计（总量 / 按模型 / 按渠道 / 按天 / 近 200 条 / 24h 分布） |

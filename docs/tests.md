@@ -49,7 +49,7 @@ node test/metrics-e2e.test.js             # 45 项断言：/metrics（Prometheus
 node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（跨协议双向都不产出 thinking 块 → 跨协议"无签名块触发 400"不可达；`signature` 只活在回放块与 4xx 作废分支；直通仍是唯一活路，回放只补上游真签过的）
 node test/thinking-replay-e2e.test.js      # 64 项断言：thinking 回放缓存（v1.18.8，同协议直通签名修复）——复现失败（关=400）→ 开=补回原签名（逐字段）→ 跨会话/渠道/模型绝不回放（三组反向）→ 过期/淘汰/作废计数 → 流式分片攒对照样修 → 完好客户端一字不动 → 设置第四组/status/metrics 暴露
 node test/settings-api-e2e.test.js        # 68 项断言：运行期设置端点（四组窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
-node test/security-headers-e2e.test.js    # 57 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + 页面壳零密钥明文 + **CSP 逐字等于设计稿（v1.18.6）** + 管理面 ?key= 已停用 / 客户端面保留 + **内联事件属性必须为 0 且 ACTS 与模板双向一一对应（v1.18.7）**）
+node test/security-headers-e2e.test.js    # 58 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + **/healthz 只回 {ok:true}（V-08：匿名面不带渠道数与密钥状态）** + 页面壳零密钥明文 + **CSP 逐字等于设计稿（v1.18.6）** + 管理面 ?key= 已停用 / 客户端面保留 + **内联事件属性必须为 0 且 ACTS 与模板双向一一对应（v1.18.7）**）
 node test/key-rotation-e2e.test.js         # 85 项断言：控制台轮换密钥（优先级链 config.auth>env>首启生成 + 旧密钥立即失效 + 非法值不落库 + 重启后仍生效 + 回到环境变量值）
 node test/admin-session-e2e.test.js        # 63 项断言：管理面会话 cookie（v1.18.6）——登录门换 HttpOnly+SameSite=Strict 会话、会话单独鉴权管理面、Bearer 通道保留、管理面 ?key= 拆除 / 客户端面保留、退出只杀自己、轮换清全会话并补发新会话、重启全部掉线、逐出先清过期
 ```
