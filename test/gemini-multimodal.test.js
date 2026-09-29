@@ -2,7 +2,7 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * test/gemini-multimodal.test.js — Gemini 图片（多模态）入站转换的回归测试
  *
- * 为什么需要它（README §9「Gemini 多模态（图片）适配」/ detailed §8.13）：
+ * 为什么需要它（docs/protocols.md「图片（多模态）的统一转换」/ docs/scheduling.md「含图请求的候选裁剪」/ detailed §8.13）：
  *   网关内部统一用 OpenAI 格式，图片表示为 messages[].content 数组里的 image_url block。
  *   `/gemini/v1beta/...` 的入站转换以前只认 part.text —— 客户端发 inlineData（图片）时会被
  *   **静默丢掉**，模型照样自信作答，用户以为它看过图。这类 bug 不报错、不崩、HTTP 全 200。

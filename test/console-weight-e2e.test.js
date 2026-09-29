@@ -108,7 +108,7 @@ const upstream = http.createServer((req, res) => {
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { }
   };
 
-  // 管理面只认 Bearer / ?key=（原生 SDK 那些头是给 /v1/* 聊天面用的，见 README「鉴权写法」）
+  // 管理面只认 Bearer / ?key=（原生 SDK 那些头是给 /v1/* 聊天面用的，见 docs/behavior.md「鉴权写法」）
   const apiReal = async (p, opt) => {
     const r = await fetch(`http://127.0.0.1:${GW}${p}`, {
       method: (opt && opt.method) || 'GET',
