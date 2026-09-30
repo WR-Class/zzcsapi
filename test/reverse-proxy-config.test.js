@@ -13,7 +13,10 @@
    另守两条现场教训：nginx 不是 Windows 服务 → 自启脚本必须存在且幂等；
    Windows PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1 → 脚本必须纯 ASCII（中文注释会让它语法错）。
    2026-10-04 外部复测（交付包 retest-after-fix.md）处置增补：server_tokens off（N-01，
-   Server 头不报版本号——版本号是给扫描器的免费情报）。 */
+   Server 头不报版本号——版本号是给扫描器的免费情报）。
+   同日公网部署（v1.18.16）增补：deploy/nginx-public.conf（公网 TLS 前端）——XFF 覆写
+   同源、HSTS/COOP/CORP 三头（N-03 TLS 里程碑落地）、TLS 只开 1.2/1.3、80 只留
+   ACME+301、LE 标准证书路径、README 公网四件套。 */
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
@@ -94,6 +97,28 @@ check('README 提醒"别把 nginx 放进容器"（容器里同样被 NAT 折叠�
   README.includes('别把 nginx 放进容器'));
 check('config.example.json 仍登记 security.trustedProxy（部署者按示例可发现）',
   EXAMPLE.includes('trustedProxy'));
+
+/* ── 公网前端（v1.18.16：deploy/nginx-public.conf，TLS + 反代采信）── */
+const NGINXP = fs.readFileSync(path.join(ROOT, 'deploy', 'nginx-public.conf'), 'utf8');
+const NGINXP_LIVE = stripComments(NGINXP);
+check('公网 nginx XFF 同样一律覆写为 $remote_addr（追加模式 = 公网客户端伪造统计/借封禁锁人）',
+  NGINXP.includes('proxy_set_header X-Forwarded-For $remote_addr;') && !NGINXP_LIVE.includes('$proxy_add_x_forwarded_for'));
+check('公网 nginx 只反代宿主回环转发口 127.0.0.1:18787（网关不经此层不可达，ufw 兜底）',
+  NGINXP.includes('proxy_pass http://127.0.0.1:18787;'));
+check('公网 nginx server_tokens off（Server 头不报版本号——N-01 同款纪律）',
+  NGINXP_LIVE.includes('server_tokens off;'));
+check('TLS 层三头齐全：HSTS/COOP/CORP（N-03 既定姿势：只在公网 TLS 层加，本机 http 层不加）',
+  NGINXP_LIVE.includes('Strict-Transport-Security') && NGINXP_LIVE.includes('Cross-Origin-Opener-Policy') && NGINXP_LIVE.includes('Cross-Origin-Resource-Policy'));
+check('公网 TLS 只开 1.2/1.3（出现 SSLv3/TLS1.0/TLS1.1 即失败）',
+  NGINXP_LIVE.includes('ssl_protocols TLSv1.2 TLSv1.3;') && !/TLSv1\.?[01]\b|SSLv/.test(NGINXP_LIVE));
+check('80 段只留 ACME webroot 与 301 跳转；业务只在 443（强制加密红线）',
+  NGINXP.includes('listen 80;') && NGINXP.includes('/.well-known/acme-challenge/') && NGINXP.includes('root /var/www/certbot;') && NGINXP.includes('return 301 https://$host$request_uri;') && NGINXP.includes('listen 443 ssl http2;'));
+check("证书走 Let's Encrypt 标准位（live/<域名>/fullchain+privkey，certbot.timer 续期直接覆盖）",
+  NGINXP.includes('/etc/letsencrypt/live/') && NGINXP.includes('fullchain.pem;') && NGINXP.includes('privkey.pem;'));
+check('公网流式与体量纪律同源（proxy_buffering off / read_timeout ≥3600s / client_max_body_size）',
+  NGINXP.includes('proxy_buffering off;') && Number((NGINXP.match(/proxy_read_timeout\s+(\d+)s/) || [])[1]) >= 3600 && /client_max_body_size\s+\d+m/.test(NGINXP));
+check('README 公网部署四件套齐：部署步骤、ZZCSAPI_ALLOWED_HOSTS、公网必须换新密钥、certbot 续期',
+  /公网部署/.test(README) && /ZZCSAPI_ALLOWED_HOSTS/.test(README) && /换新密钥/.test(README) && /certbot/.test(README));
 
 console.log('──────────────────────────────────────────────────────');
 if (fails) { console.log('✗ 失败 ' + fails + ' / ' + n + ' 项'); process.exit(1); }

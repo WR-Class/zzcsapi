@@ -73,6 +73,48 @@ D:\DSHXM\nginx-rt\nginx.exe -p D:\DSHXM\nginx-rt\ -c D:\DSHXM\ZZCSAPI\deploy\ngi
 - **四条纪律**（XFF **覆写**为 `$remote_addr` 而非追加、转发口只绑回环、`proxy_buffering off` 否则 SSE 卡死、`server_tokens off` 不给扫描器报版本号）写在 [deploy/nginx-reverse-proxy.conf](deploy/nginx-reverse-proxy.conf) 头部，由 `test/reverse-proxy-config.test.js` 守着，改坏当场报错。改响应头记得 **nginx 与网关两层一起看**（外部复测的特别提示：别改了网关却被 nginx 盖住，或反之）。
 - **回到默认直连模式**：`.env` 里删掉 `ZZCSAPI_PUBLISH`（或改回 `8787:8787`）→ `docker compose up -d`，并清空 `security.trustedProxy`。
 
+### 方式四：公网部署（域名 + TLS + 反代采信）
+
+方式三的同一套架构，把前端换成公网 TLS 层：[deploy/nginx-public.conf](deploy/nginx-public.conf)（跑在服务器宿主机 nginx 上——Let's Encrypt 证书、80 段只留 ACME 验证与 301 跳转、业务全走 443、HSTS/COOP/CORP 三头）。
+
+```bash
+# 1) 服务器准备：Docker + nginx + certbot；防火墙只放 SSH/80/443（默认全拒）
+curl -fsSL https://get.docker.com | sh && apt-get install -y nginx certbot
+ufw allow <你的SSH端口>/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
+
+# 2) 域名 A 记录指向服务器公网 IP，然后把仓库克隆到服务器
+git clone https://github.com/WR-Class/zzcsapi.git /opt/zzcsapi && cd /opt/zzcsapi
+
+# 3) 写 .env（三件事：只绑回环转发口、**公网必须换新密钥**、域名登记进 Host 门）
+#    示例密钥是公开的（就躺在本仓库里），公网照抄 = 裸奔
+A=$(openssl rand -hex 12)Aa1-; G=$(openssl rand -hex 16)g9
+printf 'ZZCSAPI_PUBLISH=127.0.0.1:18787:8787\nZZCSAPI_ALLOWED_HOSTS=你的域名\nADMIN_KEY=%s\nGATEWAY_KEY=%s\n' "$A" "$G" > .env
+chmod 600 .env
+
+# 4) config.json 准备好渠道（本地挑好再传上去，此文件不入仓库）+ usage.json 空档起步
+touch usage.json && docker compose up -d --build
+curl -s http://127.0.0.1:18787/healthz   # {"ok":true}——此刻只有服务器本机摸得到它
+
+# 5) 签证书：nginx-public.conf 的 443 段引用的证书还没存在，nginx 起不来——
+#    先用 80-only 引导配置把 ACME 跑通
+mkdir -p /var/www/certbot
+cat > /etc/nginx/nginx.conf <<'EOF'
+events { worker_connections 256; }
+http { server { listen 80; server_name 你的域名;
+  location /.well-known/acme-challenge/ { root /var/www/certbot; }
+  location / { return 301 https://$host$request_uri; } } }
+EOF
+nginx -t && systemctl start nginx
+certbot certonly --webroot -w /var/www/certbot -d 你的域名 --register-unsafely-without-email -n --agree-tos
+
+# 6) 证书到手，换上真正的公网前端（TLS 三头在这层生效；certbot.timer 自动续期）
+cp deploy/nginx-public.conf /etc/nginx/nginx.conf && nginx -t && systemctl reload nginx && systemctl enable nginx
+```
+
+- **回退**：`docker compose down` + `systemctl stop nginx`；证书重签删 `/etc/letsencrypt/live/你的域名` 等目录即可。
+- **公网后每一条小改动都要两层一起想**（nginx 前端 + 网关），改响应头尤其如此。
+- 客户端地址换成 `https://你的域名`；控制台在 `https://你的域名/console`。来源统计照常生效（XFF 覆写纪律同源，`security.trustedProxy` 填网桥网关 `172.28.137.1`，同方式三）。
+
 ### 方式二：裸 Node（18+）
 
 ```bash
@@ -150,7 +192,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 34 个测试文件 · 1676 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 34 个测试文件 · 1685 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |

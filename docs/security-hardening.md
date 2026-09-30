@@ -89,7 +89,7 @@ v1.18.9 起只回答"活着吗"；守卫断言在 `test/security-headers-e2e.tes
 | --- | --- |
 | N-01 `Server: nginx/1.28.0` 暴露版本号 | **已修**：`deploy/nginx-reverse-proxy.conf` 加 `server_tokens off`（守卫进 `test/reverse-proxy-config.test.js`） |
 | N-02 `/metrics` 401 无 `Cache-Control` | **已修**：server.js 响应头收口从 `/admin/api/`+`/healthz` 扩到 `/metrics`（401/404 全态 `no-store`；守卫进 `test/security-headers-e2e.test.js`）。修在网关收口而非 nginx 全局加——全局 `no-store` 会把 `/console` 壳自己的缓存策略一并改掉 |
-| N-03 HSTS / COOP / CORP 缺 | **推迟到 TLS 里程碑**（与会话 cookie 刻意无 `Secure` 同一姿势；复测报告自己也建议"对外启用 TLS 时一并添加"） |
+| N-03 HSTS / COOP / CORP 缺 | **已落地（v1.18.16 公网部署）**：三头加在公网 TLS 前端 `deploy/nginx-public.conf` 的 nginx 层（复测建议的原位，README「方式四」）——本机 http 前端刻意不加（http 上 HSTS 无效；与会话 cookie 刻意无 `Secure` 同一姿势） |
 | N-04 CSP 引外部字体 CDN（供应链/隐私面） | **维持**（AGENTS §2 的 MiSans 官方 CDN 是刻意约定；自托管子集化是独立工作项，风险在此记录在案） |
 | N-05 内联脚本无 nonce，CSP 需 `'unsafe-inline'` | **维持**（单文件交付是项目前提；XSS 防线 = 转义纪律 + `security-headers-e2e` 守卫；脚本外置是独立工作项） |
 
@@ -103,7 +103,7 @@ v1.18.9 起只回答"活着吗"；守卫断言在 `test/security-headers-e2e.tes
 
 **强制密钥长度/熵（不符合就拒绝启动）与多用户/角色/审计**：本项目定位是**单用户自托管**，首启随机生成密钥、示例默认值只服务本地开发，把这两条做进来会破坏开箱即用（外部渗透测试报告的建议据此驳回，理由记在此处以免重复提）。
 
-**给公网部署者**：本项目的隐藏前提是「知道密钥的人就是管理员」——请只在可信网络或反向代理后暴露，并务必给公网入口加 TLS（会话 cookie 刻意没加 `Secure` 旗标，就是为 http 本地/局域网；公网 TLS 部署时应在反代层终止并保留 `HttpOnly`/`SameSite` 语义）。**反代层仓库已备好**（v1.18.14，README「方式三」）：`deploy/nginx-reverse-proxy.conf` + compose 的 `ZZCSAPI_PUBLISH` 开关 + 固定子网 `172.28.137.0/24`（`security.trustedProxy` 登记网桥网关 `172.28.137.1` 即可拿到真实来源 IP），公网部署在它之上加 TLS 证书即可；nginx 侧**必须保持 `X-Forwarded-For` 覆写语义**（`$remote_addr`）——换成追加模式（`$proxy_add_x_forwarded_for`）会让客户端预置假 XFF 伪造来源统计、甚至借封禁把人锁死（守卫在 `test/reverse-proxy-config.test.js`）。
+**给公网部署者**：本项目的隐藏前提是「知道密钥的人就是管理员」——请只在可信网络或反向代理后暴露，并务必给公网入口加 TLS（会话 cookie 刻意没加 `Secure` 旗标，就是为 http 本地/局域网；公网 TLS 部署时应在反代层终止并保留 `HttpOnly`/`SameSite` 语义）。**反代层仓库已备好**（v1.18.14，README「方式三」）：`deploy/nginx-reverse-proxy.conf` + compose 的 `ZZCSAPI_PUBLISH` 开关 + 固定子网 `172.28.137.0/24`（`security.trustedProxy` 登记网桥网关 `172.28.137.1` 即可拿到真实来源 IP），公网部署在它之上加 TLS 证书即可；nginx 侧**必须保持 `X-Forwarded-For` 覆写语义**（`$remote_addr`）——换成追加模式（`$proxy_add_x_forwarded_for`）会让客户端预置假 XFF 伪造来源统计、甚至借封禁把人锁死（守卫在 `test/reverse-proxy-config.test.js`）。**公网前端仓库已备好（v1.18.16，README「方式四」）**：`deploy/nginx-public.conf`（Let's Encrypt TLS + HSTS/COOP/CORP 三头 + XFF 覆写同源 + 只反代回环转发口 127.0.0.1:18787），80 段只留 ACME 验证与 301 跳转，续期走 certbot.timer。**公网实例必须换全新密钥**——示例密钥公开在本仓库，公网照抄 = 裸奔（"单机自用"风险接受的失效触发点）；域名必须登记 `.env` 的 `ZZCSAPI_ALLOWED_HOSTS`（Host 门默认拒陌生域名，421），公网防火墙只放 SSH/80/443。
 
 ## 来源 IP 统计的数据留存界限（v1.18.11 补记）
 
