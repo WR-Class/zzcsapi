@@ -83,7 +83,7 @@ curl -fsSL https://get.docker.com | sh && apt-get install -y nginx certbot
 ufw allow <你的SSH端口>/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
 
 # 2) 域名 A 记录指向服务器公网 IP，然后把仓库克隆到服务器
-git clone https://github.com/WR-Class/zzcsapi.git /opt/zzcsapi && cd /opt/zzcsapi
+git clone -b master https://github.com/WR-Class/zzcsapi.git /opt/zzcsapi && cd /opt/zzcsapi   # -b master：仓库默认分支 main 停在旧版
 
 # 3) 写 .env（三件事：只绑回环转发口、**公网必须换新密钥**、域名登记进 Host 门）
 #    示例密钥是公开的（就躺在本仓库里），公网照抄 = 裸奔
@@ -113,6 +113,7 @@ cp deploy/nginx-public.conf /etc/nginx/nginx.conf && nginx -t && systemctl reloa
 
 - **回退**：`docker compose down` + `systemctl stop nginx`；证书重签删 `/etc/letsencrypt/live/你的域名` 等目录即可。
 - **公网后每一条小改动都要两层一起想**（nginx 前端 + 网关），改响应头尤其如此。
+- 域名托管在 **Cloudflare** 时，A 记录要用**灰云（DNS only）**：橙云（Proxied）下访客先进 CF 边缘，网关看到的来源全是 CF 的 IP（per-IP 来源统计失真、封禁打不中人），TLS 也由 CF 终结而不是本层证书（HTTP-01 签证书倒是可经橙云走通）。
 - 客户端地址换成 `https://你的域名`；控制台在 `https://你的域名/console`。来源统计照常生效（XFF 覆写纪律同源，`security.trustedProxy` 填网桥网关 `172.28.137.1`，同方式三）。
 
 ### 方式二：裸 Node（18+）
@@ -192,7 +193,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 34 个测试文件 · 1685 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 34 个测试文件 · 1686 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |

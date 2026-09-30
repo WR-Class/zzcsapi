@@ -16,7 +16,8 @@
    Server 头不报版本号——版本号是给扫描器的免费情报）。
    同日公网部署（v1.18.16）增补：deploy/nginx-public.conf（公网 TLS 前端）——XFF 覆写
    同源、HSTS/COOP/CORP 三头（N-03 TLS 里程碑落地）、TLS 只开 1.2/1.3、80 只留
-   ACME+301、LE 标准证书路径、README 公网四件套。 */
+   ACME+301、LE 标准证书路径、README 公网四件套；compose 必须真透传
+   ZZCSAPI_ALLOWED_HOSTS（现场教训：注释行透传 → 公网域名一律 421）。 */
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
@@ -117,6 +118,8 @@ check("证书走 Let's Encrypt 标准位（live/<域名>/fullchain+privkey，cer
   NGINXP.includes('/etc/letsencrypt/live/') && NGINXP.includes('fullchain.pem;') && NGINXP.includes('privkey.pem;'));
 check('公网流式与体量纪律同源（proxy_buffering off / read_timeout ≥3600s / client_max_body_size）',
   NGINXP.includes('proxy_buffering off;') && Number((NGINXP.match(/proxy_read_timeout\s+(\d+)s/) || [])[1]) >= 3600 && /client_max_body_size\s+\d+m/.test(NGINXP));
+check('compose 真透传 ZZCSAPI_ALLOWED_HOSTS（v1.18.16 现场教训：注释行透传 → 公网域名一律 421）',
+  COMPOSE.includes('ZZCSAPI_ALLOWED_HOSTS: ${ZZCSAPI_ALLOWED_HOSTS:-}'));
 check('README 公网部署四件套齐：部署步骤、ZZCSAPI_ALLOWED_HOSTS、公网必须换新密钥、certbot 续期',
   /公网部署/.test(README) && /ZZCSAPI_ALLOWED_HOSTS/.test(README) && /换新密钥/.test(README) && /certbot/.test(README));
 
