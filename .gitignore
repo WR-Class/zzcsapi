@@ -30,3 +30,6 @@ usage.json
 # 本机部署密钥（compose 注入用，绝不入仓库）
 .env
 keys.local.txt
+
+# 公网部署服务器凭据（root 密码 / SSH 端口，绝不入仓库）
+docs/服务器信息.txt
