@@ -930,12 +930,13 @@ const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'
    控制台唯一网络出口。鉴权走会话 cookie（v1.18.6：登录门把管理密钥交给 /admin/api/session 一次，
    换回 HttpOnly cookie；管理密钥本身不进 localStorage，JS 永远摸不到它）。
    GATEWAY_KEY 由 /admin/api/config 下发掩码，Playground 直连 /v1 时走按需揭示现取。 */
+const errMsgOf=(j,fb)=>{const e=j&&j.error;return (typeof e==='string'?e:(e&&e.message))||(j&&j.message)||fb;}; /* 2026-10-04 现场教训（公网部署实测）：网关错误体是 {error:{message,type}}——直接把 j.error 拼进字符串会显示 [object Object]、吞掉真实原因 */
 async function api(path,opts={}){
   const headers={'Content-Type':'application/json'};
   const r=await fetch(path,{...opts,headers:{...headers,...(opts.headers||{})}});
   if(r.status===401){showKeyGate();throw new Error('401')}
   const j=await r.json().catch(()=>null);
-  if(!r.ok){toast((j&&(j.error||j.message))||('HTTP '+r.status),'bad');const err=new Error('http '+r.status);err.status=r.status;err.body=j;throw err}
+  if(!r.ok){toast(errMsgOf(j,'HTTP '+r.status),'bad');const err=new Error('http '+r.status);err.status=r.status;err.body=j;throw err}
   return j;
 }
 let CFG=null;
@@ -3318,12 +3319,12 @@ function showKeyGate(){
   const input=g.querySelector('#zz-gate-input');input.focus();
   input.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('zz-gate-btn').click()});
   const attempt=async()=>{
-    const k=input.value;if(!k.trim())return;
+    const k=input.value.trim();if(!k)return; /* 2026-10-04：终端 cat 复制带尾随换行/空格不再被打成 401 */
     const errEl=g.querySelector('#zz-gate-err');errEl.textContent='';
     try{
       const r=await fetch('/admin/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k})});
       const j=await r.json().catch(()=>null);
-      if(r.status!==200){errEl.textContent=(j&&(j.error||j.message))||('密钥不对（HTTP '+r.status+'）');input.select();return}
+      if(r.status!==200){errEl.textContent=errMsgOf(j,'密钥不对（HTTP '+r.status+'）');input.select();return}
       input.value='';          // 密钥用完即弃：不留输入框、不进存储
       g.remove();boot();
     }catch(e){errEl.textContent='网络错误：'+(e&&e.message||e)}

@@ -1472,6 +1472,16 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **纪律（随本轮补记 8.33 的教训）**：`$$(…)` 的 NodeList 索引**不等于** `rows` 索引——有条件渲染（无标签行不出 chip）时按 `rows[i]` 取值必错位，点击参数一律走元素自带 `data-*` 属性（已写进 `docs/frontend-code-map.md` §0.1 历史教训）。
 
+### 8.35 v1.18.17 错误显示统一口 errMsgOf + 登录门 trim（2026-10-04，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` 新增 §17 + README 方式四钥匙名修正 + 三份计数文档）
+
+**问题**（公网部署 wurong.us.ci 实测抓到）：用户报「拿到了密钥还是提示 [object Object]，没有进去控制台」——登录门失败提示只显示 `[object Object]`，真实失败原因被吞。
+
+**根因**：前端两处 + 服务器一处叠加。① 网关错误体是 `{error:{message,type}}` 对象，`api()` 的错误 toast（全控制台共用）与登录门的 `errEl.textContent` 都直接拼 `j.error`——对象进字符串变 `[object Object]`（设置页 `saveSettings` 早已是 `j.error.message||j.error` 的正确姿势，本轮把其余两处拉齐）；② 登录门提交前只判非空不 `trim()`，从终端 `cat` 复制的密钥带尾随换行/空格也会被打成 401；③ **服务器侧真根因**：公网 `.env` 钥匙名写成了裸 `ADMIN_KEY`/`GATEWAY_KEY`（compose 映射读的是带 `ZZCSAPI_` 前缀的名字）——env 落空、容器回落首启生成，`.env` 里那把钥匙两头都不生效；已修服务器（改名不动值、剥 config.json 的 auth 段、重建容器，登录 200 实测）并改 README 方式四 + reverse-proxy 守卫（README 钥匙名必须带前缀）。
+
+**处置（`build/app.js`）**：新增 `errMsgOf(j,fb)` 统一口（219 行，错误体对象取 `message`、字符串透传、`j.message` 兜底、空体走回退文案），`api()` 错误 toast 与登录门失败显示都改走它；登录门提交前 `input.value.trim()`。app.js 净增 1 行，`api()`(220) 之后锚点整体 +1。
+
+**验证**：`test/console-state.test.js` 新增 §17（errMsgOf 真值表 + api()/登录门两处装配守卫 + 旧裸拼模式全仓清零 + trim 守卫；215 → **221 项**）；全量 **34 文件 · 1693 断言 · 0 失败**。
+
 ---
 
 ## 9. 后续可做（未实现）

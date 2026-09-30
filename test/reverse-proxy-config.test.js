@@ -122,6 +122,9 @@ check('compose 真透传 ZZCSAPI_ALLOWED_HOSTS（v1.18.16 现场教训：注释�
   COMPOSE.includes('ZZCSAPI_ALLOWED_HOSTS: ${ZZCSAPI_ALLOWED_HOSTS:-}'));
 check('README 公网部署四件套齐：部署步骤、ZZCSAPI_ALLOWED_HOSTS、公网必须换新密钥、certbot 续期',
   /公网部署/.test(README) && /ZZCSAPI_ALLOWED_HOSTS/.test(README) && /换新密钥/.test(README) && /certbot/.test(README));
+check('README 方式四 .env 钥匙名带 ZZCSAPI_ 前缀（v1.18.17 现场教训：裸 ADMIN_KEY= 被 compose 的 ZZCSAPI_ADMIN_KEY 映射漏掉 → 静默回落首启生成，.env 的钥匙两头都不生效）',
+  README.includes('ZZCSAPI_ADMIN_KEY=%s') && README.includes('ZZCSAPI_GATEWAY_KEY=%s') &&
+  !README.includes('\\nADMIN_KEY=%s') && !README.includes('\\nGATEWAY_KEY=%s'));
 
 console.log('──────────────────────────────────────────────────────');
 if (fails) { console.log('✗ 失败 ' + fails + ' / ' + n + ' 项'); process.exit(1); }

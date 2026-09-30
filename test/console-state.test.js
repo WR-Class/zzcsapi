@@ -1331,6 +1331,26 @@ try {
   process.exit(1);
 }
 
+/* ═══════════ 17. 错误显示统一口 errMsgOf + 登录门 trim（v1.18.17）═══════════
+   公网部署 wurong.us.ci 实测抓到（用户报「拿到密钥还是提示 [object Object] 进不去控制台」）：
+   ① 网关错误体是 {error:{message,type}}，api() 的错误 toast 与登录门的 errEl.textContent
+     都直接拼 j.error——对象进字符串变 [object Object]，真实失败原因被吞；
+   ② 登录门提交前只判非空不 trim，从终端 cat 复制的密钥带尾随换行/空格也被打成 401。
+   errMsgOf 统一口：对象取 message、字符串透传、j.message 兜底、空体走回退文案。 */
+function testGateErr() {
+  G('17. errMsgOf 错误显示统一口 + 登录门 trim（v1.18.17 公网实测）');
+  const m = src.match(/const errMsgOf=\(j,fb\)=>\{[^]*?\};/);
+  check('errMsgOf 存在于 build/app.js', !!m);
+  if (m) {
+    const f = eval('(function(){' + m[0] + ' return errMsgOf;})()');
+    check('对象错误取 message（不再 [object Object]）', f({ error: { message: '不对', type: 'bad_request' } }, '回退') === '不对');
+    check('字符串 error 透传 / j.message 兜底 / 空体走回退', f({ error: '字符串型' }, '回退') === '字符串型' && f({ message: '顶层' }, '回退') === '顶层' && f(null, '回退') === '回退');
+  }
+  check('api() 的错误 toast 走 errMsgOf', src.includes("toast(errMsgOf(j,'HTTP '+r.status),'bad')"));
+  check('登录门错误显示走 errMsgOf（旧裸拼模式全仓清零）', src.includes("errEl.textContent=errMsgOf(j,'密钥不对（HTTP '+r.status+'）')") && !src.includes('(j&&(j.error||j.message))'));
+  check('登录门提交前 trim（终端 cat 复制带尾随空白不再 401）', src.includes('const k=input.value.trim();if(!k)return;'));
+}
+
 (async () => {
   testModels();
   testPlayground();
@@ -1345,6 +1365,7 @@ try {
   await testKeys();
   testDelegation();
   testStats();
+  testGateErr();
 
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);

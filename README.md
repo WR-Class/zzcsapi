@@ -88,8 +88,10 @@ git clone -b master https://github.com/WR-Class/zzcsapi.git /opt/zzcsapi && cd /
 # 3) 写 .env（三件事：只绑回环转发口、**公网必须换新密钥**、域名登记进 Host 门）
 #    示例密钥是公开的（就躺在本仓库里），公网照抄 = 裸奔
 A=$(openssl rand -hex 12)Aa1-; G=$(openssl rand -hex 16)g9
-printf 'ZZCSAPI_PUBLISH=127.0.0.1:18787:8787\nZZCSAPI_ALLOWED_HOSTS=你的域名\nADMIN_KEY=%s\nGATEWAY_KEY=%s\n' "$A" "$G" > .env
+printf 'ZZCSAPI_PUBLISH=127.0.0.1:18787:8787\nZZCSAPI_ALLOWED_HOSTS=你的域名\nZZCSAPI_ADMIN_KEY=%s\nZZCSAPI_GATEWAY_KEY=%s\n' "$A" "$G" > .env
 chmod 600 .env
+#    钥匙名必须带 ZZCSAPI_ 前缀——compose 的映射读的是 .env 里的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY；
+#    写成裸 ADMIN_KEY= 会静默失效：容器回落首启生成，.env 里的钥匙两头都不生效（v1.18.17 公网现场教训）
 
 # 4) config.json 准备好渠道（本地挑好再传上去，此文件不入仓库）+ usage.json 空档起步
 touch usage.json && docker compose up -d --build
@@ -193,7 +195,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 34 个测试文件 · 1686 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 34 个测试文件 · 1693 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
