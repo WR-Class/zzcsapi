@@ -17,7 +17,11 @@
    同日公网部署（v1.18.16）增补：deploy/nginx-public.conf（公网 TLS 前端）——XFF 覆写
    同源、HSTS/COOP/CORP 三头（N-03 TLS 里程碑落地）、TLS 只开 1.2/1.3、80 只留
    ACME+301、LE 标准证书路径、README 公网四件套；compose 必须真透传
-   ZZCSAPI_ALLOWED_HOSTS（现场教训：注释行透传 → 公网域名一律 421）。 */
+   ZZCSAPI_ALLOWED_HOSTS（现场教训：注释行透传 → 公网域名一律 421）。
+   橙云姿势（v1.18.18）增补：CF Proxied 下真实访客 IP 靠 nginx realip 白名单采信
+   CF-Connecting-IP（只认 CF 网段直接对端，直连伪造头一律无视）；网关侧绝不读该头
+   （XFF 覆写仍是唯一通路）；CF 侧必须 Full (strict)（Flexible + 源站 80 的 301
+   = 访客无限重定向循环）；README 必须写全橙云姿势与源站锁定/切回灰云放行。 */
 const fs = require('fs');
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
@@ -125,6 +129,15 @@ check('README 公网部署四件套齐：部署步骤、ZZCSAPI_ALLOWED_HOSTS、
 check('README 方式四 .env 钥匙名带 ZZCSAPI_ 前缀（v1.18.17 现场教训：裸 ADMIN_KEY= 被 compose 的 ZZCSAPI_ADMIN_KEY 映射漏掉 → 静默回落首启生成，.env 的钥匙两头都不生效）',
   README.includes('ZZCSAPI_ADMIN_KEY=%s') && README.includes('ZZCSAPI_GATEWAY_KEY=%s') &&
   !README.includes('\\nADMIN_KEY=%s') && !README.includes('\\nGATEWAY_KEY=%s'));
+
+/* ── CF 橙云（v1.18.18）：真实来源恢复在 nginx 层、网关侧零改动 ── */
+const SRV = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+check('公网层 CF 橙云真实来源：realip 只对 CF 网段采信 CF-Connecting-IP（≥22 条 set_real_ip_from），XFF 覆写纪律一字不动',
+  NGINXP_LIVE.includes('real_ip_header CF-Connecting-IP;') && (NGINXP_LIVE.match(/set_real_ip_from/g) || []).length >= 22 && NGINXP_LIVE.includes('proxy_set_header X-Forwarded-For $remote_addr;'));
+check('网关侧绝不读 CF-Connecting-IP（真实来源唯一通路 = nginx realip 恢复进 XFF 那一跳，网关只认 XFF 采信链）',
+  !SRV.includes('CF-Connecting-IP'));
+check('README 方式四橙云姿势写全：Proxied + Full (strict) 防重定向循环、CF-Connecting-IP/源站锁定说明、切回灰云放行提醒、100 秒超时告警',
+  /橙云/.test(README) && /Full \(strict\)/.test(README) && /CF-Connecting-IP/.test(README) && /100 秒/.test(README) && /源站锁定/.test(README));
 
 console.log('──────────────────────────────────────────────────────');
 if (fails) { console.log('✗ 失败 ' + fails + ' / ' + n + ' 项'); process.exit(1); }

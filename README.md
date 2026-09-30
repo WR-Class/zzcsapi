@@ -115,7 +115,9 @@ cp deploy/nginx-public.conf /etc/nginx/nginx.conf && nginx -t && systemctl reloa
 
 - **回退**：`docker compose down` + `systemctl stop nginx`；证书重签删 `/etc/letsencrypt/live/你的域名` 等目录即可。
 - **公网后每一条小改动都要两层一起想**（nginx 前端 + 网关），改响应头尤其如此。
-- 域名托管在 **Cloudflare** 时，A 记录要用**灰云（DNS only）**：橙云（Proxied）下访客先进 CF 边缘，网关看到的来源全是 CF 的 IP（per-IP 来源统计失真、封禁打不中人），TLS 也由 CF 终结而不是本层证书（HTTP-01 签证书倒是可经橙云走通）。
+- 域名托管在 **Cloudflare** 时两种姿势都行：
+  - **灰云（DNS only）**：最简单——访客直连源站，来源统计天然真实，TLS 由本层证书终结；
+  - **橙云（Proxied）**：套 CF 的 DDoS 防护、藏源站 IP。仓库姿势（v1.18.18 起 `deploy/nginx-public.conf` 已内置）：nginx realip 白名单采信 **CF 网段**回源带的 `CF-Connecting-IP`（真实访客 IP），直连源站的伪造头一律无视——`$remote_addr` 恢复成真实访客，XFF 覆写纪律与网关侧采信链零改动，per-IP 统计/封禁照常工作。CF 控制台 **SSL/TLS 必须设 Full (strict)**（Flexible 会走 80 回源、撞上 301 跳转 = 访客无限重定向循环）。建议**源站锁定**：ufw 只放 CF 网段进 80/443（`for n in $(curl -s https://www.cloudflare.com/ips-v4); do ufw allow proto tcp from $n to any port 80,443; done`，v6 同理）——不然知道源站 IP 的人可绕过 CF 直连（Host 门只认域名，分不出谁走了 CF）。**切回灰云前必须先放开**：`ufw allow 80/tcp && ufw allow 443/tcp`（否则全站不可达；灰云期间 certbot 续期也依赖 80 直达）。两个代价要有数：CF 免费版 **100 秒无字节超时**——慢思考的 SSE 长回复两次事件间隔超 100 秒会被掐（nginx 侧 3600s 的耐心只对直连有效）；CF 网段表变动时要同步 conf 里的 `set_real_ip_from`（不然新网段的访客 IP 会显示成 CF 边缘 IP）。
 - 客户端地址换成 `https://你的域名`；控制台在 `https://你的域名/console`。来源统计照常生效（XFF 覆写纪律同源，`security.trustedProxy` 填网桥网关 `172.28.137.1`，同方式三）。
 
 ### 方式二：裸 Node（18+）
@@ -195,7 +197,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 34 个测试文件 · 1693 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 34 个测试文件 · 1696 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
