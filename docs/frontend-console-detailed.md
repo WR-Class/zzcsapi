@@ -1482,6 +1482,16 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`test/console-state.test.js` 新增 §17（errMsgOf 真值表 + api()/登录门两处装配守卫 + 旧裸拼模式全仓清零 + trim 守卫；215 → **221 项**）；全量 **34 文件 · 1693 断言 · 0 失败**。
 
+### 8.36 v1.18.19 「从上游探测」钥匙 trim（2026-10-05，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` 新增 §18）
+
+**问题**（用户报「所有渠道我编辑点击从上游获取是错误的……key 你是省略了什么吗？和我保存进去的不一致？」——上游 new-api 回 `HTTP 401 {"error":{"message":"Invalid token…","type":"new_api_error"}}`）。
+
+**根因**：钥匙存储与掩码显示链路全部清白（掩码只进 placeholder、写库用原文、编辑留空 = 保持原钥匙、`chKeyLive` 按需取原文），真凶是 `probeUpstream` 读钥匙框时**没 `.trim()`**——保存路径（2198 行）有 trim，粘贴尾巴的尾随换行在「从上游探测」路径原样发给上游，new-api 比对失败回 Invalid token。用户「保存进去的和发出去的不一致」的直觉完全正确：**库里存的是干净的，发出去的是带尾巴的**。服务器侧用库内原文直发 `/admin/api/probe` 实测 `ok:true · 302 个模型`，确认钥匙本身完好。
+
+**处置（`build/app.js`）**：2081 行 `$('#f-key').value` → `.value.trim()`，与保存路径对齐；行内注释记下现场教训。
+
+**验证**：`test/console-state.test.js` 新增 §18（trim 装配守卫 + 旧写法清零 + 保存路径不回退 + `probeUpstream` 结构守卫；221 → **225 项**）；全量 **34 文件 · 1700 断言 · 0 失败**。
+
 ---
 
 ## 9. 后续可做（未实现）

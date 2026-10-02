@@ -1351,6 +1351,16 @@ function testGateErr() {
   check('登录门提交前 trim（终端 cat 复制带尾随空白不再 401）', src.includes('const k=input.value.trim();if(!k)return;'));
 }
 
+function testProbeTrim() {
+  G('18. 「从上游探测」钥匙 trim（v1.18.19 现场教训：粘贴尾巴的换行发上游吃 401）');
+  const m = src.match(/let key=\$\('#f-key'\)\.value\.trim\(\)/);
+  check('probeUpstream 读取钥匙框时 .trim()（与保存路径 2198 对齐）', !!m);
+  check('旧写法（未 trim 直接读）已清零', !src.includes("let key=$('#f-key').value;"));
+  check('保存路径仍带 .trim()（两路对齐不回退）', src.includes("const key=$('#f-key').value.trim();"));
+  const probe = src.match(/async function probeUpstream\(\)\{[^]*?\n\}/);
+  check('probeUpstream 仍在（结构守卫，防误删）', !!probe);
+}
+
 (async () => {
   testModels();
   testPlayground();
@@ -1366,7 +1376,7 @@ function testGateErr() {
   testDelegation();
   testStats();
   testGateErr();
-
+  testProbeTrim();
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
   process.exit(fail ? 1 : 0);

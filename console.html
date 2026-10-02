@@ -2792,7 +2792,7 @@ let probeFound=[],probeSel=new Set(),probeQ='';
 const probeShown=()=>$('#probePanel')?.style.display!=='none';
 async function probeUpstream(){
   const base=$('#f-base').value.trim();
-  let key=$('#f-key').value;   // 编辑已有渠道且没重填时，按需取一次原文（v1.18.4）
+  let key=$('#f-key').value.trim();   // 编辑已有渠道且没重填时，按需取一次原文（v1.18.4）；.trim() 与保存路径(2198)对齐——v1.18.19 现场教训：粘贴尾巴的换行没 trim，「从上游探测」把带尾随换行的钥匙发给上游吃 401 Invalid token（库里存的钥匙其实一直是好的）
   if(!key&&modalChId){try{key=await chKeyLive(modalChId)}catch(e){}}
   const st=$('#probeStatus'), btn=$('#f-probe');
   if(!base)return setStatus(st,'先填 Base URL','bad');
