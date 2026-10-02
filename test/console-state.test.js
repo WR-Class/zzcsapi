@@ -1361,6 +1361,17 @@ function testProbeTrim() {
   check('probeUpstream 仍在（结构守卫，防误删）', !!probe);
 }
 
+function testKeyAutofill() {
+  G('19. 密码框 autocomplete（v1.18.20 现场教训：浏览器把登录密钥自动填进渠道钥匙框）');
+  check('渠道表单钥匙框带 autocomplete="new-password"（浏览器不再自动填入已存登录密钥）',
+    src.includes('id="f-key" type="password" value="" autocomplete="new-password"'));
+  check('登录门输入框带 autocomplete="new-password"（管理密钥不被浏览器收进密码库）',
+    src.includes('id="zz-gate-input" type="password" autocomplete="new-password"'));
+  const pw = (src.match(/type="password"/g) || []).length;
+  const guarded = (src.match(/type="password"[^>]*autocomplete="new-password"/g) || []).length;
+  check('全仓 password 框无一裸奔（每个都带 new-password）', pw === 2 && guarded === 2, { pw, guarded });
+}
+
 (async () => {
   testModels();
   testPlayground();
@@ -1377,6 +1388,7 @@ function testProbeTrim() {
   testStats();
   testGateErr();
   testProbeTrim();
+  testKeyAutofill();
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
   process.exit(fail ? 1 : 0);

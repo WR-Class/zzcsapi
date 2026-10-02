@@ -270,6 +270,26 @@ const freePort = () => new Promise((res, rej) => {
     check('新建渠道仍必须带 apiKey（放宽只作用于"已存在的渠道"）',
       fresh.status === 400 && /apiKey is required/.test(freshText), { status: fresh.status, body: freshText.slice(0, 120) });
 
+    /* v1.18.20 数据损失闸门：把管理/网关密钥填进渠道 apiKey 一律 400
+       （浏览器把登录密钥自动填进渠道钥匙框 / 剪贴板残值的保险丝） */
+    const hijack1 = await fetch(`${B}/admin/api/channels`, {
+      method: 'POST',
+      headers: { ...ADMIN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'mock-sec', name: 'A', baseUrl: `http://127.0.0.1:${PU}/v1`, protocol: 'openai', apiKey: AD_KEY, enabled: true, models: {} }),
+    });
+    const hijack1Text = await hijack1.text();
+    const afterHijack1 = await (await fetch(`${B}/admin/api/channels/mock-sec/key`, { headers: ADMIN })).json();
+    check('apiKey 填的是管理密钥 → 400 拒收，渠道原密钥不被覆盖',
+      hijack1.status === 400 && afterHijack1.apiKey === 'sk-a', { status: hijack1.status, body: hijack1Text.slice(0, 120), kept: afterHijack1.apiKey });
+    const hijack2 = await fetch(`${B}/admin/api/channels`, {
+      method: 'POST',
+      headers: { ...ADMIN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'brand-new-gw', baseUrl: 'http://127.0.0.1:1/v1', protocol: 'openai', apiKey: GW_KEY }),
+    });
+    const hijack2Text = await hijack2.text();
+    check('apiKey 填的是网关密钥 → 400 拒收（新建渠道同样拦，错误文案点名要填上游自己的 key）',
+      hijack2.status === 400 && /上游渠道自己的 key/.test(hijack2Text), { status: hijack2.status, body: hijack2Text.slice(0, 120) });
+
     /* 管理面失败限流：连打错密钥到阈值后转 429 + Retry-After；客户端面不受牵连 */
     let last = 0, saw429 = false, ra = '';
     for (let i = 0; i < 32; i++) {

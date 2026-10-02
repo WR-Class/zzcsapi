@@ -2019,7 +2019,7 @@ function openChannelForm(id){
         <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
       <div class="field"><label>API Key</label>
         <div class="row" style="gap:8px">
-          <input class="input" id="f-key" type="password" value="" placeholder="${c?'已配置 ' + esc(chKey(c.id)||'（未设置）') + ' · 留空保持不变':'sk-… 或 notion 的 token_v2'}">
+          <input class="input" id="f-key" type="password" value="" autocomplete="new-password" placeholder="${c?'已配置 ' + esc(chKey(c.id)||'（未设置）') + ' · 留空保持不变':'sk-… 或 notion 的 token_v2'}">
           <button class="btn ghost sm" id="f-key-btn" style="flex:0 0 auto" data-act="toggle-key-field">${svg('eye',13)}明文</button>
         </div>
         <span class="help" id="f-key-help">${pm.key}</span></div>
@@ -2597,7 +2597,7 @@ function showKeyGate(){
       <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
       <span style="font-size:17px;font-weight:600">管理密钥</span></div>
     <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY<br>验证通过后会换成会话（12 小时有效），密钥本身不会被浏览器存下来。</div>
-    <input id="zz-gate-input" type="password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box">
+    <input id="zz-gate-input" type="password" autocomplete="new-password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box">
     <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>
     <button id="zz-gate-btn" class="btn" style="width:100%;margin-top:6px">进入控制台</button>
   </div>`;

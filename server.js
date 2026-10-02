@@ -3980,6 +3980,13 @@ async function handleAdminApi(req, res, url) {
     const body = await safeReadJson(req);
     const err = validateChannelDef(body, { allowMissingApiKey: channels.has(body.id) });
     if (err) return sendJson(res, 400, { error: err });
+    // v1.18.20 数据损失闸门：把管理/网关密钥填进渠道 apiKey 一律 400 拒收。现场报告（2026-10-05）：
+    // 渠道编辑弹窗点「明文」显示的是登录控制台的那把管理密钥——浏览器把登录门记下的密码自动填进了
+    // 渠道表单的密码框（剪贴板残值同理）。存储/揭示链路本身全清白（本地 34 渠道 sha256 扫描无一命中），
+    // 但服务器若静默收下，一次保存就把渠道真密钥覆盖成网关自己的钥匙，上游立刻 401 Invalid token。
+    if (body.apiKey && (body.apiKey === ADMIN_KEY || body.apiKey === GATEWAY_KEY)) {
+      return sendJson(res, 400, { error: 'apiKey 不能是本网关的管理密钥/网关密钥——这里要填上游渠道自己的 key（浏览器可能把登录密钥自动填进了钥匙框，请清空后重新粘贴上游的 key）' });
+    }
     // 已有的 weight 不能被"本次没传这个字段"抹掉（v1.5 起控制台表单会**显式**提交 weight：
     // 留空 = 真的清成 0；只有那些老客户端/导入流程不传 weight 时才沿用旧值）
     const prevDef = channels.get(body.id)?.def;
