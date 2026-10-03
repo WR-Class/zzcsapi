@@ -3680,7 +3680,7 @@ function autoWeightObserve() {
 }
 
 // 记一次请求用量。realUsage 可传 {prompt_tokens, completion_tokens}（上游真实值优先）
-function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage, note, statsCtx }) {
+function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, latencyMs, realUsage, note, statsCtx, outReasoning }) {
   try {
     const u = ensureUsage();
     let inTok = inputTokens || 0;
@@ -3706,7 +3706,9 @@ function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, la
     bumpUsageBucket(u.byChannel, channelId, inTok, outTok, ok);
     const day = new Date(ts).toISOString().slice(0, 10);
     bumpUsageBucket(u.byDay, day, inTok, outTok, ok);
-    u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0, ...(note ? { note } : {}), ...(statsCtx && statsCtx.client ? { client: statsCtx.client } : {}) });
+    // v1.18.28：vReason 是"这次输出里有多少属于思考"（估算值，仅在有思考时写）——
+    // 推理型后端把思考算进同一份预算，混在一起看会误以为"成功产出了内容"（现场 out=30 全是思考）。
+    u.recent.push({ ts, model, channelId, kind: kind || 'chat', in: inTok, out: outTok, ok: ok !== false, ms: latencyMs || 0, ...(outReasoning > 0 ? { reason: outReasoning } : {}), ...(note ? { note } : {}), ...(statsCtx && statsCtx.client ? { client: statsCtx.client } : {}) });
     if (u.recent.length > 800) u.recent.splice(0, u.recent.length - 800);
     // v1.18.11 per-IP 态势：token/模型/会话只在成功用量上记（statsCtx 由客户端面路由注入；
     // 管理面手动测试不带 statsCtx——不算进任何来源的态势，语义正确）
@@ -3733,6 +3735,26 @@ function sseDeltaText(line) {
     if (typeof d.reasoning === 'string') t += d.reasoning;
     return t;
   } catch { return ''; }
+}
+
+/* v1.18.28：把「可见正文」与「思考」分开取。推理型后端（现场实测：mjiutang 背后的
+   accounts/fireworks/models/deepseek-v4p1-flash）会先流一串 reasoning_content，可见正文在后面才出；
+   预算被思考吃光时上游回 finish_reason=length 且**可见正文为 0**，而账本把两者混成一个 out 数字，
+   于是"后台显示成功、客户端却是空回复"。分开取才能既判失败、又如实记账。 */
+function sseDeltaSplit(line) {
+  if (!line || line.indexOf('data:') !== 0) return { visible: '', reason: '' };
+  const data = line.slice(5).trim();
+  if (!data || data === '[DONE]') return { visible: '', reason: '' };
+  try {
+    const j = JSON.parse(data);
+    const d = j && j.choices && j.choices[0] && j.choices[0].delta;
+    if (!d) return { visible: '', reason: '' };
+    let visible = '', reason = '';
+    if (typeof d.content === 'string') visible += d.content;
+    if (typeof d.reasoning_content === 'string') reason += d.reasoning_content;
+    if (typeof d.reasoning === 'string') reason += d.reasoning;
+    return { visible, reason };
+  } catch { return { visible: '', reason: '' }; }
 }
 
 function validateChannelDef(def, opts) {
@@ -5231,6 +5253,7 @@ async function tryChannel(opts) {
     const decoder = new TextDecoder();
     let buf = '';
     let streamOutText = ''; // 累计输出（用于 token 估算）
+    let streamReasonText = ''; // v1.18.28：其中属于「思考」的部分（如实记账用，见 sseDeltaSplit）
     // ★ 原生渠道：把上游的原生 SSE 逐行翻译成 OpenAI SSE，再喂给路由既有的 onStreamChunk。
     //   路由没有 onStreamChunk 时（OpenAI 路由是原样透传）就直接写翻译结果 —— 否则客户端会把
     //   Anthropic/Gemini 的事件当 OpenAI 分片解析，一个字段都读不出来。
@@ -5262,6 +5285,7 @@ async function tryChannel(opts) {
       noteStreamLine(line);   // v1.18.21 错误帧旁路扫描（与直通同一套判定）
       if (streamError !== null && !sawStreamContent && !headCommitted) throw STREAM_ABORT;
       streamOutText += sseDeltaText(line);
+      streamReasonText += sseDeltaSplit(line).reason;   // v1.18.28：思考单独累计
       if (onStreamChunk) {
         const out = onStreamChunk(line + '\n', candidate);
         if (out) outChunks.push(out);
@@ -5269,14 +5293,26 @@ async function tryChannel(opts) {
         outChunks.push(line + '\n');
       }
     };
+    // v1.18.28：扣帧判据从"见过任何内容"收紧为"见过**可见正文/工具调用**"。
+    //   推理型后端（deepseek-v4.1-flash 背后是 Fireworks 托管的推理模型）先流一串 reasoning_content，
+    //   若按旧判据"见到内容就提交"，等发现"finish=length 且可见正文 0"时字节已经写出去了、换不了家
+    //   （实测：24 帧思考 → 一提交就再没有切换窗口）。但思考对客户端是有用的实时反馈，不能无限期扣着
+    //   （客户端首字延迟、CF 免费版 100 秒无字节超时会掐断 SSE），所以只在 REASON_HOLD_MS 窗口内扣：
+    //   窗口内流结束 → 换下一家（客户端一个字节都没收到，切换零副作用）；超窗 → 照常提交，那一发换不了家，
+    //   但账本仍如实记失败（见下面 post-commit 的 reasoning-only 分支）。
+    //   纯无害帧（role/usage，没有思考也没有正文）沿用 v1.18.21/22 的"扣到流结束"语义——v1.18.26 的
+    //   "零正文流"判据依赖它（扣着才没提交，才能切）。
+    const REASON_HOLD_MS = 3000;
+    let holdUntil = 0;
     const flushOut = (force) => {
       if (!outChunks.length) return;
-      // v1.18.21 预检期不提交：正文出现之前只扣着无害帧（role 开场帧 / usage / ping），
-      //   等真正的正文或错误帧。实测 onyxaxis 是"先单独发 role 帧、紧跟一帧 error"的分帧——
-      //   一看到 role 帧就提交响应的话，错误帧再来就晚了（切换窗口关闭，客户端只能看到错误）。
-      //   role 帧对客户端没有信息量（客户端等的是正文），扣着不改变它感知到的首字延迟。
-      //   force=true 用于流正常结束时的收尾冲洗（空回复也要把已扣下的帧发出去）。
-      if (!force && !sawStreamContent && streamError === null && !headCommitted) return;
+      if (!force && streamError === null && !headCommitted && !nativeStream && !passthrough) {
+        if (!sawVisibleText && !sawToolCall) {
+          if (!sawReasoning) return;                     // 无害帧：扣到流结束（空流判据要用）
+          if (!holdUntil) holdUntil = Date.now() + REASON_HOLD_MS;
+          if (Date.now() < holdUntil) return;            // 思考帧：窗口内继续扣，给"换家"留机会
+        }
+      }
       ensureHead();
       res.write(outChunks.join(''));
       outChunks = [];
@@ -5303,6 +5339,11 @@ async function tryChannel(opts) {
     //   客户端拿到的是纯错误帧（调用日志 66991/0 token 就是这个形态）。
     let streamError = null;        // 流内错误帧的原文（data:{"error":…}）
     let sawStreamContent = false;  // 是否见过正文（delta 里除 role 外有内容 / tool_calls / 原生正文块）
+    // v1.18.28：细分为「可见正文 / 思考 / 工具调用 / 收尾原因」——判断"思考吃光预算"与如实记账都要它们。
+    let sawVisibleText = false;    // 见过真的可见正文（delta.content 有内容）
+    let sawReasoning = false;      // 见过思考（delta.reasoning_content / reasoning）
+    let sawToolCall = false;       // 见过工具调用（工具调用帧可能没有正文，不能误判成"空回复"）
+    let streamFinish = null;       // 上游给的收尾原因（length / stop / tool_calls …）
     // 判定一行 SSE 的性质。必须真解析 JSON：role-only 的开场帧不算正文（旧写法用
     // 正则替换判 role，把 {"delta":{"role":"assistant"}} 误判成正文，错误帧就再也拦不住了）。
     const noteStreamLine = (line) => {
@@ -5318,6 +5359,18 @@ async function tryChannel(opts) {
           streamError = String((e && (e.message || e.msg || e.type)) || e || 'upstream stream error');
         }
         return;
+      }
+      // v1.18.28：finish_reason 与三类内容标记必须在下面那条 `if (sawStreamContent) return` 早退**之前**抓——
+      //   推理流的思考帧会把 sawStreamContent 置位，收尾帧（往往 delta 为空、只带 finish_reason）
+      //   若被早退吞掉，就永远判不出"finish=length 且可见正文为 0"。标记写入都是幂等的，重复扫无副作用。
+      const choice0 = j.choices && j.choices[0];
+      if (choice0 && choice0.finish_reason) streamFinish = String(choice0.finish_reason);
+      const d0 = choice0 && choice0.delta;
+      if (d0 && typeof d0 === 'object') {
+        if (typeof d0.content === 'string' && d0.content !== '') sawVisibleText = true;
+        if ((typeof d0.reasoning_content === 'string' && d0.reasoning_content !== '') ||
+            (typeof d0.reasoning === 'string' && d0.reasoning !== '')) sawReasoning = true;
+        if (d0.tool_calls && (!Array.isArray(d0.tool_calls) || d0.tool_calls.length)) sawToolCall = true;
       }
       if (sawStreamContent) return;
       const delta = j.choices && j.choices[0] && j.choices[0].delta;
@@ -5420,6 +5473,56 @@ async function tryChannel(opts) {
       } catch { /* 记账失败不影响切换 */ }
       return 'stream_error: empty stream (200, no content)';
     }
+    // v1.18.28 ★「思考吃光预算」：上游流完了，**可见正文一个字都没有**，收尾原因是 length。
+    //   现场原始报文（诊断开关 dump 出来的真实请求体 + 上游 SSE）：
+    //     mjiutang 背后的 accounts/fireworks/models/deepseek-v4p1-flash 连发 24 帧 reasoning_content，
+    //     然后 finish_reason=length、可见正文 0 —— 客户端看到的就是"空回复/回答被截断/额度已用尽"，
+    //     而账本（把思考也算进 out）却记"成功 out=30"，于是"后台成功、客户端失败"两头对不上。
+    //   我们与 sub2api 的关键差别就在这里：**我们手里有一池子渠道**（同一次实测里 sharellm/bqgy 都能正常出正文），
+    //   所以这种"这家把预算烧在思考上"的发次应该**换下一家**，而不是把空回复当成功交给用户。
+    //   判据收得很窄，只命中"真·空回复"：
+    //     · 常规链路（!passthrough && !nativeStream，原生/直通语义不同，不碰）
+    //     · 响应尚未提交（没写出任何可见正文 → 切候选对客户端无副作用）
+    //     · 无 error 帧、无可见正文、**无工具调用**（工具调用帧可以不带正文，绝不能误判）
+    //     · finish_reason === 'length'
+    //     · 客户端要了像样的预算（max_tokens 缺省或 ≥256）——排除"我只要 1 个 token"的探测类请求
+    const askedMaxTokens = Number(body && (body.max_tokens !== undefined ? body.max_tokens : body.max_completion_tokens));
+    const decentBudget = !(askedMaxTokens > 0) || askedMaxTokens >= 256;
+    if (!passthrough && !nativeStream && streamError === null && !sawVisibleText && !sawToolCall && !headCommitted
+        && String(streamFinish).toLowerCase() === 'length' && decentBudget) {
+      try { reader.cancel(); } catch {}
+      const reasonChars = streamReasonText.length;
+      recordFailure(ch, `reasoning-only: 上游 finish=length 但可见正文为 0（思考 ${reasonChars} 字符把预算吃光）`, undefined, { model: failModel });
+      try {
+        recordUsage({
+          model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
+          inputTokens: estimateTokens(messagesText(body && body.messages)),
+          outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+          outReasoning: estimateTokens(streamReasonText),
+          note: `reasoning-only: length with zero visible content (思考 ${reasonChars} 字符)`,
+          statsCtx: opts.statsCtx,
+        });
+      } catch { /* 记账失败不影响切换 */ }
+      return 'stream_error: reasoning-only (finish=length, no visible content)';
+    }
+    // v1.18.28 同上，但**响应已提交**（思考帧已经流给客户端、或扣帧窗口超时）：这时换不了家，
+    //   流必须如实收尾（客户端拿到的字节是真的），但账本照样不许把它算成"成功产出了内容"——
+    //   记 ok:false + 渠道失败，备注写清是"思考吃光"。控制台那行因此不会再显示成一次正常回答。
+    if (!passthrough && !nativeStream && streamError === null && !sawVisibleText && !sawToolCall
+        && String(streamFinish).toLowerCase() === 'length' && decentBudget && headCommitted) {
+      recordFailure(ch, `reasoning-only: 上游 finish=length 但可见正文为 0（思考 ${streamReasonText.length} 字符把预算吃光；响应已提交，无法换家）`, undefined, { model: failModel });
+      try {
+        recordUsage({
+          model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
+          inputTokens: estimateTokens(messagesText(body && body.messages)),
+          outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+          outReasoning: estimateTokens(streamReasonText),
+          note: `reasoning-only: length with zero visible content (已提交；思考 ${streamReasonText.length} 字符)`,
+          statsCtx: opts.statsCtx,
+        });
+      } catch { /* 记账失败不影响正常收尾 */ }
+      return 'success';   // 响应已提交，不能再切；客户端拿到的是真实流
+    }
     // 原生流式收尾：上游没发结束标记（异常断流）时也要把 finish_reason + [DONE] 补上，
     // 否则客户端的流式解析器会一直等（与 Anthropic 路由的 streamEpilogue 是同一类兜底）
     if (nativeStream) {
@@ -5456,6 +5559,7 @@ async function tryChannel(opts) {
       inputTokens: estimateTokens(messagesText(body && body.messages)),
       outputTokens: estimateTokens(streamOutText), ok: true, latencyMs: Date.now() - t0,
       realUsage: passthroughUsage,
+      outReasoning: estimateTokens(streamReasonText),   // v1.18.28：如实标出这发里有多少是思考
       statsCtx: opts.statsCtx,
     });
     return 'success';
