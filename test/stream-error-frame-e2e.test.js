@@ -65,6 +65,13 @@ const upstream = http.createServer((req, res) => {
       res.write(roleChunk + errChunk('The input exceeds the supported context size. Compact the conversation and retry.') + 'data: [DONE]\n\n');
       return res.end();
     }
+    if (mode === 'empty-stream') {              // ★ v1.18.26：200 + 零正文（role + usage(0) + DONE，无 error 帧）
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(roleChunk);
+      res.write('data: ' + JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', model: 'mock', choices: [], usage: { prompt_tokens: 11, completion_tokens: 0, total_tokens: 11 } }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
     if (mode === 'err-frame-split') {           // ★ 真机分帧（onyxaxis 实测）：role 帧先单独发出去，隔一会儿才发 error
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(roleChunk);
@@ -198,6 +205,32 @@ async function main() {
       const st = await (await fetch(`http://127.0.0.1:${gwPort}/admin/api/status`, { headers: { Authorization: 'Bearer ' + AD_KEY } })).json();
       const badCh = (st.channels || []).find((c) => c.id === 'bad');
       check('B bad 渠道 lastError 带 stream error frame', badCh && /stream error frame/.test(String(badCh.lastError || '')), { lastError: badCh && badCh.lastError });
+    } finally { gw.kill('SIGKILL'); }
+  }
+
+  /* ══ 场景 E：200 + 零正文流（v1.18.26）→ 切下一候选 + 失败行带模型名 ══ */
+  {
+    const gwPort = await freePort();
+    const cfgPath = path.join(TMP, 'e.json');
+    fs.writeFileSync(cfgPath, JSON.stringify({
+      port: gwPort, health: { intervalSec: 3600, timeoutMs: 3000 },
+      channels: [
+        { id: 'bad', name: 'bad', protocol: 'openai', baseUrl: `http://127.0.0.1:${upPort}/v1`, apiKey: 'sk-bad', enabled: true, priority: 10, models: { mock: 'mock' }, headers: { 'x-mock-mode': 'empty-stream' } },
+        { id: 'good', name: 'good', protocol: 'openai', baseUrl: `http://127.0.0.1:${upPort}/v1`, apiKey: 'sk-good', enabled: true, priority: 5, models: { mock: 'mock' } },
+      ],
+    }));
+    const gw = startGateway(cfgPath, gwPort);
+    try {
+      check('E 网关启动', await waitUp(gwPort));
+      const r = await chat(gwPort, { model: 'mock', messages: [{ role: 'user', content: 'hi' }], stream: true });
+      const text = await r.text();
+      check('E 零正文流 → 切到 good 拿到正文', r.status === 200 && text.includes('乙'), { servedBy: r.headers.get('x-zzcsapi-channel'), head: text.slice(0, 120) });
+      check('E 落在 good 渠道', r.headers.get('x-zzcsapi-channel') === 'good');
+      await sleep(300);
+      const u = await usage(gwPort);
+      const badErr = (u.recent || []).find((x) => x.channelId === 'bad' && x.ok === false);
+      check('E bad 渠道记 ok:false（不再把它算成功）', !!badErr, { recent: (u.recent || []).slice(0, 3) });
+      check('★ E 失败行带上了模型名（v1.18.26：此前写死 —）', badErr && badErr.model === 'mock', { model: badErr && badErr.model });
     } finally { gw.kill('SIGKILL'); }
   }
 

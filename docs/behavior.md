@@ -15,6 +15,10 @@
   · 判据是**响应有没有提交给客户端**：① 正文出现**之前**扫到错误帧（此时还没写出任何字节）→ 取消读取、返回 `stream_error: <上游原文>`，候选链**切下一家**（别家的上下文上限可能更大），用量如实记 `ok:false` 但**不**给这家记失败（"这家吃不下这个请求"≠渠道坏了）；② 正文已经流出去之后才扫到 → 流如实转发收尾（客户端拿到的部分是真的），但账本记 `ok:false` 并给渠道 `recordFailure`（连败进冷却）。
   · 为了让 ① 可行，流式的 `writeHead`/开场事件（`streamPrelude`）改成**懒提交**：推迟到确实要写出第一段字节时。提前提交会让下一候选的 `writeHead` 撞 `ERR_HTTP_HEADERS_SENT`，客户端也会先收到一个空的 200 壳。
   · 非流式同型（200 + `{"error":…}` 报文）走同一判据：还没提交响应 → 记 `ok:false` 并切下一候选。**字节保真不受影响**（直通路径仍逐字节转发；扫描只是旁路读一份文本副本）。回归：`test/stream-error-frame-e2e.test.js`。
+  · **零正文流（v1.18.26）**：上游回 **200 但流里一个正文字节都没有**（只有 role/usage 帧 + `[DONE]`，既无 `error` 帧也无内容帧）——这是**额度耗尽/过载**最常回的形态。旧逻辑"200 + 流干净结束 = 成功"把它记成 `ok:true`，于是后台看着成功、客户端却只拿到空回复（DSH 报「当前请求的额度已用尽」），既不退避也不切候选，用户反复撞同一家。现在：**未提交响应**且零正文 → 判失败、`recordFailure`、切下一候选，用量记 `ok:false`（`note: stream empty: 200 no content`）。
+    · 判据**只作用于 OpenAI 协议渠道的常规链路**（`!passthrough && !nativeStream`）：同协议直通是逐字节转发、原生渠道走翻译器，"空"的语义不同（工具调用帧可能不带文本），不在该判据范围内以免误伤；`sawStreamContent` 由正文/工具调用/思考任一帧置位，故只有**真·空流**才命中。
+    · 与"首字超时"「流内错误帧」合起来，流式失败现在覆盖三类：上游不回（idle）、上游回错误（error 帧）、上游回空（zero content）。
+- **失败行也带模型名（v1.18.26）**：`recordFailure()` 记账时带上**请求的模型名**（`tryChannel` 的 `failModel` = 客户端请求体里的 `model`）。此前写死 `model:'—'`，实测近 200 行用量里 **88% 的失败行看不出在调哪个模型**（用户报「有的显示失败但没显示调用的哪个模型」）。后台探测/无请求上下文的路径仍落 `—`——那是"本就没有模型"，不是"我们没记"。
 - **协议转换**：OpenAI ↔ Anthropic ↔ Gemini 三边都走内部 OpenAI 协议中转；**出站方向也按渠道的 `protocol` 走原生格式**（见 [docs/protocols.md](protocols.md)「原生出站」），所以任一客户端协议都能打到任一协议的渠道上。
 - **原生出站（`protocol: anthropic` / `gemini`）**：请求侧 `system`→顶层 `system`/`systemInstruction`、`tool_calls`→`tool_use`/`functionCall`、工具结果→`tool_result`/`functionResponse`（Gemini 按函数名配对）、图片→`image` 块/`inlineData`・`fileData`、`max_tokens`→`max_output_tokens`/`maxOutputTokens`、`stop`→`stop_sequences`/`stopSequences`；响应侧反向映射（`stop_reason`→`finish_reason`、`usageMetadata`→`usage`、`thinking`→`reasoning_content`）。
   · 流式：Anthropic 原生 SSE 事件与 Gemini `alt=sse` 分片都会**逐行翻译成 OpenAI 分片**，再交给该路由既有的流式转换器；上游异常断流时由收尾逻辑补 `finish_reason` + `[DONE]`（客户端不会一直等）。

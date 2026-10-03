@@ -4995,6 +4995,10 @@ const STREAM_ABORT = Symbol('zzcsapi-stream-error-frame');
 async function tryChannel(opts) {
   const { res, url, body, candidate, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk } = opts;
   const ch = channels.get(candidate.channelId);
+  // v1.18.26：失败记账要带上**请求的模型名**。此前 recordFailure 写死 model:'—'，于是近 200 行用量里
+  // 88% 的失败行看不出在调哪个模型（用户报「有的显示失败但没显示调用的哪个模型」）。这里取客户端请求的
+  // 模型名（别名，和用户在控制台看到的一致）；后台探测/无请求上下文的路径仍落 '—'（那是事实，不是缺失）。
+  const failModel = (body && body.model) || opts.requestedModel || '—';
   try {
     // Notion 协议渠道：完全独立的请求/响应路径
     if ((ch.def.protocol || 'openai') === 'notion') {
@@ -5033,7 +5037,7 @@ async function tryChannel(opts) {
     // 流式请求走下方 usedFallback 分支整体重放（与 CF 回退同款语义，首字节延迟=上游总耗时）
     const out = await wbCurlRequest('POST', target, headers, bodyStr, timeoutMs, ch.def.proxy);
     if (out.error || !out.body) {
-      recordFailure(ch, 'proxy: ' + (out.error || 'empty body'));
+      recordFailure(ch, 'proxy: ' + (out.error || 'empty body'), undefined, { model: failModel });
       return `proxy: ${out.error || 'empty body'}`;
     }
     usedFallback = true;
@@ -5053,7 +5057,7 @@ async function tryChannel(opts) {
       resp = await zzFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
     } finally { clearTimeout(to); }
   } catch (err) {
-    recordFailure(ch, String(err && err.message || err));
+    recordFailure(ch, String(err && err.message || err), undefined, { model: failModel });
     return `network: ${err.message || err}`;
   }
 
@@ -5088,6 +5092,7 @@ async function tryChannel(opts) {
     // 429 时若上游给了 Retry-After，就照它说的等（比我们自己拍的曲线更准）；否则按状态码分级退避
     recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`, failureKindFromStatus(resp.status), {
       retryAfterMs: retryAfterMsFromHeaders(resp.headers),
+      model: failModel,
     });
     // 401/402/403/404/408/429 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底；
     // 其余 4xx（400 参数错等）**只在没有后续候选时**才原样透传 ——
@@ -5156,7 +5161,7 @@ async function tryChannel(opts) {
     } catch (err) {
       clearTimeout(firstTimer);
       try { reader.cancel(); } catch {}
-      recordFailure(ch, `stream idle: 上游 ${FIRST_CHUNK_MS / 1000 | 0}s 未出首字节（挂起/排队）`);
+      recordFailure(ch, `stream idle: 上游 ${FIRST_CHUNK_MS / 1000 | 0}s 未出首字节（挂起/排队）`, undefined, { model: failModel });
       return `stream idle ${FIRST_CHUNK_MS}ms`;
     }
     // v1.18.21 懒提交（预检期可切换的前提）：writeHead/开场事件推迟到"确实要写出第一段字节"时。
@@ -5350,6 +5355,27 @@ async function tryChannel(opts) {
       } catch { /* 记账失败不影响切换 */ }
       return `stream_error: ${streamError.slice(0, 200)}`;
     }
+    // v1.18.26 ★ 上游 200 但**零正文**：额度耗尽/过载最常回这个形态——流里只有 role 帧/usage 帧 +
+    //   [DONE]，既没有 error 帧、也没有一个正文字节（现场：gpt-6-astra 与 deepseek-v4.1-flash 连续
+    //   十几行"成功 + out=0"，后台看着成功、客户端却只拿到空回复，报「额度已用尽」）。
+    //   旧逻辑「200 + 流干净结束 = 成功」把它记成成功，于是既没退避、也不切候选，用户反复撞同一家。
+    //   判据只作用于 **OpenAI 协议渠道的常规链路**（`!passthrough && !nativeStream`）：直通是逐字节转发、
+    //   原生渠道走翻译器，二者"空"的语义不同（工具调用帧可能不带正文），不在本判据范围内以免误伤。
+    //   `sawStreamContent` 由 noteStreamLine 在**正文/工具调用/思考**任一帧上置位，故"真·空流"才命中。
+    if (!passthrough && !nativeStream && streamError === null && !sawStreamContent && !headCommitted) {
+      try { reader.cancel(); } catch {}
+      recordFailure(ch, 'stream empty: 上游 200 但零正文（无 error 帧、无内容帧；额度耗尽/过载常见）', undefined, { model: failModel });
+      try {
+        recordUsage({
+          model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
+          inputTokens: estimateTokens(messagesText(body && body.messages)),
+          outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+          note: 'stream empty: 200 no content',
+          statsCtx: opts.statsCtx,
+        });
+      } catch { /* 记账失败不影响切换 */ }
+      return 'stream_error: empty stream (200, no content)';
+    }
     // 原生流式收尾：上游没发结束标记（异常断流）时也要把 finish_reason + [DONE] 补上，
     // 否则客户端的流式解析器会一直等（与 Anthropic 路由的 streamEpilogue 是同一类兜底）
     if (nativeStream) {
@@ -5371,7 +5397,7 @@ async function tryChannel(opts) {
     // v1.18.21 已提交后的流内错误帧：客户端已看到部分输出，流如实收尾，但账本不许再说谎——
     //   ok:false + 渠道记失败（连败会进冷却，这家确实在出错）
     if (streamError !== null) {
-      recordFailure(ch, 'stream error frame: ' + streamError.slice(0, 200));
+      recordFailure(ch, 'stream error frame: ' + streamError.slice(0, 200), undefined, { model: failModel });
       recordUsage({
         model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
         inputTokens: estimateTokens(messagesText(body && body.messages)),
@@ -5470,7 +5496,7 @@ async function tryChannel(opts) {
   } catch (err) {
     // 渠道处理器内部异常兜底：不再让单个渠道的 bug 打崩整个网关进程
     console.error('[tryChannel] internal error:', err);
-    try { recordFailure(ch, 'internal: ' + String(err && err.message || err).slice(0, 200)); } catch {}
+    try { recordFailure(ch, 'internal: ' + String(err && err.message || err).slice(0, 200), undefined, { model: failModel }); } catch {}
     if (res.headersSent || res.writableEnded) { try { res.end(); } catch {} return 'fatal_client'; }
     return 'internal: ' + (err && err.message || err);
   }
@@ -6656,9 +6682,12 @@ function recordFailure(ch, msg, kind, opts) {
   ch.lastError = msg;
   ch.cooldownUntil = Date.now() + cooldownMsFor(ch, k, o.retryAfterMs);
   if (ch.consecutiveFail >= 3) ch.status = 'down';
-  // 失败也进用量统计（ok:false），便于排查"哪个渠道在挂"
+  // 失败也进用量统计（ok:false），便于排查"哪个渠道在挂"。
+  // v1.18.26：带上请求的模型名（o.model，由 tryChannel 的 failModel 提供）。此前写死 '—'，
+  // 于是控制台失败行的「模型」列几乎总是空的（实测 103/117 = 88%）——用户看不出失败发生在哪个模型上。
+  // 探测/后台等**没有请求上下文**的调用仍落 '—'：那是"本就没有模型"，不是"我们没记"。
   try {
-    recordUsage({ model: '—', channelId: ch.def.id, kind: 'error', inputTokens: 0, outputTokens: 0, ok: false, latencyMs: 0, note: String(msg).slice(0, 200) });
+    recordUsage({ model: (o.model && String(o.model)) || '—', channelId: ch.def.id, kind: 'error', inputTokens: 0, outputTokens: 0, ok: false, latencyMs: 0, note: String(msg).slice(0, 200) });
   } catch { /* ignore */ }
 }
 
