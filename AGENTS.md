@@ -1,4 +1,4 @@
-﻿# AGENTS.md · 项目协作约定
+# AGENTS.md · 项目协作约定
 
 > 本文件是**强约束**。任何 Agent（或人）在本仓库动手之前必须先读，动手之后必须执行 §1。
 
@@ -73,7 +73,8 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 
 - [ ] 改了 `console-redesign.html` / `build/*` 后**已重新 `node build/build.js`**，且 `git diff console.html` 里能看到预期变化
 - [ ] 受影响的文档已更新，且**不是**只写"已优化"这类空话，而是写明**问题 → 根因 → 处置**
-- [ ] 代码地图里的行号已用 §1.2 的命令重新核对
+- [ ] 代码地图里的行号已用 §1.2 的命令重新核对（**且只改"当前锚点"，历史注记保持原值**）
+- [ ] `docs/frontend-console-detailed.md` §8 新增条目的日期 = **引入该版本的提交日期**（`git log` 取，不手填）
 - [ ] 新增的文件/端点/协议已登记到 §1.1 表格涉及的所有位置
 - [ ] `docs/frontend-code-map.md` §8「快速自测清单」里相关的项已手工验证
 
@@ -88,6 +89,12 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 - **图表**：全部手写内联 SVG，不引入图表库；曲线用独立图表带 + `preserveAspectRatio="none"` 铺满，避免与文字重叠。
 - **弹窗**：遮罩**不响应点击关闭**（拖选复制易误关），关闭路径只有 × / 取消 / Esc。
 - **布局**：整页不滚动，`.viewport` 是唯一滚动容器。不要用 `min-height: calc(100vh - Npx)` 这类写死横幅高度的写法。
+- **行号锚点分两类，别一刀切（v1.18.33 起为硬约束）**：① **当前锚点**——代码地图 §0.2/§1/§3/§4/§5/§7 的索引表与正文、
+  `docs/frontend-console-detailed.md` §5/§6 的页面与流程正文——**必须等于源码今天的真实行号**，改完源文件就要重新导出核对；
+  ② **历史注记**——代码地图 §0.1 的偏移/版本注记、`docs/frontend-console-detailed.md` §8 变更日志里写的行号——
+  记的是**那一版当时的位置**，**刻意不许改**（改了就是把历史改写成假话）。
+  核对也要机械做，不要按差值平移：把「符号 + 相邻数字」从文档里抠出来，与 `grep -n` 导出的符号行号逐一比对
+  （`test/` 之外没有守卫，靠人眼必然腐烂）。**能由源码/git 推导的字段，不要手写第二份。**
 - **密钥与隐私（血泪条款）**：`config.json` / `.env` / `usage.json` / `keys.local.txt` 都是**本机私有文件**（均已 gitignore）。
   它们的**值**（网关 `GATEWAY_KEY` / `ADMIN_KEY`、各渠道上游 `apiKey`、WorkBuddy 的 JWT 与其里的账号邮箱）
   **绝不允许**打印进对话、提交进仓库、写进任何文档或截图。需要把密钥交给用户时，**写进 `keys.local.txt`**

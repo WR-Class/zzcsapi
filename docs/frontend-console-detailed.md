@@ -1,4 +1,4 @@
-# 控制台前端 · 详细设计文档
+﻿# 控制台前端 · 详细设计文档
 
 > 对象文件：
 > - `console-redesign.html` —— **视觉唯一真源**，新版控制台的高保真静态原型（单文件、零依赖，双击即可打开）
@@ -288,7 +288,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ## 5. 页面详解
 
-### 5.1 总览 `vOverview`（1069）
+### 5.1 总览 `vOverview`（1064）
 
 - 4 张 KPI 卡：累计请求 / 成功率 / 平均延迟 / Token 消耗，各带独立曲线带
 - 请求趋势大图（`areaChart`，20 天）+ 峰值/日均 chip
@@ -296,9 +296,9 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - Top 渠道表、Top 模型条形榜
 - 时间范围页签 `24h / 7d / 30d`
   - **原型**：仅切换选中样式，不切换数据（快照里只有日粒度）
-  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 429）定义三档 → `ovSeries()`（432）按档取序列：
+  - **生产**：**真实切换**。`OV_RANGE`（`build/app.js` 429）定义三档 → `ovSeries()`（453）按档取序列：
     24 小时走后端 `usage.hourly`（24 桶），7/30 天走 `DATA.trend.slice(-N)`；KPI 环比窗口同步跟着天数走
-- **延迟环比 `avgLatencyDelta()`（`build/app.js` 414）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
+- **延迟环比 `avgLatencyDelta()`（`build/app.js` 438）**：取最近 200 条成功日志，前一半当「本期」、后一半当「上期」算变化率；
   **样本 < 40 返回 `null`**——宁可不显示，也不编一个假百分比
 
 ### 5.2 涨跌颜色（中国股票惯例）
@@ -309,15 +309,15 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 ```
 
 > 与欧美惯例相反，**这是需求方明确要求的**。同时移除了原本的 ↑/↓ 箭头——
-> 方向已由 `+/-` 符号和颜色双重表达，再加箭头是三重冗余（`kpiCard`（原型 1055）有注释留档）。
+> 方向已由 `+/-` 符号和颜色双重表达，再加箭头是三重冗余（`kpiCard`（原型 1050）有注释留档）。
 
 **生产侧零差异**：`build/app.js` 不重定义任何涨跌样式，直接吃设计稿这条规则。
-它只负责算数值与方向：`dChip(v, unit, suffix)`（`build/app.js` 423）产出带符号的文本，`kpiCard({dir:'up'|'down'})`（`build/app.js` 372）产出 `.delta.up` / `.delta.down` 类名。
+它只负责算数值与方向：`dChip(v, unit, suffix)`（`build/app.js` 447）产出带符号的文本，`kpiCard({dir:'up'|'down'})`（`build/app.js` 396）产出 `.delta.up` / `.delta.down` 类名。
 （旧版的 `deltaBadge(delta, invert)` 已随重构删除——`invert` 会把"好/坏"折算成颜色，与"方向即颜色"的规则冲突。）
 
 **改这里时别顺手改回欧美惯例**，见 `AGENTS.md` §2。
 
-### 5.3 渠道管理 `vChannels`（1179）
+### 5.3 渠道管理 `vChannels`（1174）
 
 - 工具栏：导入（四项下拉）/ 测试模型 / 添加渠道
 - 筛选：全部 / 已启用 / 已停用 页签 + 名称·ID·协议搜索框
@@ -326,12 +326,12 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   权重 0（未配）显示 `—` 并提示"未参与加权轮询"，**不显示 `0%`**——`0%` 会被误读成"配了但一次都没分到"。
   数据来自 `/admin/api/status` 的 `weight` / `weightedHits` / `weightedShare`，经 `adapt()` 映射为 `w` / `wHits` / `wShare`。
 - 操作列：**测试 / 编辑 / 详情**（三个都要 `stopPropagation`）
-- 排序（`drawChTable` 1219）：「全部」页签下**已启用优先**，同组内按优先级、请求量降序
+- 排序（`drawChTable` 1214）：「全部」页签下**已启用优先**，同组内按优先级、请求量降序
 
 > **v1.9 起观测卡不在这一页了**：它已迁到「资源 → 自动权重」独立页（见 §5.4）。渠道页现在只剩
 > 页签 / 搜索 / 表格，避免"一个只读预测卡压在可操作的表格上方"造成层级混乱。
 
-**渠道详情抽屉 `openChannel`（1260）**：
+**渠道详情抽屉 `openChannel`（1255）**：
 顶部标签行（状态 / 延迟 / 优先级〔自动降权时显示「→ 有效 X（失败率 Y%）」角标〕/ 启停 / **权重角标**）→
 **自动权重（观测 · 只算不生效）一节** → 接入配置（Base URL / 密钥掩码+明文切换+复制 / 协议 / 模型数）→
 近 7 天表现三宫格 + 曲线 → 模型别名 chips → 底部动作：测试模型 / 重探测 / 编辑 / 启停 / 删除
@@ -344,14 +344,14 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 > 下面一行说明"这一版只计算并展示，上面的系数不会被执行"。对应字段 `autoH` / `autoSamples` /
 > `autoFailRate` / `autoLatMs` / `autoSpeedRatio` → `adapt()` 映射为 `ah` / `aN` / `aFail` / `aLat` / `aSpd`。
 
-**启停 `toggleCh`（1254）**：就地改 `DATA`，toast 明确提示"原型演示，不会写入 config.json"。
+**启停 `toggleCh`（1249）**：就地改 `DATA`，toast 明确提示"原型演示，不会写入 config.json"。
 
 ### 5.4 自动权重 `vAutoWeight`（生产独有，原型无此页）
 
 - 位置：「资源」组的第三个页签（渠道管理 / 聚合模型 / **自动权重**）。`NAV` 加一项、`go()` 的分发表加一条
   `autoweight:vAutoWeight` —— 新增页面照这两步走（见 code-map §5「新增页面（生产）」）。
 - 结构：页头（`page-title` 自动权重 + 一句副标题）→ 一张 `.aw-card`（复用 §4.10 的 `.aw-*`）。
-  `vAutoWeight()` 只出页头 + 挂卡，真正的卡在 `autoWeightCard()`（`build/app.js` 654）。
+  `vAutoWeight()` 只出页头 + 挂卡，真正的卡在 `autoWeightCard()`（`build/app.js` 678）。
 - 目的：回答"如果开了自动权重，同一个模型的多个候选会怎么分"——**只算不生效**，卡头必须写明这点。
 - 卡头 `.card-hd`：`分流预测` + `只算不生效` chip（生效时才换成 `已生效` accent chip）+ 右侧 `N 个多候选模型` 计数。
 - `.aw-meta` 说明带：一句加粗自证的 **"当前分流一字未动"**（不说清楚，用户会以为份额已经变了）
@@ -374,67 +374,67 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   （v1.6 那版行内样式让排版无法统一维护，是 v1.8 重做的直接原因）。
 - **原型 `console-redesign.html` 未同步此页**（同 v1.5/v1.6 约定：生产独有能力，原型不追平）。
 
-### 5.5 聚合模型 `vModels`（1340）
+### 5.5 聚合模型 `vModels`（1335）
 
 - 协议筛选页签 + 搜索
-- 排序（`drawMTable` 1385）：**仍有启用渠道的模型排前面**，仅剩停用渠道的模型整体降透明度（`opacity:.62`）并标"来源已停用"
+- 排序（`drawMTable` 1380）：**仍有启用渠道的模型排前面**，仅剩停用渠道的模型整体降透明度（`opacity:.62`）并标"来源已停用"
 - 状态列：稳定 / 有失败 / 来源已停用
 - 点击行打开模型详情抽屉：按实际选中顺序展示调度优先级
 
-### 5.6 调用日志 `vLogs`（1450）
+### 5.6 调用日志 `vLogs`（1445）
 
-请求列表（时间 / **请求 ID → 渠道名 → 模型名** / 协议 / 状态 / 耗时 / token）+ 详情抽屉 `openLog`（1494）。
+请求列表（时间 / **请求 ID → 渠道名 → 模型名** / 协议 / 状态 / 耗时 / token）+ 详情抽屉 `openLog`（1489）。
 
 - **渠道列显示显示名，不显示 id**：表格与详情抽屉都渲染渠道显示名（"主渠道 / 备用渠道 / AgentRouter"，而不是 `ch-a / ch-b`）。
   原型在模板里就地查名（`(DATA.channels.find(c=>c.id===l.c)||{}).name||l.c`）；
   生产在 `adapt()` 里把显示名解析进每条日志的 `n` 字段（`n:(chans.find(c=>c.id===r.channelId)||{}).name||r.channelId||'—'`），
   渲染层直接用 `esc(l.n)`。**渠道 id 仍保留在 `l.c`**，供筛选、导出与排障。
-- **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1210）。
+- **列序**：渠道列紧跟请求 ID 之后（用户要求"在请求 ID 后面"），模型列顺延其后（生产 `drawLogTable` 生产锚点 1260）。
 - **客户端列（v1.18.11；v1.18.13 跳转升级）**：模型之后新增「客户端」列——UA 自报家门的标签（codex CLI / Claude Code / curl 等；无 UA 或未识别显示 `—`）。
   格子是 chip（自带 `data-cl="${esc(l.cl)}"`），点击 → 跳「数据统计」页**按该客户端标签过滤**并**直接弹开最活跃来源的详情抽屉**（多个来源共用同一标签时弹敲门最多的那个，其余来源都在过滤后的表里；统计里没有该标签时不弹，只落过滤页）。行内 `stopPropagation` 不触发行点击。空值 `—` 不可点。
   标签取 chip 自带的 `data-cl`（`esc()` 过的属性），**绝不按 NodeList 索引对 `rows[i]` 取值**——无标签的行不渲染 chip，按索引取会错位（v1.18.13 修掉的潜伏 bug）。
   客户端标签是**外部可控值**（服务端只截断不消毒）→ 渲染必须 `esc(l.cl)`。标签只做显示，**绝不进任何控制逻辑的判定**（详见 §5.11）。
 - **搜索**：搜索框同时匹配模型名 / 渠道名 / 渠道 ID / 请求 ID（`logRows()` 判据 `l.m + l.n + l.c + l.id`，生产锚点 1198）——
   按名字搜比按 id 自然，老习惯按 id 也仍然命中。
-- **CSV 导出** `exportLogs`（生产锚点 468）：渠道列同样写显示名（`l.n`），与页面所见一致。
-- 详情抽屉 `openLog`（生产锚点 1238）补「客户端」键值（有标签才显示）。
+- **CSV 导出** `exportLogs`（生产锚点 484）：渠道列同样写显示名（`l.n`），与页面所见一致。
+- 详情抽屉 `openLog`（生产锚点 1296）补「客户端」键值（有标签才显示）。
 
-### 5.7 Playground `vPlayground`（1539）
+### 5.7 Playground `vPlayground`（1534）
 
 左对话区 + 右参数栏（模型、temperature、top_p 等）。
 
-- **原型**：`pgSend`（1623）模拟流式输出——逐字/逐块插入 → 结束补 usage，**无真实请求**，仅演示交互
-- **生产**：`pgSend`（`build/app.js` 1372）**真发 `POST /v1/chat/completions`**，与外部客户端走完全同一条链路：
+- **原型**：`pgSend`（1618）模拟流式输出——逐字/逐块插入 → 结束补 usage，**无真实请求**，仅演示交互
+- **生产**：`pgSend`（`build/app.js` 1579）**真发 `POST /v1/chat/completions`**，与外部客户端走完全同一条链路：
   - 支持 `stream`：读 `response.body.getReader()` 解析 SSE，逐块追加；记录**首块延迟 TTFB**
   - 从响应头 `X-ZZCSAPI-Channel` 取实际命中渠道 → `drawRoute()` 渲染路由信息（候选渠道 / 命中 / 首块 / 总耗时）
   - 失败时把上游错误原文显示在气泡里，不吞错
 
-### 5.8 接入信息 `vAccess`（1680）
+### 5.8 接入信息 `vAccess`（1675）
 
-三套协议（OpenAI / Anthropic / Gemini）的 baseURL、密钥、示例代码，代码片段用 `.code` + 页签切换（`vAccess` 1680 内）。
+三套协议（OpenAI / Anthropic / Gemini）的 baseURL、密钥、示例代码，代码片段用 `.code` + 页签切换（`vAccess` 1675 内）。
 
 - **原型**：地址与密钥是文件内写死的演示值
-- **生产**：`vAccess`（`build/app.js` 1658）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey` 掩码、模型名，
+- **生产**：`vAccess`（`build/app.js` 1861）从 `GET /admin/api/config` 取**真实**网关地址、`gatewayKey` 掩码、模型名，
   按当前 `location.origin` 拼端点 URL；页头「密钥管理」按钮 `go('keys')` 直接跳**在线轮换页**（v1.18.5，见 §5.10）；
-  `showKeyHelp()`（`build/app.js` 1754）降级为**命令行备用路径**步骤清单（每条命令可单独复制，且会提醒"控制台轮换过之后 .env 说了不算"）；
+  `showKeyHelp()`（`build/app.js` 1957）降级为**命令行备用路径**步骤清单（每条命令可单独复制，且会提醒"控制台轮换过之后 .env 说了不算"）；
   端点地址行与客户端配置表 Base URL 列均带复制按钮
 
 ### 5.9 运行期设置 `vSettings`（生产独有，原型无此页）
 
 - 位置：「工具」组第二个页签（工具组顺序：Playground / **运行期设置** / **密钥管理** / 接入信息）。
-  `NAV`（`build/app.js` 339）加一项、`go()`（362）与 `render()`（161）**两张分发表都要加** `settings:vSettings`
+  `NAV`（`build/app.js` 359）加一项、`go()`（383）与 `render()`（180）**两张分发表都要加** `settings:vSettings`
   —— 只加一张会出现"能进页但 8 秒轮询不刷新"（v1.18 之前自动权重页就栽在 `render()` 表漏页上，见 §8.22）。
 - 结构：页头（标题 + 副标题「改完立即生效、立即落库，无需重启容器」+ 右侧「还原 / 保存设置」）→ 错误条 `.set-err`
   → `.grid.set-cards` 里四张 `.set-card`（会话粘性 / 客户端限流 / 指标端点 / thinking 回放，两排各两张）。
-- 数据源**唯一**：`GET/POST /admin/api/settings`。`loadAll()`（139）把 `settings` 一起拉回来写进 `RAW.settings`，
+- 数据源**唯一**：`GET/POST /admin/api/settings`。`loadAll()`（143）把 `settings` 一起拉回来写进 `RAW.settings`，
   **单独 `.catch(()=>null)` 兜底**（端点挂了不能拖垮整页）。`RAW.settings` 缺失时页面显示「设置接口不可用」，不白屏。
-- 四张卡的**唯一真源**是 `SET_GROUPS`（729）/ `SET_META`（730）/ `SET_FIELDS`（740）：加字段只改这三处，
-  `setCard()`（797）按声明生成行，`setPayload()`（774）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
+- 四张卡的**唯一真源**是 `SET_GROUPS`（750）/ `SET_META`（751）/ `SET_FIELDS`（761）：加字段只改这三处，
+  `setCard()`（818）按声明生成行，`setPayload()`（795）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
   第四张卡（v1.18.8）走同一条声明路：`SET_META` 的「thinking 回放」条目 + `SET_FIELDS` 的
-  `ttlSec`/`maxEntries` 两旋钮 + `setStat()`（789）读 `status.thinkingReplay`（缓存条数 / 学习 / 修复命中 / 未命中 / 作废）。
+  `ttlSec`/`maxEntries` 两旋钮 + `setStat()`（810）读 `status.thinkingReplay`（缓存条数 / 学习 / 修复命中 / 未命中 / 作废）。
 - **只提交有改动的组 / 字段**（PATCH 语义，`setPayload`）：没带的不动、不归零；留空的数字不下发（留空 ≠ 0）。
   没改动时「保存设置」按钮 `disabled`。
-- **400 原文直显**：`api()`（215）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（863）取 `e.body.error`
+- **400 原文直显**：`api()`（235）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（884）取 `e.body.error`
   写进 `.set-err` —— 后端已点名到字段，照抄给用户就能直接改。
 - 提交期间按钮 `disabled` + 文案变「保存中…」（`setSaving` 幂等，避免连点造成两次写入）。
 - **实时计数**来自 `status` 段：粘性命中/未命中/学习条数、在飞/峰值/限速拒绝/并发拒绝、`/metrics` 是否匿名可抓、
@@ -445,20 +445,20 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 ### 5.10 密钥管理 `vKeys`（生产独有，原型无此页，v1.18.5）
 
 - 位置：「工具」组第三个页签，**夹在运行期设置与接入信息之间**（工具组顺序：Playground / 运行期设置 / **密钥管理** / 接入信息）。
-  `NAV`（`build/app.js` 339）加一项、`go()`（362）与 `render()`（161）**两张分发表都要加** `keys:vKeys`——只加一张会出现"能进页但 8 秒轮询不刷新"（同 §5.9 的教训）。
-- 数据源唯一：`GET /admin/api/keys`，随 `loadAll()`（139）一起拉，**单独 `.catch(()=>null)` 兜底**（端点挂了显示「密钥接口不可用」，不白屏、不拖垮整页）。
+  `NAV`（`build/app.js` 359）加一项、`go()`（383）与 `render()`（180）**两张分发表都要加** `keys:vKeys`——只加一张会出现"能进页但 8 秒轮询不刷新"（同 §5.9 的教训）。
+- 数据源唯一：`GET /admin/api/keys`，随 `loadAll()`（143）一起拉，**单独 `.catch(()=>null)` 兜底**（端点挂了显示「密钥接口不可用」，不白屏、不拖垮整页）。
   响应里**只有掩码与来源**（`gatewayKey`/`adminKey` 各带 `masked`/`set`/`source`，外加 `rotatedAt`/`keysInsecure`/`minLen`/`noAuth`）。
-- 两张密钥卡（`keyCard` 1520）：当前值掩码 + 来源角标（控制台轮换 / 环境变量 / 首启生成）+ 「显示」「复制」按钮 + 手填输入框 + 「随机生成」「轮换」。
+- 两张密钥卡（`keyCard` 1713）：当前值掩码 + 来源角标（控制台轮换 / 环境变量 / 首启生成）+ 「显示」「复制」按钮 + 手填输入框 + 「随机生成」「轮换」。
   **「随机生成」只在本地把 48 位随机串（大小写字母+数字+特殊字符四样齐全，与服务端 `genKey` 同规格）填进输入框（`fillGeneratedKey`，用 `crypto.getRandomValues`，不发任何请求）——用户先看到/复制新值，再点「轮换」才提交生效**（服务端 `/admin/api/keys/generate` 端点保留给 API 调用方，控制台不走它）。
-- **明文绝不进页面快照**：点「显示」才经 `GET /admin/api/admin-key` / `GET /admin/api/gateway-key` 现取一次（`toggleKeyReveal` 1599），只存内存 `keyReveal`，再点「隐藏」即清。
-- **换管理密钥后的自我保命（v1.18.6 会话语义）**（`rotateKey` 1625）：成功后**前端什么都不用做也不再写任何浏览器存储**——
+- **明文绝不进页面快照**：点「显示」才经 `GET /admin/api/admin-key` / `GET /admin/api/gateway-key` 现取一次（`toggleKeyReveal` 1792），只存内存 `keyReveal`，再点「隐藏」即清。
+- **换管理密钥后的自我保命（v1.18.6 会话语义）**（`rotateKey` 1825）：成功后**前端什么都不用做也不再写任何浏览器存储**——
   服务端在轮换响应里**补发一枚新会话 cookie**（`Set-Cookie`，换管理密钥会清空全部旧会话，但发起轮换的这个浏览器当场拿到新会话），
   发起页无感继续用；其它标签页/设备拿旧 key（或旧会话）立即 401 弹回登录门，页面文案明示。
 - **「轮换」单击直接生效**（用户明确要求，最初的"点两下确认"被否掉；页面上方警示条与按钮旁文案都写明"旧密钥立即失效"）。「随机生成」只是本地填框，不算危险动作。
-  「回到环境变量值」保留两步确认（`armConfirm` 1583，第一次点击变成「确认…」，6 秒不复位自动还原）——它会把控制台轮换的成果整段交还给 .env（也会清空全部会话）。
+  「回到环境变量值」保留两步确认（`armConfirm` 1783，第一次点击变成「确认…」，6 秒不复位自动还原）——它会把控制台轮换的成果整段交还给 .env（也会清空全部会话）。
   无论手填还是随机生成后点「轮换」，生效的那一刻所有拿旧 key 的调用方就开始 401。
-- 手填草稿存 `keyDraft`（1505）并在模板回填（8 秒轮询重绘约定，见代码地图 §0.2「状态回填约定」）；成功/失败后清空。
-- 「回到环境变量值」（`resetKeysAction` 1645 → `POST /admin/api/keys/reset`）：删掉 `config.json` 的 `auth` 段，把密钥控制权交还给环境变量（同时清空全部会话）。
+- 手填草稿存 `keyDraft`（1705）并在模板回填（8 秒轮询重绘约定，见代码地图 §0.2「状态回填约定」）；成功/失败后清空。
+- 「回到环境变量值」（`resetKeysAction` 1845 → `POST /admin/api/keys/reset`）：删掉 `config.json` 的 `auth` 段，把密钥控制权交还给环境变量（同时清空全部会话）。
 - 后端语义：优先级链 `config.auth`（控制台轮换）**>** 环境变量 **>** 首启生成；准入规则 8–128 位可见 ASCII、禁 `change-me`、两把不得相同，**管理密钥另需大小写字母+数字+特殊字符四样齐全**（v1.18.5 从"16 位"放宽并加了管理密钥复杂度门槛）；
   轮换即清管理面失败计数。细节与真链路验证见 `test/key-rotation-e2e.test.js`（75 项断言）与 docs/behavior.md「密钥轮换」。
 - 接入信息页的「轮换密钥」按钮从"只读步骤弹窗"改为 `go('keys')` 直达本页；`showKeyHelp` 降级为命令行备用路径（见 §5.8）。
@@ -466,19 +466,19 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ### 5.11 数据统计 `vStats`（生产独有，原型无此页，v1.18.11）
 
-来源 IP 态势页——回答"密钥是不是被人放进了中转站在转卖"这个问题（监控 → 数据统计，紧随调用日志之后；`NAV` 生产锚点 343，`zap` 图标复用 `IC` 现有的）。
+来源 IP 态势页——回答"密钥是不是被人放进了中转站在转卖"这个问题（监控 → 数据统计，紧随调用日志之后；`NAV` 生产锚点 359，`zap` 图标复用 `IC` 现有的）。
 
-- **位置与注册**：`NAV`（343）「监控」组、调用日志之后；`go()`（367）与 `render()`（165）**两张分发表都注册了** `stats:vStats`（生产锚点 `vStats` 1297）。
-- **数据源唯一**：`GET /admin/api/stats`，随 `loadAll()`（141）一起拉、**单独 `.catch(()=>null)` 兜底**（端点挂了或旧版网关显示「统计端点不可达」，不白屏、不拖垮整页）；`adapt()` 把它放进 `DATA.stats`。手动刷新按钮走 `refreshStats()`（1404，只拉 stats 一条并重绘）。
+- **位置与注册**：`NAV`（359）「监控」组、调用日志之后；`go()`（383）与 `render()`（180）**两张分发表都注册了** `stats:vStats`（生产锚点 `vStats` 1347）。
+- **数据源唯一**：`GET /admin/api/stats`，随 `loadAll()`（143）一起拉、**单独 `.catch(()=>null)` 兜底**（端点挂了或旧版网关显示「统计端点不可达」，不白屏、不拖垮整页）；`adapt()` 把它放进 `DATA.stats`。手动刷新按钮走 `refreshStats()`（1454，只拉 stats 一条并重绘）。
 - **页面结构**（自上而下）：
   - **四张全局卡**（敲门总数 / token 输入+输出 / 全局峰值并发 vs 单来源峰值 / 封禁命中）——**全局峰值远高于任何单来源峰值 = 中转站在轮换出口**的指纹，四张卡的文案把这层对比写明了。
   - **封禁名单行**：每枚封禁 IP 一个 chip（已封禁标记 + 解封 × 按钮，`data-act="unban-ip" data-t="<ip>"`，`confirm()` 两步确认）。
-  - **per-IP 表**：IP / 敲门数（含被 401/429 拒掉的——刷鉴权也是指纹）/ token / 模型数 / 并发峰值 / 会话估计（**上限 512 饱和后显示 `≥512`**，不下发裸数字）/ 客户端标签（多个 chip）/ 24 小时 sparkline。**行点击开 `openIpStats`（1371）详情抽屉**（行 `.clickable`，`tr.onclick` 直挂，`vLogs` 的先例）。**v1.18.12 版式**：表走 `.st-fixed` + 9 列 `colgroup` 定量列宽；表头与数值列 `.t-c` 居中（KPI 四卡 `.st-kpi` 内容居中、占位符「—」走 `.t-c-ph`，真名左对齐——见 §4.12）。
+  - **per-IP 表**：IP / 敲门数（含被 401/429 拒掉的——刷鉴权也是指纹）/ token / 模型数 / 并发峰值 / 会话估计（**上限 512 饱和后显示 `≥512`**，不下发裸数字）/ 客户端标签（多个 chip）/ 24 小时 sparkline。**行点击开 `openIpStats`（1421）详情抽屉**（行 `.clickable`，`tr.onclick` 直挂，`vLogs` 的先例）。**v1.18.12 版式**：表走 `.st-fixed` + 9 列 `colgroup` 定量列宽；表头与数值列 `.t-c` 居中（KPI 四卡 `.st-kpi` 内容居中、占位符「—」走 `.t-c-ph`，真名左对齐——见 §4.12）。
   - **按模型聚合卡**：全局视角哪几个模型在被谁打。
   - trustedProxy 模式显示「反代采信：x.x.x.x」条（直连模式不显示）。
 - **`openIpStats(ip)` 详情抽屉**：per-IP 键值（敲门 / 封禁命中 / token / 会话 / 首末见）+ 客户端标签 chips 带计数 + 模型 chips 带计数 + **24 小时分布面积图**（`areaChart` 复用，本地时区整点桶）+ 底部**封禁/解封按钮**（未封禁 IP 显示「封禁该来源」，已封禁显示「解封该来源」；`confirm()` 两步确认——`clearUsage` 的先例，不用 armed 状态）。
-- **客户端过滤 `stFilter`（1295，模块级、跨页保留）**：调用日志客户端列跳进来（或统计页内点 chip）时只留匹配来源；**v1.18.13 起从调用日志跳进来还会直接弹开最活跃匹配来源的抽屉**（`ips` 按敲门数降序 → `hit[0]`，抽屉里的客户端标签 chips 带计数——"这个客户端属于哪个 IP、用了多少次"当场就有答案）；页头显示「客户端：X ✕」chip，✕ 清除（`data-act="clear-st-filter"`）。无匹配时空态文案点明是"该客户端"的空态（区别于全网关刚清零），**且不误弹任何抽屉**。
-- **封禁/解封动作**：`banIp`（1407）/`unbanIp`（1411）走 `POST /admin/api/bans` / `DELETE /admin/api/bans/{ip}`，成功后 `refreshStats()`；按钮一律 `data-act` + `data-t`（IP 经服务端字面量校验，渲染仍 `esc()`）。
+- **客户端过滤 `stFilter`（1345，模块级、跨页保留）**：调用日志客户端列跳进来（或统计页内点 chip）时只留匹配来源；**v1.18.13 起从调用日志跳进来还会直接弹开最活跃匹配来源的抽屉**（`ips` 按敲门数降序 → `hit[0]`，抽屉里的客户端标签 chips 带计数——"这个客户端属于哪个 IP、用了多少次"当场就有答案）；页头显示「客户端：X ✕」chip，✕ 清除（`data-act="clear-st-filter"`）。无匹配时空态文案点明是"该客户端"的空态（区别于全网关刚清零），**且不误弹任何抽屉**。
+- **封禁/解封动作**：`banIp`（1457）/`unbanIp`（1461）走 `POST /admin/api/bans` / `DELETE /admin/api/bans/{ip}`，成功后 `refreshStats()`；按钮一律 `data-act` + `data-t`（IP 经服务端字面量校验，渲染仍 `esc()`）。
 - **转义与安全**：客户端标签是外部可控值（UA 截断，不消毒）→ 一律 `esc()`；IP 是服务端校验过的字面量，仍照 `esc()` 纪律过一遍。
 - **后端语义**：统计**内存态**（重启清零、留存有界：IP 512 / 会话 512 / 标签 8 / 模型 64）；封禁**只拦客户端面**（管理面/控制台/健康检查永远可达——解封按钮永远不会把自己锁在门外）；`X-Forwarded-For` 只在 `config.security.trustedProxy` 登记的来源上采信第一跳。详见 docs/behavior.md「来源 IP 态势统计与封禁」与 `test/ip-stats-ban-e2e.test.js`（62 项）。
 - **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
@@ -487,7 +487,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ## 6. 交互流程
 
-### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1834）
+### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1815）
 
 ```
 openChannelForm()        新增：清空表单，协议默认 openai，权重默认 0
@@ -521,14 +521,14 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 - 面板 `.probe-panel`：搜索框 + 可滚动列表（`max-height:212px`）+ 底部计数与批量按钮
 - 已存在的别名行标 `.have`（半透明 + 不可勾选），避免重复添加
 - 支持**搜索过滤** `filterProbeRows`、**全选** `probeSelectAll`、**清空** `probeClearSel`、**批量加入** `probeAddSelected`
-- **原型**：`probeUpstream`（1912）从 `PROBE_POOL`（1788，约 46 个模型）取数，贴近真实中转站规模
-- **生产**：`probeUpstream`（`build/app.js` 1742）真发 `POST /admin/api/probe`，
+- **原型**：`probeUpstream`（1910）从 `PROBE_POOL`（1783，约 46 个模型）取数，贴近真实中转站规模
+- **生产**：`probeUpstream`（`build/app.js` 2131）真发 `POST /admin/api/probe`，
   返回的是**该渠道上游真实的 `/v1/models` 清单**；搜索/全选/批量逻辑与原型同构。
   ⚠️ 注意 `server.js` 的探测协议白名单——曾漏 `workbuddy` 导致误报失败
 
 ### 6.2 导入（四类）
 
-`IMPORT_META`（2035）驱动同一套弹窗骨架，`mode` 决定形态：
+`IMPORT_META`（2033）驱动同一套弹窗骨架，`mode` 决定形态：
 
 | kind | 名称 | 形态 | 要点 |
 | --- | --- | --- | --- |
@@ -539,24 +539,24 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 - 粘贴式 `doImport`：分步状态动画（换令牌 → 拿账号 → 拉模型 → 建渠道）
 - 文件式 `importFiles`：逐个文件解析，逐行输出成功/失败结果与原因
-- 解析容错集中在 `parseCodexUnits`（2053）与 `parseGsSessionId`（2061），**改动务必保留多结构兼容**
+- 解析容错集中在 `parseCodexUnits`（2051）与 `parseGsSessionId`（2059），**改动务必保留多结构兼容**
 
-**生产侧（`build/app.js`）**：`IMPORT_META` 在 1569，弹窗骨架与原型同构，但**去掉了假步骤动画**，改为真实请求：
+**生产侧（`build/app.js`）**：`IMPORT_META` 在 2302，弹窗骨架与原型同构，但**去掉了假步骤动画**，改为真实请求：
 
 | kind | 生产函数 | 真实端点 |
 | --- | --- | --- |
-| `codex-rt` / `codex-json` | `importCodexRt(rt)` 2161 | `POST /admin/api/codex-import` |
-| `gs-session` / `gs-json` | `importGsSession(raw)` 2166 | `POST /admin/api/genspark-import` |
+| `codex-rt` / `codex-json` | `importCodexRt(rt)` 2370 | `POST /admin/api/codex-import` |
+| `gs-session` / `gs-json` | `importGsSession(raw)` 2375 | `POST /admin/api/genspark-import` |
 
-- `doImport` 2172 / `importFiles` 2192 都直接转发给上面两个函数，逐条回填真实结果
-- 原型的 `hash(s)`（2117，造假渠道 ID）**生产侧已删除**
+- `doImport` 2381 / `importFiles` 2401 都直接转发给上面两个函数，逐条回填真实结果
+- 原型的 `hash(s)`（2115，造假渠道 ID）**生产侧已删除**
 - 解析容错逻辑与原型一致（同样的 `parseCodexUnits` / `parseGsSessionId`），改一处要两处同步
 
-### 6.3 测试模型 `openTestModels(opts)`（2231）
+### 6.3 测试模型 `openTestModels(opts)`（2167）
 
 - 支持 `{channelId}` 预筛（从渠道行/抽屉进入时只显示该渠道的模型）
 - 分组多选列表 `.test-list`（分组头 sticky）+ 提示词输入
-- `runTests`（2295）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
+- `runTests`（2213）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
 - **停用渠道同样可测（v1.13）**：停用只是"不参与调度、不参与自动探测"，不代表不能手动打一发验证模型还活着。
   弹窗按 `DATA.channels` 里**全部**渠道构造（不再 `if(!c.on)continue`），停用渠道的分组头带「已停用」标签，
   且当列表里含停用渠道时补一行说明："手动测试照打，测通也不会因此启用它，且停用渠道不参与自动探测"。
@@ -577,9 +577,9 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
   （复用设计稿已有样式，不新增 CSS、不动行号偏移）。图标用已有的 `check` / `clock` / `warn`。
   汇总行同步改成"通过 a · 空回复 b · 失败 c（共 n 个 · 提示词「…」）"，不再只报一个 `x/y 通过`。
 
-- **原型**：`simTest`（2156）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
-  回复文案取自 `REPLIES`（2155）
-- **生产**：`runTests`（`build/app.js` 2097）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt}`），
+- **原型**：`simTest`（2154）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
+  回复文案取自 `REPLIES`（2153）
+- **生产**：`runTests`（`build/app.js` 2504）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt}`），
   逐条渲染真实 `latencyMs` / `promptTokens` / `completionTokens` / 上游回复或错误原文。
   原型的 `simTest` 与 `REPLIES` **生产侧已删除**；跑完会 `loadAll()` 刷新一次数据
 - ⚠️ **原型未同步（有意）**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`，
@@ -594,7 +594,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | 全局搜索回车 | 关键词写入 `chQ` 并跳转渠道页（原型 2261） |
 | 主题切换 | `#themeBtn`，写入 `localStorage['zzcs-theme']`，刷新保持 |
 | 点击菜单外部 | 关闭所有下拉菜单（原型 1772） |
-| 复制按钮 | 统一走 `copyText(t,btn)`（`build/app.js` 242）：安全上下文用 `navigator.clipboard`，否则回落到 `execCommand('copy')`；待复制文本一律经 `data-t="${esc(x)}"` 注入，不要用 `JSON.stringify` 直接拼进属性 |
+| 复制按钮 | 统一走 `copyText(t,btn)`（`build/app.js` 264）：安全上下文用 `navigator.clipboard`，否则回落到 `execCommand('copy')`；待复制文本一律经 `data-t="${esc(x)}"` 注入，不要用 `JSON.stringify` 直接拼进属性 |
 
 ---
 
@@ -639,6 +639,8 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 ---
 
 ## 8. 变更日志
+
+> **日期纪律（v1.18.33 起为强制）**：本节每条的日期必须等于**引入该版本的提交日期**（取法见代码地图 §1.2 同源的 git log --date=short --pretty='%h|%ad|%s'，按版本号匹配提交标题），**不要手填**。此前有 19 条日期比提交日期早 3–5 天，其中 v1.18.20 / v1.18.23 / v1.18.24 三条甚至写成了**未来日期**（10-05 / 10-07，而当天是 10-04），已于 v1.18.33 按提交日期统一校准——uthor date 与 committer date 逐条一致，所以这不是 rebase 造成的，是手填漂移。教训：**能由仓库自身事实推导的字段，就不要手写第二份。**
 
 ### 8.1 v0.1 原型定稿（2026-09-25，对象 `console-redesign.html`）
 
@@ -899,7 +901,7 @@ setInterval(()=>{
 
 ---
 
-### 8.12 v1.0.2 公开发布前的脱敏：原型演示数据里的真实渠道身份（2026-09-27，对象 `console-redesign.html` + `docs/*.md` + `test/console-state.test.js` + `.gitignore` + 产物 `console.html`）
+### 8.12 v1.0.2 公开发布前的脱敏：原型演示数据里的真实渠道身份（2026-09-26，对象 `console-redesign.html` + `docs/*.md` + `test/console-state.test.js` + `.gitignore` + 产物 `console.html`）
 
 **问题**（用户提出"项目推到 GitHub 给别人用，但不能把我已添加的渠道也传上去"）：
 仓库里除了运行时的 `config.json`（本来就被忽略）之外，还有**三处把真实渠道身份带进了版本控制**：
@@ -1198,7 +1200,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-### 8.19 v1.13.1 测试结果看得懂：每行写明模型，且不再把"空回复"当成功（2026-09-29，对象 `build/app.js` + 产物 `console.html` + 两份前端文档 + `AGENTS.md` + `README.md` + `test/console-state.test.js`）
+### 8.19 v1.13.1 测试结果看得懂：每行写明模型，且不再把"空回复"当成功（2026-09-28，对象 `build/app.js` + 产物 `console.html` + 两份前端文档 + `AGENTS.md` + `README.md` + `test/console-state.test.js`）
 
 **问题**（用户原话，渠道名已脱敏）："点击测试 [free]kimi-k3 @ `渠道名` … 我不知道哪个是成功的哪个是失败的。完全不知道测试的是哪个模型。"
 
@@ -1305,7 +1307,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-### 8.23 v1.18.1 空数据炸渲染：全新部署上「渠道管理 → 详情」点了没反应（2026-10-02，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `AGENTS.md`）
+### 8.23 v1.18.1 空数据炸渲染：全新部署上「渠道管理 → 详情」点了没反应（2026-09-28，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `AGENTS.md`）
 
 **问题**：别人把网关部署起来后，控制台**渠道管理点「详情」毫无反应**——不弹抽屉、不报错、不白屏，只有浏览器控制台里一行红字（用户不一定会去看）。有数据的机器上完全正常，所以本机一直没暴露。
 
@@ -1330,7 +1332,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **对「部署方」的结论**：这不是环境问题、不是浏览器缓存问题（`/console` 响应头是 `Cache-Control: no-store`，刷新即最新），而是**基于 `git` 的那份构建里就有的代码缺陷**——唯一解法是更新代码后重新构建并重启容器（`node build/build.js` + 重建镜像）。
 
-### 8.24 v1.18.2 运行期设置页归到「工具」组：Playground 与接入信息之间（2026-10-02，对象 `build/app.js` + 产物 `console.html` + 两份前端文档 + `README.md`）
+### 8.24 v1.18.2 运行期设置页归到「工具」组：Playground 与接入信息之间（2026-09-28，对象 `build/app.js` + 产物 `console.html` + 两份前端文档 + `README.md`）
 
 **问题**：v1.18 把「运行期设置」放进「资源」组（排在 渠道管理 / 聚合模型 / 自动权重 之后），但它是**网关运行态开关**、不是资源条目——归到「资源」语义不搭，用户在资源里找不到"设置"。
 
@@ -1338,7 +1340,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`node build/build.js` 通过、产物已含新顺序；`test/console-state.test.js` **146 项断言全绿**（§10 不受影响，其断言按 `id` 取元素、不依赖分组；另加一条位置守卫锁住"工具组 / Playground 与接入信息之间"）；全量 **28 文件 / 0 失败**。
 
-### 8.25 v1.18.3 第一批安全加固：渲染层统一转义 + 安全响应头（2026-10-02，对象 `build/app.js` + `server.js` + 产物 `console.html` + 新增 `test/security-headers-e2e.test.js`）
+### 8.25 v1.18.3 第一批安全加固：渲染层统一转义 + 安全响应头（2026-09-28，对象 `build/app.js` + `server.js` + 产物 `console.html` + 新增 `test/security-headers-e2e.test.js`）
 
 **问题（外部黑盒渗透测试报告 F-03 / F-05，本机逐条复核确认为真）**：控制台的转义是**不一致**的——同一张调用日志表里渠道名走了 `esc(l.n)`，模型名却是裸的 `${l.m}`；`toast()` 更直接把上游/服务端错误串拼进 `innerHTML`。而任何持有 `GATEWAY_KEY` 的调用方都能让字符串进入这些字段：实测传 `model=<任意串>`，该串会出现在 `/admin/api/usage` 的 `recent[].note`（上游把模型名回显进错误文案）与 `channels[].lastError`；**成功**请求则会以调用方请求的模型名落进 `recent[].model`（`server.js:5056` 等 20 余处记的都是 `displayModel`）。管理员打开「调用日志」页那段文本就被当 HTML 解析 ⇒ 一条「网关密钥 → 管理端脚本执行」的存储型 XSS 链。同时全站**一个安全响应头都没有**（无 `nosniff`、可被 iframe 嵌套、`Referrer-Policy` 缺失，而 `?key=` 登录方式会把管理密钥写进 Referer），`/admin/api/*` 与 `/healthz` 也没有 `Cache-Control: no-store`。
 
@@ -1350,7 +1352,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：新增 `test/security-headers-e2e.test.js`（**23 项断言**，真起临时网关）——源码级装配守卫（`build/app.js` 的 11 个"裸插值"必须一个不剩、`toast` 必须 `esc(msg)`、`data-t` 必须 `JSON.stringify`+`esc`、`SEC_HEADERS` 必须在 `createServer` 之前且 `setHeader` 在所有分支之前、CSP 不得偷偷加上）+ 真链路逐条核头（`/console`、`/healthz`、`/admin/api/status` 的 200 与 401、`/metrics`、`/v1/models`、404 全部带齐三个头；`/healthz` 与 `/admin/api/*` 带 `no-store`；页面壳零密钥明文；产物里能看到 `esc(l.m)`）。`node build/build.js` 通过（**163,938 字符 / 184,983 字节**，比改前 +324 字节）；全量回归 **29 文件 / 1251 项断言 / 0 失败**。
 
-### 8.26 v1.18.4 第二批安全加固：密钥默认不下发 + 按需揭示 + 管理面失败限流（2026-10-02，对象 `server.js` + `build/app.js` + 产物 `console.html` + `test/security-headers-e2e.test.js`）
+### 8.26 v1.18.4 第二批安全加固：密钥默认不下发 + 按需揭示 + 管理面失败限流（2026-09-29，对象 `server.js` + `build/app.js` + 产物 `console.html` + `test/security-headers-e2e.test.js`）
 
 **问题（外部黑盒渗透测试报告，本机复核确认为真）**：`/admin/api/status`、`/admin/api/channels`、`/admin/api/config` 直接把全部渠道的上游 `apiKey` 明文交给浏览器（本机实测 **32 条**），其中 `/admin/api/config` 还同时给出 `ADMIN_KEY` 与 `GATEWAY_KEY` 原文。报告原文照录：「**ADMIN_KEY 一旦泄漏，全部上游密钥一起泄漏**」。控制台自己是有掩码的（`chKey()`），但那是**前端自愿**——接口已经把原文发出去了，任何拿到 `ADMIN_KEY` 的人（或任何一次脚本注入 / 浏览器扩展 / 中间代理日志）都能直接读走全部上游额度凭证，控制台显示成什么样都不影响。
 
@@ -1369,7 +1371,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`node test/security-headers-e2e.test.js` 新增「第二批」一节——两处渠道列表只下发掩码而写盘构造保留原文、`POST` 留空即保持原密钥（含真链路往返）、`/admin/api/config` 不再交出 `adminKey` 且新增 `keysInsecure`、两个揭示端点仍需 admin、鉴权改 `timingSafeEqual`、9 处鉴权点全走 `authGate`、连续失败到阈值转 429 + `Retry-After` 且客户端面不受牵连；全量回归；8788 灰度实例实测。`node build/build.js` 通过（产物 **165,769 字符 / 187,743 字节**）。
 
-### 8.27 v1.18.5 密钥管理页：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY（2026-10-02，对象 `server.js` + `build/app.js` + 产物 `console.html` + 新增 `test/key-rotation-e2e.test.js`）
+### 8.27 v1.18.5 密钥管理页：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY（2026-09-29，对象 `server.js` + `build/app.js` + 产物 `console.html` + 新增 `test/key-rotation-e2e.test.js`）
 
 **问题（用户原话："就这个轮换密钥不能做成可编辑的？不能只是让你修改吧？"）**：`GATEWAY_KEY` / `ADMIN_KEY` 只来自环境变量（`.env` → compose → 进程），容器里改不了 `.env`，"轮换"只能手改文件 + 重开容器；控制台的「轮换密钥」按钮点开的只是一张**只读**步骤清单。
 
@@ -1385,7 +1387,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-### 8.28 v1.18.6 密钥值整行看不见：`.mask` 类名冲突（2026-10-02，对象 `console-redesign.html` + `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `README.md`）
+### 8.28 v1.18.6 密钥值整行看不见：`.mask` 类名冲突（2026-09-29，对象 `console-redesign.html` + `build/app.js` + 产物 `console.html` + `test/console-state.test.js` + 两份前端文档 + `README.md`）
 
 **问题（用户原话："页面新增了一个密钥管理，但是界面元素貌似不是很对……这行字所在的框感觉怪怪的，位置不对还是什么问题？"）**：密钥管理页两张卡里的「当前值」行**掩码值根本看不见**——行内只剩「当前值」与「显示 / 复制」两个按钮，中间空一块。同一个毛病也一直在**接入信息页的 `GATEWAY_KEY` 行**上（从设计稿就带着，长期没人报）。同一句反馈里还有更直观的另一半：状态横幅的 `div` 漏了 `card-bd`（`.card` 只有 `overflow:hidden`、没有 `padding`），内容直接塞 `.row` 会**贴着边框**。
 
@@ -1397,7 +1399,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-### 8.29 v1.18.6 第三批安全整改：CSP 响应头 + 管理面会话化（2026-10-02，对象 `server.js` + `build/app.js` + 产物 `console.html` + 新增 `test/admin-session-e2e.test.js` + `test/security-headers-e2e.test.js` / `test/console-state.test.js` / `test/key-rotation-e2e.test.js` 增章）
+### 8.29 v1.18.6 第三批安全整改：CSP 响应头 + 管理面会话化（2026-09-29，对象 `server.js` + `build/app.js` + 产物 `console.html` + 新增 `test/admin-session-e2e.test.js` + `test/security-headers-e2e.test.js` / `test/console-state.test.js` / `test/key-rotation-e2e.test.js` 增章）
 
 **问题（渗透测试报告第三批，两项同报）**：① 全站没有 CSP（Content-Security-Policy）——v1.18.3 的转义整改把"注入"堵住了，但纵深防御缺第二道墙；② `/console?key=…` 登录方式把管理密钥**写进浏览器历史**（渗透报告点名）；更结构性的问题是 v1.0–v1.18.5 的"密钥记忆"方案是 localStorage/sessionStorage **常驻**——任何 XSS 只要得手一次，读走的就不是一次性凭据而是**长效主密钥**（§8.7 第 3 行当年点名的正是这条链）。
 
@@ -1411,7 +1413,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **残留（明确记下）**：① 会话表在内存——网关重启全部掉线（重开控制台粘一次密钥即可，脚本走 Bearer 不受影响）；② 公网 TLS 部署需在反向代理层终止 TLS 并保持 `HttpOnly`/`SameSite` 语义（cookie 刻意无 `Secure`）；③ `'unsafe-inline'` 是单文件控制台的必要妥协，真正的兜底是 `connect-src 'self'`（外发被掐死）；将来若把控制台拆成外链资源，应同步收紧 CSP 并更新 `test/security-headers-e2e.test.js` 的逐字守卫。
 
-### 8.30 v1.18.7 第四批安全整改：彻底消灭内联事件处理器（2026-10-03，对象 `build/app.js` + `build/shell.html` + 产物 `console.html` + `test/security-headers-e2e.test.js` / `test/console-state.test.js` 增章）
+### 8.30 v1.18.7 第四批安全整改：彻底消灭内联事件处理器（2026-09-29，对象 `build/app.js` + `build/shell.html` + 产物 `console.html` + `test/security-headers-e2e.test.js` / `test/console-state.test.js` 增章）
 
 **问题**：v1.18.3 给所有内联 `onclick` 参数补了 `esc()`，堵死属性层逃逸；但仍有 16 处把渠道 ID/请求 ID 拼进 `onclick="fn('${id}')"` 的写法，依赖"ID 里不出现引号"这一现状（导入渠道理论上可构造），剩 JS 字符串层的理论风险。其余 50+ 处是零参数/静态参数内联属性——注入风险为零，但"内联事件属性"这个形态本身就该消灭：AGENTS §2 渲染层转义约束当年就预告了这次改造。
 
@@ -1423,7 +1425,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-### 8.31 v1.18.8 thinking 回放缓存落地 + 「运行期设置」第四张卡（2026-10-03，对象 `server.js` 回放块 + `build/app.js` 设置卡 + 产物 `console.html` + `test/thinking-replay-e2e.test.js` 新增 + 五份既有测试同步 + 全套文档）
+### 8.31 v1.18.8 thinking 回放缓存落地 + 「运行期设置」第四张卡（2026-09-29，对象 `server.js` 回放块 + `build/app.js` 设置卡 + 产物 `console.html` + `test/thinking-replay-e2e.test.js` 新增 + 五份既有测试同步 + 全套文档）
 
 **背景（三次决策）**：v1.17 只落设计稿（"往用户请求里回注历史内容"风险先行）；v1.18 前置验证（`test/thinking-fidelity.test.js`）发现跨协议路径**产不出** thinking 块、400 不可达，判定"现有实现下无收益"不实现；v1.18.8 用户拍板——项目已开源，**会弄丢 `signature` 的客户端是真实受益人群**（同协议直通上，部分框架重序列化时丢掉不认识的字段，上游按规矩 400）。设计稿随实现改写为 as-built 记录（[`thinking-replay-design.md`](thinking-replay-design.md) §9 第三次决策）。
 
@@ -1435,7 +1437,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **纪律（AGENTS §2 已同步为硬约束）**：thinking 回放六条配套纪律（只回放真签过的、四元键不跨、没坏不碰、4xx 作废、默认关、学习走旁路）；改回放路径后必跑 `test/thinking-replay-e2e.test.js` 与 `test/thinking-fidelity.test.js`。
 
-### 8.32 v1.18.11 数据统计页 + 调用日志客户端列 + 来源 IP 封禁（2026-10-04，对象 `server.js` 统计块 + `build/app.js` 统计页 + 产物 `console.html` + 新增 `test/ip-stats-ban-e2e.test.js` + `test/console-state.test.js` §13 增章 + 全套文档）
+### 8.32 v1.18.11 数据统计页 + 调用日志客户端列 + 来源 IP 封禁（2026-09-29，对象 `server.js` 统计块 + `build/app.js` 统计页 + 产物 `console.html` + 新增 `test/ip-stats-ban-e2e.test.js` + `test/console-state.test.js` §13 增章 + 全套文档）
 
 **问题**：密钥被人放进"中转站"转卖时**看不见**——调用日志只有请求级记录，看不出"哪个来源 IP 在以多大频率、多大并发、多少个会话在打"；就算看出来了，也没有任何外科手术手段（全局改密钥伤所有正常客户端，限流是全局的连坐）。
 
@@ -1458,7 +1460,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **纪律（AGENTS §2 已同步为硬约束）**：来源 IP 态势与封禁六条配套纪律（只拦客户端面、单漏斗、persistConfig 白名单含 security、内存态有界 + trustedProxy 采信门槛、settle 同路径、UA 标签不进控制逻辑）；改统计/封禁/trustedProxy 采信路径后必跑 `test/ip-stats-ban-e2e.test.js`，改统计页渲染后加跑 `test/console-state.test.js`（§13 一节）。
 
-### 8.33 v1.18.12 数据统计页布局整改：KPI 居中 / 列宽定量 / 占位符「—」居中（2026-10-04，对象 `build/app.js` + `build/extra.css` + `console-redesign.html` + 产物 `console.html` + `test/console-state.test.js`；**本条为补记——原始提交 38c80b8 漏同步本文档，v1.18.13 轮补上**）
+### 8.33 v1.18.12 数据统计页布局整改：KPI 居中 / 列宽定量 / 占位符「—」居中（2026-09-29，对象 `build/app.js` + `build/extra.css` + `console-redesign.html` + 产物 `console.html` + `test/console-state.test.js`；**本条为补记——原始提交 38c80b8 漏同步本文档，v1.18.13 轮补上**）
 
 **问题**：v1.18.11 的统计页是照渠道表格的老套路写的——KPI 数字走内联 `font-size:22px`、来源明细表用 auto 列宽、占位符「—」和真实值混在一起左对齐。用户过目后拍板整改（基于确认过的原型 `_st_preview.html`）：**数字是视觉锚点要居中、列宽要定量、占位符要和真名一眼分得开**。
 
@@ -1468,7 +1470,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`test/console-state.test.js` §13 增**布局守卫**（198 → **208 项**：KPI 类名计数、colgroup 9 列、表头 `t-c` 七列、数值 `t-r` 清零、`.t-c-ph` 只套占位符、产物 CSS 存在性 + 旧写法对照组）→ 全绿；全量 33 文件 / 1645 断言 / 0 失败。
 
-### 8.34 v1.18.13 客户端 chip 跳转直开抽屉 + 索引错位修复（2026-10-04，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` §13 + 两份前端文档 + tests/AGENTS/README 计数）
+### 8.34 v1.18.13 客户端 chip 跳转直开抽屉 + 索引错位修复（2026-09-29，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` §13 + 两份前端文档 + tests/AGENTS/README 计数）
 
 **问题**：用户报「调用日志我点击客户端跳转到了数据统计，但是我如何知道这个客户端是属于哪个 IP 的？能不能点击后跳转过去后直接打开那个抽屉框？」——跳过去只看到过滤后的列表，还要自己再点一次行才知道详情。
 
@@ -1480,7 +1482,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **纪律（随本轮补记 8.33 的教训）**：`$$(…)` 的 NodeList 索引**不等于** `rows` 索引——有条件渲染（无标签行不出 chip）时按 `rows[i]` 取值必错位，点击参数一律走元素自带 `data-*` 属性（已写进 `docs/frontend-code-map.md` §0.1 历史教训）。
 
-### 8.35 v1.18.17 错误显示统一口 errMsgOf + 登录门 trim（2026-10-04，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` 新增 §17 + README 方式四钥匙名修正 + 三份计数文档）
+### 8.35 v1.18.17 错误显示统一口 errMsgOf + 登录门 trim（2026-09-30，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` 新增 §17 + README 方式四钥匙名修正 + 三份计数文档）
 
 **问题**（公网部署 wurong.us.ci 实测抓到）：用户报「拿到了密钥还是提示 [object Object]，没有进去控制台」——登录门失败提示只显示 `[object Object]`，真实失败原因被吞。
 
@@ -1490,7 +1492,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`test/console-state.test.js` 新增 §17（errMsgOf 真值表 + api()/登录门两处装配守卫 + 旧裸拼模式全仓清零 + trim 守卫；215 → **221 项**）；全量 **34 文件 · 1693 断言 · 0 失败**。
 
-### 8.36 v1.18.19 「从上游探测」钥匙 trim（2026-10-05，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` 新增 §18）
+### 8.36 v1.18.19 「从上游探测」钥匙 trim（2026-10-02，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` 新增 §18）
 
 **问题**（用户报「所有渠道我编辑点击从上游获取是错误的……key 你是省略了什么吗？和我保存进去的不一致？」——上游 new-api 回 `HTTP 401 {"error":{"message":"Invalid token…","type":"new_api_error"}}`）。
 
@@ -1500,7 +1502,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **验证**：`test/console-state.test.js` 新增 §18（trim 装配守卫 + 旧写法清零 + 保存路径不回退 + `probeUpstream` 结构守卫；221 → **225 项**）；全量 **34 文件 · 1700 断言 · 0 失败**。
 
-### 8.37 v1.18.20 渠道钥匙框的浏览器自动填充闸门（2026-10-05，对象 `build/app.js` + `server.js` POST /admin/api/channels + 产物 `console.html`）
+### 8.37 v1.18.20 渠道钥匙框的浏览器自动填充闸门（2026-10-02，对象 `build/app.js` + `server.js` POST /admin/api/channels + 产物 `console.html`）
 
 **问题**（用户报「我把 key 复制进去后，点击保存渠道，然后关闭，再点编辑-明文显示，显示的为什么是登录控制台的 key？」）。
 
@@ -1516,7 +1518,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-### 8.38 v1.18.23 两处搜索框清空对称（2026-10-07，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js`）
+### 8.38 v1.18.23 两处搜索框清空对称（2026-10-03，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js`）
 
 **问题**（用户报 + 截图：「这两个地方，在任一个位置输入了，单独删右上角搜索框的内容无法退出搜索。但是单独删除左面的筛选可以退出搜索」——右上角全局搜索（`#globalSearch`）与渠道页左侧筛选框（`#chQ`）都显示着 `11`，删掉右上角那段文字后渠道列表**仍被过滤**）。
 
@@ -1533,7 +1535,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-### 8.39 v1.18.24 移除右上角全局搜索框（2026-10-07，对象 `build/shell.html` + `build/app.js` + `console-redesign.html` + `build/build.js` + 产物 `console.html` + `test/console-state.test.js`）
+### 8.39 v1.18.24 移除右上角全局搜索框（2026-10-03，对象 `build/shell.html` + `build/app.js` + `console-redesign.html` + `build/build.js` + 产物 `console.html` + `test/console-state.test.js`）
 
 **问题**（用户问「右上角的那个搜索只搜索渠道的吧？其他页右上角也是一样的，回车会跳转到渠道管理。但是这样的搜索有必要存在吗？渠道搜索本身就有一个搜索了。」）。
 
