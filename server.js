@@ -5120,19 +5120,28 @@ async function tryChannel(opts) {
   const target = buildOutgoingUrl(ch, candidate, isStream);
   const headers = applyCustomHeaders(buildOutgoingHeaders(ch), ch.def);
   const bodyStr = JSON.stringify(outgoing);
-  const timeoutMs = ch.def.timeoutMs || 120_000;
+  // v1.18.30：每渠道总超时 120s → 90s。配合首字超时（30s/60s），让"挂死的渠道"在 30 秒内被踢掉，
+  //   而不是把客户端拖到 120 秒超时（现场 glm-5.3 两发各等了 120 秒）。真需要更长的渠道可设 `timeoutMs`。
+  const timeoutMs = ch.def.timeoutMs || 90_000;
 
   const t0 = Date.now();
   let resp;
   let usedFallback = false;
   let respBody = null;
 
+  // v1.18.30 ★ 首字/响应头死线（现场 glm-5.3「等两分钟才失败」的真根因）：
+  //   旧逻辑只在**拿到响应头之后**起首字计时器 → 一家渠道若**连响应头都不回**（挂死），
+  //   首字超时永远不触发，只能等"每渠道总超时"（旧 120s、收紧后 90s）→ 客户端（DSH 120s）先超时，
+  //   用户看到"等两分钟然后失败"，而不是"30 秒内自动换了一家成功"。
+  //   现在把 fetch 本身也纳入这条死线：30s（有其它候选）/ 60s（末位），渠道可用 firstChunkTimeoutMs 覆盖。
+  const FIRST_BYTE_MS = ch.def.firstChunkTimeoutMs || (opts.hasMoreCandidates ? 30_000 : 60_000);
+
   if (ch.def.proxy) {
     // PT02：渠道配了代理 → 全程 curl -x（undici fetch 不支持代理）。响应全量缓冲，
     // 流式请求走下方 usedFallback 分支整体重放（与 CF 回退同款语义，首字节延迟=上游总耗时）
     const out = await wbCurlRequest('POST', target, headers, bodyStr, timeoutMs, ch.def.proxy);
     if (out.error || !out.body) {
-      recordFailure(ch, 'proxy: ' + (out.error || 'empty body'), undefined, { model: failModel });
+      recordFailure(ch, 'proxy: ' + (out.error || 'empty body'), undefined, { model: failModel, statsCtx: opts.statsCtx });
       return `proxy: ${out.error || 'empty body'}`;
     }
     usedFallback = true;
@@ -5148,11 +5157,20 @@ async function tryChannel(opts) {
   } else try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), timeoutMs);
+    // v1.18.30：响应头死线（见上面 FIRST_BYTE_MS 的注释）。刻意不写成 Promise.race 包住出站调用——
+    //   出站必须保持直接的 await 调用形态（test/outbound-http-client.test.js 的结构守卫按调用点计数，
+    //   也让人一眼看出"所有出站都走同一个客户端"；注释里别写出那个被计数的字面量，否则它会被数进去）。
+    //   这里用标志位把 abort 抛出的 AbortError 改写为真原因。
+    let headTimedOut = false;
+    const headTimer = setTimeout(() => { headTimedOut = true; try { ctrl.abort(); } catch { /* 已断开 */ } }, FIRST_BYTE_MS);
     try {
       resp = await zzFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
-    } finally { clearTimeout(to); }
+    } catch (err) {
+      if (headTimedOut) throw new Error(`first byte timeout: 上游 ${FIRST_BYTE_MS / 1000 | 0}s 未回响应头（挂起/排队）`);
+      throw err;
+    } finally { clearTimeout(to); clearTimeout(headTimer); }
   } catch (err) {
-    recordFailure(ch, String(err && err.message || err), undefined, { model: failModel });
+    recordFailure(ch, String(err && err.message || err), undefined, { model: failModel, statsCtx: opts.statsCtx });
     return `network: ${err.message || err}`;
   }
 
@@ -5188,6 +5206,7 @@ async function tryChannel(opts) {
     recordFailure(ch, `HTTP ${resp.status}: ${String(text).slice(0, 200)}`, failureKindFromStatus(resp.status), {
       retryAfterMs: retryAfterMsFromHeaders(resp.headers),
       model: failModel,
+      statsCtx: opts.statsCtx,
     });
     // 401/402/403/404/408/429 是渠道侧问题（鉴权/余额/该渠道没有此模型/超时/限频，跨渠道各不相同）→ 切下一候选兜底；
     // 其余 4xx（400 参数错等）**只在没有后续候选时**才原样透传 ——
@@ -5243,7 +5262,12 @@ async function tryChannel(opts) {
     //    · 已是最后候选 → 等 300s（与 DSH 的 idle 超时一致）。上游"慢但能在客户端超时前出数据"
     //      的请求仍能成功，失败也由客户端自身的重试机制接管（保持旧行为）。
     //    在 writeHead 之前等首块，此时响应未提交，切候选仍可行。
-    const FIRST_CHUNK_MS = ch.def.firstChunkTimeoutMs || (opts.hasMoreCandidates ? 90_000 : 300_000);
+    // v1.18.30：首字超时从 90s/300s 收到 30s/60s。
+    //   现场：glm-5.3 有渠道**完全不出字节**（挂死），旧值下网关要等 90 秒才换家，客户端（DSH 120s）先超时 →
+    //   用户看到的是"等两分钟后失败"，而不是"自动换了一家成功"。30 秒足够覆盖正常的慢思考首字节
+    //   （实测成功的发次首字节都在 1~6 秒内），真遇到"思考很久才吐第一个字节"的渠道可单独设
+    //   `firstChunkTimeoutMs` 放宽（末位候选仍给 60s，因为没下家可换，多等一点更划算）。
+    const FIRST_CHUNK_MS = FIRST_BYTE_MS;   // v1.18.30：与响应头死线共用同一个值，别再各写一份公式
     let firstVal = null;
     let firstTimer = null;
     try {
@@ -5256,7 +5280,7 @@ async function tryChannel(opts) {
     } catch (err) {
       clearTimeout(firstTimer);
       try { reader.cancel(); } catch {}
-      recordFailure(ch, `stream idle: 上游 ${FIRST_CHUNK_MS / 1000 | 0}s 未出首字节（挂起/排队）`, undefined, { model: failModel });
+      recordFailure(ch, `stream idle: 上游 ${FIRST_CHUNK_MS / 1000 | 0}s 未出首字节（挂起/排队）`, undefined, { model: failModel, statsCtx: opts.statsCtx });
       return `stream idle ${FIRST_CHUNK_MS}ms`;
     }
     // v1.18.21 懒提交（预检期可切换的前提）：writeHead/开场事件推迟到"确实要写出第一段字节"时。
@@ -5490,7 +5514,7 @@ async function tryChannel(opts) {
     //   `sawStreamContent` 由 noteStreamLine 在**正文/工具调用/思考**任一帧上置位，故"真·空流"才命中。
     if (!passthrough && !nativeStream && streamError === null && !sawStreamContent && !headCommitted) {
       try { reader.cancel(); } catch {}
-      recordFailure(ch, 'stream empty: 上游 200 但零正文（无 error 帧、无内容帧；额度耗尽/过载常见）', undefined, { model: failModel });
+      recordFailure(ch, 'stream empty: 上游 200 但零正文（无 error 帧、无内容帧；额度耗尽/过载常见）', undefined, { model: failModel, statsCtx: opts.statsCtx });
       try {
         recordUsage({
           model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
@@ -5521,7 +5545,7 @@ async function tryChannel(opts) {
         && String(streamFinish).toLowerCase() === 'length' && decentBudget) {
       try { reader.cancel(); } catch {}
       const reasonChars = streamReasonText.length;
-      recordFailure(ch, `reasoning-only: 上游 finish=length 但可见正文为 0（思考 ${reasonChars} 字符把预算吃光）`, undefined, { model: failModel });
+      recordFailure(ch, `reasoning-only: 上游 finish=length 但可见正文为 0（思考 ${reasonChars} 字符把预算吃光）`, undefined, { model: failModel, statsCtx: opts.statsCtx });
       try {
         recordUsage({
           model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
@@ -5539,7 +5563,7 @@ async function tryChannel(opts) {
     //   记 ok:false + 渠道失败，备注写清是"思考吃光"。控制台那行因此不会再显示成一次正常回答。
     if (!passthrough && !nativeStream && streamError === null && !sawVisibleText && !sawToolCall
         && String(streamFinish).toLowerCase() === 'length' && decentBudget && headCommitted) {
-      recordFailure(ch, `reasoning-only: 上游 finish=length 但可见正文为 0（思考 ${streamReasonText.length} 字符把预算吃光；响应已提交，无法换家）`, undefined, { model: failModel });
+      recordFailure(ch, `reasoning-only: 上游 finish=length 但可见正文为 0（思考 ${streamReasonText.length} 字符把预算吃光；响应已提交，无法换家）`, undefined, { model: failModel, statsCtx: opts.statsCtx });
       try {
         recordUsage({
           model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
@@ -5573,7 +5597,7 @@ async function tryChannel(opts) {
     // v1.18.21 已提交后的流内错误帧：客户端已看到部分输出，流如实收尾，但账本不许再说谎——
     //   ok:false + 渠道记失败（连败会进冷却，这家确实在出错）
     if (streamError !== null) {
-      recordFailure(ch, 'stream error frame: ' + streamError.slice(0, 200), undefined, { model: failModel });
+      recordFailure(ch, 'stream error frame: ' + streamError.slice(0, 200), undefined, { model: failModel, statsCtx: opts.statsCtx });
       recordUsage({
         model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
         inputTokens: estimateTokens(messagesText(body && body.messages)),
@@ -5673,7 +5697,7 @@ async function tryChannel(opts) {
   } catch (err) {
     // 渠道处理器内部异常兜底：不再让单个渠道的 bug 打崩整个网关进程
     console.error('[tryChannel] internal error:', err);
-    try { recordFailure(ch, 'internal: ' + String(err && err.message || err).slice(0, 200), undefined, { model: failModel }); } catch {}
+    try { recordFailure(ch, 'internal: ' + String(err && err.message || err).slice(0, 200), undefined, { model: failModel, statsCtx: opts.statsCtx }); } catch {}
     if (res.headersSent || res.writableEnded) { try { res.end(); } catch {} return 'fatal_client'; }
     return 'internal: ' + (err && err.message || err);
   }
@@ -6862,9 +6886,11 @@ function recordFailure(ch, msg, kind, opts) {
   // 失败也进用量统计（ok:false），便于排查"哪个渠道在挂"。
   // v1.18.26：带上请求的模型名（o.model，由 tryChannel 的 failModel 提供）。此前写死 '—'，
   // 于是控制台失败行的「模型」列几乎总是空的（实测 103/117 = 88%）——用户看不出失败发生在哪个模型上。
-  // 探测/后台等**没有请求上下文**的调用仍落 '—'：那是"本就没有模型"，不是"我们没记"。
+  // v1.18.30：再带上 `statsCtx`（客户端标签）——此前失败行永远没有 `client` 字段，导致"某客户端的失败"
+  // 无法与"别的客户端/测试脚本的失败"区分（我自己就因此把测试脚本的失败误当成用户 DSH 的失败）。
+  // 探测/后台等**没有请求上下文**的调用仍落 '—' / 无 client：那是"本就没有"，不是"我们没记"。
   try {
-    recordUsage({ model: (o.model && String(o.model)) || '—', channelId: ch.def.id, kind: 'error', inputTokens: 0, outputTokens: 0, ok: false, latencyMs: 0, note: String(msg).slice(0, 200) });
+    recordUsage({ model: (o.model && String(o.model)) || '—', channelId: ch.def.id, kind: 'error', inputTokens: 0, outputTokens: 0, ok: false, latencyMs: 0, note: String(msg).slice(0, 200), statsCtx: o.statsCtx });
   } catch { /* ignore */ }
 }
 
