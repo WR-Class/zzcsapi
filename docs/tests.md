@@ -1,4 +1,4 @@
-# 测试清单（35 个文件 · 1721 项断言，零依赖）
+# 测试清单（35 个文件 · 1724 项断言，零依赖）
 
 > 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 35 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
@@ -30,7 +30,7 @@ node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
 node test/anthropic-tools-e2e.test.js     # 30 项断言：两轮工具回合（要工具 → 回传结果）真 HTTP 链路
 node test/streaming-e2e.test.js           # 19 项断言：三协议流式（首块不丢字节 / 事件序列 / 收尾兜底）
-node test/stream-error-frame-e2e.test.js  # 16 项断言（v1.18.21）：流内错误帧——上游 200 但 SSE 里塞 data:{"error":…}（超长上下文打到上限小的渠道就是这么回，现场 req_mur6vapv：66,991 进 / 0 出，网关却记"成功"）。真起「假上游 + 临时网关」四条：①预检期错误帧（正文未出、响应未提交）→ 取消读取、切下一候选拿到正文、**不**记渠道失败但用量记 ok:false；②已提交后的错误帧（正文已流出）→ 流如实转发、`ok:false` 记账、渠道 lastError 带 `stream error frame`（连败进冷却）；③非流式 200+error 报文同样切候选（旧写法记成功还回 200）；④对照组：正常流逐字节透传零改动、只记一条 ok:true
+node test/stream-error-frame-e2e.test.js  # 19 项断言（v1.18.21）：流内错误帧——上游 200 但 SSE 里塞 data:{"error":…}（超长上下文打到上限小的渠道就是这么回，现场 req_mur6vapv：66,991 进 / 0 出，网关却记"成功"）。真起「假上游 + 临时网关」四条：①预检期错误帧（正文未出、响应未提交）→ 取消读取、切下一候选拿到正文、**不**记渠道失败但用量记 ok:false；②已提交后的错误帧（正文已流出）→ 流如实转发、`ok:false` 记账、渠道 lastError 带 `stream error frame`（连败进冷却）；③非流式 200+error 报文同样切候选（旧写法记成功还回 200）；④对照组：正常流逐字节透传零改动、只记一条 ok:true
 node test/weighted-rr.test.js             # 31 项断言：加权轮询算法（3:1→75/25、平滑性、老配置零影响对照）
 node test/weighted-rr-e2e.test.js         # 12 项断言：真 HTTP 数落点，验证实际分流比例与降级行为
 node test/native-channels.test.js         # 78 项断言：原生出站双向转换（请求/响应/流式状态机/URL 鉴权头/错误体不翻译）

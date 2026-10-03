@@ -5216,8 +5216,14 @@ async function tryChannel(opts) {
         outChunks.push(line + '\n');
       }
     };
-    const flushOut = () => {
+    const flushOut = (force) => {
       if (!outChunks.length) return;
+      // v1.18.21 预检期不提交：正文出现之前只扣着无害帧（role 开场帧 / usage / ping），
+      //   等真正的正文或错误帧。实测 onyxaxis 是"先单独发 role 帧、紧跟一帧 error"的分帧——
+      //   一看到 role 帧就提交响应的话，错误帧再来就晚了（切换窗口关闭，客户端只能看到错误）。
+      //   role 帧对客户端没有信息量（客户端等的是正文），扣着不改变它感知到的首字延迟。
+      //   force=true 用于流正常结束时的收尾冲洗（空回复也要把已扣下的帧发出去）。
+      if (!force && !sawStreamContent && streamError === null && !headCommitted) return;
       ensureHead();
       res.write(outChunks.join(''));
       outChunks = [];
@@ -5230,7 +5236,7 @@ async function tryChannel(opts) {
         handleLine(line);
       }
       if (final && buf.length) { handleLine(buf); buf = ''; }
-      flushOut();
+      flushOut(false);
     };
     // ★ 直通（v1.16）：原始字节直接转给客户端，不再逐行重组 ——
     //   因此 CRLF/分帧边界/空行与上游**逐字节一致**（旧写法把 CRLF 归一成 LF，还把每帧拆成两次写）。
@@ -5356,6 +5362,7 @@ async function tryChannel(opts) {
       replayLearn(opts.replayKey, candidate.channelId, opts.requestedModel, replayScan.done);
     }
     ensureHead();   // 空流也要把 200 头发出去（客户端不能挂在等头上）
+    flushOut(true); // 收尾冲洗：预检期扣下的无害帧（空回复等）在此发出
     res.end();
     // v1.18.21 已提交后的流内错误帧：客户端已看到部分输出，流如实收尾，但账本不许再说谎——
     //   ok:false + 渠道记失败（连败会进冷却，这家确实在出错）

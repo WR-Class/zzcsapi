@@ -10,6 +10,8 @@
  *
  * 覆盖：
  *   · 预检期错误帧（正文未出、响应未提交）→ 取消读取、切下一候选、不记渠道失败；
+ *     · 含真机分帧形态：onyxaxis 实测"先单独发 role 帧、隔一会儿才发 error"——role 帧对客户端没有
+ *       信息量，预检期只扣着不提交，故错误帧到来时切换窗口仍开着；
  *   · 已提交后的错误帧（正文已流出一部分）→ 如实收尾、ok:false 记账、渠道记失败；
  *   · 非流式直通错误体（200 + {"error":…}）→ 切下一候选，不再记成功；
  *   · 对照组：正常流与正常非流式行为零改动（字节级透传仍成立）。
@@ -58,10 +60,19 @@ const upstream = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ data: [{ id: 'mock' }] }));
     }
-    if (mode === 'err-frame-first') {           // 预检期错误帧：role + error + DONE，零正文
+    if (mode === 'err-frame-first') {           // 预检期错误帧：role + error + DONE，零正文（一次 write）
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(roleChunk + errChunk('The input exceeds the supported context size. Compact the conversation and retry.') + 'data: [DONE]\n\n');
       return res.end();
+    }
+    if (mode === 'err-frame-split') {           // ★ 真机分帧（onyxaxis 实测）：role 帧先单独发出去，隔一会儿才发 error
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(roleChunk);
+      setTimeout(() => {
+        res.write(errChunk('The input exceeds the supported context size. Compact the conversation and retry.') + 'data: [DONE]\n\n');
+        res.end();
+      }, 60);
+      return;
     }
     if (mode === 'err-frame-late') {            // 已提交后错误帧：先出正文再 error + DONE
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -140,6 +151,27 @@ async function main() {
       const badRow = recent.find((x) => x.channelId === 'bad');
       check('A bad 渠道没有"成功"记账（不再谎报）', !badOk, { recent: recent.slice(0, 4) });
       check('A bad 渠道如实记 ok:false', badRow && badRow.ok === false, { badRow });
+    } finally { gw.kill('SIGKILL'); }
+  }
+
+  /* ══ 场景 A2：真机分帧（role 帧与 error 帧分两次写）→ 仍必须能切下一候选 ══ */
+  {
+    const gwPort = await freePort();
+    const cfgPath = path.join(TMP, 'a2.json');
+    fs.writeFileSync(cfgPath, JSON.stringify({
+      port: gwPort, health: { intervalSec: 3600, timeoutMs: 3000 },
+      channels: [
+        { id: 'bad', name: 'bad', protocol: 'openai', baseUrl: `http://127.0.0.1:${upPort}/v1`, apiKey: 'sk-bad', enabled: true, priority: 10, models: { mock: 'mock' }, headers: { 'x-mock-mode': 'err-frame-split' } },
+        { id: 'good', name: 'good', protocol: 'openai', baseUrl: `http://127.0.0.1:${upPort}/v1`, apiKey: 'sk-good', enabled: true, priority: 5, models: { mock: 'mock' } },
+      ],
+    }));
+    const gw = startGateway(cfgPath, gwPort);
+    try {
+      check('A2 网关启动', await waitUp(gwPort));
+      const r = await chat(gwPort, { model: 'mock', messages: [{ role: 'user', content: 'hi' }], stream: true });
+      const text = await r.text();
+      check('A2 分帧错误帧仍切到 good（正文出现前的 role 帧不提交响应）', r.status === 200 && text.includes('乙') && !text.includes('exceeds the supported context size'), { servedBy: r.headers.get('x-zzcsapi-channel'), head: text.slice(0, 160) });
+      check('A2 落在 good 渠道', r.headers.get('x-zzcsapi-channel') === 'good');
     } finally { gw.kill('SIGKILL'); }
   }
 
