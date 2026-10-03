@@ -1358,7 +1358,7 @@ function vChannels(v){
 
   <div class="card"><div class="card-bd tight tbl-wrap" id="chTable"></div></div>`;
   $$('#chTabs .tab',v).forEach(t=>t.onclick=()=>{chTab=t.dataset.t;$$('#chTabs .tab',v).forEach(x=>x.classList.remove('on'));t.classList.add('on');drawChTable()});
-  $('#chQ',v).oninput=e=>{chQ=e.target.value;drawChTable()};
+  $('#chQ',v).oninput=e=>{chQ=e.target.value;syncGlobalSearch(chQ);drawChTable()};
   drawChTable();
 }
 /* 自动权重页（v1.9）：回答"如果开了自动权重，同一个模型的候选会怎么分"。
@@ -3226,10 +3226,24 @@ function setTheme(t){
   $('#themeBtn').title=t==='dark'?'切换到浅色':'切换到深色';
 }
 $('#themeBtn').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+/* v1.18.23 两处搜索框共用一份状态（chQ），清空路径必须**对称**。
+   现场报告（2026-10-07 截图）：右上角搜索框输入后回车进入渠道搜索，之后单独删掉右上角的文字——
+   渠道列表仍被过滤，退不出搜索；而删左侧筛选框能退出。原因是两处绑的不是同一件事：
+   左侧 oninput 实时写回 chQ，右上角只在**回车**时写一次，删空时什么都不做。
+   现在：右上角删空 → 清 chQ、清左框、重绘当前页（退出搜索）；左侧删空 → 右上角同步清空
+   （避免"状态已退出、右上角还留着一串字"的显示与状态不一致）。
+   回车才生效的语义保持不变（正在输入、还没回车时不改列表）。 */
+function syncGlobalSearch(val){const el=$('#globalSearch');if(el&&el.value!==val)el.value=val;}
 $('#globalSearch').addEventListener('keydown',e=>{
   if(e.key==='Enter'){const q=e.target.value.trim();if(!q)return;chQ=q;go('channels');toast('已在渠道中搜索：'+q,'ok')}
 });
-
+$('#globalSearch').addEventListener('input',e=>{
+  if(e.target.value.trim()!=='')return;   // 有内容：仍然回车才生效（原语义不动）
+  if(chQ==='')return;                     // 本来就没在搜索，不必重绘
+  chQ='';
+  const box=$('#chQ');if(box)box.value='';
+  render();
+});
 /* ═════════════════════════ 事件委托：全站唯一事件入口（v1.18.7） ═════════════════════════
    内联事件属性（onclick=/onchange=/onkeydown=）已全量清零：动作进 data-act、参数走 data-*，
    document 上的委托监听统一分发——8 秒轮询整页重绘不用重挂；点击从目标向上找最近的 [data-act]，

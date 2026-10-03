@@ -1372,6 +1372,72 @@ function testKeyAutofill() {
   check('全仓 password 框无一裸奔（每个都带 new-password）', pw === 2 && guarded === 2, { pw, guarded });
 }
 
+/* ══ §20 两处搜索框的清空对称（v1.18.23） ══
+   现场报告（2026-10-07 截图）：右上角搜索框输入后回车进渠道搜索，之后**单独删掉右上角的文字**，
+   渠道列表仍被过滤、退不出搜索；删左侧筛选框却能退出。根因：左侧 oninput 实时写回 chQ，
+   右上角只在回车时写一次——两处共用一份状态，清空路径却不对称。
+   本节把产品里真实的那个块（syncGlobalSearch + 两个 globalSearch 监听）抠出来在桩 DOM 上真跑。 */
+function testSearchClear() {
+  G('20. 搜索框清空对称（v1.18.23：右上角删空也要退出搜索）');
+  const start = src.indexOf('function syncGlobalSearch');
+  const end = src.indexOf('/* ═════════════════════════ 事件委托', start);
+  if (start < 0 || end < 0) throw new Error('build/app.js 里找不到搜索框同步块（syncGlobalSearch / globalSearch 监听）');
+  const block = src.slice(start, end);
+
+  const els = { '#globalSearch': { value: '', listeners: {} }, '#chQ': { value: '' } };
+  for (const [k, el] of Object.entries(els)) {
+    el.addEventListener = (kind, fn) => { el.listeners[kind] = fn; };
+  }
+  const calls = [];
+  const stubs = {
+    go: (p) => calls.push(['go', p]),
+    toast: (m) => calls.push(['toast', m]),
+    render: () => calls.push(['render']),
+    drawChTable: () => calls.push(['drawChTable']),
+  };
+  const state = { chQ: '' };
+  const make = new Function('$', 'state', 'go', 'toast', 'render', 'drawChTable',
+    `let chQ=state.chQ;\n${block}\nreturn {sync:syncGlobalSearch,getChQ:()=>chQ};`);
+  const api = make((sel) => els[sel] || null, state, stubs.go, stubs.toast, stubs.render, stubs.drawChTable);
+  const Q = () => api.getChQ();
+
+  const g = els['#globalSearch'];
+  const fire = (el, kind, value, extra) => { el.value = value; el.listeners[kind]({ target: el, ...(extra || {}) }); };
+
+  /* ① 回车：原语义不变（写 chQ + 跳渠道页 + 提示） */
+  calls.length = 0;
+  fire(g, 'keydown', '11', { key: 'Enter' });
+  check('回车仍写 chQ 并跳渠道页（原语义不动）',
+    Q() === '11' && calls.some((c) => c[0] === 'go' && c[1] === 'channels'), { chQ: Q(), calls });
+
+  /* ② 右上角在输入中（未回车）不改列表 */
+  calls.length = 0;
+  fire(g, 'input', '113');
+  check('右上角正在输入（未回车）不动列表状态', Q() === '11' && !calls.some((c) => c[0] === 'render'), { chQ: Q() });
+
+  /* ③ ★ 右上角删空 → 退出搜索：清 chQ、清左框、重绘 */
+  calls.length = 0;
+  els['#chQ'].value = '11';
+  fire(g, 'input', '');
+  check('★ 右上角删空 → chQ 清空（退出搜索）', Q() === '', { chQ: Q() });
+  check('★ 右上角删空 → 左侧筛选框同步清空（显示与状态一致）', els['#chQ'].value === '', { left: els['#chQ'].value });
+  check('★ 右上角删空 → 重绘当前页', calls.some((c) => c[0] === 'render'), calls);
+
+  /* ④ 本来就没在搜索时，删空不做无谓重绘 */
+  calls.length = 0;
+  fire(g, 'input', '');
+  check('未在搜索状态下删空不触发重绘', !calls.some((c) => c[0] === 'render'), calls);
+
+  /* ⑤ 左侧删空 → 右上角同步清空（反方向也要一致） */
+  els['#globalSearch'].value = 'x';
+  api.sync('');
+  check('左侧删空 → 右上角搜索框同步清空', els['#globalSearch'].value === '', { g: els['#globalSearch'].value });
+
+  /* ⑥ 结构守卫：左侧 oninput 真的调了 syncGlobalSearch（漏了它就又不对称） */
+  check('渠道页左框 oninput 接上 syncGlobalSearch（防回退）',
+    /chQ=''/.test(src) && src.includes("oninput=e=>{chQ=e.target.value;syncGlobalSearch(chQ);drawChTable()}"));
+}
+
 (async () => {
   testModels();
   testPlayground();
@@ -1389,6 +1455,7 @@ function testKeyAutofill() {
   testGateErr();
   testProbeTrim();
   testKeyAutofill();
+  testSearchClear();
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
   process.exit(fail ? 1 : 0);
