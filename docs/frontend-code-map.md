@@ -28,9 +28,9 @@
 | --- | --- | --- | --- |
 | `console-redesign.html` | ~2272 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
-| `build/shell.html` | 52 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
+| `build/shell.html` | 47 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 105 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**、**数据统计页 `.st-*` / 占位符 `.t-c-ph`**） | ✅ §0.2 |
-| `build/app.js` | 2674 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/app.js` | 2660 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 52 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
 | `console.html` | ~3376 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~6572 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import`、`/admin/api/session`（登录 / 退出，v1.18.6）、`/admin/api/settings`（四组，v1.18.8）、`/admin/api/stats` 与 `/admin/api/bans`（来源 IP 态势与封禁，v1.18.11）等；含首启密钥生成、会话表与双层鉴权、thinking 回放块（v1.18.8）、来源 IP 统计与封禁块（v1.18.11） | 参考 |
@@ -74,7 +74,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 目标 | 公式 | 校验点 |
 | --- | --- | --- |
 | `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24；`--tx:#1b1710`：原型 46 → 产物 59 |
-| `console.html` 的 JS 行号 | `build/app.js` 行号 **+714** | `const IC`：app.js 3 → 产物 717；`autoWeightCard()`：app.js 662 → 产物 1376；`vStats()`：app.js 1297 → 产物 2011；`tick()`：app.js 2644 → 产物 3358（偏移仍为 **+714**，与下面 §0.2 的源行号一一对应） |
+| `console.html` 的 JS 行号 | `build/app.js` 行号 **+709** | `const IC`：app.js 3 → 产物 712；`autoWeightCard()`：app.js 663 → 产物 1372；`vStats()`：app.js 1298 → 产物 2007；`tick()`：app.js 2630 → 产物 3339（偏移 **+709**，与下面 §0.2 的源行号一一对应） |
 
 > 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（105 行）/ 设计稿 `<style>` 的行数增删影响（head/shell 已有构建期行数守卫；extra.css 与设计稿 CSS 改行数需人工重算并同步本文档、AGENTS.md §1.2 与 `build/build.js` 注释）。
 > **历史教训（v1.8 重核）**：这条公式曾长期停在 **+617**（`build/build.js` 注释里又写着 +648），而实测是 **+673** —— 三个地方对不上，且漂移量在各函数间不等（+1 ~ +26），说明是历次改动累积的局部插入。
@@ -86,7 +86,11 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 > **v1.18.11（数据统计页 + 调用日志客户端列）**：`extra.css` 与设计稿 CSS 零改动 → 偏移仍 **+689**。`app.js` 侧净增 138 行（stats 整块 ~126 + NAV/render/go 三表 + 客户端列 +3 + ACTS +4 + adapt/loadAll 数据层），`app.js` 2512 → **2650 行**、产物 3205 → **3343 行**。本轮重核时还发现两处**历史烂账**：vChannels 行的 `drawChTable`(881)/`toggleCh`(918)/`openChannel`(927) 是 v1.18 设置块插入前就烂掉的旧行号，密钥块 `keyDraft`(1512) 一排同理——已随本轮整表重核一并修正（现 893/930/939、1647）。
 > **v1.18.12（数据统计页布局整改：KPI 居中 / 列宽定量 / 占位符居中）**：`build/extra.css` 80 → **105 行**（新增 `.st-*` 数据统计页区块 + 占位符 `.t-c-ph`，共 25 行）→ JS 偏移 **+689 → +714**（CSS 偏移仍 +13；实测复核：`const IC` 3→717、`vStats` 1289→**2003**、`autoWeightCard` 662→1376、`tick` 2621→3335）。`app.js` 侧**净零行**（`vStats()` 内就地改类名 + colgroup 内联进 `<table>` 同一行，不加行）→ §0.2 的 app.js 锚点**全部不动**，`app.js` 仍 **2650 行**、产物 3343 → **3368 行**。设计稿 CSS 只在既有 `.t-c` 那一行**就地追加** `table.tbl thead th.t-c{text-align:center}`（照抄 `.t-r` 的同款补权重写法，**不新增行**）→ CSS 偏移仍 +13。
 > **v1.18.13（客户端 chip 跳转直开抽屉 + 索引错位修复）**：`extra.css` 与设计稿 CSS 零改动 → 偏移仍 **+714**。`app.js` 侧客户端列绑定块 2 → 10 行（净增 8），`drawLogTable`(1210) 之后锚点整体 **+8**，`app.js` 2650 → **2658 行**、产物 3368 → **3376 行**。**教训**：`$$(…)` 拿到的 NodeList 索引**不等于** `rows` 索引——有条件渲染（无标签的行不渲染 chip）时按 `rows[i]` 取值会错位，点击参数一律走元素自带 `data-*` 属性（本轮顺带修掉了这个潜伏 bug）。
-> **v1.18.23（两处搜索框清空对称）**：`extra.css` 与设计稿 CSS **零改动** → 偏移仍 **+714**（复核：`const IC` 3 → 717、`tick` 2644 → 3358）。`app.js` 侧在 `setTheme`(2508) 与事件委托块之间插入搜索框同步块（`syncGlobalSearch` + `#globalSearch` 的 keydown/input 两个监听，净增 16 行）→ **其后的锚点整体 +14**（`ACTS` 2525 → **2539**、click 2575 → **2589**、change 2581 → **2595**、`showKeyGate` 2591 → **2605**、`logout` 2620 → **2634**、`__ZZ_BOOTED__` 2639 → **2653**、`tick` 2630 → **2644**、`boot` 2640 → **2654**）；`app.js` 2658 → **2674 行**、产物 3376 → **3392 行**。本轮按 AGENTS §1.2 整表重核，顺带修掉两处**历史漂移**（与本次改动无关、此前一直没回写）：`vStats` 1298 → **1298**（§修改路由表）、`vSettings` 826 → **827**（同上）。
+> **v1.18.23（两处搜索框清空对称）——已被 v1.18.24 作废**：当时在 `setTheme` 与事件委托块之间插入搜索框同步块（净增 16 行），其后的 app.js 锚点整体 **+14**。**该补丁随 v1.18.24 删除搜索框一并移除**，下列数字只作历史记录，不要按它核对当前文件：v1.18.23 当时为 `ACTS` 2539 / click 2589 / change 2595 / `showKeyGate` 2605 / `logout` 2634 / `__ZZ_BOOTED__` 2653 / `tick` 2644 / `boot` 2654、`app.js` **2674 行**、产物 **3392 行**。该轮顺带修掉两处历史漂移：`vStats` → **1298**、`vSettings` → **827**（两条仍然有效）。
+> **v1.18.24（移除右上角全局搜索框）**：用户拍板删除——它只做"回车把关键词塞进 `chQ` 再跳渠道页"，与渠道页自带筛选框重复（其它页各有各的搜索）。
+> · `build/shell.html` **52 → 47 行**（删掉 `.search` 顶栏容器）→ **JS 偏移 +714 → +709**（构建期行数守卫同步改成 21/47，谁再动行数会直接爆错）；设计稿 CSS 零改动 → CSS 偏移仍 **+13**。
+> · `build/app.js` 侧删掉 `syncGlobalSearch` + 两个 `#globalSearch` 监听 + `Cmd/Ctrl+K` 抢焦点（净 **−14** 行，回到 v1.18.23 之前的水位再 +2 行注释）→ 锚点**回到**：`setTheme` **2507**、事件委托块 **2525–2586**（`ACTS` 2525 / click 2575 / change 2581）、`showKeyGate` **2591**、`logout` **2620**、`__ZZ_BOOTED__` **2639**、`tick` **2630**、`boot` **2640**；`app.js` **2660 行**、产物 **3373 行**（复核：`const IC` 3 → **712**、`autoWeightCard` 663 → **1372**、`vStats` 1298 → **2007**、`tick` 2630 → **3339**，偏移一致为 **+709**）。
+> · 设计稿 `console-redesign.html` 同步移除（顶栏 5 行 + JS 4 行，净 **−9** 行）：原型 §3 表里 `drawer` **2237**、`closeDrawer` **2241**、keydown 监听 **2242**、`setTheme` **2248**、`#themeBtn.onclick` **2254**、`init()`(IIFE) **2255**。
 > **教训**：extra.css 在拼接序里位于 app.js **之前**，所以它每增删 1 行，JS 偏移就整体 ±1，而 CSS 偏移不动 —— 改 extra.css 前先想清楚要不要多这一行。改完 `build/*` 一定要用 AGENTS.md §1.2 的命令重新导一遍，不要按估算改数字。
 
 ### 三条硬规则
@@ -150,11 +154,11 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 1984–2242 | `modalChId`(1984) `openChannelForm`(1985) `renderModelRows`(2053) `addModelRow`(2070) `delModelRow`(2076) `probeUpstream`(2079) `probeFound` 等(2077) `renderProbeList`(2107) `filterProbeRows`(2137) `updateProbeSel`(2143) `probeSelectAll`(2149) `probeClearSel`(2158) `probeAddSelected`(2163) `testRowModel`(2172) `toggleKeyField`(2179) `saveChannel`(2195) | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换（**v1.18.4 起不回填原文**，占位符为「已配置 sk-a…1234 · 留空保持不变」；点「明文」时 `toggleKeyField` 才经 `chKeyLive` 现取一次原文、只填进输入框不落库）、保存（`weight` 随 `POST /admin/api/channels` 一起提交；**`apiKey` 留空 = 保持原密钥**） |
 | 2244–2380 | `IMPORT_META`(2244) `parseCodexUnits`(2262) `parseGsSessionId`(2270) `openImport`(2277) `importCodexRt`(2312) `importGsSession`(2317) `doImport`(2323) `importFiles`(2343) | 导入：**真实对接** `codex-import` / `genspark-import` |
 | 2382–2494 | `openTestModels`(2382) `chName`(2433) `testRowVerdict`(2439) `runTests`(2446) | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前）。**结果行必须能看懂**：每行带 `模型名` + 渠道显示名（`chName`）+ 中文结论（`testRowVerdict` 分 通过 / 空回复 / 失败 三档）+ 延迟 / token / 回复或错误原文 |
-| 2496–2537 | `drawer`(2496) `closeDrawer`(2500) `keydown` 监听(2501) `setTheme`(2508) **`syncGlobalSearch`(2522) + 两处搜索框监听（keydown 2523 / input 2526）** | 抽屉 / 全局 Esc 关闭 / 主题持久化 / 明暗互切（`#themeBtn.onclick` 与 `#globalSearch` 的两个监听是程序化挂接，非内联属性）。**v1.18.23**：右上角搜索框**删空** → 清 `chQ`、清左侧筛选框、重绘当前页（退出搜索）；左侧删空 → 右上角同步清空。两处共用一份状态（`chQ`），**清空路径必须对称**——现场（2026-10-07 截图）：只删右上角那段文字时渠道列表仍被过滤、退不出搜索，而删左侧筛选框能退出（左侧 `oninput` 实时写回，右上角原先只在回车时写一次） |
-| 2539–2600 | **事件委托块**：`ACTS`(2539) + click(2589) / change(2595) 两个 `document` 委托监听 | **全站唯一事件入口（v1.18.7）**：内联 `onclick=`/`onchange=`/`onkeydown=` 属性已全部清零（含 `build/shell.html` 的抽屉遮罩，改 `data-act`）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`），两个委托监听统一分发：`ACTS` 表 **48** 个动作与模板**双向一一对应**（v1.18.11 增 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip` 四个）；8 秒轮询整页重绘**不用重挂监听**；点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，`stopPropagation` 成为历史）。登录门的 Enter 改为 `showKeyGate` 内程序化挂接（非内联属性）。**新增交互：先在 `ACTS` 注册 + 模板写 `data-act`，禁止写内联属性**（`test/security-headers-e2e.test.js` 内联清零 + 双向覆盖守卫、`test/console-state.test.js` 真实委托块桩上真跑，都会拦回潮） |
-| 2605 / 2634 / 2653 | `showKeyGate()` `logout()` `__ZZ_BOOTED__`(2653) | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；**v1.18.17：提交前 `trim()`（终端 cat 复制带尾随换行/空格不再被打成 401）、失败原因走 `errMsgOf`（看得见「密钥不对」而不是 `[object Object]`）**；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
-| 2644 | `tick()` | 时钟 |
-| 2654 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 2496–2519 | `drawer`(2496) `closeDrawer`(2500) `keydown` 监听(2501) `setTheme`(2507) | 抽屉 / 全局 Esc 关闭 / 主题持久化 / 明暗互切（`#themeBtn.onclick` 与 `#globalSearch` 的两个监听是程序化挂接，非内联属性）。**v1.18.23**：右上角搜索框**删空** → 清 `chQ`、清左侧筛选框、重绘当前页（退出搜索）；左侧删空 → 右上角同步清空。两处共用一份状态（`chQ`），**清空路径必须对称**——现场（2026-10-07 截图）：只删右上角那段文字时渠道列表仍被过滤、退不出搜索，而删左侧筛选框能退出（左侧 `oninput` 实时写回，右上角原先只在回车时写一次） |
+| 2525–2586 | **事件委托块**：`ACTS`(2525) + click(2575) / change(2581) 两个 `document` 委托监听 | **全站唯一事件入口（v1.18.7）**：内联 `onclick=`/`onchange=`/`onkeydown=` 属性已全部清零（含 `build/shell.html` 的抽屉遮罩，改 `data-act`）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`），两个委托监听统一分发：`ACTS` 表 **48** 个动作与模板**双向一一对应**（v1.18.11 增 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip` 四个）；8 秒轮询整页重绘**不用重挂监听**；点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，`stopPropagation` 成为历史）。登录门的 Enter 改为 `showKeyGate` 内程序化挂接（非内联属性）。**新增交互：先在 `ACTS` 注册 + 模板写 `data-act`，禁止写内联属性**（`test/security-headers-e2e.test.js` 内联清零 + 双向覆盖守卫、`test/console-state.test.js` 真实委托块桩上真跑，都会拦回潮） |
+| 2591 / 2620 / 2639 | `showKeyGate()` `logout()` `__ZZ_BOOTED__`(2639) | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；**v1.18.17：提交前 `trim()`（终端 cat 复制带尾随换行/空格不再被打成 401）、失败原因走 `errMsgOf`（看得见「密钥不对」而不是 `[object Object]`）**；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
+| 2630 | `tick()` | 时钟 |
+| 2640 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
@@ -383,12 +387,11 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 2242 / 2246 | `drawer(html)` / `closeDrawer()` | 右侧抽屉（渠道详情、模型详情、日志详情共用） |
-| 2247 | keydown 监听 | `Esc` 关弹窗（优先）或抽屉；`Cmd/Ctrl+K` 聚焦全局搜索 |
-| 2254 | `setTheme(t)` | 切 `data-theme` + 写 `localStorage['zzcs-theme']` + 换图标 |
-| 2260 | `#themeBtn.onclick` | 明暗互切 |
-| 2261 | `#globalSearch` Enter | 回车把关键词塞进 `chQ` 并跳渠道页 |
-| 2264 | `init()` | 读主题 → `setTheme` → `go('overview')` |
+| 2237 / 2241 | `drawer(html)` / `closeDrawer()` | 右侧抽屉（渠道详情、模型详情、日志详情共用） |
+| 2242 | keydown 监听 | `Esc` 关弹窗（优先）或抽屉（**v1.18.24 起没有 `Cmd/Ctrl+K`**：右上角全局搜索框已移除） |
+| 2248 | `setTheme(t)` | 切 `data-theme` + 写 `localStorage['zzcs-theme']` + 换图标 |
+| 2254 | `#themeBtn.onclick` | 明暗互切 |
+| 2255 | `init()`（IIFE） | 读主题 → `setTheme` → `go('overview')` |
 
 ---
 

@@ -61,9 +61,9 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 
 > **换算捷径**（构建是纯拼接，偏移恒定，改完源文件后可用它自查文档里的 `console.html` 行号）：
 > - `console.html` 的 CSS 行号 = `console-redesign.html` 行号 **+13**
-> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+714**
+> - `console.html` 的 JS 行号 = `build/app.js` 行号 **+709**
 >
-> 偏移只受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（105 行）/ 设计稿 `<style>` 行数增删影响
+> 偏移只受 `build/head.html`（21 行）/ `build/shell.html`（**47 行**，v1.18.24 移除右上角搜索框后 −5）/ `build/extra.css`（105 行）/ 设计稿 `<style>` 行数增删影响
 > （head/shell 已由 build.js 构建期行数守卫把住；**extra.css 与设计稿 CSS 一旦增删行，JS 偏移必须人工重算**，并同步此处、`build/build.js` 注释与 `docs/frontend-code-map.md` §行号换算）。
 > `extra.css` 在拼接序里位于 `app.js` 之前，所以它每增删 1 行，JS 偏移整体 ±1（CSS 偏移不动）——改它的注释前先想清楚要不要多这一行。
 
@@ -187,7 +187,7 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/scheduling.md` | 调度**详解**（v1.18.8 从 README 拆出）：调度顺序 8 步全量语义、同渠道重试、熔断冷却分级（三曲线 + 半愈合 + `Retry-After` + 503/502 带原因）、加权轮询（smooth WRR）、自动权重（观测版：健康系数/抗振荡三件套/四护栏/后台节拍）、有效优先级、含图请求的候选裁剪。改调度算法时同步本文 |
 | `docs/runtime-settings.md` | 运行期四组开关**详解**（v1.18.8 从 README 拆出）：会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义、旋钮、钳制与 `GET/POST /admin/api/settings` 用法；含 `/metrics` 全量指标清单。改四组开关语义时同步本文 |
 | `docs/behavior.md` | 行为细节**详解**（v1.18.8 从 README 拆出）：上游 4xx 兜底判据、流式失败、协议转换与有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测数字。改网关行为语义时同步本文 |
-| `docs/tests.md` | 测试清单（v1.18.8 从 README 拆出）：35 个测试文件 · 1732 项断言的全量命令与每条守的是什么、「改什么 → 必跑什么」速查表、测试哲学（现抠真实源码 / e2e 姊妹 / 临时目录纪律）。**新增测试时登记进本文** |
+| `docs/tests.md` | 测试清单（v1.18.8 从 README 拆出）：35 个测试文件 · 1730 项断言的全量命令与每条守的是什么、「改什么 → 必跑什么」速查表、测试哲学（现抠真实源码 / e2e 姊妹 / 临时目录纪律）。**新增测试时登记进本文** |
 | `docs/security-hardening.md` | 安全整改记录（v1.18.8 从 README 拆出）：2026-10-02 本机实测结论、外部渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账（已修/接受/部分成文，含理由）、复查记录（附录 B 脚本复测结果与双实例疑云解除）、公网部署者提示。改鉴权 / 静态文件 / 响应头时配合 `sec-audit.js` 与本文 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |
 | `sec-audit.js`（仓库根，非 test/） | **安全体检（只读）**：`node sec-audit.js` 体检本机，`ZZ_BASE=http://host:port` 体检远端，`ZZ_TRY_DEFAULTS=1` 额外试仓库里公开的示例默认密钥。查匿名可达面、默认密钥、控制台版本指纹、安全响应头/CORS、无/错/对三态鉴权覆盖面、密钥泄露面（网关密钥 + 上游 apiKey 会不会从 `/metrics`／管理面／错误体漏出）、路径穿越与私有文件暴露。**报告一律脱敏，绝不回显密钥**；加了密钥才做后三项。改动鉴权、静态文件、响应头或控制台时必跑 |

@@ -1372,70 +1372,28 @@ function testKeyAutofill() {
   check('全仓 password 框无一裸奔（每个都带 new-password）', pw === 2 && guarded === 2, { pw, guarded });
 }
 
-/* ══ §20 两处搜索框的清空对称（v1.18.23） ══
-   现场报告（2026-10-07 截图）：右上角搜索框输入后回车进渠道搜索，之后**单独删掉右上角的文字**，
-   渠道列表仍被过滤、退不出搜索；删左侧筛选框却能退出。根因：左侧 oninput 实时写回 chQ，
-   右上角只在回车时写一次——两处共用一份状态，清空路径却不对称。
-   本节把产品里真实的那个块（syncGlobalSearch + 两个 globalSearch 监听）抠出来在桩 DOM 上真跑。 */
+/* ══ §20 右上角全局搜索框已移除（v1.18.24） ══
+   背景：那个框只做一件事——回车把关键词塞进 `chQ` 再跳渠道页，而渠道页自己就有筛选框、
+   其它页各有各的搜索（现场报告 2026-10-07：它在各页都在，却总跳渠道管理，是重复入口）。
+   v1.18.23 曾为它补过"清空对称"（当时的真 bug），用户拍板**整体移除**后该补丁一并作废。
+   本节守的是"它真的没了、也没被换名字加回来"——比守它的行为更能防止回潮。 */
 function testSearchClear() {
-  G('20. 搜索框清空对称（v1.18.23：右上角删空也要退出搜索）');
-  const start = src.indexOf('function syncGlobalSearch');
-  const end = src.indexOf('/* ═════════════════════════ 事件委托', start);
-  if (start < 0 || end < 0) throw new Error('build/app.js 里找不到搜索框同步块（syncGlobalSearch / globalSearch 监听）');
-  const block = src.slice(start, end);
-
-  const els = { '#globalSearch': { value: '', listeners: {} }, '#chQ': { value: '' } };
-  for (const [k, el] of Object.entries(els)) {
-    el.addEventListener = (kind, fn) => { el.listeners[kind] = fn; };
-  }
-  const calls = [];
-  const stubs = {
-    go: (p) => calls.push(['go', p]),
-    toast: (m) => calls.push(['toast', m]),
-    render: () => calls.push(['render']),
-    drawChTable: () => calls.push(['drawChTable']),
-  };
-  const state = { chQ: '' };
-  const make = new Function('$', 'state', 'go', 'toast', 'render', 'drawChTable',
-    `let chQ=state.chQ;\n${block}\nreturn {sync:syncGlobalSearch,getChQ:()=>chQ};`);
-  const api = make((sel) => els[sel] || null, state, stubs.go, stubs.toast, stubs.render, stubs.drawChTable);
-  const Q = () => api.getChQ();
-
-  const g = els['#globalSearch'];
-  const fire = (el, kind, value, extra) => { el.value = value; el.listeners[kind]({ target: el, ...(extra || {}) }); };
-
-  /* ① 回车：原语义不变（写 chQ + 跳渠道页 + 提示） */
-  calls.length = 0;
-  fire(g, 'keydown', '11', { key: 'Enter' });
-  check('回车仍写 chQ 并跳渠道页（原语义不动）',
-    Q() === '11' && calls.some((c) => c[0] === 'go' && c[1] === 'channels'), { chQ: Q(), calls });
-
-  /* ② 右上角在输入中（未回车）不改列表 */
-  calls.length = 0;
-  fire(g, 'input', '113');
-  check('右上角正在输入（未回车）不动列表状态', Q() === '11' && !calls.some((c) => c[0] === 'render'), { chQ: Q() });
-
-  /* ③ ★ 右上角删空 → 退出搜索：清 chQ、清左框、重绘 */
-  calls.length = 0;
-  els['#chQ'].value = '11';
-  fire(g, 'input', '');
-  check('★ 右上角删空 → chQ 清空（退出搜索）', Q() === '', { chQ: Q() });
-  check('★ 右上角删空 → 左侧筛选框同步清空（显示与状态一致）', els['#chQ'].value === '', { left: els['#chQ'].value });
-  check('★ 右上角删空 → 重绘当前页', calls.some((c) => c[0] === 'render'), calls);
-
-  /* ④ 本来就没在搜索时，删空不做无谓重绘 */
-  calls.length = 0;
-  fire(g, 'input', '');
-  check('未在搜索状态下删空不触发重绘', !calls.some((c) => c[0] === 'render'), calls);
-
-  /* ⑤ 左侧删空 → 右上角同步清空（反方向也要一致） */
-  els['#globalSearch'].value = 'x';
-  api.sync('');
-  check('左侧删空 → 右上角搜索框同步清空', els['#globalSearch'].value === '', { g: els['#globalSearch'].value });
-
-  /* ⑥ 结构守卫：左侧 oninput 真的调了 syncGlobalSearch（漏了它就又不对称） */
-  check('渠道页左框 oninput 接上 syncGlobalSearch（防回退）',
-    /chQ=''/.test(src) && src.includes("oninput=e=>{chQ=e.target.value;syncGlobalSearch(chQ);drawChTable()}"));
+  G('20. 右上角全局搜索框已移除（v1.18.24：重复入口，删掉不回归）');
+  const shell = fs.readFileSync(path.join(__dirname, '..', 'build', 'shell.html'), 'utf8');
+  const out = fs.readFileSync(path.join(__dirname, '..', 'console.html'), 'utf8');
+  const proto = fs.readFileSync(path.join(__dirname, '..', 'console-redesign.html'), 'utf8');
+  check('build/shell.html 里不再有全局搜索框（#globalSearch / .search 顶栏容器）',
+    !shell.includes('globalSearch') && !/class="search"/.test(shell));
+  check('build/app.js 里不再有 syncGlobalSearch 与它的监听', !src.includes('syncGlobalSearch'));
+  check('build/app.js 里没有 Ctrl/⌘+K 抢焦点到搜索框的代码',
+    !/e\.key\.toLowerCase\(\)==='k'/.test(src) && !src.includes("$('#globalSearch')"));
+  check('产物 console.html 里同样没有了（构建已生效）',
+    !out.includes('globalSearch') && !/e\.key\.toLowerCase\(\)==='k'/.test(out));
+  check('设计稿 console-redesign.html 同步移除（原型与产品一致）',
+    !proto.includes('globalSearch') && !/e\.key\.toLowerCase\(\)==='k'/.test(proto));
+  /* 渠道页自己的筛选框必须还在（它是唯一的渠道搜索入口） */
+  check('渠道页筛选框仍在（左框是唯一渠道搜索入口，没被误删）',
+    src.includes("$('#chQ',v).oninput=e=>{chQ=e.target.value;drawChTable()}"));
 }
 
 (async () => {
