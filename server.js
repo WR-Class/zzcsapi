@@ -1696,7 +1696,51 @@ function joinUrl(base, p) {
   const s = p.replace(/^\/+/, '');
   return `${b}/${s}`;
 }
-function readBody(req) { return new Promise((resolve, reject) => { const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); }); }
+/* ═════════════ 请求体落盘诊断（v1.18.27，默认关闭） ═════════════
+   动机：现场出现「上游回 200 + finish=length + 输出仅 1 个 token」和「200 + 空流」两种失败，
+   但客户端侧的会话日志里只有 token 计数、**没有真实请求体**；而请求形态（系统提示 + 工具目录 +
+   工具调用历史 + thinking 回放）恰好是"凭空复现不出来"的那部分。所以需要把**真实的那一发**原样留证。
+   用法：设 `ZZCSAPI_DUMP_BODIES=<目录>` 即开启（compose 里挂 ./dump:/app/dump），默认不开。
+   纪律（破坏任一条都是数据事故）：
+     ① **只在显式开启时**写盘（默认零副作用、零磁盘占用）；② 只落**客户端会话类**请求
+        （chat/completions、messages、generateContent），**绝不碰 /admin/**（那里有密钥）；
+     ③ URL 里的 `?key=` 一律打码（Gemini SDK 的另一种鉴权模式会把网关密钥放进查询串）；
+     ④ 只留最近 N 个（`ZZCSAPI_DUMP_MAX`，默认 30），单文件超 12MB 截断并标记；
+     ⑤ 任何异常都吞掉——诊断绝不能影响请求本身。
+   注意：dump 文件含**完整对话内容**（可能含用户数据），只在本机排查时开，别在公网部署上长期开。 */
+const DUMP_DIR = process.env.ZZCSAPI_DUMP_BODIES || '';
+const DUMP_MAX = Math.max(1, Math.min(500, Number(process.env.ZZCSAPI_DUMP_MAX) || 30));
+let dumpSeq = 0;
+const DUMP_HINT = /(chat\/completions|\/v1\/completions|\/messages|generateContent)/;
+function dumpRequestBody(req, buf) {
+  if (!DUMP_DIR) return;
+  try {
+    const u = String(req.url || '');
+    if (!DUMP_HINT.test(u) || u.includes('/admin/')) return;
+    const safeUrl = u.replace(/([?&]key=)[^&]*/gi, '$1***');
+    const n = ++dumpSeq;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const name = `req-${String(n).padStart(3, '0')}-${stamp}.json`;
+    let body = buf.toString('utf8');
+    const truncated = body.length > 12 * 1024 * 1024;
+    if (truncated) body = body.slice(0, 12 * 1024 * 1024);
+    const rec = {
+      at: new Date().toISOString(), seq: n, method: req.method, url: safeUrl,
+      ua: String(req.headers['user-agent'] || ''), host: String(req.headers.host || ''),
+      bytes: buf.length, truncated, body,
+    };
+    fs.mkdirSync(DUMP_DIR, { recursive: true });
+    fs.writeFileSync(path.join(DUMP_DIR, name), JSON.stringify(rec, null, 1));
+    const files = fs.readdirSync(DUMP_DIR).filter((f) => /^req-\d+-.*\.json$/.test(f)).sort();
+    for (const f of files.slice(0, Math.max(0, files.length - DUMP_MAX))) {
+      try { fs.unlinkSync(path.join(DUMP_DIR, f)); } catch { /* 删旧失败不影响本次落盘 */ }
+    }
+    console.log(`[dump] ${name} ← ${safeUrl}（${buf.length} 字节${truncated ? '，已截断' : ''}）`);
+  } catch { /* 诊断失败绝不外抛 */ }
+}
+if (DUMP_DIR) console.log(`[dump] 请求体落盘诊断已开启 → ${DUMP_DIR}（最多保留 ${DUMP_MAX} 个；文件含完整对话内容，请勿长期开启）`);
+
+function readBody(req) { return new Promise((resolve, reject) => { const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', () => { const buf = Buffer.concat(chunks); dumpRequestBody(req, buf); resolve(buf); }); req.on('error', reject); }); }
 function sendJson(res, code, obj) { const body = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) }); res.end(body); }
 function unauthorized(res, kind) { sendJson(res, 401, { error: { message: `${kind} key required` } }); }
 

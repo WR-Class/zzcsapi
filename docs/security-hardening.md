@@ -105,6 +105,20 @@ v1.18.9 起只回答"活着吗"；守卫断言在 `test/security-headers-e2e.tes
 
 **给公网部署者**：本项目的隐藏前提是「知道密钥的人就是管理员」——请只在可信网络或反向代理后暴露，并务必给公网入口加 TLS（会话 cookie 刻意没加 `Secure` 旗标，就是为 http 本地/局域网；公网 TLS 部署时应在反代层终止并保留 `HttpOnly`/`SameSite` 语义）。**反代层仓库已备好**（v1.18.14，README「方式三」）：`deploy/nginx-reverse-proxy.conf` + compose 的 `ZZCSAPI_PUBLISH` 开关 + 固定子网 `172.28.137.0/24`（`security.trustedProxy` 登记网桥网关 `172.28.137.1` 即可拿到真实来源 IP），公网部署在它之上加 TLS 证书即可；nginx 侧**必须保持 `X-Forwarded-For` 覆写语义**（`$remote_addr`）——换成追加模式（`$proxy_add_x_forwarded_for`）会让客户端预置假 XFF 伪造来源统计、甚至借封禁把人锁死（守卫在 `test/reverse-proxy-config.test.js`）。**公网前端仓库已备好（v1.18.16，README「方式四」）**：`deploy/nginx-public.conf`（Let's Encrypt TLS + HSTS/COOP/CORP 三头 + XFF 覆写同源 + 只反代回环转发口 127.0.0.1:18787），80 段只留 ACME 验证与 301 跳转，续期走 certbot.timer。**公网实例必须换全新密钥**——示例密钥公开在本仓库，公网照抄 = 裸奔（"单机自用"风险接受的失效触发点）；域名必须登记 `.env` 的 `ZZCSAPI_ALLOWED_HOSTS`（Host 门默认拒陌生域名，421；compose 自 v1.18.16 真透传该变量——此前是 compose 清单里的注释行，公网域名一律 421），公网防火墙只放 SSH/80/443。**公网上线实测（2026-10-04，wurong.us.ci → 45.153.131.40，Cloudflare 灰云 DNS only 直连）**：`https://wurong.us.ci/healthz` → 200 + `{"ok":true}` + HSTS/COOP/CORP + `Server: nginx`（无版本号）；`http://` → 301；IP 直连 443（`-k` 硬上）→ Host 门 421；`/console` 200；客户端面未带密钥 401；监听面只有 80/443 + 回环 18787（8787/18787 从外部一律不可达——ufw 默认全拒 + 发布口只绑回环）。证书 Let's Encrypt（webroot 签发，certbot.timer 自动续期）。**钥匙名必须带 `ZZCSAPI_` 前缀（v1.18.17 公网现场教训）**：`.env` 里写裸 `ADMIN_KEY=`/`GATEWAY_KEY=` 会被 compose 的 `ZZCSAPI_ADMIN_KEY`/`ZZCSAPI_GATEWAY_KEY` 映射静默漏掉——容器回落首启生成，`.env` 的钥匙两头都不生效；必写 `ZZCSAPI_ADMIN_KEY=...` / `ZZCSAPI_GATEWAY_KEY=...`（守卫在 `test/reverse-proxy-config.test.js`）。**橙云（CF Proxied，v1.18.18 起仓库姿势）**：真实访客 IP 靠 nginx realip 白名单采信 CF 回源带的 `CF-Connecting-IP`（`deploy/nginx-public.conf` 的 `set_real_ip_from` CF 网段表，2026-10 快照 22 条）——只认 CF 网段直接对端，直连源站的伪造头一律无视；`$remote_addr` 在 CF 流量下即真实访客，XFF 覆写与网关 trustedProxy 采信链零改动（**网关侧绝不读该头**）。CF 侧 SSL/TLS 必须 **Full (strict)**（Flexible + 源站 80 的 301 = 无限重定向循环）；建议 ufw 只放 CF 网段进 80/443 锁死源站（绕 CF 直连的路径在源站 IP 泄露时才存在——Host 门只认域名、分不出谁走了 CF），**切回灰云前必须先放开 80/443 直达**。代价：CF 免费版 100 秒无字节超时会掐慢思考 SSE；CF 网段表变动需同步 conf。守卫在 `test/reverse-proxy-config.test.js`。
 
+## 请求体落盘诊断的隐私边界（v1.18.27 补记）
+
+`ZZCSAPI_DUMP_BODIES=<目录>`（compose 挂 `./dump:/app/dump`）会把**客户端会话类请求体原文**写到磁盘，
+用于留证「上游 200 + `finish_reason=length` + 输出仅 1 个 token」「上游 200 + 空流」这类**伪装成成功**的失败——
+客户端侧只有 token 计数、没有请求形态，不落盘就无法复现。
+
+**默认关闭（不设该变量 = 零落盘、零磁盘占用）**，且已内置四条边界：只落客户端会话类请求（`/v1/chat/completions`、
+`/anthropic/v1/messages`、Gemini `:generateContent`），**`/admin/*` 一律不落**（管理面请求含密钥）；URL 里的 `?key=`
+统一打码（Gemini SDK 会把网关密钥放查询串）；最多保留 `ZZCSAPI_DUMP_MAX` 个（默认 30）；任何落盘异常都被吞掉，
+绝不影响请求本身。守卫：`test/body-dump-diagnostic-e2e.test.js`。
+
+⚠ **公网部署不要开**：dump 文件含**完整对话内容**（可能含用户数据/业务信息），属于比访问日志敏感得多的数据。
+仓库 `.gitignore` 已忽略 `dump/`，但真正的边界是"别在公网实例上开启它"。排查完请把 `.env` 里那一行删掉。
+
 ## 来源 IP 统计的数据留存界限（v1.18.11 补记）
 
 v1.18.11 加了来源 IP 态势统计（per-IP 敲门 / token / 并发 / 会话估计 / 客户端标签）与封禁。留存的刻意边界，与渗透整改期「不留可关联数据」的姿势对齐：

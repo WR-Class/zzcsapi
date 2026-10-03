@@ -135,7 +135,13 @@ ADMIN_KEY=yyy    node server.js    # 控制台 + /admin/* 必须带 Bearer yyy
 ZZCSAPI_NOAUTH=1 node server.js    # 本地开发：完全关闭鉴权（仅限本机自用）
 ZZCSAPI_BIND=0.0.0.0 node server.js  # 绑定地址，缺省 127.0.0.1（裸跑时对外提供服务的必填项）
 ZZCSAPI_ALLOWED_HOSTS=a.com,b.com node server.js  # Host 门白名单域名（逗号分隔）。默认放行 localhost 与回环/私网 IP 字面量；反代/公网域名必须在此登记，否则 421（v1.18.10 渗透整改 V-07：拦 DNS 重绑定）
+ZZCSAPI_DUMP_BODIES=/app/dump node server.js  # 【排查用，默认关】把客户端会话类请求体原样落盘到该目录，用于留证"上游异常"的真实请求形态（v1.18.27）
+ZZCSAPI_DUMP_MAX=30 node server.js            # 落盘最多保留几个（默认 30，钳到 1–500）
 ```
+
+**请求体落盘诊断（v1.18.27，默认关闭）**：设 `ZZCSAPI_DUMP_BODIES` 后，客户端会话类请求（`/v1/chat/completions`、`/anthropic/v1/messages`、Gemini `:generateContent`）的**请求体原文**会落到该目录（compose 场景已挂 `./dump:/app/dump`，仓库 `.gitignore` 已忽略 `dump/`）。
+用途：当上游出现「200 + `finish_reason=length` + 输出仅 1 个 token」「200 + 空流」这类**伪装成成功**的失败时，客户端侧只有 token 计数、没有请求形态（系统提示 / 工具目录 / 工具调用历史），无法复现——这个开关就是为留证而设。
+纪律：只落**客户端会话类**请求，`/admin/*` 一律不落（那里有密钥）；URL 里的 `?key=` 会打码；最多保留 `ZZCSAPI_DUMP_MAX` 个；**默认不设该变量 = 零落盘零副作用**。⚠ dump 文件含**完整对话内容**，只在本机排查时开，公网部署不要长期开启。
 
 **密钥从哪来（分享/分发友好）**：
 
@@ -197,7 +203,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 35 个测试文件 · 1735 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 36 个测试文件 · 1749 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |

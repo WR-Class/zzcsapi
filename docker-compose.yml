@@ -28,9 +28,17 @@ services:
       # v1.18.16 教训：这里必须真透传——此前是注释行，公网域名进容器一律 421。
       ZZCSAPI_ALLOWED_HOSTS: ${ZZCSAPI_ALLOWED_HOSTS:-}
       ZZCSAPI_CONFIG: /app/config.json
+      # 请求体落盘诊断（v1.18.27，默认关闭）：根目录 .env 写 ZZCSAPI_DUMP_BODIES=/app/dump 即开启，
+      # 把客户端会话类请求体原样落到 ./dump/（只留最近 ZZCSAPI_DUMP_MAX 个，默认 30）。
+      # 用途：抓"上游 200 + finish=length + 输出仅 1 token / 200 + 空流"那类失败的真实请求形态。
+      # ⚠ dump 文件含完整对话内容，只在排查时开；公网部署别开（README「方式四」已在 .env 模板标注）。
+      ZZCSAPI_DUMP_BODIES: ${ZZCSAPI_DUMP_BODIES:-}
+      ZZCSAPI_DUMP_MAX: ${ZZCSAPI_DUMP_MAX:-30}
     volumes:
       - ./config.json:/app/config.json
       - ./usage.json:/app/usage.json
+      # 诊断落盘目录（未开启诊断时该挂载点为空目录，零副作用）
+      - ./dump:/app/dump
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
       interval: 30s
