@@ -1,4 +1,4 @@
-# 测试清单（39 个文件 · 1781 项断言，零依赖）
+# 测试清单（40 个文件 · 1800 项断言，零依赖）
 
 > 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 35 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
@@ -22,6 +22,7 @@
 | 请求体落盘诊断（`ZZCSAPI_DUMP_BODIES` 与 compose 的 dump 挂载） | `body-dump-diagnostic-e2e` |
 | 流式提交时机 / 扣帧窗口 / 思考吃光（reasoning-only） | `reasoning-only-fallback-e2e` + `stream-error-frame-e2e` + `streaming-e2e` |
 | 渠道超时（首字/总超时）/ 挂死换家 / 失败行归因 | `channel-timeout-attribution-e2e` + `cooldown-grading-e2e` |
+| 输出预算（max_tokens / max_completion_tokens）跨协议保真 | `budget-passthrough-e2e` + `native-channels` |
 | 手动测试（`/admin/api/test`）的预算与判据 | `channel-test-reasoning-e2e` + `disabled-channel-manual-test-e2e` |
 
 ## 全量清单
@@ -36,6 +37,7 @@ node test/anthropic-tools-e2e.test.js     # 30 项断言：两轮工具回合（
 node test/streaming-e2e.test.js           # 19 项断言：三协议流式（首块不丢字节 / 事件序列 / 收尾兜底）
 node test/stream-error-frame-e2e.test.js  # 24 项断言（v1.18.21；v1.18.26 增场景 E）：流内错误帧与零正文流——上游 200 但 SSE 里塞 data:{"error":…}（超长上下文打到上限小的渠道就是这么回，现场 req_mur6vapv：66,991 进 / 0 出，网关却记"成功"）。真起「假上游 + 临时网关」四条：①预检期错误帧（正文未出、响应未提交）→ 取消读取、切下一候选拿到正文、**不**记渠道失败但用量记 ok:false；②已提交后的错误帧（正文已流出）→ 流如实转发、`ok:false` 记账、渠道 lastError 带 `stream error frame`（连败进冷却）；③非流式 200+error 报文同样切候选（旧写法记成功还回 200）；④对照组：正常流逐字节透传零改动、只记一条 ok:true；**⑤v1.18.26 场景 E：200 + 零正文流**（role + usage(0) + [DONE]，无 error 帧）→ 判失败、切下一候选、用量记 ok:false、**失败行带上请求的模型名**（此前 recordFailure 写死 `—`，实测 88% 的失败行看不出在调哪个模型）
 node test/reasoning-only-fallback-e2e.test.js # 15 项断言（v1.18.28）：★「思考吃光预算」必须换下一家——上游只流 reasoning_content + finish=length + 可见正文 0（现场 dump 实证：Fireworks 托管的推理模型）→ 判失败、切到能出正文的家、账本 ok:false + reason 字段；三条对照（有思考也有正文不切 / 只有工具调用帧不切 / max_tokens=8 探测类不切）
+node test/budget-passthrough-e2e.test.js # 19 项断言（v1.18.31）：客户端的输出预算必须活着穿过每一层——DSH 发的是新字段 max_completion_tokens=32768（不发 max_tokens），而转换器只读老字段，于是 anthropic 渠道被静默换成缺省 8192、gemini 渠道整个丢掉，推理型上游把思考算进同一份预算，8192 被吃光就是「可见正文 0 字符 + finish=length」。真链路断言 anthropic 上游真收到 32768、gemini 真收到 maxOutputTokens=32768，另含"客户端没给 → anthropic 仍 8192 / gemini 仍不设"与"两个字段都给 → 老字段优先"两组对照，外加三处共用 clientBudgetOf 的结构守卫
 node test/channel-timeout-attribution-e2e.test.js # 9 项断言（v1.18.30）：挂死渠道要快速换家 + 失败行能归因——渠道连响应头都不回时首字死线必须生效（旧逻辑只在拿到头之后才起计时器，挂死家会吃掉整个 90s 总超时，客户端先超时）；断言 1s 内换家拿到正文、失败行记 ok:false+原因、失败行带 client 标签与模型名，并结构守卫默认值（首字 30s/60s、总超时 90s）
 node test/channel-test-reasoning-e2e.test.js # 8 项断言（v1.18.29）：手动测试必须为推理型模型兜底——测试请求预算 ≥256（原来只有 16，token 全被思考吃光 → 200+正文空 → 控制台判不过）；只有思考的家仍判可用并标 reasoningOnly；真·空回复仍如实显示；上游 5xx 带回原文
 node test/body-dump-diagnostic-e2e.test.js # 14 项断言（v1.18.27）：请求体落盘诊断——开启后真落盘且内容一致、?key= 打码（密钥绝不进 dump）、/admin/ 不落盘、默认关闭零副作用、轮转只留最近 N 个、落盘失败不影响请求

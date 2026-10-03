@@ -56,7 +56,7 @@ const SRC_OF = {};
 for (const n of ['anthropicToOpenAI', 'openAIToAnthropicResponse', 'createAnthropicStreamConverter',
   'openAIStreamToAnthropicSSE', 'anthropicToOaiResponse', 'createAnthropicToOaiStream',
   'oaiRequestToAnthropic', 'sanitizeToolId', 'mapFinishReason', 'anthropicStopToFinish', 'oaiChunkLine', 'estimateTokens',
-  'oaiTextOf', 'oaiContentBlocks']) {
+  'oaiTextOf', 'oaiContentBlocks', 'clientBudgetOf']) {
   SRC_OF[n] = extract(n);
 }
 
@@ -64,7 +64,7 @@ let api;
 try {
   api = new Function([
     SRC_OF.sanitizeToolId, SRC_OF.mapFinishReason, SRC_OF.anthropicStopToFinish, SRC_OF.oaiChunkLine, SRC_OF.estimateTokens,
-    SRC_OF.oaiTextOf, SRC_OF.oaiContentBlocks,
+    SRC_OF.oaiTextOf, SRC_OF.oaiContentBlocks, SRC_OF.clientBudgetOf,
     (src.match(/^const TOOL_RESULT_IMAGE_MARK = .*$/m) || [''])[0],
     SRC_OF.anthropicToOpenAI, SRC_OF.openAIToAnthropicResponse, SRC_OF.createAnthropicStreamConverter,
     SRC_OF.openAIStreamToAnthropicSSE, SRC_OF.anthropicToOaiResponse, SRC_OF.createAnthropicToOaiStream,

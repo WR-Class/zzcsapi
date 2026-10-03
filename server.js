@@ -2411,6 +2411,20 @@ function parseDataUrl(url) {
   return { mediaType: m[1] || 'image/png', base64: !!m[2], data: m[3] };
 }
 
+// ── 客户端要的输出预算（v1.18.31）──
+// OpenAI 把 max_tokens 改名成 max_completion_tokens 之后，客户端只发新字段是常态
+// （DSH 实测就只发 max_completion_tokens=32768，不发 max_tokens）。此前跨协议转换器只读老字段，
+// 于是「客户端要 32768」被我们悄悄换成缺省 8192（→anthropic）或整个丢掉（→gemini）——
+// 而推理型上游把思考 token 算进同一份预算，8192 被思考吃光就是「可见正文 0 字符 + finish=length」。
+// 这里只做一件事：两个字段名读成同一个值，客户端给多少就是多少（缺省 0 = 客户端没给）。
+function clientBudgetOf(oai) {
+  for (const k of ['max_tokens', 'max_completion_tokens']) {
+    const v = Number(oai && oai[k]);
+    if (Number.isFinite(v) && v > 0) return Math.floor(v);
+  }
+  return 0;
+}
+
 // ── OpenAI 请求 → Anthropic /v1/messages 请求体 ──
 function oaiRequestToAnthropic(oai, candidate) {
   const out = {
@@ -2419,8 +2433,9 @@ function oaiRequestToAnthropic(oai, candidate) {
     // v1.18.25：4096 → **8192**（用户拍板）。理由：推理型上游把「思考 token」算进同一份预算，
     // 4k 级缺省经常被思考吃光、正文一个字符都不剩（实测预算 4096 时思考占满 4096、可见正文 0 字符、
     // finish_reason=length）；同类网关 sub2api 在 Responses→Anthropic 的缺省也是 8192。
-    // 客户端显式给了 max_tokens 就一字不改——这是缺省，不是封顶。
-    max_tokens: Number(oai.max_tokens) > 0 ? Math.floor(Number(oai.max_tokens)) : 8192,
+    // v1.18.31：客户端显式给的预算一字不改，且**两个字段名都认**（此前只认 max_tokens，
+    // 于是只发 max_completion_tokens 的客户端被静默降到 8192 缺省——见 clientBudgetOf）。
+    max_tokens: clientBudgetOf(oai) || 8192,
   };
   if (oai.temperature !== undefined) out.temperature = oai.temperature;
   if (oai.top_p !== undefined) out.top_p = oai.top_p;
@@ -2668,7 +2683,10 @@ function oaiRequestToGemini(oai) {
   const out = { contents };
   if (sys.length) out.systemInstruction = { parts: [{ text: sys.join('\n\n') }] };
   const gc = {};
-  if (Number(oai.max_tokens) > 0) gc.maxOutputTokens = Math.floor(Number(oai.max_tokens));
+  // v1.18.31：预算两个字段名都认（此前只认 max_tokens，只发 max_completion_tokens 的客户端
+  // 在 Gemini 渠道上等于没给预算，只能吃模型自己的缺省）
+  const cbGem = clientBudgetOf(oai);
+  if (cbGem > 0) gc.maxOutputTokens = cbGem;
   if (oai.temperature !== undefined) gc.temperature = oai.temperature;
   if (oai.top_p !== undefined) gc.topP = oai.top_p;
   if (oai.stop) gc.stopSequences = Array.isArray(oai.stop) ? oai.stop : [oai.stop];
@@ -5538,9 +5556,11 @@ async function tryChannel(opts) {
     //     · 响应尚未提交（没写出任何可见正文 → 切候选对客户端无副作用）
     //     · 无 error 帧、无可见正文、**无工具调用**（工具调用帧可以不带正文，绝不能误判）
     //     · finish_reason === 'length'
-    //     · 客户端要了像样的预算（max_tokens 缺省或 ≥256）——排除"我只要 1 个 token"的探测类请求
-    const askedMaxTokens = Number(body && (body.max_tokens !== undefined ? body.max_tokens : body.max_completion_tokens));
-    const decentBudget = !(askedMaxTokens > 0) || askedMaxTokens >= 256;
+    //     · 客户端要了像样的预算（预算缺省或 ≥256）——排除"我只要 1 个 token"的探测类请求
+    // v1.18.31：这里原来手写「max_tokens 优先、否则 max_completion_tokens」，与转换器里的读法各写一份，
+    //   正是那种"同一件事两处实现、其中一处忘了新字段名"的温床；现在统一走 clientBudgetOf。
+    const askedMaxTokens = clientBudgetOf(body);
+    const decentBudget = askedMaxTokens === 0 || askedMaxTokens >= 256;
     if (!passthrough && !nativeStream && streamError === null && !sawVisibleText && !sawToolCall && !headCommitted
         && String(streamFinish).toLowerCase() === 'length' && decentBudget) {
       try { reader.cancel(); } catch {}

@@ -40,6 +40,8 @@ const code = [
   extractConst('TOOL_RESULT_IMAGE_MARK'),
   extract('joinUrl'), extract('safeJson'), extract('sanitizeToolId'),
   extract('parseDataUrl'), extract('oaiContentBlocks'), extract('oaiTextOf'),
+  // 两个出站转换器（anthropic / gemini）共用它读客户端的输出预算，不抠进来沙箱里会 ReferenceError
+  extract('clientBudgetOf'),
   extract('oaiRequestToAnthropic'), extract('anthropicImageSource'),
   extract('anthropicStopToFinish'), extract('anthropicToOaiResponse'),
   extract('oaiChunkLine'), extractConst('OAI_SSE_DONE'),
