@@ -5076,6 +5076,21 @@ function isRetryableFailure(result) {
   return true;
 }
 
+// v1.18.34 失败归因：进入 502 attempts 的每一条都必须**能自证原因**。
+//   'channel_error' 是个不透明标签（4xx → 切下家、同渠道不重试），它把"为什么"留在了渠道运行态里：
+//   现场 502 长成 {"ch":"mjiutang5920","err":"channel_error"}，看不出是余额、限额还是被 WAF 拦
+//   ——实测这两家当时分别是 HTTP 429（空体）与 HTTP 403（HTML 挑战页），而报文里一个字都没有。
+//   'upstream 500' 同理：只有码、没有上游原文。这两类补上渠道**刚刚**记下的 lastError
+//   （4xx 路径在返回前必先 recordFailure，所以它不是陈年旧账），与冷却分支那句
+//   「in cooldown（…：原文）」是同一招（v1.14.1）。
+//   只补这两类：其余返回值本身已带原因（`stream error frame: …` / `network: …`），再拼一遍就是噪音。
+function attemptErr(err, channelId) {
+  if (err !== 'channel_error' && !/^upstream \d/.test(err)) return err;
+  const st = channels.get(channelId);
+  const d = st && st.lastError ? String(st.lastError).replace(/\s+/g, ' ').slice(0, 160) : '';
+  return d ? `${err}：${d}` : err;
+}
+
 // ─────────────────────────── 调度核心（统一） ───────────────────────────
 async function dispatchRequest(opts) {
   const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind } = opts;
@@ -5146,7 +5161,8 @@ async function dispatchRequest(opts) {
         if (!res.writableEnded) { try { res.end(); } catch {} }
         return;
       }
-      errors.push({ ch: c.channelId, err: result, ...(attempt ? { attempt } : {}) });
+      // v1.18.34：不带原因的标签（channel_error / upstream 5xx）在这里补上渠道刚记下的原文
+      errors.push({ ch: c.channelId, err: attemptErr(result, c.channelId), ...(attempt ? { attempt } : {}) });
       if (!isRetryableFailure(result) || attempt >= PER_CHANNEL_RETRIES) break;
     }
   }

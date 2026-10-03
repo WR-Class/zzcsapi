@@ -10,6 +10,9 @@
   · 「还有候选」只看**这轮真能上场的**（冷却中的候选不算：它这一轮不会被尝试，把它算成后手会让兜底切进空池、最后兜出个 502，把客户端本该看到的 400 弄丢）。
   · 代价：真·客户端的错（参数写错）现在会把候选链走完才回 4xx，请求更慢、上游多挨几下；相比之下"明明有能用的渠道却给客户端报错"更糟。链长仍受 `retries.maxModelFallbacks` 约束，同一家的额外重试次数受 `retries.perChannel` 约束（但 4xx 从不重试，见 [docs/scheduling.md](scheduling.md)「同渠道重试」）。
   · 透传时用的是**最后一家**上游的错误体与状态码，客户端看到的仍是上游真实答复（不是网关伪造的 502）。
+- **失败归因：进入 502 的每一条都要能自证原因（v1.18.34）**：`all channels failed` 的 `attempts[]` 里，`channel_error` 曾是个**不透明标签**——4xx 路径把"为什么"留在了渠道运行态（`lastError`），报文里只剩一个词。现场（`gpt-6-astra` 那次 502）两条 `mjiutang5920` / `mjiutang1` 写着 `channel_error`，而它们真实的失败是 `HTTP 429`（空体）与 `HTTP 403`（`<!DOCTYPE html>` 挑战页）——用户拿到的 502 看不出是余额、限额还是被 WAF 拦，只能反过来问"为什么调用失败"。
+  · 现在 `attemptErr()` 给"不带原因"的两类返回值补上渠道**刚刚**记下的 `lastError`：`channel_error`（4xx，无码无文）与 `upstream N`（5xx，只有码没文），格式 `channel_error：HTTP 429: <上游原文前 160 字>`（换行/制表符压成空格，避免报文里冒裸 HTML）。
+  · **只补这两类**：`stream error frame: …` / `network: …` 本身已带原因，再拼一遍是噪音。4xx 路径在返回前必先 `recordFailure`，所以补进去的是**本次**原因、不是陈年旧账。与冷却分支那句「in cooldown（…：上游原文）」（v1.14.1）是同一招。回归：`test/upstream-4xx-fallback-e2e.test.js` §9/§10。
 - **流式失败**：已经开始向客户端写 200 + 任意 chunk 后，上游断开不会再换渠道（避免半截回复）。
   · **流内错误帧与"提交分界线"（v1.18.21）**：不少中转站（new-api 系）遇到自家后端失败时**不**回 4xx，而是回 HTTP 200 的 SSE 里塞一帧 `data:{"error":{…}}` ——超长上下文打到上限小的渠道是最常见的触发（现场 `req_mur6vapv`：66,991 进 / **0 出**，流里只有 role 帧 + `The input exceeds the supported context size` + `[DONE]`，客户端报 `The server had an error`，而网关旧逻辑只看"200 + 流结束"就记 `ok:true`，渠道健康还被清零）。
   · 判据是**响应有没有提交给客户端**：① 正文出现**之前**扫到错误帧（此时还没写出任何字节）→ 取消读取、返回 `stream_error: <上游原文>`，候选链**切下一家**（别家的上下文上限可能更大），用量如实记 `ok:false` 但**不**给这家记失败（"这家吃不下这个请求"≠渠道坏了）；② 正文已经流出去之后才扫到 → 流如实转发收尾（客户端拿到的部分是真的），但账本记 `ok:false` 并给渠道 `recordFailure`（连败进冷却）。

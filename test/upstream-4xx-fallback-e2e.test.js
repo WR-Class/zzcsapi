@@ -159,6 +159,13 @@ function makeUpstream(state) {
         (src.match(/\[401, 402, 403, 404, 408, 429\]/g) || []).length === 1);
       check('★ 装配守卫："还有候选"必须排除冷却中的候选（回归：下标判法会兜出 502）',
         /some\(\(x\) => !\(x\.cooldownUntil > Date\.now\(\)\)\)/.test(src));
+      /* v1.18.34 归因守卫：attempts 的每一条都必须过 attemptErr，且它只补"不带原因"的两类返回值。
+         有人把 err: result 写回去（或把 attemptErr 改成什么都拼），这条会当场报错。 */
+      check('★ 装配守卫：attempts 的每条都过 attemptErr（不许退回裸 err: result）',
+        /errors\.push\(\{ ch: c\.channelId, err: attemptErr\(result, c\.channelId\)/.test(src)
+        && !/errors\.push\(\{ ch: c\.channelId, err: result/.test(src));
+      check('★ 装配守卫：attemptErr 只补 channel_error 与 upstream N 两类（其余本身带原因，再拼是噪音）',
+        /if \(err !== 'channel_error' && !\/\^upstream \\d\/\.test\(err\)\) return err;/.test(src));
     }
 
     console.log('\n1. ★ 真机场景：排第一的渠道给 404（声明了过期模型）→ 必须兜到第二家');
@@ -225,6 +232,38 @@ function makeUpstream(state) {
     check('★ up-a 的 lastError 记着上游 400', /HTTP 400/.test(String(ca.lastError || '')), ca.lastError);
     check('up-a 的 consecutiveFail 已经累加', ca.consecutiveFail >= 1, ca.consecutiveFail);
     check('兜底成功的 up-b 状态是 ok', st.channels.find((c) => c.id === 'up-b').status === 'ok');
+    console.log('\n9. ★ v1.18.34 全链 429 → 502，且每条 attempts 都要能自证原因（不许只剩一个 channel_error）');
+    /* 现场（gpt-6-astra 那次 502）：报文里 mjiutang5920 / mjiutang1 两条只写着 "channel_error"，
+       而它们真实的失败是 HTTP 429（空体）与 HTTP 403（HTML 挑战页）—— 用户拿到的 502 看不出
+       是余额、限额还是被 WAF 拦，只能反过来问"为什么调用失败"。这里把"能自证"钉成断言。 */
+    reset(429, 429, 429); await restart('abc');
+    r = await call();
+    check('★ 三家都 429 → 客户端拿到 502 gateway_error', r.status === 502, { status: r.status, text: r.text.slice(0, 160) });
+    let at = [];
+    try { at = JSON.parse(r.text).error.attempts || []; } catch { at = []; }
+    check('attempts 覆盖三家（每家一条）', at.length === 3 && ['up-a', 'up-b', 'up-c'].every((id) => at.some((x) => x.ch === id)),
+      at.map((x) => x.ch));
+    check('★ 每条都带着 HTTP 状态码（不再是光秃秃的 channel_error）',
+      at.length > 0 && at.every((x) => /^channel_error：HTTP 429/.test(String(x.err))), at.map((x) => x.err));
+    check('★ 每条都带着上游原文（一眼看出是余额、限额还是参数错）',
+      at.length > 0 && at.every((x) => /upstream [ABC] says 429/.test(String(x.err))), at.map((x) => x.err));
+    check('原因被压成单行（换行/制表符会被压掉，避免报文里出现裸 HTML）',
+      at.every((x) => !/[\r\n\t]/.test(String(x.err))), at.map((x) => x.err));
+
+    console.log('\n10. 对照组：本来就有原因的失败不许被拼成两遍（同一句话只出现一次）');
+    /* stream error frame / network 这类返回值本身已带原因；再拼一次 lastError 就是噪音，
+       所以 attemptErr 只补 channel_error 与 upstream N 两类。单候选 + 500 走 upstream 5xx 这一支。 */
+    reset(500, 0, 0); await restart('a');
+    r = await call();
+    at = [];
+    try { at = JSON.parse(r.text).error.attempts || []; } catch { at = []; }
+    check('单候选 500 → 502', r.status === 502, { status: r.status, text: r.text.slice(0, 140) });
+    check('500 是可重试失败 → attempts 里两条（attempt 0 与 1），这本身是"原地重试"的证据',
+      at.length === 2 && at[1].attempt === 1, at);
+    check('★ 5xx 那条也补上了上游原文（upstream 500：HTTP 500: …）',
+      at.length > 0 && at.every((x) => /^upstream 500：HTTP 500/.test(String(x.err))), at.map((x) => x.err));
+    check('上游原文只出现一次（没有被拼两遍）',
+      at.length > 0 && at.every((x) => String(x.err).split('upstream A says 500').length - 1 === 1), at.map((x) => x.err));
   } catch (e) {
     fail++;
     console.log('  ✗ 运行异常: ' + (e && e.message));

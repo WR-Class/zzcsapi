@@ -1,4 +1,4 @@
-# 测试清单（41 个文件 · 1917 项断言，零依赖）
+# 测试清单（41 个文件 · 1928 项断言，零依赖）
 
 > 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 41 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
@@ -51,7 +51,7 @@ node test/native-channels-e2e.test.js     # 33 项断言：原生假上游 × �
 node test/console-weight-e2e.test.js      # 18 项断言：控制台表单报文 → 真网关落库 → 真流量分流 → 表格那一格显示出来
 node test/auto-weight.test.js             # 66 项断言：自动权重算法（健康系数/地板/死区平滑/份额封顶）＋**静默不变式**（观测不许改分流）＋后台节拍装配守卫
 node test/auto-weight-e2e.test.js         # 37 项断言：真流量下预测与健康系数自洽、分流一字未动、配置往返旋钮不丢、后台节拍不依赖控制台
-node test/upstream-4xx-fallback-e2e.test.js  # 32 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）
+node test/upstream-4xx-fallback-e2e.test.js  # 43 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）；v1.18.34 加两节——全链 429 → 502 时每条 attempts 都要带 HTTP 码与上游原文（现场 channel_error 光秃秃、看不出是余额还是 WAF）+ 对照组防拼两遍
 node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5）
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
