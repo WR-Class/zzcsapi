@@ -87,8 +87,8 @@ console.log('\n1. ★ OpenAI 请求 → Anthropic 请求（真实报文形状）
   check('tools 的 parameters → input_schema', a.tools[0].name === 'get_weather' && a.tools[0].input_schema.properties.city.type === 'string', a.tools[0]);
   check('tool_choice auto → {type:auto}', a.tool_choice.type === 'auto', a.tool_choice);
   check('parallel_tool_calls:false → disable_parallel_tool_use:true', a.disable_parallel_tool_use === true);
-  check('★ 没有 max_tokens 时补 4096（Anthropic 必填，不补就 400）',
-    M.oaiRequestToAnthropic({ messages: [{ role: 'user', content: 'x' }] }, cand('m')).max_tokens === 4096);
+  check('★ 没有 max_tokens 时补 8192（Anthropic 必填；v1.18.25 由 4096 上调，思考会吃同一份预算）',
+    M.oaiRequestToAnthropic({ messages: [{ role: 'user', content: 'x' }] }, cand('m')).max_tokens === 8192);
   check('tool_choice required → {type:any}',
     M.oaiRequestToAnthropic({ messages: [], tools: oai.tools, tool_choice: 'required' }, cand('m')).tool_choice.type === 'any');
   check('tool_choice {function:{name}} → {type:tool,name}',

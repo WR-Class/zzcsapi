@@ -2371,8 +2371,12 @@ function parseDataUrl(url) {
 function oaiRequestToAnthropic(oai, candidate) {
   const out = {
     model: candidate.upstream,
-    // Anthropic 强制要求 max_tokens（OpenAI 可省略）——缺省给 4096，否则上游直接 400
-    max_tokens: Number(oai.max_tokens) > 0 ? Math.floor(Number(oai.max_tokens)) : 4096,
+    // Anthropic 强制要求 max_tokens（OpenAI 可省略）——缺省给 8192，否则上游直接 400。
+    // v1.18.25：4096 → **8192**（用户拍板）。理由：推理型上游把「思考 token」算进同一份预算，
+    // 4k 级缺省经常被思考吃光、正文一个字符都不剩（实测预算 4096 时思考占满 4096、可见正文 0 字符、
+    // finish_reason=length）；同类网关 sub2api 在 Responses→Anthropic 的缺省也是 8192。
+    // 客户端显式给了 max_tokens 就一字不改——这是缺省，不是封顶。
+    max_tokens: Number(oai.max_tokens) > 0 ? Math.floor(Number(oai.max_tokens)) : 8192,
   };
   if (oai.temperature !== undefined) out.temperature = oai.temperature;
   if (oai.top_p !== undefined) out.top_p = oai.top_p;

@@ -19,6 +19,7 @@
 - **原生出站（`protocol: anthropic` / `gemini`）**：请求侧 `system`→顶层 `system`/`systemInstruction`、`tool_calls`→`tool_use`/`functionCall`、工具结果→`tool_result`/`functionResponse`（Gemini 按函数名配对）、图片→`image` 块/`inlineData`・`fileData`、`max_tokens`→`max_output_tokens`/`maxOutputTokens`、`stop`→`stop_sequences`/`stopSequences`；响应侧反向映射（`stop_reason`→`finish_reason`、`usageMetadata`→`usage`、`thinking`→`reasoning_content`）。
   · 流式：Anthropic 原生 SSE 事件与 Gemini `alt=sse` 分片都会**逐行翻译成 OpenAI 分片**，再交给该路由既有的流式转换器；上游异常断流时由收尾逻辑补 `finish_reason` + `[DONE]`（客户端不会一直等）。
   · 上游错误体不翻译（原样透传状态码与消息），避免 400 被伪装成"成功但空"。
+  · **`max_tokens` 缺省（v1.18.25 由 4096 上调为 8192）**：Anthropic `/v1/messages` 强制要求 `max_tokens`（OpenAI 侧可省略），所以**客户端没给时**网关补一个缺省值，否则上游直接 400。原值 4096 太小：推理型上游把思考 token 算进**同一份预算**，实测 `max_tokens=4096` 时 `reasoning_tokens=4096`、可见正文 **0 字符**、`finish_reason=length`（客户端表现就是"已达到输出 token 上限回答被截断"）。同类网关 sub2api 在 Responses→Anthropic 的缺省也是 8192（其 `apicompat/responses_to_anthropic_request.go`）。**客户端显式带了 `max_tokens` 就一字不改**——这是缺省，不是封顶。
   · 有损点（**仅跨协议时**）：`tool_choice:"none"` 在 Anthropic 侧无对应语义（改为去掉 tools）；`cache_control`/`top_k`/thinking 签名在跨格式时丢弃。同协议（Anthropic 客户端 → Anthropic 渠道、Gemini 客户端 → Gemini 渠道）自 v1.15 起走**同协议直通**，一趟转换都没有，上面这些丢件不再发生（见 [docs/protocols.md](protocols.md)「同协议直通（v1.15）」）。
   · **思维链（thinking）的真实边界（v1.18 核对、v1.18.8 增补，有测试守着）**：**跨协议**时**双向**都不带思维链——入站 `thinking`/`redacted_thinking` 整块丢弃，
     回程也**不向客户端产出** `thinking` 块（`server.js` 里 `signature` 只活在 thinking 回放块与 4xx 作废分支两处，跨协议转换器一个都不碰：既不保存、不校验，也**绝不伪造**）。
