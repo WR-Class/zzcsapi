@@ -2425,6 +2425,47 @@ function clientBudgetOf(oai) {
   return 0;
 }
 
+// ── 渠道级「不发这些参数」（v1.18.33）──────────────────────────────────────────
+// 动机（现场）：`agentrouter` 每天固定开放额度，但它对「tools + reasoning_effort」这个组合直接
+//   400 —— `Function tools with reasoning_effort are not supported for gpt-6-astra`，而 DSH 每次
+//   请求都同时带这两样，于是这个渠道对我们 **19 行 0 成功**。这类"上游只吃不下某一个参数"的情况，
+//   同类网关通常只能让用户改客户端，而客户端不由我们控制——所以在**渠道**上给一个显式开关。
+// 三条纪律：
+//   ① 只允许**白名单内**的参数名被剔除（见 DROP_PARAM_WHITELIST）。`messages` / `model` / `stream` /
+//      `tools` 这类结构性字段**一律不在白名单**：配置写错一个名字最多是"没生效"，绝不会把请求打残。
+//   ② 只在**出站副本**上删，绝不改客户端报文对象本身——它在候选链里被多个渠道共用，
+//      原地删会把 A 家的怪癖串味给 B 家（下一家明明吃这个参数，却被上一家连累）。
+//   ③ 没配这个字段的渠道**零成本零拷贝**：直接返回原对象，老配置的行为一个字节都不变。
+//   可剔除的参数名。刻意不含 tools/tool_choice 之外的结构性字段；`tool_choice`/`parallel_tool_calls`
+//   属于"可选调优"，剔掉只是退回默认行为，不会让请求失去工具能力。
+const DROP_PARAM_WHITELIST = [
+  'reasoning_effort', 'reasoning', 'verbosity', 'thinking', 'thinkingConfig',
+  'temperature', 'top_p', 'top_k', 'frequency_penalty', 'presence_penalty', 'logit_bias',
+  'logprobs', 'top_logprobs', 'n', 'seed', 'stop', 'stop_sequences', 'stream_options',
+  'tool_choice', 'parallel_tool_calls', 'response_format', 'service_tier', 'store',
+  'metadata', 'user', 'modalities', 'prediction', 'safetySettings',
+  'max_tokens', 'max_completion_tokens', 'maxOutputTokens',
+];
+// 归一化：接受数组，也接受控制台输入框常见的 "a, b c" 文本；去重、丢掉白名单外的名字（校验层会 400，
+// 这里只是兜底，保证运行时用的永远是干净数组）。
+function normDropParams(v) {
+  const raw = Array.isArray(v) ? v : String(v == null ? '' : v).split(/[\s,]+/);
+  const out = [];
+  for (const x of raw) {
+    const k = String(x).trim();
+    if (k && DROP_PARAM_WHITELIST.includes(k) && !out.includes(k)) out.push(k);
+  }
+  return out.length ? out : undefined;
+}
+// 出站前剔除：没配就原样返回（零拷贝），配了就返回一份浅拷贝再删（见纪律②）
+function dropParamsFrom(body, ch) {
+  const list = (ch && ch.def && ch.def.dropParams) || null;
+  if (!list || !list.length || !body || typeof body !== 'object') return body;
+  const out = { ...body };
+  for (const k of list) delete out[k];
+  return out;
+}
+
 // ── OpenAI 请求 → Anthropic /v1/messages 请求体 ──
 function oaiRequestToAnthropic(oai, candidate) {
   const out = {
@@ -2868,11 +2909,21 @@ function nativeChannelOpts(proto, requestedModel) {
 // 响应侧也不再被重排（连 `message_start` 都不再是网关"补"出来的，而是上游那一个）。
 // 出站 URL/请求头与原生路径完全一致，只是不再提供 encodeOutgoing 的格式转换，
 // 也不提供 translateResponse / makeStreamTranslator —— 由 tryChannel 原样读写。
-function passthroughChannelOpts(proto, rawBody) {
+// v1.18.33：直通路径用的是**客户端原始报文**（`raw`），不走 encodeOutgoing 的常规入参，所以
+//   渠道级「不发这些参数」必须在这里也剔一遍——否则"配了却不生效"，而直通正是 anthropic/gemini
+//   客户端最常走的那条路。剔除仍只作用于这份副本（`raw` 由调用方传进来，绝不原地改）。
+function passthroughChannelOpts(proto, rawBody, dropParams) {
   const raw = (rawBody && typeof rawBody === 'object') ? rawBody : {};
+  const drops = Array.isArray(dropParams) ? dropParams : [];
+  const strip = (o) => {
+    if (!drops.length) return o;
+    const c = { ...o };
+    for (const k of drops) delete c[k];
+    return c;
+  };
   return {
     passthrough: proto,
-    encodeOutgoing: (b, c) => (proto === 'anthropic' ? { ...raw, model: c.upstream } : raw),
+    encodeOutgoing: (b, c) => (proto === 'anthropic' ? { ...strip(raw), model: c.upstream } : strip(raw)),
     buildOutgoingUrl: (ch, c, isStream) => nativeOutgoingUrl(proto, ch, c, isStream),
     buildOutgoingHeaders: (ch) => nativeOutgoingHeaders(proto, ch),
   };
@@ -3399,6 +3450,10 @@ function persistConfig() {
       priority: ch.def.priority ?? 0,
       // 加权轮询权重：必须随配置持久化，否则控制台保存任一渠道都会把权重从 config.json 里抹掉
       weight: ch.def.weight ?? undefined,
+      // v1.18.33 渠道级「不发这些参数」——与 weight 同一个坑（PT29）：persistConfig 是**显式字段清单**，
+      //   漏一行就会在下一次任意渠道保存时被静默抹掉。加渠道字段必须三处一起加：
+      //   这里 + /admin/api/channels 的 GET + POST 的 def 构造。
+      dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -3804,6 +3859,14 @@ function validateChannelDef(def, opts) {
   if ((!def.apiKey || typeof def.apiKey !== 'string') && !(opts && opts.allowMissingApiKey)) return 'apiKey is required';
   if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
+  // v1.18.33 渠道级「不发这些参数」：只收白名单内的名字。**写错一个名字就 400，不静默忽略**——
+  //   静默忽略会让人以为"已经生效了"，然后继续对着一个 100% 失败的渠道排查半天（正是本次的现场）。
+  //   合法清单随错误文案一起回去，前端直接显示原文即可，不必自己维护一份会漂移的副本。
+  if (def.dropParams !== undefined && def.dropParams !== null && def.dropParams !== '') {
+    const raw = Array.isArray(def.dropParams) ? def.dropParams : String(def.dropParams).split(/[\s,]+/);
+    const bad = raw.map((x) => String(x).trim()).filter(Boolean).filter((x) => !DROP_PARAM_WHITELIST.includes(x));
+    if (bad.length) return `dropParams 只接受这些参数名：${DROP_PARAM_WHITELIST.join(', ')}（不认识：${bad.join(', ')}）`;
+  }
   // 加权轮询权重：必须是有限数字且 ≥ 0（0 = 不参与轮询；负数/NaN 会让分流比例失去意义）
   if (def.weight !== undefined && def.weight !== null && def.weight !== '') {
     const w = Number(def.weight);
@@ -3900,6 +3963,9 @@ async function handleAdminApi(req, res, url) {
         console: `${base}/console`,
         health: `${base}/healthz`,
       },
+      // v1.18.33：渠道级「不发这些参数」的合法名字清单。**服务端下发、前端照用**——前端若自己抄一份，
+      // 迟早与后端的白名单漂移，用户就会遇到"表单里能选、保存却 400"这种没法自证的怪事。
+      dropParamWhitelist: DROP_PARAM_WHITELIST,
     });
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/recheck') {
@@ -4074,6 +4140,8 @@ async function handleAdminApi(req, res, url) {
       protocol: ch.def.protocol || 'openai',
       priority: ch.def.priority ?? 0,
       weight: ch.def.weight ?? undefined,
+      // v1.18.33 渠道级「不发这些参数」：控制台表单要回填它（见 POST 的 def 构造与 persistConfig）
+      dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -4115,6 +4183,9 @@ async function handleAdminApi(req, res, url) {
       proxy: body.proxy ? String(body.proxy) : undefined,
       // 渠道级自定义请求头（对象或 "Name: value" 多行文本）
       headers: body.headers ? body.headers : undefined,
+      // v1.18.33 渠道级「不发这些参数」：显式传空数组 = 清空（用户就是要恢复"原样转发"）；
+      // 只有那些压根不传这个字段的老客户端/导入流程才沿用旧值（与 weight 同款语义）
+      dropParams: body.dropParams !== undefined ? normDropParams(body.dropParams) : (prevDef ? prevDef.dropParams : undefined),
     };
     const existed = channels.has(def.id);
     const ch = upsertChannel(def);
@@ -5048,7 +5119,7 @@ async function dispatchRequest(opts) {
         // 没有缺签名的块（或一条都没命中）时传原始报文，直通保真一个字段都不动
         ? passthroughChannelOpts(chProto, (chProto === 'anthropic'
           ? repairThinkingBody(opts.replayKey, c.channelId, requestedModel, opts.rawClientBody)
-          : null) || opts.rawClientBody)
+          : null) || opts.rawClientBody, chDef && chDef.dropParams)
         : nativeChannelOpts(chProto, requestedModel))
       : null;
     // ★ 同渠道重试（perChannel）：一次请求内对**同一家**最多再试 PER_CHANNEL_RETRIES 次，
@@ -5133,7 +5204,7 @@ async function tryChannel(opts) {
     if ((ch.def.protocol || 'openai') === 'codex') {
       return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
     }
-  const outgoing = encodeOutgoing(body, candidate);
+  const outgoing = encodeOutgoing(dropParamsFrom(body, ch), candidate);
   const passthrough = opts.passthrough || null;   // 同协议直通时由扩展注入（'anthropic' / 'gemini'）
   const target = buildOutgoingUrl(ch, candidate, isStream);
   const headers = applyCustomHeaders(buildOutgoingHeaders(ch), ch.def);
@@ -5627,6 +5698,43 @@ async function tryChannel(opts) {
       });
       return 'success';   // 响应已提交，候选链不能再切；客户端拿到的是真实流
     }
+    // v1.18.32 ★「上游 200 但一个内容帧都没有」在**同协议直通路径**上也要如实记账。
+    //   上面那条零正文判据（v1.18.26，现 5583 行）带 `!passthrough`，且要求 `!headCommitted`（它要的是
+    //   "零副作用换家"）——所以它**只管常规 OpenAI 链路**：那里命中后会 `reader.cancel()` 并 `return
+    //   'stream_error'` 换下一家（比记账更好，那个语义别动）。而直通是边收边写、`headCommitted` 恒真，
+    //   被那条判据**明确排除** → 直通路径上"200 + 零正文"记成**成功**。同一形态在常规链路记失败并换家、
+    //   在直通路径记成功，本身就是不一致，这里补的就是这一格。
+    //   ★ 生效域要说清（别被注释骗了）：常规 OpenAI 链路早在 5583 就被接住了，所以**这一条实际只在直通
+    //   （同协议 anthropic/gemini）路径上生效**。实测 gpt-6-astra 九十余行 `ok:true / out=0`（账本滚动
+    //   窗口内量到 84~95 行）全是 DSH 的真实会话——那批走的是**非流式**路径（见下面非流式那处判据，
+    //   流式的空流早已被 5583 如实记账，账本里有 16 行带 `stream empty` 备注可证）。两处判据各自补一格，
+    //   合起来才覆盖"200 但空"的全部形态。
+    //   语义：流已收尾、无错误帧、却一个内容帧（正文/工具调用/思考）都没见过 →
+    //   `ok:false` + 渠道记失败（进冷却，下一发自然换家）。字节已经写出去了、换不了家，
+    //   但"账本不说谎 + 让这家退避"两件都成立——这正是用户感知的堵点。
+    //   判据用 `sawStreamContent`：`noteStreamLine` 在直通路径上也逐行跑（5473），且 role-only 开场帧
+    //   刻意不算正文（5450），故真·空流才命中，带正文/工具调用的正常流不受影响。
+    //   ★ 必须带 `!nativeStream`：原生渠道走翻译器，`handleLine` 在 nativeStream 分支**直接 return**
+    //   （5349 行）——`noteStreamLine` 压根不跑，`sawStreamContent` 在原生流上恒为 false，只按它会把
+    //   **每一条正常的原生流**都判成空（实测误伤：mock-anthropic 已有 23 字符正文仍被记失败，进而被
+    //   打进冷却，整段 native-channels e2e 级联 503；该文件因此从 6 失败回到 34 项全过）。
+    //   ★ 也不要在这里加 `streamOutText.length === 0` 之类的"保险"：直通路径的 streamOutText 会在
+    //   `sseDeltaText` 取不到文本时**回落累计原始行**（5475 行 `|| line`），空流的它照样非空，
+    //   加了这个条件等于把直通场景整条判死（写的时候真踩了，靠 `!nativeStream` 已足够排掉误伤源）。
+    if (streamError === null && !nativeStream && !sawStreamContent) {
+      recordFailure(ch, 'stream empty: 上游 200 但零正文（响应已提交，无法换家）', undefined, { model: failModel, statsCtx: opts.statsCtx });
+      try {
+        recordUsage({
+          model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+          inputTokens: estimateTokens(messagesText(body && body.messages)),
+          outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+          realUsage: passthroughUsage,
+          note: 'stream empty: 200 no content（已提交；客户端拿到的是空回复）',
+          statsCtx: opts.statsCtx,
+        });
+      } catch { /* 记账失败不影响正常收尾 */ }
+      return 'success';   // 响应已提交，候选链不能再切；客户端拿到的是真实流（空的）
+    }
     recordUsage({
       model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
       inputTokens: estimateTokens(messagesText(body && body.messages)),
@@ -5695,6 +5803,38 @@ async function tryChannel(opts) {
       if (j && j.usage) realUsage = j.usage;
       if (j && j.choices && j.choices[0] && j.choices[0].message && typeof j.choices[0].message.content === 'string') replyText = j.choices[0].message.content;
     } catch { /* 非 JSON 上游 */ }
+    // v1.18.32 ★ 非流式的「200 + 空回复」同样不许记成功（与流式侧的零正文判据对称）。
+    //   现场：`gpt-6-astra` 一个模型就有九十余行 `ok:true / out=0`（账本滚动窗口内量到 84~95 行，client
+    //   全是 deepseek-harness 的真实会话），客户端拿到空回复、账本一片绿。**这批就是这一格漏的**：
+    //   流式的空流早被 v1.18.26 判据如实记账（账本里有 16 行带 `stream empty` 备注可证），
+    //   所以剩下的"成功但零输出"只能来自非流式路径——它此前压根没有空正文判据。
+    //   这里比流式侧还多一层收益：非流式**响应尚未提交**，判失败后直接 `return stream_error` 就能
+    //   **切下一家**（流式侧字节已写出、只能诚实记账）。
+    //   判据只在"上游报文确实是一份 OpenAI 补全"（有 `choices[0].message`）时才下结论，避免误伤
+    //   被 translateResponse 转成别的形态的报文；`tool_calls` / 思考都算内容（工具调用帧可以不带正文）。
+    if (resp.ok) {
+      let emptyCompletion = false;
+      try {
+        const j0 = JSON.parse(text);
+        const m0 = j0 && j0.choices && j0.choices[0] && j0.choices[0].message;
+        if (m0 && typeof m0.content === 'string' && m0.content === ''
+            && !(Array.isArray(m0.tool_calls) && m0.tool_calls.length)
+            && !m0.reasoning_content && !m0.reasoning) emptyCompletion = true;
+      } catch { /* 非 JSON 上游：不在本判据范围内 */ }
+      if (emptyCompletion) {
+        recordFailure(ch, 'stream empty: 上游 200 但空回复（非流式）', undefined, { model: failModel, statsCtx: opts.statsCtx });
+        try {
+          recordUsage({
+            model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+            inputTokens: estimateTokens(messagesText(body && body.messages)),
+            outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+            note: 'stream empty: 200 empty completion (非流式)',
+            statsCtx: opts.statsCtx,
+          });
+        } catch { /* 记账失败不影响切换 */ }
+        return 'stream_error: empty completion (200, no content)';
+      }
+    }
     recordUsage({
       model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
       inputTokens: estimateTokens(messagesText(body && body.messages)),
@@ -6955,3 +7095,4 @@ server.listen(PORT, process.env.ZZCSAPI_BIND || '127.0.0.1', () => {
 
 process.on('SIGINT', () => { console.log('\n[zzcsapi] bye'); try { flushUsage(); } catch {} process.exit(0); });
 process.on('SIGTERM', () => { try { flushUsage(); } catch {} process.exit(0); });
+

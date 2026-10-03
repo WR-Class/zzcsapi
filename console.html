@@ -783,6 +783,8 @@ function adapt() {
       w:c.weight == null ? 0 : Number(c.weight) || 0,
       wHits:Number(c.weightedHits) || 0,
       wShare:Number(c.weightedShare) || 0,
+      /* 渠道级「不发这些参数」（v1.18.33）：没配的渠道后端不下发该字段 → 统一成数组，模板可直接 join */
+      dp:Array.isArray(c.dropParams)?c.dropParams.map(String):[],
       /* 自动权重观测（v1.6 静默版，**只算不生效**）：ah = 健康系数 0~1；
          aFail/aN/aLat/aSpd = 这个系数是凭什么算出来的（失败率 / 样本数 / 延迟 / 相对最快者的倍数） */
       ah:c.autoH == null ? null : Number(c.autoH),
@@ -848,7 +850,7 @@ function adapt() {
 }
 
 async function loadAll() {
-  const [st, us, cfg, settings, keys, ipst] = await Promise.all([
+  const [st, us, cfg, settings, keys, ipst, chdefs] = await Promise.all([
     api('/admin/api/status'),
     api('/admin/api/usage').catch(() => null),
     api('/admin/api/config').catch(() => null),
@@ -858,8 +860,21 @@ async function loadAll() {
     api('/admin/api/keys').catch(() => null),
     /* 来源 IP 态势统计同理单独兜底（v1.18.11） */
     api('/admin/api/stats').catch(() => null),
+    /* 渠道定义（v1.18.33）：渠道级「不发这些参数」**只在 GET /admin/api/channels 上**——
+       /admin/api/status 的渠道投影里没有它，而表单回填与详情抽屉都要同步拿到（抽屉渲染是同步的，
+       没法 await 一次请求），故在这里并一份进来。同样单独兜底：它挂了只是那个字段看不到，
+       整页照常刷新（其余六份不受影响）。 */
+    api('/admin/api/channels').catch(() => null),
   ]);
-  RAW = { channels:(st && st.channels) || [], usage:us, config:cfg, auto:(st && st.autoWeight) || null,
+  const stChans = (st && st.channels) || [];
+  /* **只按 id 补 dropParams 一个字段**：其余一律以 status（带实时状态）为准，
+     别让这份"渠道定义快照"把 status 的实时字段覆盖回去。空数组/缺省 = 没配，不覆盖。 */
+  const defs = (chdefs && chdefs.channels) || null;
+  if (defs) {
+    const dpById = new Map(defs.map((d) => [d && d.id, d && d.dropParams]));
+    for (const c of stChans) { const d = dpById.get(c.id); if (Array.isArray(d) && d.length) c.dropParams = d; }
+  }
+  RAW = { channels:stChans, usage:us, config:cfg, auto:(st && st.autoWeight) || null,
           settings:settings || RAW.settings, keys:keys || RAW.keys, stats:ipst || RAW.stats };
   CFG = cfg || CFG;
   adapt();
@@ -1646,6 +1661,39 @@ async function toggleCh(id){
     drawChTable();
   }catch(e){}
 }
+/* ═══ 渠道级「不发这些参数」（v1.18.33）══════════════════════════════════════
+   现场：某渠道对「tools + reasoning_effort」组合直接 400，而客户端不由我们控制，
+   于是后端在**渠道**上给了一个「出站前删掉这几个参数」的开关。
+   合法参数名清单**只从服务端下发取**（GET /admin/api/config 的 dropParamWhitelist）——
+   前端绝不自己抄一份：抄了就会漂移，用户会撞上"表单里能填、保存却 400"。
+   服务端没给这个字段时**优雅降级**：不显示清单，输入框照常可用（后端仍会 400 兜底，
+   且 400 的 error 原文由 api() 直显，清单就写在文案里）。 */
+function dropWhitelist(){
+  const w=CFG&&CFG.dropParamWhitelist;
+  return Array.isArray(w)?w.filter(x=>typeof x==='string'&&x):[];
+}
+/* 该渠道已配的清单 → 输入框里的 'a, b' 文本（没配 = 空框） */
+function dropParamsOf(c){
+  return (c&&Array.isArray(c.dp)&&c.dp.length)?c.dp.join(', '):'';
+}
+/* 合法参数名 chips：点一下把这个名字填进框（走 data-act 委托，不写内联属性）。
+   名字与模板里的 data-act 双向一一对应，见 ACTS 与 test/console-state.test.js。 */
+function dropChipsHtml(){
+  const w=dropWhitelist(); if(!w.length)return '';
+  return `<div class="row wrap" style="gap:6px;margin-top:6px"><span class="help">合法参数名（点一下填进框）：</span>`
+    +w.map(k=>`<button type="button" class="chip" style="cursor:pointer" data-act="fill-drop-param" data-k="${esc(k)}">${esc(k)}</button>`).join('')
+    +`</div>`;
+}
+function addDropParam(k){
+  const inp=$('#f-drop'); if(!inp||typeof k!=='string')return;
+  /* 名字先 trim 再用：chip 传进来的本来就干净（来自服务端下发的清单），但这条路径也可能被
+     别的入口复用，留个脏值就会变成框里一个看不见的空项（保存时被后端 400 挡下，用户还看不出哪错了）。 */
+  const name=(k||'').trim(); if(!name)return;
+  const cur=((inp.value||'')+'').split(/[\s,]+/).map(s=>s.trim()).filter(Boolean);
+  if(cur.includes(name))return;   /* 已经填过就不重复塞 */
+  cur.push(name); inp.value=cur.join(', ');
+}
+
 function openChannel(id){
   const c=DATA.channels.find(x=>x.id===id); if(!c)return;
   const rate=c.req?pct(c.req-c.err,c.req):0;
@@ -1690,6 +1738,7 @@ function openChannel(id){
           <button class="icon-btn" style="width:22px;height:22px" title="复制密钥" data-act="copy-ch-key" data-id="${esc(c.id)}">${svg('copy',12)}</button>
         </dd>
         <dt>协议</dt><dd class="mono">${esc(c.proto)}</dd>
+        ${c.dp&&c.dp.length?`<dt>不发这些参数</dt><dd class="mono">${esc(c.dp.join(', '))}</dd>`:''}
         <dt>模型数</dt><dd class="mono">${c.models} 个别名</dd>
       </dl>
 
@@ -2726,6 +2775,9 @@ function openChannelForm(id){
         <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
       <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
         <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
+      <div class="field"><label>不发这些参数 <span class="help">逗号或空格分隔；出站前从这家渠道的请求报文里删掉这几个参数（上游对某个参数组合直接 400 时用，例如 tools + reasoning_effort）</span></label>
+        <input class="input" id="f-drop" value="${esc(dropParamsOf(c))}" placeholder="留空 = 一个都不删；例：reasoning_effort, temperature">
+        ${dropChipsHtml()}</div>
       <div class="field"><label>API Key</label>
         <div class="row" style="gap:8px">
           <input class="input" id="f-key" type="password" value="" autocomplete="new-password" placeholder="${c?'已配置 ' + esc(chKey(c.id)||'（未设置）') + ' · 留空保持不变':'sk-… 或 notion 的 token_v2'}">
@@ -2935,6 +2987,12 @@ async function saveChannel(){
     autoAlias:$('#f-autoAlias').checked,
     proxy:$('#f-proxy').value.trim()||undefined,
     headers:$('#f-headers').value.trim()||undefined,
+    /* 渠道级「不发这些参数」（v1.18.33）：**总是**提交这个字段——框空 = 显式 `[]` = 清空。
+       刻意与上面几个字段的 `||undefined`（"留空 = 不动"）不同：服务端对 dropParams 的语义是
+       "传了空数组就清空、压根不传才沿用旧值"，前端若不发，用户就永远清不掉已配的清单。
+       这里不做白名单校验（前端只做"挡住明显错误"这类便宜检查）——合法名清单由服务端下发用于**提示**，
+       真正的准入门槛在后端 validateChannelDef，写错名字会 400 并把合法清单原文回显给用户。 */
+    dropParams:($('#f-drop').value||'').split(/[\s,]+/).map(s=>s.trim()).filter(Boolean),
     models,
   };
   const btn=$('.m-ft .btn.primary');
@@ -3242,6 +3300,8 @@ const ACTS={
   'open-import':el=>openImport(el.dataset.kind),
   'open-test-models':el=>openTestModels(el.dataset.id?{channelId:el.dataset.id}:{}),
   'open-channel-form':el=>openChannelForm(el.dataset.id||undefined),
+  /* v1.18.33 渠道级「不发这些参数」：合法参数名 chip → 填进输入框（名字走 data-k，不拼事件代码） */
+  'fill-drop-param':el=>addDropParam(el.dataset.k),
   'toggle-ch':el=>toggleCh(el.dataset.id),
   'close-drawer':()=>closeDrawer(),
   'toggle-drawer-key':el=>toggleDrawerKey(el.dataset.id,el),

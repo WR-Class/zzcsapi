@@ -60,6 +60,7 @@
       "enabled": true,
       "autoAlias": true,
       "proxy": "",
+      "dropParams": ["reasoning_effort"],
       "models": {}
     },
     {

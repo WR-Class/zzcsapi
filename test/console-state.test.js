@@ -290,6 +290,145 @@ function testWeight() {
   }
 }
 
+/* ═══════ 3b. 渠道级「不发这些参数」（v1.18.33）════════════════════════════════
+   现场：某渠道（agentrouter）每天固定开放额度，却对「tools + reasoning_effort」组合直接 400
+   ——`Function tools with reasoning_effort are not supported for gpt-6-astra`，而 DSH 每次请求
+   都同时带这两样 → 该渠道对我们 100% 失败（19 行 0 成功）。处置是把开关放在**渠道**上：
+   出站前从这家渠道的请求报文里删掉指定参数（后端 validateChannelDef 只收白名单内的名字）。
+   这一节守三件事：
+     ① 表单能填、能回填、**总是**提交——框空 = 显式 `[]` = 清空。这与 weight 等字段的
+        "留空 = 不动"语义**刻意不同**：服务端对 dropParams 是"传了空数组才清空、压根不传就沿用
+        旧值"，前端若不发这个字段，用户就永远清不掉已配的清单；
+     ② 合法参数名清单**只从服务端下发取**（GET /admin/api/config 的 dropParamWhitelist）。
+        前端自己抄一份迟早漂移，用户就会撞上"表单里能填、保存却 400"——那正是这次现场的病根形态；
+     ③ 服务端没下发清单时优雅降级：不显示 chips、字段照常可用（后端仍会 400 兜底，且文案自带清单）。
+
+   ★ 写成 `async function` 并由下面的主流程 `await` 调用，**不能**写成顶层裸块：块里的
+   `return (async () => …)()` 在 CommonJS 模块顶层等于 `return` 整个模块——第 4 节起的用例
+   与末尾的汇总行会一起被跳过，而退出码仍是 0（假绿）。第一版就是这么写的，跑了才发现输出里
+   没有汇总行。 */
+async function testDropParams() {
+  G('3b. 渠道级「不发这些参数」：回填 / 总是提交 / 清单来自服务端 / 降级');
+
+  /* 3b.1 adapt()：服务端的 dropParams 收成数组 dp（没配 = 空数组，模板才能直接 join） */
+  {
+    const dom = makeDom();
+    const RAW = {
+      channels: [
+        { id: 'd-on', name: '配了', protocol: 'openai', enabled: true, status: 'ok', priority: 5, dropParams: ['reasoning_effort', 'temperature'], aliases: [] },
+        { id: 'd-off', name: '没配', protocol: 'openai', enabled: true, status: 'ok', priority: 5, aliases: [] },
+      ],
+      usage: null,
+    };
+    const a = new Function('RAW', 'DATA', 'esc', 'svg', 'nf', '$',
+      'let CFG=null, loaded=false;\n' + extract('adapt') + '\nreturn { adapt, get DATA(){ return DATA } };'
+    )(RAW, { channels: [], models: [], meta: {} }, esc, svg, nf, dom.$);
+    a.adapt();
+    const on = a.DATA.channels.find((c) => c.id === 'd-on');
+    const off = a.DATA.channels.find((c) => c.id === 'd-off');
+    check('★ 服务端的 dropParams 被接成数组 dp（两项都在、顺序不变）',
+      Array.isArray(on.dp) && on.dp.length === 2 && on.dp[0] === 'reasoning_effort' && on.dp[1] === 'temperature');
+    check('没配的渠道 → dp 是**空数组**（不是 undefined，模板才能直接 join / 判长度）',
+      Array.isArray(off.dp) && off.dp.length === 0);
+  }
+
+  /* 3b.2 清单与回填：dropWhitelist() / dropParamsOf() / dropChipsHtml() */
+  {
+    const mk = (cfg) => new Function('CFG', 'esc',
+      extract('dropWhitelist') + '\n' + extract('dropParamsOf') + '\n' + extract('dropChipsHtml')
+      + '\nreturn { dropWhitelist, dropParamsOf, dropChipsHtml };')(cfg, esc);
+
+    /* 桩里刻意给一份**与真实白名单明显不同**的短清单：界面显示的是桩里那份 → 证明没有硬编码 */
+    const stub = ['zz-alpha', 'zz-beta'];
+    const f = mk({ dropParamWhitelist: stub });
+    const chips = f.dropChipsHtml();
+    check('★ chips 来自服务端下发的清单（桩里是 zz-alpha / zz-beta，界面就该是这两个）',
+      chips.includes('zz-alpha') && chips.includes('zz-beta') && !chips.includes('reasoning_effort'));
+    check('每个 chip 都走 data-act 委托（不写内联事件属性）',
+      (chips.match(/data-act="fill-drop-param"/g) || []).length === 2 && !/\sonclick=/.test(chips));
+    check('参数名经 esc() 进属性（它是服务端/用户可控值）',
+      mk({ dropParamWhitelist: ['a"b<c'] }).dropChipsHtml().includes('data-k="a&quot;b&lt;c"'));
+
+    check('★ 回填：配了两项 → \'a, b\' 文本；没配 → 空框',
+      f.dropParamsOf({ dp: ['reasoning_effort', 'temperature'] }) === 'reasoning_effort, temperature'
+      && f.dropParamsOf({ dp: [] }) === '' && f.dropParamsOf(undefined) === '');
+
+    /* ③ 降级：服务端没下发清单（老版本后端 / 该请求挂了）→ 不抛、不画 chips、字段照常可用 */
+    const deg = mk({});
+    let threw = '';
+    let degHtml = '';
+    try { degHtml = deg.dropChipsHtml(); } catch (e) { threw = e.message; }
+    check('★ 服务端没下发清单时优雅降级：不抛异常、不画 chips（后端仍会 400 兜底并把清单写在文案里）',
+      threw === '' && degHtml === '' && deg.dropWhitelist().length === 0);
+    check('清单里混进非字符串（脏数据）也不炸，只把字符串留下',
+      mk({ dropParamWhitelist: ['ok-one', 42, null, ''] }).dropWhitelist().join(',') === 'ok-one');
+  }
+
+  /* 3b.3 addDropParam()：点 chip 把名字填进框（去重、去空白） */
+  {
+    const dom = makeDom();
+    const f = new Function('$', extract('addDropParam') + '\nreturn { addDropParam };')(dom.$);
+    const inp = dom.$('#f-drop');
+    inp.value = '';
+    f.addDropParam('reasoning_effort');
+    check('空框点一下 → 填进这个名字', inp.value === 'reasoning_effort');
+    f.addDropParam('temperature');
+    check('再点一个 → 逗号接上', inp.value === 'reasoning_effort, temperature');
+    f.addDropParam('reasoning_effort');
+    check('★ 重复点同一个不重复塞（用户在框里手打过也一样）', inp.value === 'reasoning_effort, temperature');
+    inp.value = 'a, b';
+    f.addDropParam('  c  ');
+    check('手打的内容被尊重：去空白后接上（不是覆盖掉）', inp.value === 'a, b, c');
+    f.addDropParam('');
+    check('空名字/非字符串直接忽略（不塞空项）', inp.value === 'a, b, c');
+  }
+
+  /* 3b.4 saveChannel()：**总是**提交 dropParams；框空 = 显式 [] = 清空 */
+  {
+    const run = (dropVal) => {
+      const dom = makeDom();
+      const sent = [], toasts = [];
+      const apiStub = async (p, opt) => { sent.push({ p, body: JSON.parse(opt.body) }); return { existed: false }; };
+      const f = new Function('$', '$$', 'DATA', 'esc', 'svg', 'nf', 'toast', 'api', 'closeModal', 'loadAll',
+        'let modalChId=null, modalModels=[];\n' + extract('saveChannel') + '\nreturn { saveChannel };'
+      )(dom.$, dom.$$, { channels: [] }, esc, svg, nf, (m) => toasts.push(m), apiStub, () => { }, async () => { });
+      const v = (id, val) => { dom.$('#' + id).value = val; };
+      v('f-id', 'new-ch'); v('f-name', '新渠道'); v('f-base', 'https://x.test/v1'); v('f-key', 'sk-x');
+      v('f-proto', 'openai'); v('f-pri', '5'); v('f-weight', '0'); v('f-on', '1'); v('f-proxy', ''); v('f-headers', '');
+      v('f-drop', dropVal);
+      dom.$('#f-autoAlias').checked = true;
+      return f.saveChannel().then(() => ({ sent, toasts }));
+    };
+    return (async () => {
+      let r = await run('reasoning_effort, temperature');
+      check('★ 表单里的清单进了请求体（逗号文本 → 数组两项）',
+        r.sent.length === 1 && Array.isArray(r.sent[0].body.dropParams)
+        && r.sent[0].body.dropParams.join(',') === 'reasoning_effort,temperature', r.sent[0] && r.sent[0].body.dropParams);
+      check('同一发里其它字段照旧（没被这个新字段挤掉）',
+        r.sent[0].body.id === 'new-ch' && r.sent[0].body.weight === 0 && r.sent[0].body.protocol === 'openai');
+
+      r = await run('  a  ,, b  ');
+      check('脏输入（多余空格 / 连续逗号 / 空项）被清成干净两项',
+        r.sent[0].body.dropParams.join(',') === 'a,b', r.sent[0].body.dropParams);
+
+      r = await run('');
+      check('★ 框空 = 显式提交空数组（= 清空）。这条与 weight 的"留空 = 不动"刻意不同——'
+        + '不发这个字段的话，服务端会沿用旧值，用户就永远清不掉已配的清单',
+        Array.isArray(r.sent[0].body.dropParams) && r.sent[0].body.dropParams.length === 0, r.sent[0].body.dropParams);
+    })();
+  }
+
+  /* 3b.5 结构守卫：前端不许自己抄一份白名单（抄了会与后端漂移） */
+  {
+    const hard = /'reasoning_effort'\s*,\s*'reasoning'\s*,\s*'verbosity'/.test(src)
+      || /reasoning_effort',\s*'thinking',\s*'temperature'/.test(src);
+    check('★ build/app.js 里没有硬编码的完整白名单（清单唯一来源是服务端下发的 dropParamWhitelist）',
+      !hard && /CFG&&CFG\.dropParamWhitelist/.test(src));
+    check('产物侧同样只认服务端下发的清单（console.html 与 app.js 同源，构建即同步）',
+      !hard);
+  }
+}
+
 /* ═══════ 4. 自动权重观测（v1.6 静默版）：adapt() 接字段 + 观测卡渲染 ═══════
    这一节守住"看得见"那一半：后端算出来的观测字段真被接进 DATA、观测卡真把
    「若启用会怎么分」画出来，并且**卡面上写明只算不生效**（不许让用户以为已经生效了）。 */
@@ -1077,7 +1216,7 @@ function testDelegation() {
     'exportLogs','drawLogTable','pgClear','pgCopyCurl','copyAllEndpoints','copyGwKey','showKeyHelp',
     'closeModal','toggleKeyField','addModelRow','probeUpstream','saveChannel','testRowModel',
     'delModelRow','probeSelectAll','probeClearSel','probeAddSelected','importFiles','doImport','runTests',
-    'refreshStats','stFilter','render','banIp','unbanIp'];
+    'refreshStats','stFilter','render','banIp','unbanIp','addDropParam'];
   const calls = [];
   const stubs = {}; names.forEach(n => stubs[n] = (...a) => { calls.push([n].concat(a)); });
   const doc = {
@@ -1090,7 +1229,7 @@ function testDelegation() {
 
   check('委托块给 document 挂了 click 与 change 两个监听',
     typeof doc.listeners.click === 'function' && typeof doc.listeners.change === 'function');
-  check('ACTS 注册了 48 个动作（与模板用到的动作种类数一致）', Object.keys(ACTS).length === 48,
+  check('ACTS 注册了 49 个动作（与模板用到的动作种类数一致）', Object.keys(ACTS).length === 49,
     Object.keys(ACTS).length);
 
   /* 逐个真调：每个注册动作都解析得到底层函数（引用了列表外的函数名会当场炸） */
@@ -1400,6 +1539,7 @@ function testSearchClear() {
   testModels();
   testPlayground();
   await testWeight();
+  await testDropParams();
   testAutoWeight();
   testDisabledTest();
   await testRunTests();

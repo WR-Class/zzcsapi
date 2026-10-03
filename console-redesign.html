@@ -1845,6 +1845,9 @@ function openChannelForm(id){
         <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
       <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
         <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
+      <div class="field"><label>不发这些参数 <span class="help">逗号或空格分隔；出站前从这家渠道的请求报文里删掉这几个参数（上游对某个参数组合直接 400 时用，例如 tools + reasoning_effort）。合法参数名清单由服务端下发（/admin/api/config 的 dropParamWhitelist），点下面的名字即可填进框</span></label>
+        <input class="input" id="f-drop" value="${esc((c&&Array.isArray(c.dp)&&c.dp.length)?c.dp.join(', '):'')}" placeholder="留空 = 一个都不删；例：reasoning_effort, temperature">
+        <div class="row wrap" style="gap:6px;margin-top:6px"><span class="help">合法参数名（点一下填进框）：</span>${['reasoning_effort','thinking','temperature','top_p','max_tokens'].map(k=>`<button type="button" class="chip" style="cursor:pointer" data-act="fill-drop-param" data-k="${esc(k)}">${esc(k)}</button>`).join('')}</div></div>
       <div class="field"><label>API Key</label>
         <div class="row" style="gap:8px">
           <input class="input" id="f-key" type="password" value="${esc(c?fakeKey(c.id):'')}" placeholder="sk-… 或 notion 的 token_v2">

@@ -1,4 +1,4 @@
-# ZZCSAPI — 本地多渠道 AI 聚合网关
+﻿# ZZCSAPI — 本地多渠道 AI 聚合网关
 
 类似 new-api / sub2-api / one-api 的轻量自部署版，**零依赖，仅 Node 18+**。
 把所有中转 API key 集中在一处，对外同时暴露 **OpenAI / Anthropic / Gemini** 三种兼容端点。
@@ -203,7 +203,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 40 个测试文件 · 1800 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 41 个测试文件 · 1917 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -224,7 +224,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**32 个文件 · 1548 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**41 个文件 · 1917 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
 ## 配置示例 (`config.example.json`)
@@ -279,6 +279,13 @@ http://127.0.0.1:8787/console
 
 > 渠道字段 `proxy`（可选）：HTTP 代理地址，探测/测试/聊天全部经代理转发（流式会整体缓冲后回放）；
 > `notion` / `notion-agent` 不支持代理。细则见 [协议与渠道详解](docs/protocols.md)。
+> 渠道字段 `dropParams`（可选，v1.18.33）：**渠道级「不发这些参数」**——出站前从这家渠道的请求报文里删掉指定的几个参数。
+> 用于「上游只吃不下某个参数」的场合：某渠道对「`tools` + `reasoning_effort`」组合直接 400，而客户端每次请求都带这两样，
+> 参数是客户端发的、网关只原样转发 → 开关只能放在渠道上。**只接受白名单内的名字**（`reasoning_effort` / `thinking` /
+> `temperature` / `max_tokens` 等；`messages`/`model`/`stream`/`tools` 这类结构性字段不在内，配错名字最多"没生效"、不会把请求打残），
+> 白名单外的名字 **400** 并回带合法清单（不静默忽略）。生效于常规链路与同协议直通；`workbuddy` / `codex` / `genspark` /
+> `notion-agent` 自带专用报文构造，**不适用**。控制台入口：渠道编辑弹窗「不发这些参数」，合法名清单由
+> `GET /admin/api/config` 的 `dropParamWhitelist` 下发。细则见 [协议与渠道详解](docs/protocols.md)。
 > 调度旋钮（`cooldown` / `retries` / `autoWeight`）与运行期四组开关（`sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`）
 > 的全量取值与钳制范围见 [调度详解](docs/scheduling.md) 与 [运行期设置](docs/runtime-settings.md)。
 > `security.trustedProxy` 只在网关部署在反向代理后面时才需要：留空 = 直连模式，一律只认 socket 地址
@@ -335,14 +342,14 @@ thinking 回放修复）。矩阵表、工具调用四方向、各渠道配置�
 | `/admin/api/recheck` | POST | admin | 立即重探测（body 可传 `{id}`）；**不带 id = 全部重探测，含停用渠道** |
 | `/admin/api/channel` | POST | admin | 改渠道（`{id, priority?, enabled?, weight?}`，立即生效并持久化） |
 | `/admin/api/channels` | GET | admin | 渠道列表（`apiKey` 只下发掩码 + `apiKeySet` 布尔） |
-| `/admin/api/channels` | POST | admin | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥** |
+| `/admin/api/channels` | POST | admin | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥**；`dropParams` 显式空数组 = 清空、不传 = 沿用旧值（v1.18.33） |
 | `/admin/api/channels` | DELETE | admin | 删除渠道（body `{id}`） |
 | `/admin/api/probe` | POST | admin | 临时探测上游模型清单（不落库） |
 | `/admin/api/test` | POST | admin | 真发一次最小 chat 请求；带 `channelId` 时**只打该渠道且不看 `enabled`** |
 | `/admin/api/codex-import` | POST | admin | 导入 codex 凭据（完整 JSON 或裸 RT） |
 | `/admin/api/codex-quota` | GET | admin | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import` | POST | admin | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
-| `/admin/api/config` | GET | admin | 接入信息（URL / 端口 + 密钥**掩码** + `keysInsecure`；不交任何密钥原文） |
+| `/admin/api/config` | GET | admin | 接入信息（URL / 端口 + 密钥**掩码** + `keysInsecure`；不交任何密钥原文）+ `dropParamWhitelist`（渠道 `dropParams` 的合法参数名，控制台照用） |
 | `/admin/api/channels/{id}/key` | GET | admin | **按需揭示**：取单个渠道的上游密钥原文 |
 | `/admin/api/gateway-key` | GET | admin | **按需揭示**：取网关 `GATEWAY_KEY` 原文 |
 | `/admin/api/admin-key` | GET | admin | **按需揭示**：取管理 `ADMIN_KEY` 原文 |

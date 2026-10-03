@@ -16,6 +16,9 @@
  * 代价要诚实说：入站那层"顺手的清洗"也不再执行（内部格式才需要的工具 id 清洗、参数方言修正），
  * 报什么错就透什么错；candidate 过滤（图片能力门）仍在选路阶段照常生效。
  *
+ * v1.18.32 增补（§3b）：直通路径上的「上游 200 但一个内容帧都没有」也要如实记账——直通是边收边写、
+ *   `headCommitted` 恒真、换不了家，但"账本不说谎 + 让这家退避"必须成立（此前它被记成成功）。
+ *
  * 跑法：node test/same-protocol-passthrough.test.js   （退出码非 0 表示有回归）
  * ═══════════════════════════════════════════════════════════════════════════ */
 'use strict';
@@ -67,6 +70,16 @@ function extract(name) {
 const load = (name) => new Function(extract(name) + '\nreturn ' + name + ';')();
 
 /* ── 假上游：一个进程里同时扮演 anthropic / gemini / openai 三种原生上游 ── */
+// v1.18.32：直通路径的「200 + 零正文」——上游只发 message_start + message_stop，
+//   **零 content_block_delta**（客户端拿到的是一个没有任何内容块的消息）。
+const EMPTY_ANTHROPIC_SSE = [
+  'event: message_start',
+  'data: {"type":"message_start","message":{"id":"msg_empty","role":"assistant","content":[],"usage":{"input_tokens":4,"output_tokens":0}}}',
+  '',
+  'event: message_stop',
+  'data: {"type":"message_stop"}',
+  '',
+].join('\n');
 function makeFakeUpstream() {
   const st = {
     mode: 'ok', hits: [], anthropicBody: '', anthropicSSE: '', geminiBody: '', oaiReply: null,
@@ -83,6 +96,11 @@ function makeFakeUpstream() {
       }
       // Anthropic 原生
       if (/\/v1\/messages$/.test(req.url)) {
+        // v1.18.32：渠道 ant-empty 的上游模型名 → 只回 message_start + message_stop（零 content_block_delta）
+        if (body && body.model === 'claude-empty-up') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          return res.end(EMPTY_ANTHROPIC_SSE);
+        }
         if (st.mode === 'anthropic-stream') {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
           return res.end(st.anthropicSSE);
@@ -119,8 +137,12 @@ function makeFakeUpstream() {
       /function passthroughChannelOpts\(/.test(SRC)
       && !/passthroughChannelOpts[\s\S]{0,900}?translateResponse:/.test(SRC)
       && !/passthroughChannelOpts[\s\S]{0,900}?makeStreamTranslator:/.test(SRC));
-    check('★ anthropic 直通只改 model，其余字段原样带出去',
-      /encodeOutgoing: \(b, c\) => \(proto === 'anthropic' \? \{ \.\.\.raw, model: c\.upstream \} : raw\)/.test(SRC));
+    check('★ anthropic 直通只改 model（v1.18.33 起另按渠道 dropParams 剔除显式配置的那几个参数），其余字段原样带出去',
+      /encodeOutgoing: \(b, c\) => \(proto === 'anthropic' \? \{ \.\.\.strip\(raw\), model: c\.upstream \} : strip\(raw\)\)/.test(SRC)
+      // v1.18.33：strip() 的两条承诺——没配 dropParams 的渠道必须**原对象原样返回**（老配置行为一个字节不变，
+      // 直通保真是这套设计的立身之本），配了也只删 drops 里那几个键、绝不整份重造报文。
+      && /const strip = \(o\) => \{\s*if \(!drops\.length\) return o;/.test(SRC)
+      && /for \(const k of drops\) delete c\[k\];/.test(SRC));
     check('★ 选路：只有客户端协议 === 渠道协议才直通（v1.18.8 直通前先做 thinking 签名修复——没坏就不碰），否则仍走原生转换',
       /opts\.clientProto && opts\.clientProto === chProto\)/.test(SRC)
       && /\? passthroughChannelOpts\(chProto, \(chProto === 'anthropic'\s*\?\s*repairThinkingBody/.test(SRC)
@@ -142,6 +164,12 @@ function makeFakeUpstream() {
       (SRC.match(/clientProto: 'anthropic'/g) || []).length === 1
       && (SRC.match(/clientProto: 'gemini'/g) || []).length === 1
       && (SRC.match(/rawClientBody: body/g) || []).length === 2);
+    check('★ v1.18.32 直通空流判据的条件逐字为 `streamError === null && !nativeStream && !sawStreamContent`'
+      + '（正则要求条件右括号后紧跟 `{`，所以多塞任何一项都会挂：既不许少 `!nativeStream`，也不许再加 `streamOutText.length === 0`。'
+      + '`!nativeStream` 是真实误伤过的坑——原生流走翻译器、`noteStreamLine` 压根不跑，`sawStreamContent` 在原生流上恒 false，'
+      + '缺了它每条正常原生流都会被判空：实测 mock-anthropic 翻译后已有 23 字符正文仍被记失败 → 渠道进冷却 → native-channels-e2e 6 条级联 503；'
+      + '而 `streamOutText` 在直通路径会回落累计原始行，加了它等于把直通场景整条判死）',
+      /if \(streamError === null && !nativeStream && !sawStreamContent\) \{/.test(SRC));
   }
 
   /* ══════════ 1. 真值表 ══════════ */
@@ -185,6 +213,8 @@ function makeFakeUpstream() {
       { id: 'ant-native', name: 'Anthropic原生', protocol: 'anthropic', baseUrl: `http://127.0.0.1:${UP}`, apiKey: 'sk-ant-test', priority: 1, models: { 'claude-x': 'claude-3-5-sonnet-20241022' } },
       { id: 'ant-openai', name: 'OpenAI中转', protocol: 'openai', baseUrl: `http://127.0.0.1:${UP}/v1`, apiKey: 'sk-oai-test', priority: 5, models: { 'claude-cv': 'gpt-x' } },
       { id: 'gem-native', name: 'Gemini原生', protocol: 'gemini', baseUrl: `http://127.0.0.1:${UP}`, apiKey: 'goog-test', priority: 3, models: { 'gem-x': 'gemini-2.5-pro' } },
+      // v1.18.32：这条渠道的上游只回 message_start + message_stop（零内容帧）——直通空流用
+      { id: 'ant-empty', name: 'Anthropic空流', protocol: 'anthropic', baseUrl: `http://127.0.0.1:${UP}`, apiKey: 'sk-ant-empty', priority: 7, models: { 'claude-empty': 'claude-empty-up' } },
     ],
   }));
   const gwEnv = { ...process.env, ZZCSAPI_CONFIG: cfgPath, ZZCSAPI_USAGE: path.join(TMP, 'u.json'), GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' };
@@ -209,7 +239,7 @@ function makeFakeUpstream() {
     // 等到三个渠道都被探活过（否则可能在冷却里）
     for (let i = 0; i < 30; i++) {
       const st = await adminGet('/admin/api/status');
-      const ok = ['ant-native', 'ant-openai', 'gem-native'].every((id) => { const c = st.channels.find((x) => x.id === id); return c && c.status === 'ok'; });
+      const ok = ['ant-native', 'ant-openai', 'gem-native', 'ant-empty'].every((id) => { const c = st.channels.find((x) => x.id === id); return c && c.status === 'ok'; });
       if (ok) break;
       await sleep(300);
     }
@@ -309,6 +339,36 @@ function makeFakeUpstream() {
       const last = u.recent[0];
       check('★ 流式直通也记真实 token（5 进 / 3 出）',
         last && last.in === 5 && last.out === 3, last);
+    }
+
+    console.log('\n3b. 直通路径的「200 + 零正文」：如实记失败、不谎报成功（v1.18.32）');
+    {
+      // 上游只发 message_start + message_stop（**零 content_block_delta**）：客户端拿到的是空回复。
+      // 直通是边收边写（`headCommitted` 恒真、字节已经出去了），所以这一发**换不了家**——
+      // 本节验证的是另两件：账本不许记成功、这家必须被记失败（下一发才会退避/换家）。
+      const r = await post('/anthropic/v1/messages', {
+        model: 'claude-empty', max_tokens: 32, stream: true,
+        messages: [{ role: 'user', content: 'ping' }],
+      });
+      const hit = lastHit(/\/v1\/messages$/);
+      check('★ 上游确实收到了这一发（原生报文、模型名已换成渠道的上游名）', !!hit && hit.body.model === 'claude-empty-up', hit && hit.body.model);
+      check('★ 客户端仍拿到 200 + 上游原始 SSE（字节已写出、按设计换不了家）',
+        r.code === 200 && r.text === EMPTY_ANTHROPIC_SSE && /message_start/.test(r.text) && /message_stop/.test(r.text),
+        { code: r.code, got: r.text.slice(0, 200) });
+      check('响应头带渠道标记', r.chan === 'ant-empty', r.chan);
+      await sleep(200);
+      const u = await adminGet('/admin/api/usage');
+      const rows = (u.recent || []).filter((x) => x.channelId === 'ant-empty');
+      check('★ 用量行如实记 ok:false（不再"200 + 空 = 成功"）', rows.length > 0 && rows.some((x) => x.ok === false), rows);
+      check('★ 失败行备注写明「200 但零正文」', rows.some((x) => /no content|零正文/.test(String(x.note || ''))), rows);
+      const st = await adminGet('/admin/api/status');
+      const ch = (st.channels || []).find((x) => x.id === 'ant-empty');
+      check('★ 该渠道被记了失败（lastError 写明 stream empty + consecutiveFail ≥ 1，下一发才会退避）',
+        !!ch && /stream empty/.test(String(ch.lastError || '')) && Number(ch.consecutiveFail) >= 1,
+        ch && { lastError: ch.lastError, consecutiveFail: ch.consecutiveFail });
+      check('对照：这条判据没碰前面那些**正常**直通流（§2 非流式 / §3 流式之后 ant-native 仍是零欠账）',
+        (st.channels || []).filter((x) => x.id === 'ant-native').every((x) => Number(x.consecutiveFail) === 0),
+        (st.channels || []).map((x) => ({ id: x.id, f: x.consecutiveFail })));
     }
 
     console.log('\n4. Gemini 客户端 → Gemini 渠道（直通）');

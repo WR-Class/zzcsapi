@@ -14,6 +14,8 @@
  *       信息量，预检期只扣着不提交，故错误帧到来时切换窗口仍开着；
  *   · 已提交后的错误帧（正文已流出一部分）→ 如实收尾、ok:false 记账、渠道记失败；
  *   · 非流式直通错误体（200 + {"error":…}）→ 切下一候选，不再记成功；
+ *   · v1.18.32：非流式 **200 + 空回复**（`choices[0].message.content === ''`，且无 tool_calls、无思考）
+ *     → 判失败、`ok:false` 记账、失败行带模型名，并**切下一候选**（非流式响应尚未提交，真能换家）；
  *   · 对照组：正常流与正常非流式行为零改动（字节级透传仍成立）。
  *
  * 安全约束：动态空闲端口；配置/用量在系统临时目录（绝不动仓库 config.json/usage.json）。
@@ -91,6 +93,10 @@ const upstream = http.createServer((req, res) => {
     if (mode === 'err-body') {                  // 非流式错误体：200 + {"error":…}
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: { message: 'The input exceeds the supported context size.', type: 'server_error' } }));
+    }
+    if (mode === 'empty-completion') {          // ★ v1.18.32：非流式 200 + 空回复（message.content === ''）
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ id: 'x', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 0 } }));
     }
     if (mode === 'nonstream') {                 // 非流式正常
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -234,6 +240,39 @@ async function main() {
     } finally { gw.kill('SIGKILL'); }
   }
 
+  /* ══ 场景 F：非流式 200 + 空回复（v1.18.32）→ 判失败 + 切下一候选 ══
+   *   现场：`gpt-6-astra` 349 行里 123 成功 / 226 失败，其中 91 行是"幽灵成功"（ok:true 但 out=0，
+   *   client 全是 deepseek-harness 的真实会话，输入 128k~132k）——客户端拿到空回复、账本一片绿。
+   *   流式的「200 + 零正文」已被 v1.18.26 的判据抓死，所以那些行只能来自**非流式路径**：
+   *   那里此前压根没有空正文判据。这里真起两个渠道验证"判失败 + 换家 + 如实记账"三件都成立。 */
+  {
+    const gwPort = await freePort();
+    const cfgPath = path.join(TMP, 'f.json');
+    fs.writeFileSync(cfgPath, JSON.stringify({
+      port: gwPort, health: { intervalSec: 3600, timeoutMs: 3000 },
+      channels: [
+        { id: 'bad', name: 'bad', protocol: 'openai', baseUrl: `http://127.0.0.1:${upPort}/v1`, apiKey: 'sk-bad', enabled: true, priority: 10, models: { mock: 'mock' }, headers: { 'x-mock-mode': 'empty-completion' } },
+        { id: 'good', name: 'good', protocol: 'openai', baseUrl: `http://127.0.0.1:${upPort}/v1`, apiKey: 'sk-good', enabled: true, priority: 5, models: { mock: 'mock' }, headers: { 'x-mock-mode': 'nonstream' } },
+      ],
+    }));
+    const gw = startGateway(cfgPath, gwPort);
+    try {
+      check('F 网关启动', await waitUp(gwPort));
+      const r = await chat(gwPort, { model: 'mock', messages: [{ role: 'user', content: 'hi' }], stream: false });
+      const text = await r.text();
+      check('★ F 非流式空回复 → 切到 good，客户端拿到正文（HTTP ' + r.status + '）', r.status === 200 && text.includes('好的'), { servedBy: r.headers.get('x-zzcsapi-channel'), head: text.slice(0, 160) });
+      check('★ F 落在 good 渠道（非流式响应未提交，所以真的换得了家）', r.headers.get('x-zzcsapi-channel') === 'good');
+      await sleep(300);
+      const u = await usage(gwPort);
+      const badRows = (u.recent || []).filter((x) => x.channelId === 'bad');
+      check('★ F bad 渠道如实记 ok:false（不再"幽灵成功"）', badRows.length > 0 && badRows.every((x) => x.ok === false), { badRows });
+      check('★ F 失败行备注写明空回复', badRows.some((x) => /empty completion|空回复/.test(String(x.note || ''))), { notes: badRows.map((x) => x.note) });
+      check('★ F 失败行带上了模型名（不再写死 —）', badRows.some((x) => x.model === 'mock'), { models: badRows.map((x) => x.model) });
+      const goodRow = (u.recent || []).find((x) => x.channelId === 'good');
+      check('F 对照：good 的正常非流式回复仍记 ok:true 且 out > 0（判据没误伤正常非流式）', goodRow && goodRow.ok === true && goodRow.out > 0, { goodRow });
+    } finally { gw.kill('SIGKILL'); }
+  }
+
   /* ══ 场景 C：非流式直通错误体 → 切下一候选 ══ */
   {
     const gwPort = await freePort();
@@ -280,8 +319,19 @@ async function main() {
   }
 
   upstream.close();
+  try { upstream.closeAllConnections(); } catch { /* 老 Node 没有该方法：无妨 */ }
   console.log(`\n${'-'.repeat(56)}\n流内错误帧回归：${pass} 通过 / ${fail} 失败`);
-  if (fail > 0) { fs.rmSync(TMP, { recursive: true, force: true }); process.exit(1); }
   fs.rmSync(TMP, { recursive: true, force: true });
+  // 收尾纪律（与 channel-test-reasoning-e2e 一致）：**不用**硬 process.exit——kill 子进程与 close
+  // 假上游会和 Windows 上的 libuv 句柄关闭竞态，撞 "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)"
+  // 而让退出码变成 0xC0000409，把一个全过的用例报成失败。改为先让句柄落定，再按 exitCode 自然退出。
+  process.exitCode = fail ? 1 : 0;
+  await sleep(250);
 }
-main().catch((e) => { console.error('测试异常:', e); process.exit(1); });
+main().catch((e) => {
+  console.error('测试异常:', e);
+  // 异常路径同样不用硬 process.exit：关掉假上游（含在飞连接）后按 exitCode 自然退出
+  try { upstream.close(); upstream.closeAllConnections(); } catch { }
+  fs.rmSync(TMP, { recursive: true, force: true });
+  process.exitCode = 1;
+});

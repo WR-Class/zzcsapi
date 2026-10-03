@@ -1,4 +1,4 @@
-# 前端代码地图
+﻿# 前端代码地图
 
 > 面向「接手改前端」的 Agent / 开发者的快速定位文档。
 > 配套的深入说明见 [frontend-console-detailed.md](./frontend-console-detailed.md)。
@@ -26,7 +26,7 @@
 
 | 文件 | 行数 | 职责 | 本文件涉及 |
 | --- | --- | --- | --- |
-| `console-redesign.html` | ~2272 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
+| `console-redesign.html` | ~2266 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
 | `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
 | `build/shell.html` | 47 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 105 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**、**数据统计页 `.st-*` / 占位符 `.t-c-ph`**） | ✅ §0.2 |
@@ -61,7 +61,7 @@ build/app.js     ─────────────────────
 1. 从 `console-redesign.html` 切出 `<style>` 内容 —— **不重写、不改写**，视觉因此与设计稿逐字节一致
 2. 按 `head → banner → 设计CSS → extra.css → </style></head><body> → shell → <script> → app.js → </script></body></html>` 拼接
 3. **自检**：产物里 `</style>` 必须恰好出现 1 次，否则抛错
-4. **行数守卫**：head.html=21 行 / shell.html=52 行，变了就在构建期爆错（行号换算偏移的恒定前提）
+4. **行数守卫**：head.html=21 行 / shell.html=47 行，变了就在构建期爆错（行号换算偏移的恒定前提）
 
 ### ⚠️ 为什么必须有这条自检
 
@@ -74,9 +74,9 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 目标 | 公式 | 校验点 |
 | --- | --- | --- |
 | `console.html` 的 CSS 行号 | `console-redesign.html` 行号 **+13** | tokens 区块：原型 11 → 产物 24；`--tx:#1b1710`：原型 46 → 产物 59 |
-| `console.html` 的 JS 行号 | `build/app.js` 行号 **+709** | `const IC`：app.js 3 → 产物 712；`autoWeightCard()`：app.js 663 → 产物 1372；`vStats()`：app.js 1298 → 产物 2007；`tick()`：app.js 2630 → 产物 3339（偏移 **+709**，与下面 §0.2 的源行号一一对应） |
+| `console.html` 的 JS 行号 | `build/app.js` 行号 **+709** | `const IC`：app.js 3 → 产物 712；`autoWeightCard()`：app.js 678 → 产物 1387；`vStats()`：app.js 1347 → 产物 2056；`tick()`：app.js 2690 → 产物 3399；`dropChipsHtml()`：app.js 972 → 产物 1681（偏移 **+709**，与下面 §0.2 的源行号一一对应） |
 
-> 偏移受 `build/head.html`（21 行）/ `build/shell.html`（52 行）/ `build/extra.css`（105 行）/ 设计稿 `<style>` 的行数增删影响（head/shell 已有构建期行数守卫；extra.css 与设计稿 CSS 改行数需人工重算并同步本文档、AGENTS.md §1.2 与 `build/build.js` 注释）。
+> 偏移受 `build/head.html`（21 行）/ `build/shell.html`（47 行）/ `build/extra.css`（105 行）/ 设计稿 `<style>` 的行数增删影响（head/shell 已有构建期行数守卫；extra.css 与设计稿 CSS 改行数需人工重算并同步本文档、AGENTS.md §1.2 与 `build/build.js` 注释）。
 > **历史教训（v1.8 重核）**：这条公式曾长期停在 **+617**（`build/build.js` 注释里又写着 +648），而实测是 **+673** —— 三个地方对不上，且漂移量在各函数间不等（+1 ~ +26），说明是历次改动累积的局部插入。
 > **v1.8.1（图例对齐修复）**：`build/extra.css` 的 `.aw-*` 注释块 +4 行 → 偏移 **+673 → +677**，CSS 偏移仍 +13。
 > **v1.9（自动权重独立成页 + 份额列对齐）**：`.aw-*` 由「堆叠带 + `auto-fit` 图例」重写成「一候选一列（`.aw-split`/`.aw-col`/`.aw-seg`）」，`build/extra.css` 68 → **58 行** → 偏移 **+677 → +667**（CSS 偏移仍 +13）。注意本轮是**双向变化**：`extra.css` 减 10 行（偏移 −10）+ `app.js` 在 `vAutoWeight()` 处净增行（app.js 行号 +）——所以产物行号在插入点**前后表现不同**：`autoWeightCard()` 之前的函数产物行号整体 −10（如 `const IC` 680 → 670），之后的函数因两个方向抵消而基本不动（`autoWeightCard()` 恰好 1301 → 1301）。
@@ -92,6 +92,11 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 > · `build/app.js` 侧删掉 `syncGlobalSearch` + 两个 `#globalSearch` 监听 + `Cmd/Ctrl+K` 抢焦点（净 **−14** 行，回到 v1.18.23 之前的水位再 +2 行注释）→ 锚点**回到**：`setTheme` **2507**、事件委托块 **2525–2586**（`ACTS` 2525 / click 2575 / change 2581）、`showKeyGate` **2591**、`logout` **2620**、`__ZZ_BOOTED__` **2639**、`tick` **2630**、`boot` **2640**；`app.js` **2660 行**、产物 **3373 行**（复核：`const IC` 3 → **712**、`autoWeightCard` 663 → **1372**、`vStats` 1298 → **2007**、`tick` 2630 → **3339**，偏移一致为 **+709**）。
 > · 设计稿 `console-redesign.html` 同步移除（顶栏 5 行 + JS 4 行，净 **−9** 行）：原型 §3 表里 `drawer` **2237**、`closeDrawer` **2241**、keydown 监听 **2242**、`setTheme` **2248**、`#themeBtn.onclick` **2254**、`init()`(IIFE) **2255**。
 > **教训**：extra.css 在拼接序里位于 app.js **之前**，所以它每增删 1 行，JS 偏移就整体 ±1，而 CSS 偏移不动 —— 改 extra.css 前先想清楚要不要多这一行。改完 `build/*` 一定要用 AGENTS.md §1.2 的命令重新导一遍，不要按估算改数字。
+> **v1.18.33（渠道级「不发这些参数」`dropParams`）**：设计稿 `<style>` **一行未动** → **CSS 偏移 +13 与 JS 偏移 +709 均不变**（实测复核：`const IC` app.js 3 → 产物 712、`dropChipsHtml()` app.js 972 → 产物 1681、`tick()` app.js 2690 → 产物 3399，三处差一致为 **+709**；CSS 侧 `tokens` 原型 11 → 产物 24、`--tx:#1b1710` 原型 46 → 产物 59，差一致为 **+13**）。
+> · `build/app.js` 净增约 58 行（`adapt()` +2、`loadAll()` +13、`toggleCh` 与 `openChannel` 之间新增 4 个 `drop*` 函数约 33 行、`openChannel()` 抽屉 +1、`openChannelForm()` 表单 +3、`saveChannel()` 报文 +6、`ACTS` +1）→ `app.js` 2660 → **2719 行**。
+> · **§0.2 里 app.js 侧的行号锚点整体下移**，且**分段不同**（插入点不止一处）：`loadAll()` 之前 **+0**、`loadAll()` 之后 **+15**、`openChannel()` 之后 **+49**、`openChannelForm()` 表单之后 **+52**、`saveChannel()` 之后 **+58**、事件委托块之后 **+60**——本轮已按 AGENTS §1.2 的三条命令**整表重核**。
+> · 设计稿 `console-redesign.html` 只在演示表单里加 3 行（`#f-drop` + chips 行）→ 原型 JS 锚点在插入点之前 **−5**（v1.18.24 删顶栏时 §3.1–§3.7 没回写，属于历史烂账，本轮一并修掉）、插入点之后 **−2**、`drawer` 起 **+3**。
+> · 上面 v1.18.24 那条列出的 app.js 锚点（`setTheme` 2507 / `ACTS` 2525 / click 2575 / change 2581 / `showKeyGate` 2591 / `logout` 2620 / `tick` 2630 / `boot` 2640 / `__ZZ_BOOTED__` 2639）是**该版当时**的位置，当前值见 §0.2。
 
 ### 三条硬规则
 
@@ -103,7 +108,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 ## 0.2 生产侧（`build/`）索引
 
-### 结构分段（`build/shell.html` 52 行 · `build/head.html` 21 行）
+### 结构分段（`build/shell.html` 47 行 · `build/head.html` 21 行）
 
 | 文件 | 行号 | 内容 |
 | --- | --- | --- |
@@ -111,8 +116,8 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | `build/head.html` | 12–20 | 构建管线说明注释 |
 | `build/shell.html` | 1–4 | `.bg-layer` ×3 背景氛围 |
 | `build/shell.html` | 6–24 | `.app > .rail`（brand / railNav / rail-foot） |
-| `build/shell.html` | 27–41 | `.main > .topbar` + `.viewport#viewport` |
-| `build/shell.html` | 44–52 | `#scrim` + `#drawer` + `#mask` + `#toasts` |
+| `build/shell.html` | 27–37 | `.main > .topbar` + `.viewport#viewport` |
+| `build/shell.html` | 40–47 | `#scrim` + `#drawer` + `#mask` + `#toasts` |
 
 > 生产只有 **1 个 `.mask`**（`#mask`，内容由 `modal()` 注入）+ 1 个抽屉（`#drawer`）。
 > 早期版本的 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 已随重构删除。
@@ -125,40 +130,41 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | --- | --- | --- |
 | 3 | `IC` | 内联 SVG path 字典 |
 | 59 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构（含渠道的 `weight`/`weightedHits`/`weightedShare` → `w`/`wHits`/`wShare`；日志条目解析进 `n` + **`cl`（客户端标签，v1.18.11）**；顶层 `stats: RAW.stats`（v1.18.11）） |
-| 141 | `loadAll()` | 并发拉取 status / usage / config / **settings** / **keys** / **stats（v1.18.11）**，写 `RAW` → `adapt()`。**settings 与 keys（v1.18.5 密钥管理页数据）与 stats 各自单独 `.catch(()=>null)` 兜底**：这几个端点挂了不能把整页拉取拖垮（其余照常刷新） |
-| 165 / 185 | `render()` / `reload()` | 重绘当前页（**保留滚动位置 + 焦点/光标**；筛选状态由各页 JS 变量回填，见下方「状态回填」约定）/ 重新拉数并重绘 |
-| 188 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
-| 205–219 | `$` `$$` `esc`(207) `nf` `pct` `fTok` `fMs` `stTxt` `protoLabel` `errMsgOf`(219) | DOM/格式化小工具 + **错误显示统一口（v1.18.17，公网部署实测抓到）**：网关错误体是 `{error:{message,type}}`，`errMsgOf` 对象取 `message`、字符串透传、`j.message` 兜底——`api()` 错误 toast 与登录门共用（直接拼 `j.error` 会显示 `[object Object]`、吞掉真实原因） |
-| 220 | `api(path,opts)` | **统一请求封装**：错误 toast 走 `errMsgOf`（v1.18.17，错误体是对象时不再显示 `[object Object]`）；**v1.18.6 起不注入任何 `Authorization` 头**——管理面鉴权交给登录门换来的会话 cookie（同源自动随行，`HttpOnly`，JS 读不到）；**401 → 弹登录门**（会话过期 / 被轮换清掉时自动闭环）。**v1.18.1 起把 `status`/`body` 挂到抛出的 Error 上**，供运行期设置页显示后端 400 原文 |
-| 228 / 230 / 239 / 249 | `CFG`(228) `downloadCsv`(230) `toast`(239) `copyText`(249) | 端点配置缓存 / 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
-| 265 / 307 / 325 | `areaChart` / `sparkline` / `donut` | 内联 SVG 图表。**v1.18.1 起两个折线函数对空数据返回占位图而不是抛错**（全新部署 `usage` 为空时，详情抽屉曾在 `pts[0][0]` 处崩掉 → 表现是"点详情没反应"） |
-| 344 | `NAV` | 侧栏导航定义（「资源」组含 渠道管理 / 聚合模型 / 自动权重；「监控」组含 **调用日志 / 数据统计（v1.18.11 新增，`zap` 图标）**；「工具」组含 Playground / 运行期设置 / 密钥管理 / 接入信息） |
-| 360 / 368 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`；路由表含 `autoweight:vAutoWeight`、`settings:vSettings`、`keys:vKeys` 与 **`stats:vStats`（v1.18.11，`render()` 的分发表同加了这一项——只加 `go()` 一张会出现"能进页但 8 秒轮询不刷新"）**） |
-| 381 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
-| 401–437 | `winStats`(401) `avgLatency`(417) `avgLatencyDelta`(423) `dPct`(431) `dChip`(432) `OV_RANGE`(435) `ovRange`(436) `ovRangeCfg`(437) | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ 涨跌小工具 / **时间范围配置** |
-| 438 / 446 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
-| 457–492 | `exportUsage`(457) `exportLogs`(469) `exportModels`(476) `copyModels`(483) | 导出与复制 |
-| 492 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
-| 609 / 610 / 894 / 931 / 940 | `chTab`/`chQ`(609) `vChannels` / `drawChTable` / `toggleCh` / `openChannel` | 渠道页（v1.9 起**只剩页签 + 搜索 + 表格**，观测卡已迁出）/ 排序渲染（含**权重 / 分流**列）/ 启停 / 详情抽屉（含权重与分流占比角标 + 自动权重观测一节） |
-| 655 / 663 | **`vAutoWeight()`** / **`autoWeightCard()`** | **自动权重页**（v1.9，资源 → 自动权重）：`vAutoWeight` 只出页头 + 挂卡；`autoWeightCard` 把 `/admin/api/status` 的 `autoWeight.models[]` 画成"若启用会怎么分"（**只算不生效**）。份额改成**一候选一列**（`.aw-col`，列宽 = 份额，色带段与名字/百分比同列，见 `build/extra.css` 10–57），份额为 0 的候选不进列、单独一行 `未参与分流：`。列标签**只留渠道显示名**（v1.9.1 起不再拼 id 小片） |
-| 734–893 | **运行期设置页（v1.18；v1.18.8 增第四组）**：`setDraft`(734) / `SET_GROUPS`(735) / `SET_META`(736) / `SET_FIELDS`(746) / `setGroupCfg`(767) / `metricsUrl`(768) / `syncSettingsDraft`(769) / `setHint`(774) / `setPayload`(780) / `setStat`(795) / `setCard`(803) / **`vSettings`(827)** / `setToggle`(860) / `updateSetSave`(861) / `resetSettings`(865) / **`saveSettings`(869)** | **运行期设置页**（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`（v1.18.8 增，**四组**）网关运行态开关，唯一数据源 `GET/POST /admin/api/settings`。`SET_GROUPS`/`SET_META`/`SET_FIELDS` 是**四张卡的唯一真源**（加字段只改这三处；v1.18.8 加第四张卡就只动了它们 + `setStat` 一行，零新交互）；`setGroupCfg` 同时取 `config`（回填表单）与 `effective`（钳制后生效值）两段，`setHint` 把二者不一致时算成生效角标；`syncSettingsDraft` 决定"8 秒轮询要不要覆盖草稿"（**`setDirty` 时绝不覆盖**）；`setPayload` **只收有改动的组**（PATCH 语义，没带的不动、不归零）；`saveSettings` 提交期间按钮 disabled + 文案变「保存中…」，**400 的 `error` 原文直接显示**（后端已点名到字段，如 `unknown field rateLimit.rpmm`）。卡容器 `.grid.set-cards`（四卡两排各两张，用户拍板，≤900px 折一列）。样式见 `build/extra.css` 59–80 |
-| 1008–1044 | `toggleDrawerKey`(1008) `reprobe`(1020) `delChannel`(1033) | 抽屉密钥切换（**v1.18.4 起点一次才现取原文**，走 `chKeyLive`）/ 重探测 / 删除 |
-| 1048–1160 | `mTab`/`mQ`(1048) `vModels`(1049) `drawMTable`(1097) `openModel`(1126) | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
-| 1162–1294 | `lgRange` 等(1162) `vLogs`(1163) `logRows`(1199) `drawLogTable`(1211) `clearUsage`(1243) `openLog`(1247) `copyCurl`(1285) | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填）。**v1.13.2 起渠道列显示渠道显示名（`adapt()` 解析进 `n`，id 留在 `c`），列序为 请求 ID → 渠道 → 模型，搜索判据含 `l.n`**。**v1.18.11 增「客户端」列**（模型之后，`esc(l.cl)`；点击格子跳转统计页并按该客户端标签过滤，行内 `stopPropagation` 不触发行点击）。**v1.18.13 跳转升级**：chip 自带 `data-cl`（esc 过）——标签从 `dataset` 取，**绝不按 NodeList 索引对 `rows[i]` 取值**（无标签的行不渲染 chip，按索引取会错位）；点击后**直接弹开最活跃来源的详情抽屉**（多个来源共用标签时弹敲门最多的） |
-| 1296–1418 | **数据统计页（v1.18.11）**：`stFilter`(1296) `stClients`(1297) **`vStats`(1298)** `openIpStats`(1372) `refreshStats`(1405) `banIp`(1408) `unbanIp`(1412) | **数据统计页**（监控 → 数据统计，夹在调用日志之后；生产独有，原型无此页）：来源 IP 态势。`GET /admin/api/stats` 随 `loadAll` 拉取（单独兜底）；四张全局卡（敲门数 / token / 峰值并发 / 封禁命中）+ 封禁名单 chip 行（每枚带解封 ×）+ per-IP 表（敲门 / token / 模型数 / 并发峰值 / 会话估计 ≥512 饱和 / 客户端标签 / 24h sparkline，行点击开 `openIpStats` 详情抽屉）+ 按模型聚合卡；详情抽屉带 24 小时面积图 + 封禁/解封按钮（`confirm()` 两步确认，`clearUsage` 先例）。**客户端过滤 `stFilter`（模块级，跨页保留）**：从调用日志客户端列跳进来时只留匹配来源（v1.18.13 起跳转后**自动弹开最活跃匹配来源的抽屉**），chip ✕ 清除。封禁/解封/刷新走 `ACTS` 的 `ban-ip`/`unban-ip`/`stats-refresh`（`data-t` 带 IP）。**v1.18.12 布局整改**：KPI 四卡 `.st-kpi*`（内容居中、四卡等高）、来源明细表 `.st-fixed` + 9 列 `colgroup`（定量列宽）、数值与表头 `.t-c`（居中，替掉旧的 `t-r`）、占位符「—」走 `.t-c-ph`（只有占位符那格居中，真名仍左对齐）、分区标题 `.st-sec`（与卡片 16px 对齐）；样式见 `build/extra.css` 82–105，`.t-c` 表头补权重在设计稿 300 行 |
-| 1421–1605 | `PG` 等(1421) `pgDraft` 等(1424) `vPlayground`(1425) `drawPG`(1494) `drawRoute`(1508) `fmtUsage`(1520) `pgClear`(1523) `pgCopyCurl`(1524) `pgSend`(1530) | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
-| 1606–1810 | **密钥管理页（v1.18.5；v1.18.6 会话化）**：`SNIP`(1606) `KEY_SRC_TXT`(1655) `keyDraft`(1656) `keyReveal`(1657) `keyBusy`(1658) `keyOf`(1660) `keyCard`(1664) **`vKeys`(1689)** `armConfirm`(1734) `toggleKeyReveal`(1743) `copyKeyValue`(1751) `genLocalKey`(1760) `fillGeneratedKey`(1769) `rotateKey`(1776) `resetKeysAction`(1796) | **密钥管理页**（工具 → 密钥管理，夹在运行期设置与接入信息之间）：在线轮换 `GATEWAY_KEY` / `ADMIN_KEY`。快照只有**掩码 + 来源**（console/env/generated/none），明文点「显示」才现取一次（按需揭示端点）；**「轮换」单击直接生效**（用户明确要求，文案写明"旧密钥立即失效"）；「回到环境变量值」保留**两步确认**（`armConfirm`，6 秒不复位自动还原）——它把控制台轮换的成果整段交还给 .env；**v1.18.6 会话化**：页头页操作区挂「退出登录」按钮（`#keyLogout` → `logout()`，只杀自己那枚会话）；换管理密钥后前端**不再写任何浏览器存储**——服务端清空全部会话并在轮换响应里**补发新会话 cookie**，发起页无感继续用；页脚文案明示"所有已登录会话都会失效、重启也会掉线（内存表），重开控制台重新粘一次密钥即可"；手填草稿存 `keyDraft` 回填（状态回填约定）。唯一数据源 `GET /admin/api/keys`（随 `loadAll` 拉取，单独兜底）；**「随机生成」只在本地把 48 位随机串（四样字符齐全）填进输入框（`fillGeneratedKey`，不发请求）——用户先看到/复制新值，再点「轮换」提交 `POST /admin/api/keys` 生效**；「回到环境变量值」走 `POST /admin/api/keys/reset`。服务端 `POST /admin/api/keys/generate` 端点保留（API 可用，e2e 已测），控制台不再用它 |
-| 1812–1941 | `vAccess`(1812) `showKeyHelp`(1908) | 接入信息（端口 / 模型名照旧；**v1.18.4 起服务端只下发掩码**，密钥原文要点一次才现取：`copyGwKey` / `copyAllEndpoints`）；端点地址可直接复制；页头「密钥管理」按钮 `go('keys')` 直接跳轮换页（v1.18.5）；`showKeyHelp` 降级为**命令行备用路径**步骤清单（会提醒：控制台轮换过之后 `.env` 说了不算）。**v1.18.5 插入密钥管理页后本块被拆成两段**：`SNIP`（curl 等接入示例）在密钥块之前、`vAccess`/`showKeyHelp` 在其后 |
-| 1943–1954 | `modal`(1943) `closeModal`(1950) `setStatus`(1951) `toggleMenu`(1952) | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
-| 1956–1982 | `PROTO_META`(1956) `PROTO_ORDER`(1966) `chKey`(1969) `EP_COPY_TEXT`(1972) `_gwk`(1973) `chKeyLive`(1974) `gwKeyLive`(1975) `copyChKey`(1976) `copyGwKey`(1977) `copyAllEndpoints`(1978) `maskKey`(1979) `chBaseUrl`(1980) `chAliases`(1981) | 协议元数据 / 顺序 / 密钥取值（**v1.18.4**：`chKey` 给的是**掩码**；原文只在用户点击时经 `GET /admin/api/channels/{id}/key` / `GET /admin/api/gateway-key` 现取一次，`gwKeyLive` 按页缓存）；（原型是 `fakeKey`） |
-| 1984–2242 | `modalChId`(1984) `openChannelForm`(1985) `renderModelRows`(2053) `addModelRow`(2070) `delModelRow`(2076) `probeUpstream`(2079) `probeFound` 等(2077) `renderProbeList`(2107) `filterProbeRows`(2137) `updateProbeSel`(2143) `probeSelectAll`(2149) `probeClearSel`(2158) `probeAddSelected`(2163) `testRowModel`(2172) `toggleKeyField`(2179) `saveChannel`(2195) | 渠道表单：**权重输入框（`f-weight`，v1.5）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换（**v1.18.4 起不回填原文**，占位符为「已配置 sk-a…1234 · 留空保持不变」；点「明文」时 `toggleKeyField` 才经 `chKeyLive` 现取一次原文、只填进输入框不落库）、保存（`weight` 随 `POST /admin/api/channels` 一起提交；**`apiKey` 留空 = 保持原密钥**） |
-| 2244–2380 | `IMPORT_META`(2244) `parseCodexUnits`(2262) `parseGsSessionId`(2270) `openImport`(2277) `importCodexRt`(2312) `importGsSession`(2317) `doImport`(2323) `importFiles`(2343) | 导入：**真实对接** `codex-import` / `genspark-import` |
-| 2382–2494 | `openTestModels`(2382) `chName`(2433) `testRowVerdict`(2439) `runTests`(2446) | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前）。**结果行必须能看懂**：每行带 `模型名` + 渠道显示名（`chName`）+ 中文结论（`testRowVerdict` 分 通过 / 空回复 / 失败 三档）+ 延迟 / token / 回复或错误原文 |
-| 2496–2519 | `drawer`(2496) `closeDrawer`(2500) `keydown` 监听(2501) `setTheme`(2507) | 抽屉 / 全局 Esc 关闭 / 主题持久化 / 明暗互切（`#themeBtn.onclick` 与 `#globalSearch` 的两个监听是程序化挂接，非内联属性）。**v1.18.23**：右上角搜索框**删空** → 清 `chQ`、清左侧筛选框、重绘当前页（退出搜索）；左侧删空 → 右上角同步清空。两处共用一份状态（`chQ`），**清空路径必须对称**——现场（2026-10-07 截图）：只删右上角那段文字时渠道列表仍被过滤、退不出搜索，而删左侧筛选框能退出（左侧 `oninput` 实时写回，右上角原先只在回车时写一次） |
-| 2525–2586 | **事件委托块**：`ACTS`(2525) + click(2575) / change(2581) 两个 `document` 委托监听 | **全站唯一事件入口（v1.18.7）**：内联 `onclick=`/`onchange=`/`onkeydown=` 属性已全部清零（含 `build/shell.html` 的抽屉遮罩，改 `data-act`）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`），两个委托监听统一分发：`ACTS` 表 **48** 个动作与模板**双向一一对应**（v1.18.11 增 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip` 四个）；8 秒轮询整页重绘**不用重挂监听**；点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，`stopPropagation` 成为历史）。登录门的 Enter 改为 `showKeyGate` 内程序化挂接（非内联属性）。**新增交互：先在 `ACTS` 注册 + 模板写 `data-act`，禁止写内联属性**（`test/security-headers-e2e.test.js` 内联清零 + 双向覆盖守卫、`test/console-state.test.js` 真实委托块桩上真跑，都会拦回潮） |
-| 2591 / 2620 / 2639 | `showKeyGate()` `logout()` `__ZZ_BOOTED__`(2639) | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；**v1.18.17：提交前 `trim()`（终端 cat 复制带尾随换行/空格不再被打成 401）、失败原因走 `errMsgOf`（看得见「密钥不对」而不是 `[object Object]`）**；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
-| 2630 | `tick()` | 时钟 |
-| 2640 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 143 | `loadAll()` | 并发拉取 status / usage / config / **settings** / **keys** / **stats（v1.18.11）**，写 `RAW` → `adapt()`。**settings 与 keys（v1.18.5 密钥管理页数据）与 stats 各自单独 `.catch(()=>null)` 兜底**：这几个端点挂了不能把整页拉取拖垮（其余照常刷新） |
+| 180 / 200 | `render()` / `reload()` | 重绘当前页（**保留滚动位置 + 焦点/光标**；筛选状态由各页 JS 变量回填，见下方「状态回填」约定）/ 重新拉数并重绘 |
+| 203 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
+| 220–234 | `$` `$$` `esc`(222) `nf` `pct` `fTok` `fMs` `stTxt` `protoLabel` `errMsgOf`(234) | DOM/格式化小工具 + **错误显示统一口（v1.18.17，公网部署实测抓到）**：网关错误体是 `{error:{message,type}}`，`errMsgOf` 对象取 `message`、字符串透传、`j.message` 兜底——`api()` 错误 toast 与登录门共用（直接拼 `j.error` 会显示 `[object Object]`、吞掉真实原因） |
+| 235 | `api(path,opts)` | **统一请求封装**：错误 toast 走 `errMsgOf`（v1.18.17，错误体是对象时不再显示 `[object Object]`）；**v1.18.6 起不注入任何 `Authorization` 头**——管理面鉴权交给登录门换来的会话 cookie（同源自动随行，`HttpOnly`，JS 读不到）；**401 → 弹登录门**（会话过期 / 被轮换清掉时自动闭环）。**v1.18.1 起把 `status`/`body` 挂到抛出的 Error 上**，供运行期设置页显示后端 400 原文 |
+| 243 / 245 / 254 / 264 | `CFG`(243) `downloadCsv`(245) `toast`(254) `copyText`(264) | 端点配置缓存 / 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
+| 280 / 322 / 340 | `areaChart` / `sparkline` / `donut` | 内联 SVG 图表。**v1.18.1 起两个折线函数对空数据返回占位图而不是抛错**（全新部署 `usage` 为空时，详情抽屉曾在 `pts[0][0]` 处崩掉 → 表现是"点详情没反应"） |
+| 359 | `NAV` | 侧栏导航定义（「资源」组含 渠道管理 / 聚合模型 / 自动权重；「监控」组含 **调用日志 / 数据统计（v1.18.11 新增，`zap` 图标）**；「工具」组含 Playground / 运行期设置 / 密钥管理 / 接入信息） |
+| 375 / 383 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`；路由表含 `autoweight:vAutoWeight`、`settings:vSettings`、`keys:vKeys` 与 **`stats:vStats`（v1.18.11，`render()` 的分发表同加了这一项——只加 `go()` 一张会出现"能进页但 8 秒轮询不刷新"）**） |
+| 396 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
+| 416–452 | `winStats`(416) `avgLatency`(432) `avgLatencyDelta`(438) `dPct`(446) `dChip`(447) `OV_RANGE`(450) `ovRange`(451) `ovRangeCfg`(452) | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ 涨跌小工具 / **时间范围配置** |
+| 453 / 461 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
+| 472–498 | `exportUsage`(472) `exportLogs`(484) `exportModels`(491) `copyModels`(498) | 导出与复制 |
+| 507 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
+| 624 / 625 / 909 / 946 / 988 | `chTab`/`chQ`(624) `vChannels`(625) / `drawChTable`(909) / `toggleCh`(946) / `openChannel`(988) | 渠道页（v1.9 起**只剩页签 + 搜索 + 表格**，观测卡已迁出）/ 排序渲染（含**权重 / 分流**列）/ 启停 / 详情抽屉（含权重与分流占比角标 + 自动权重观测一节） |
+| 962–978 | **渠道级「不发这些参数」（`dropParams`，v1.18.33）**：`dropWhitelist()`(962) / `dropParamsOf()`(967) / `dropChipsHtml()`(972) / `addDropParam(k)`(978) | 出站参数剔除的 4 个辅助函数，夹在 `toggleCh` 与 `openChannel` 之间。**合法参数名清单只从 `GET /admin/api/config` 的 `dropParamWhitelist` 取**（前端不抄第二份，抄了会漂移）；`dropChipsHtml` 把清单渲染成可点 chip（`data-act="fill-drop-param"` + `data-k`，外部可控值一律 `esc()`），点一下把名字填进表单的 `#f-drop` 输入框（逗号/空格分隔）；抽屉里显示已配清单。**框空 = 显式提交 `[]` = 清空**（与 `weight` 的"留空 = 不动"刻意不同）。后端语义与边界（哪些协议不生效、白名单外 400）见 `test/channel-drop-params-e2e.test.js` |
+| 670 / 678 | **`vAutoWeight()`** / **`autoWeightCard()`** | **自动权重页**（v1.9，资源 → 自动权重）：`vAutoWeight` 只出页头 + 挂卡；`autoWeightCard` 把 `/admin/api/status` 的 `autoWeight.models[]` 画成"若启用会怎么分"（**只算不生效**）。份额改成**一候选一列**（`.aw-col`，列宽 = 份额，色带段与名字/百分比同列，见 `build/extra.css` 10–57），份额为 0 的候选不进列、单独一行 `未参与分流：`。列标签**只留渠道显示名**（v1.9.1 起不再拼 id 小片） |
+| 749–908 | **运行期设置页（v1.18；v1.18.8 增第四组）**：`setDraft`(749) / `SET_GROUPS`(750) / `SET_META`(751) / `SET_FIELDS`(761) / `setGroupCfg`(782) / `metricsUrl`(783) / `syncSettingsDraft`(784) / `setHint`(789) / `setPayload`(795) / `setStat`(810) / `setCard`(818) / **`vSettings`(842)** / `setToggle`(875) / `updateSetSave`(876) / `resetSettings`(880) / **`saveSettings`(884)** | **运行期设置页**（工具组顺序：Playground → 运行期设置 → **密钥管理** → 接入信息）：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`（v1.18.8 增，**四组**）网关运行态开关，唯一数据源 `GET/POST /admin/api/settings`。`SET_GROUPS`/`SET_META`/`SET_FIELDS` 是**四张卡的唯一真源**（加字段只改这三处；v1.18.8 加第四张卡就只动了它们 + `setStat` 一行，零新交互）；`setGroupCfg` 同时取 `config`（回填表单）与 `effective`（钳制后生效值）两段，`setHint` 把二者不一致时算成生效角标；`syncSettingsDraft` 决定"8 秒轮询要不要覆盖草稿"（**`setDirty` 时绝不覆盖**）；`setPayload` **只收有改动的组**（PATCH 语义，没带的不动、不归零）；`saveSettings` 提交期间按钮 disabled + 文案变「保存中…」，**400 的 `error` 原文直接显示**（后端已点名到字段，如 `unknown field rateLimit.rpmm`）。卡容器 `.grid.set-cards`（四卡两排各两张，用户拍板，≤900px 折一列）。样式见 `build/extra.css` 59–80 |
+| 1057–1093 | `toggleDrawerKey`(1057) `reprobe`(1069) `delChannel`(1082) | 抽屉密钥切换（**v1.18.4 起点一次才现取原文**，走 `chKeyLive`）/ 重探测 / 删除 |
+| 1097–1209 | `mTab`/`mQ`(1097) `vModels`(1098) `drawMTable`(1146) `openModel`(1175) | 模型页（启用优先排序）/ 调度顺序抽屉。**筛选状态存 JS**（`mTab`/`mQ`，见 v1.0.1） |
+| 1211–1343 | `lgRange` 等(1211) `vLogs`(1212) `logRows`(1248) `drawLogTable`(1260) `clearUsage`(1292) `openLog`(1296) `copyCurl`(1334) | 日志页 / 用量清零 / 详情 / 复制 curl（筛选状态 `lgRange`/`lgCh`/`lgOk`/`lgQ`，重绘后命令式回填）。**v1.13.2 起渠道列显示渠道显示名（`adapt()` 解析进 `n`，id 留在 `c`），列序为 请求 ID → 渠道 → 模型，搜索判据含 `l.n`**。**v1.18.11 增「客户端」列**（模型之后，`esc(l.cl)`；点击格子跳转统计页并按该客户端标签过滤，行内 `stopPropagation` 不触发行点击）。**v1.18.13 跳转升级**：chip 自带 `data-cl`（esc 过）——标签从 `dataset` 取，**绝不按 NodeList 索引对 `rows[i]` 取值**（无标签的行不渲染 chip，按索引取会错位）；点击后**直接弹开最活跃来源的详情抽屉**（多个来源共用标签时弹敲门最多的） |
+| 1345–1467 | **数据统计页（v1.18.11）**：`stFilter`(1345) `stClients`(1346) **`vStats`(1347)** `openIpStats`(1421) `refreshStats`(1454) `banIp`(1457) `unbanIp`(1461) | **数据统计页**（监控 → 数据统计，夹在调用日志之后；生产独有，原型无此页）：来源 IP 态势。`GET /admin/api/stats` 随 `loadAll` 拉取（单独兜底）；四张全局卡（敲门数 / token / 峰值并发 / 封禁命中）+ 封禁名单 chip 行（每枚带解封 ×）+ per-IP 表（敲门 / token / 模型数 / 并发峰值 / 会话估计 ≥512 饱和 / 客户端标签 / 24h sparkline，行点击开 `openIpStats` 详情抽屉）+ 按模型聚合卡；详情抽屉带 24 小时面积图 + 封禁/解封按钮（`confirm()` 两步确认，`clearUsage` 先例）。**客户端过滤 `stFilter`（模块级，跨页保留）**：从调用日志客户端列跳进来时只留匹配来源（v1.18.13 起跳转后**自动弹开最活跃匹配来源的抽屉**），chip ✕ 清除。封禁/解封/刷新走 `ACTS` 的 `ban-ip`/`unban-ip`/`stats-refresh`（`data-t` 带 IP）。**v1.18.12 布局整改**：KPI 四卡 `.st-kpi*`（内容居中、四卡等高）、来源明细表 `.st-fixed` + 9 列 `colgroup`（定量列宽）、数值与表头 `.t-c`（居中，替掉旧的 `t-r`）、占位符「—」走 `.t-c-ph`（只有占位符那格居中，真名仍左对齐）、分区标题 `.st-sec`（与卡片 16px 对齐）；样式见 `build/extra.css` 82–105，`.t-c` 表头补权重在设计稿 300 行 |
+| 1470–1654 | `PG` 等(1470) `pgDraft` 等(1473) `vPlayground`(1474) `drawPG`(1543) `drawRoute`(1557) `fmtUsage`(1569) `pgClear`(1572) `pgCopyCurl`(1573) `pgSend`(1579) | Playground：**真实 `POST /v1/chat/completions`**（流式 + 路由信息）。**草稿与参数存 JS**（`pgDraft`/`pgSysText`/`pgModelSel`/`pgTempV`/`pgMaxV`/`pgStreamOn`） |
+| 1655–1859 | **密钥管理页（v1.18.5；v1.18.6 会话化）**：`SNIP`(1655) `KEY_SRC_TXT`(1704) `keyDraft`(1705) `keyReveal`(1706) `keyBusy`(1707) `keyOf`(1709) `keyCard`(1713) **`vKeys`(1738)** `armConfirm`(1783) `toggleKeyReveal`(1792) `copyKeyValue`(1800) `genLocalKey`(1809) `fillGeneratedKey`(1818) `rotateKey`(1825) `resetKeysAction`(1845) | **密钥管理页**（工具 → 密钥管理，夹在运行期设置与接入信息之间）：在线轮换 `GATEWAY_KEY` / `ADMIN_KEY`。快照只有**掩码 + 来源**（console/env/generated/none），明文点「显示」才现取一次（按需揭示端点）；**「轮换」单击直接生效**（用户明确要求，文案写明"旧密钥立即失效"）；「回到环境变量值」保留**两步确认**（`armConfirm`，6 秒不复位自动还原）——它把控制台轮换的成果整段交还给 .env；**v1.18.6 会话化**：页头页操作区挂「退出登录」按钮（`#keyLogout` → `logout()`，只杀自己那枚会话）；换管理密钥后前端**不再写任何浏览器存储**——服务端清空全部会话并在轮换响应里**补发新会话 cookie**，发起页无感继续用；页脚文案明示"所有已登录会话都会失效、重启也会掉线（内存表），重开控制台重新粘一次密钥即可"；手填草稿存 `keyDraft` 回填（状态回填约定）。唯一数据源 `GET /admin/api/keys`（随 `loadAll` 拉取，单独兜底）；**「随机生成」只在本地把 48 位随机串（四样字符齐全）填进输入框（`fillGeneratedKey`，不发请求）——用户先看到/复制新值，再点「轮换」提交 `POST /admin/api/keys` 生效**；「回到环境变量值」走 `POST /admin/api/keys/reset`。服务端 `POST /admin/api/keys/generate` 端点保留（API 可用，e2e 已测），控制台不再用它 |
+| 1861–1990 | `vAccess`(1861) `showKeyHelp`(1957) | 接入信息（端口 / 模型名照旧；**v1.18.4 起服务端只下发掩码**，密钥原文要点一次才现取：`copyGwKey` / `copyAllEndpoints`）；端点地址可直接复制；页头「密钥管理」按钮 `go('keys')` 直接跳轮换页（v1.18.5）；`showKeyHelp` 降级为**命令行备用路径**步骤清单（会提醒：控制台轮换过之后 `.env` 说了不算）。**v1.18.5 插入密钥管理页后本块被拆成两段**：`SNIP`（curl 等接入示例）在密钥块之前、`vAccess`/`showKeyHelp` 在其后 |
+| 1992–2003 | `modal`(1992) `closeModal`(1999) `setStatus`(2000) `toggleMenu`(2001) | 弹窗容器 / 关闭 / 行内状态 / 下拉菜单 |
+| 2005–2031 | `PROTO_META`(2005) `PROTO_ORDER`(2015) `chKey`(2018) `EP_COPY_TEXT`(2021) `_gwk`(2022) `chKeyLive`(2023) `gwKeyLive`(2024) `copyChKey`(2025) `copyGwKey`(2026) `copyAllEndpoints`(2027) `maskKey`(2028) `chBaseUrl`(2029) `chAliases`(2030) | 协议元数据 / 顺序 / 密钥取值（**v1.18.4**：`chKey` 给的是**掩码**；原文只在用户点击时经 `GET /admin/api/channels/{id}/key` / `GET /admin/api/gateway-key` 现取一次，`gwKeyLive` 按页缓存）；（原型是 `fakeKey`） |
+| 2033–2300 | `modalChId`(2033) `openChannelForm`(2034) `renderModelRows`(2105) `addModelRow`(2122) `delModelRow`(2128) `probeUpstream`(2131) `probeFound` 等(2129) `renderProbeList`(2159) `filterProbeRows`(2189) `updateProbeSel`(2195) `probeSelectAll`(2201) `probeClearSel`(2210) `probeAddSelected`(2215) `testRowModel`(2224) `toggleKeyField`(2231) `saveChannel`(2247) | 渠道表单：**权重输入框（`f-weight`，v1.5）**、**「不发这些参数」输入框（`f-drop`，v1.18.33 —— 逗号/空格分隔，下方跟一排服务端下发的合法名 chips，点一下填进框；见上方 `drop*` 四函数）**、模型别名行、上游探测列表（搜索/全选/批量）、密钥掩码切换（**v1.18.4 起不回填原文**，占位符为「已配置 sk-a…1234 · 留空保持不变」；点「明文」时 `toggleKeyField` 才经 `chKeyLive` 现取一次原文、只填进输入框不落库）、保存（`weight` 随 `POST /admin/api/channels` 一起提交；**`apiKey` 留空 = 保持原密钥**） |
+| 2302–2438 | `IMPORT_META`(2302) `parseCodexUnits`(2320) `parseGsSessionId`(2328) `openImport`(2335) `importCodexRt`(2370) `importGsSession`(2375) `doImport`(2381) `importFiles`(2401) | 导入：**真实对接** `codex-import` / `genspark-import` |
+| 2440–2552 | `openTestModels`(2440) `chName`(2491) `testRowVerdict`(2497) `runTests`(2504) | 测试模型：**真实调用 `/admin/api/test`**。**v1.13 起停用渠道也要能测**（不再 `!c.on` 跳过；指定渠道时只列该渠道、带「已停用」标记与"不参与自动探测"说明，全局模式包含停用渠道但启用排前）。**结果行必须能看懂**：每行带 `模型名` + 渠道显示名（`chName`）+ 中文结论（`testRowVerdict` 分 通过 / 空回复 / 失败 三档）+ 延迟 / token / 回复或错误原文 |
+| 2554 | `drawer`(2554) `closeDrawer`(2558) `keydown` 监听(2559) `setTheme`(2565) | 抽屉 / 全局 Esc 关闭 / 主题持久化 / 明暗互切（`#themeBtn.onclick` 与 `#globalSearch` 的两个监听是程序化挂接，非内联属性）。**v1.18.23**：右上角搜索框**删空** → 清 `chQ`、清左侧筛选框、重绘当前页（退出搜索）；左侧删空 → 右上角同步清空。两处共用一份状态（`chQ`），**清空路径必须对称**——现场（2026-10-07 截图）：只删右上角那段文字时渠道列表仍被过滤、退不出搜索，而删左侧筛选框能退出（左侧 `oninput` 实时写回，右上角原先只在回车时写一次） |
+| 2583–2646 | **事件委托块**：`ACTS`(2583) + click(2635) / change(2641) 两个 `document` 委托监听 | **全站唯一事件入口（v1.18.7）**：内联 `onclick=`/`onchange=`/`onkeydown=` 属性已全部清零（含 `build/shell.html` 的抽屉遮罩，改 `data-act`）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`），两个委托监听统一分发：`ACTS` 表 **49** 个动作与模板**双向一一对应**（v1.18.11 增 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip` 四个；**v1.18.33 增 `fill-drop-param` 一个**——点合法参数名 chip 填进「不发这些参数」输入框）；8 秒轮询整页重绘**不用重挂监听**；点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，`stopPropagation` 成为历史）。登录门的 Enter 改为 `showKeyGate` 内程序化挂接（非内联属性）。**新增交互：先在 `ACTS` 注册 + 模板写 `data-act`，禁止写内联属性**（`test/security-headers-e2e.test.js` 内联清零 + 双向覆盖守卫、`test/console-state.test.js` 真实委托块桩上真跑，都会拦回潮） |
+| 2651 / 2680 / 2699 | `showKeyGate()` `logout()` `__ZZ_BOOTED__`(2699) | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；**v1.18.17：提交前 `trim()`（终端 cat 复制带尾随换行/空格不再被打成 401）、失败原因走 `errMsgOf`（看得见「密钥不对」而不是 `[object Object]`）**；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
+| 2690 | `tick()` | 时钟 |
+| 2700 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
@@ -211,7 +217,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 ## 1. 单文件三段结构（行号锚点 · `console-redesign.html`）
 
-> 本节及 §2 / §3 的锚点**只对应 `console-redesign.html`**（~2272 行）。生产侧锚点见 §0.2。
+> 本节及 §2 / §3 的锚点**只对应 `console-redesign.html`**（~2266 行）。生产侧锚点见 §0.2。
 
 文件固定由三段组成，改任何东西先按这张表定位：
 
@@ -219,10 +225,10 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | --- | --- | --- |
 | `<head>` | 1–9 | `lang="zh-CN"`、`data-theme="dark"` 初始主题、**MiSans 字体 CDN**（`font.sec.miui.com`，按 unicode-range 分片） |
 | `<style>` | 10–537 | 全部 CSS（无外链样式表）。**这段原文会被逐字节复制进 `console.html`** |
-| `<body>` | 539–858 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
-| `<script>` | 859–2269 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
+| `<body>` | 539–853 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
+| `<script>` | 854–2263 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
 
-> ⚠️ `<body>` 里 583–783 行是**渠道页的静态占位 markup**（`<div class="viewport" id="viewport">` 到 `</tbody></table>`）。`init()` 末尾会 `go('overview')`，
+> ⚠️ `<body>` 里 578–778 行是**渠道页的静态占位 markup**（`<div class="viewport" id="viewport">` 到 `</tbody></table>`）。`init()` 末尾会 `go('overview')`，
 > 首屏立刻用 JS 重绘整个 `#viewport`，所以那段占位只在 JS 失效时可见。
 > **改动 UI 时不要只改占位 markup**，否则会出现"静态和实际渲染不一致"的问题（本轮已踩过，见 §7）。
 >
@@ -295,103 +301,103 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 | 行号 | 名称 | 说明 |
 | --- | --- | --- |
-| 861–892 | `IC` | 内联 SVG path 字典；`svg(name,size)` 包成 `<svg>`（893） |
-| 896–933 | **`DATA`** | **唯一数据源**：`meta` / `trend` / `channels[9]` / `models[8]` / `logs[8]` / `donut`。**会被就地修改**（启停、删除、探测）。里面的渠道是**演示数据**，非真实部署渠道 |
-| 1022–1032 | `NAV` | 侧栏导航定义（`sec` 分组 / `id` / `label` / `icon` / `cnt()`） |
-| 1532 | `PG` | Playground 预置对话 |
-| 1775–1784 | `PROTO_META` | 协议元数据：`label` / 默认 `base` / `key` 填写提示（添加渠道表单据此渲染） |
-| 1785 | `PROTO_ORDER` | 协议下拉顺序（**新增协议要同时改 `PROTO_META` 和这里**） |
-| 1786 | `MODEL_POOL` | 别名补齐池（保证表格/抽屉/编辑器三处模型数一致） |
-| 1788–1796 | `PROBE_POOL` | 模拟"上游返回的一大批模型"，用于演示探测列表 + 搜索 |
-| 2035–2052 | `IMPORT_META` | 四类导入的配置：`codex-rt` / `codex-json` / `gs-session` / `gs-json`（`mode: paste\|file`、`hint`、`steps`、`warn`、`bad` 校验） |
-| 2155 | `REPLIES` | 测试模型的模拟回复池 |
+| 856–888 | `IC` | 内联 SVG path 字典；`svg(name,size)` 包成 `<svg>`（888） |
+| 891–928 | **`DATA`** | **唯一数据源**：`meta` / `trend` / `channels[9]` / `models[8]` / `logs[8]` / `donut`。**会被就地修改**（启停、删除、探测）。里面的渠道是**演示数据**，非真实部署渠道 |
+| 1017 | `NAV` | 侧栏导航定义（`sec` 分组 / `id` / `label` / `icon` / `cnt()`） |
+| 1527 | `PG` | Playground 预置对话 |
+| 1770 | `PROTO_META` | 协议元数据：`label` / 默认 `base` / `key` 填写提示（添加渠道表单据此渲染） |
+| 1780 | `PROTO_ORDER` | 协议下拉顺序（**新增协议要同时改 `PROTO_META` 和这里**） |
+| 1781 | `MODEL_POOL` | 别名补齐池（保证表格/抽屉/编辑器三处模型数一致） |
+| 1783 | `PROBE_POOL` | 模拟"上游返回的一大批模型"，用于演示探测列表 + 搜索 |
+| 2033 | `IMPORT_META` | 四类导入的配置：`codex-rt` / `codex-json` / `gs-session` / `gs-json`（`mode: paste\|file`、`hint`、`steps`、`warn`、`bad` 校验） |
+| 2153 | `REPLIES` | 测试模型的模拟回复池 |
 
 ### 3.2 全局可变状态
 
 ```js
-page                    // 1033 当前页面 id
-chTab, chQ              // 1178 渠道页签 / 搜索词
-modalChId, modalModels  // 1819 渠道表单：编辑对象 id / 模型别名数组
-probeFound, probeSel, probeQ  // 1910 探测结果 / 已勾选集合 / 搜索词
+page                    // 1028 当前页面 id
+chTab, chQ              // 1173 渠道页签 / 搜索词
+modalChId, modalModels  // 1814 渠道表单：编辑对象 id / 模型别名数组
+probeFound, probeSel, probeQ  // 1908 探测结果 / 已勾选集合 / 搜索词
 DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 ```
 
-### 3.3 工具层（935–956）
+### 3.3 工具层（930–952）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 936–942 | `$` `$$` `esc` `nf` `pct` `fTok` `fMs` | 选择器 / **HTML 转义** / 千分位 / 百分比 / Token 中文单位 / 毫秒格式化 |
-| 943–944 | `stTxt` `protoLabel` | 状态、协议的中文映射表 |
-| 946 | `toast(msg,kind)` | 右下浮动提示（`kind:'ok'` 加绿边） |
-| 953 | `copyText(t,btn)` | 复制 + 按钮图标短暂变勾 |
+| 931–937 | `$` `$$` `esc` `nf` `pct` `fTok` `fMs` | 选择器 / **HTML 转义** / 千分位 / 百分比 / Token 中文单位 / 毫秒格式化 |
+| 938–939 | `stTxt` `protoLabel` | 状态、协议的中文映射表 |
+| 941 | `toast(msg,kind)` | 右下浮动提示（`kind:'ok'` 加绿边） |
+| 948 | `copyText(t,btn)` | 复制 + 按钮图标短暂变勾 |
 
 > ⚠️ 所有插入 innerHTML 的动态文本都必须走 `esc()`，`DATA` 里有上游返回的模型名/渠道名。
 
-### 3.4 图表层（958–1020，手写 SVG，无图表库）
+### 3.4 图表层（953–1015，手写 SVG，无图表库）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 959 | `areaChart(data,w,h,opts)` | 面积折线图：贝塞尔平滑 + 渐变填充 + 虚线网格 + 末点放大；`preserveAspectRatio="none"` 拉伸铺满 |
-| 990 | `sparkline(vals,w,h,c,stretch)` | 迷你曲线；`stretch=true` 时带渐变面积，用于 KPI 卡底部独立图表带 |
-| 1003 | `donut(parts,size,thick)` | 环形图（渠道健康分布） |
+| 954 | `areaChart(data,w,h,opts)` | 面积折线图：贝塞尔平滑 + 渐变填充 + 虚线网格 + 末点放大；`preserveAspectRatio="none"` 拉伸铺满 |
+| 985 | `sparkline(vals,w,h,c,stretch)` | 迷你曲线；`stretch=true` 时带渐变面积，用于 KPI 卡底部独立图表带 |
+| 998 | `donut(parts,size,thick)` | 环形图（渠道健康分布） |
 
-### 3.5 导航与路由（1021–1052）
+### 3.5 导航与路由（1016–1048）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 1034 | `renderRail()` | 重绘侧栏（含高亮与计数） |
-| 1042 | `go(p)` | **唯一路由**：改 `page` → 重绘 rail → 清空 `#viewport` → 调对应 `vXxx(v)` → `scrollTop=0` |
+| 1029 | `renderRail()` | 重绘侧栏（含高亮与计数） |
+| 1037 | `go(p)` | **唯一路由**：改 `page` → 重绘 rail → 清空 `#viewport` → 调对应 `vXxx(v)` → `scrollTop=0` |
 
-> 页面分发是一张对象表（1048）：`{overview:vOverview, channels:vChannels, models:vModels, logs:vLogs, playground:vPlayground, access:vAccess}`。
-> **新增页面 = 加 `NAV` 项 + 写 `vXxx(v)` + 在 1048 注册**。
+> 页面分发是一张对象表（1043）：`{overview:vOverview, channels:vChannels, models:vModels, logs:vLogs, playground:vPlayground, access:vAccess}`。
+> **新增页面 = 加 `NAV` 项 + 写 `vXxx(v)` + 在 1043 注册**。
 
 ### 3.6 页面渲染层
 
 | 页面 | 渲染函数 | 关键子函数 / 行号 |
 | --- | --- | --- |
-| 总览 | `vOverview` 1069 | `kpiCard` 1055、`areaChart`、`donut`；页签 `#rangeTabs` 仅切样式不切数据 |
-| 渠道 | `vChannels` 1179 | **`drawChTable` 1219**（筛选/排序/渲染）、`toggleCh` 1254、**`openChannel` 1260**（详情抽屉）、`toggleDrawerKey` 1316、`reprobe` 1324、`delChannel` 1331 |
-| 模型 | `vModels` 1340 | **`drawMTable` 1385**（含**启用优先排序** 1393）、`openModel` 1414（模型来源抽屉，按 config 渠道序非调度序） |
-| 日志 | `vLogs` 1450 | `openLog` 1494（请求详情抽屉）；表格列序 **请求 ID → 渠道（显示名）→ 模型**，渠道名就地查 `DATA.channels` |
-| Playground | `vPlayground` 1539 | `drawPG` 1607、`pgSend` 1623（模拟流式输出） |
-| 接入 | `vAccess` 1680 | 三协议端点卡 + 代码片段页签（1750） |
+| 总览 | `vOverview` 1064 | `kpiCard` 1050、`areaChart`、`donut`；页签 `#rangeTabs` 仅切样式不切数据 |
+| 渠道 | `vChannels` 1174 | **`drawChTable` 1214**（筛选/排序/渲染）、`toggleCh` 1249、**`openChannel` 1255**（详情抽屉）、`toggleDrawerKey` 1311、`reprobe` 1319、`delChannel` 1326 |
+| 模型 | `vModels` 1335 | **`drawMTable` 1380**（含**启用优先排序** 1388）、`openModel` 1409（模型来源抽屉，按 config 渠道序非调度序） |
+| 日志 | `vLogs` 1445 | `openLog` 1489（请求详情抽屉）；表格列序 **请求 ID → 渠道（显示名）→ 模型**，渠道名就地查 `DATA.channels` |
+| Playground | `vPlayground` 1534 | `drawPG` 1602、`pgSend` 1618（模拟流式输出） |
+| 接入 | `vAccess` 1675 | 三协议端点卡 + 代码片段页签（1745） |
 
 ### 3.7 弹窗层
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 1761 | `modal(html,wide)` | 通用容器：写入 `#modalBox` 并给 `#mask` 加 `.on` |
-| 1768 | `closeModal()` | 移除 `.on`（**只有 ×、取消、Esc 三条关闭路径**） |
-| 1769 | `setStatus(el,text,cls)` | 行内状态文字（`ok`/`bad`/`wait`） |
-| 1771 | `toggleMenu(id)` | 下拉菜单开关；1772 全局点击外部关闭 |
-| 1799–1817 | `fakeKey` `maskKey` `chBaseUrl` `chAliases` | 原型派生数据（假密钥、默认 BaseURL、别名补齐） |
-| **1820** | **`openChannelForm(id)`** | 添加/编辑渠道弹窗（无 id = 新增）。内含表单骨架 1826–1875 |
-| 1886 | `renderModelRows()` | 渲染模型别名编辑器行 |
-| 1903 / 1909 | `addModelRow()` / `delModelRow(i)` | 增删别名行 |
-| 1912 | `probeUpstream()` | 模拟探测上游 `/v1/models` → 填充 `probeFound` |
-| 1928 | `renderProbeList()` | 渲染**列表式 + 可搜索 + 多选**的探测结果面板 |
-| 1952 / 1958 / 1964 | 行内绑定 / `filterProbeRows()` / `updateProbeSel()` | 搜索过滤、勾选计数 |
-| 1970 / 1979 / 1984 | `probeSelectAll()` / `probeClearSel()` / `probeAddSelected()` | 全选 / 清空 / 批量加入别名表 |
-| 1993 | `testRowModel(i)` | 单行模型测试（编辑器内） |
-| 2000 | `toggleKeyField()` | 密钥掩码/明文切换 |
-| 2006 | `saveChannel()` | 收集表单 → 校验 → 写回 `DATA.channels` |
-| 2053 / 2061 | `parseCodexUnits(j)` / `parseGsSessionId(raw)` | **兼容多结构的 JSON 解析**（codex 三种结构；genspark 正则提 sessionId） |
-| 2068 | `openImport(kind)` | 导入弹窗（粘贴 / 拖放两种形态） |
-| 2101 | `doImport(kind)` | 粘贴式导入：分步状态动画 → 成功提示 |
-| 2118 | `importFiles(kind,input)` | 文件式导入：多选、逐个解析、逐行结果 |
-| 2156 | `simTest(chanId)` | 模拟一次模型测试（按渠道状态/失败率造成功或失败） |
-| 2169 | `openTestModels(opts)` | 测试模型弹窗（可按 `channelId` 预筛） |
-| 2215 | `runTests()` | 逐条执行 + 进度行 + 汇总 |
+| 1756 | `modal(html,wide)` | 通用容器：写入 `#modalBox` 并给 `#mask` 加 `.on` |
+| 1763 | `closeModal()` | 移除 `.on`（**只有 ×、取消、Esc 三条关闭路径**） |
+| 1764 | `setStatus(el,text,cls)` | 行内状态文字（`ok`/`bad`/`wait`） |
+| 1766 | `toggleMenu(id)` | 下拉菜单开关；1767 全局点击外部关闭 |
+| 1794–1812 | `fakeKey` `maskKey` `chBaseUrl` `chAliases` | 原型派生数据（假密钥、默认 BaseURL、别名补齐） |
+| **1815** | **`openChannelForm(id)`** | 添加/编辑渠道弹窗（无 id = 新增）。内含表单骨架 1821–1873（**v1.18.33 在 1848–1850 加了「不发这些参数」`#f-drop` 输入框 + 合法名 chips 行**，见 `docs/frontend-console-detailed.md` §6.1） |
+| 1884 | `renderModelRows()` | 渲染模型别名编辑器行 |
+| 1901 / 1907 | `addModelRow()` / `delModelRow(i)` | 增删别名行 |
+| 1910 | `probeUpstream()` | 模拟探测上游 `/v1/models` → 填充 `probeFound` |
+| 1926 | `renderProbeList()` | 渲染**列表式 + 可搜索 + 多选**的探测结果面板 |
+| 1950 / 1956 / 1962 | 行内绑定 / `filterProbeRows()` / `updateProbeSel()` | 搜索过滤、勾选计数 |
+| 1968 / 1977 / 1982 | `probeSelectAll()` / `probeClearSel()` / `probeAddSelected()` | 全选 / 清空 / 批量加入别名表 |
+| 1991 | `testRowModel(i)` | 单行模型测试（编辑器内） |
+| 1998 | `toggleKeyField()` | 密钥掩码/明文切换 |
+| 2004 | `saveChannel()` | 收集表单 → 校验 → 写回 `DATA.channels` |
+| 2051 / 2059 | `parseCodexUnits(j)` / `parseGsSessionId(raw)` | **兼容多结构的 JSON 解析**（codex 三种结构；genspark 正则提 sessionId） |
+| 2066 | `openImport(kind)` | 导入弹窗（粘贴 / 拖放两种形态） |
+| 2099 | `doImport(kind)` | 粘贴式导入：分步状态动画 → 成功提示 |
+| 2116 | `importFiles(kind,input)` | 文件式导入：多选、逐个解析、逐行结果 |
+| 2154 | `simTest(chanId)` | 模拟一次模型测试（按渠道状态/失败率造成功或失败） |
+| 2167 | `openTestModels(opts)` | 测试模型弹窗（可按 `channelId` 预筛） |
+| 2213 | `runTests()` | 逐条执行 + 进度行 + 汇总 |
 
-### 3.8 抽屉 / 主题 / 全局（2242–2270）
+### 3.8 抽屉 / 主题 / 全局（2239–2266）
 
 | 行号 | 函数 | 说明 |
 | --- | --- | --- |
-| 2237 / 2241 | `drawer(html)` / `closeDrawer()` | 右侧抽屉（渠道详情、模型详情、日志详情共用） |
-| 2242 | keydown 监听 | `Esc` 关弹窗（优先）或抽屉（**v1.18.24 起没有 `Cmd/Ctrl+K`**：右上角全局搜索框已移除） |
-| 2248 | `setTheme(t)` | 切 `data-theme` + 写 `localStorage['zzcs-theme']` + 换图标 |
+| 2240 / 2244 | `drawer(html)` / `closeDrawer()` | 右侧抽屉（渠道详情、模型详情、日志详情共用） |
+| 2245 | keydown 监听 | `Esc` 关弹窗（优先）或抽屉（**v1.18.24 起没有 `Cmd/Ctrl+K`**：右上角全局搜索框已移除） |
+| 2251 | `setTheme(t)` | 切 `data-theme` + 写 `localStorage['zzcs-theme']` + 换图标 |
 | 2254 | `#themeBtn.onclick` | 明暗互切 |
-| 2255 | `init()`（IIFE） | 读主题 → `setTheme` → `go('overview')` |
+| 2258 | `init()`（IIFE） | 读主题 → `setTheme` → `go('overview')` |
 
 ---
 
@@ -452,9 +458,9 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 
 渠道详情/表单用到的**派生字段**（都不是 `DATA` 里的原始字段）：
 
-- `chBaseUrl(c)` 1971 —— `PROTO_META[c.proto].base`，空则造 `https://<id>.example.com/v1`
-- `chAliases(c)` 1972 —— 先用 `DATA.models` 里真实归属该渠道的模型，不足 `c.models` 个用 `MODEL_POOL` 补齐
-- `maskKey(k)` 1970 —— 掩码工具（抽屉/表单显示用；明文只能按需现取，见 v1.18.4 纪律）
+- `chBaseUrl(c)` 1800 —— `PROTO_META[c.proto].base`，空则造 `https://<id>.example.com/v1`
+- `chAliases(c)` 1802 —— 先用 `DATA.models` 里真实归属该渠道的模型，不足 `c.models` 个用 `MODEL_POOL` 补齐
+- `maskKey(k)` 1799 —— 掩码工具（抽屉/表单显示用；明文只能按需现取，见 v1.18.4 纪律）
 - `fakeKey(c.id)` —— 由 id 派生的稳定假密钥（**原型专用**，仅存在于 `console-redesign.html`；**真实环境必须换成后端返回**）
 
 ---
@@ -473,13 +479,13 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 | 页面底部空白 / 侧栏高度 | 65–73 `body`、114 `.app`、147 `.main`、171 `.viewport` |
 | 弹窗宽度 | 402–408 `.modal` / `.modal.wide` |
 | 弹窗遮罩点击行为 | 997–1000 `#mask` markup（**当前刻意不绑 onclick**）；生产同规则，见 `build/shell.html` 48 |
-| 新增协议（原型） | `PROTO_META` 1775 + `PROTO_ORDER` 1785 + `.chip.<proto>` 配色 226–233 |
-| 新增协议（生产） | `build/app.js` 的 `PROTO_META` 1947 / `PROTO_ORDER` 1957 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
-| 新增页面（原型） | `NAV` 1022 + `vXxx()` + `go()` 1042 的分发表 |
-| 新增页面（生产） | `build/app.js` 的 `NAV` 343 + `vXxx()` + `go()` 367 **与 `render()` 165 两张**分发表，然后重新构建（**v1.9 的「自动权重」页**、**v1.18 的「运行期设置」页**（`vSettings` 826）、**v1.18.5 的「密钥管理」页**（`vKeys` 1688）、**v1.18.11 的「数据统计」页**（`vStats` 1298）都是照这条加的 —— 注意 **`go()` 与 `render()` 两张表都要注册**，只加一张会出现"能进页但 8 秒轮询不刷新"） |
-| 新增导入类型 | `IMPORT_META` 2035（原型）/ 2235（生产）+ 工具栏菜单（原型 1186–1196、占位 markup 589 起 / 生产 587–598） |
+| 新增协议（原型） | `PROTO_META` 1770 + `PROTO_ORDER` 1780 + `.chip.<proto>` 配色 226–233 |
+| 新增协议（生产） | `build/app.js` 的 `PROTO_META` 2005 / `PROTO_ORDER` 2015 + `build/extra.css` 补 chip 色 + `server.js` 协议分支，然后重新构建 |
+| 新增页面（原型） | `NAV` 1017 + `vXxx()` + `go()` 1037 的分发表 |
+| 新增页面（生产） | `build/app.js` 的 `NAV` 359 + `vXxx()` + `go()` 383 **与 `render()` 180 两张**分发表，然后重新构建（**v1.9 的「自动权重」页**、**v1.18 的「运行期设置」页**（`vSettings` 826）、**v1.18.5 的「密钥管理」页**（`vKeys` 1688）、**v1.18.11 的「数据统计」页**（`vStats` 1298）都是照这条加的 —— 注意 **`go()` 与 `render()` 两张表都要注册**，只加一张会出现"能进页但 8 秒轮询不刷新"） |
+| 新增导入类型 | `IMPORT_META` 2033（原型）/ 2302（生产）+ 工具栏菜单（原型 1186–1196、占位 markup 589 起 / 生产 587–598） |
 | 渠道列表排序 | 1179（渠道页）/ 1385（模型页）；生产 893 / 1096 |
-| 探测列表交互 | `renderProbeList` 1928 起整段（原型）/ 2098（生产） |
+| 探测列表交互 | `renderProbeList` 1926 起整段（原型）/ 2159（生产） |
 | 图标 | `IC` 861（原型）/ 3（生产），用 `svg('name',size)` 引用 |
 | 主题持久化 key | `zzcs-theme`（原型 `setTheme` 2254 / 生产 `setTheme` 2499） |
 | 生产独有组件样式 | `build/extra.css`（**不要写进设计稿**，设计稿没有这些组件） |
@@ -533,7 +539,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 10. **导入解析要容错**：`parseCodexUnits` 兼容扁平 / `credentials` / `accounts[]` 三种结构；`parseGsSessionId` 用正则从任意文本里捞 `uuid:hex`。改这里务必保留容错。
 11. **`</style>` 是 CSS 里的禁忌字面量**：HTML 解析 `<style>` 是裸文本模式，注释里出现结束标签也会**立刻闭合元素**，后面整段 CSS 会变成页面正文。写构建 banner / CSS 注释时绝不能出现它（`build/build.js` 有自检兜底，但别指望它替你找语义错误）。
 12. **`console.html` 是产物，不是源文件**：直接手改会在下次 `node build/build.js` 时被静默覆盖。改视觉去 `console-redesign.html` 的 `<style>`，改生产逻辑去 `build/app.js`，改完必须重新构建。
-13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 **+714**（JS，v1.18.12 起；v1.18.8–v1.18.11 曾是 +689，v1.18–v1.18.7 曾是 +686，v1.9.1–v1.17 曾是 +666）。增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会让 JS 偏移改变（head/shell 已有构建期行数守卫）；**`extra.css` 在拼接序里位于 `app.js` 之前，它每增删 1 行 JS 偏移就整体 ±1，而 CSS 偏移不受影响**。
+13. **改完 `console-redesign.html` 的行号会漂移**：`console.html` 的行号 = 原型行号 +13（CSS）/ `build/app.js` 行号 **+709**（JS，v1.18.24 起；v1.18.12–v1.18.23 曾是 +714，v1.18.8–v1.18.11 曾是 +689，v1.18–v1.18.7 曾是 +686，v1.9.1–v1.17 曾是 +666）。增删 `build/head.html` / `build/shell.html` / `build/extra.css` 的行会让 JS 偏移改变（head/shell 已有构建期行数守卫）；**`extra.css` 在拼接序里位于 `app.js` 之前，它每增删 1 行 JS 偏移就整体 ±1，而 CSS 偏移不受影响**。
 14. **表格表头右对齐/居中要压权重**：`table.tbl thead th{text-align:left}` 权重是 (0,1,3)，高于 `.t-r`/`.t-c` 的 (0,1,0)，所以 `th` 上的 `.t-r`/`.t-c` **默认不生效**，会出现"表头左对齐、数值右对齐/居中"的错位。必须用 `table.tbl thead th.t-r` / `table.tbl thead th.t-c` 这种更高权重的选择器（原型 299 行的 `.t-r`、300 行的 `.t-c` 都把补权重规则并排写在同一行，就是为了不增行数、避免锚点整体漂移；`.t-c` 那条是 v1.18.12 数据统计页布局整改时补的）。新增右对齐/居中列时务必肉眼确认表头也对齐了。
 15. **剪贴板只在安全上下文可用**：`navigator.clipboard` 在 `http://` + 局域网 IP 下是 `undefined`，而可选链 `?.` 会把整条链**静默短路**——既不复制也不报错，看起来就是"按钮点了没反应"。`copyText` 因此用 `document.execCommand('copy')` 兜底，别删。
 16. **往 HTML 属性里塞字符串一律走 `data-t`**：`onclick="copyText(${JSON.stringify(x)},this)"` 会把双引号塞进双引号属性里，属性被截断、按钮彻底失效（接入信息页曾因此复制不了密钥）。统一写 `data-t="${esc(x)}" data-act="copy"`（v1.18.7 起事件全走委托，`onclick=` 内联属性已清零——往事件代码字符串里拼外部值的整类坑随之消失；`esc()` 仍守一切 `data-*` 属性值）。

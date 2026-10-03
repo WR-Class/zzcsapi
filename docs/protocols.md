@@ -25,6 +25,17 @@
 - 注意两点：流式响应经代理会**整体缓冲后一次性回放**（首字节延迟 ≈ 上游总耗时，与 CF 回退同款语义）；代理挂了渠道探测即失败、进冷却（诚实失败，不静默直连）。
 - `notion` / `notion-agent` 不支持代理（官方 API 直连）。
 
+## 渠道字段 `dropParams`（可选，v1.18.33）
+
+**渠道级「不发这些参数」**：出站前从这家渠道的请求报文里删掉指定的几个参数。
+
+- 为什么需要它：有些上游只吃不下**某个参数**，而不是整条链路不通。现场例子——`agentrouter` 每天固定开放额度，但它对「`tools` + `reasoning_effort`」这个组合直接 400（`Function tools with reasoning_effort are not supported for gpt-6-astra`），而客户端（DSH）每次请求都同时带这两样，于是这个渠道对**我们** 100% 失败（19 行 0 成功）。参数是客户端发的、网关原样转发，客户端又不由我们控制 → 开关只能放在**渠道**上。
+- 生效范围：**常规链路**（openai / anthropic / gemini / notion 协议渠道）与**同协议直通**都生效。
+- **不适用**：`workbuddy` / `codex` / `genspark` / `notion-agent` 这四种协议自带专用报文构造（在自己的函数里从零组装报文，不经过常规出站构造）——给它们配 `dropParams` 会**静默不生效**（字段照样保存、照样显示，但报文里那几个参数不会被删）。
+- **只接受白名单内的参数名**（`reasoning_effort`、`reasoning`、`verbosity`、`thinking`、`thinkingConfig`、`temperature`、`top_p`、`top_k`、`frequency_penalty`、`presence_penalty`、`logit_bias`、`logprobs`、`top_logprobs`、`n`、`seed`、`stop`、`stop_sequences`、`stream_options`、`tool_choice`、`parallel_tool_calls`、`response_format`、`service_tier`、`store`、`metadata`、`user`、`modalities`、`prediction`、`safetySettings`、`max_tokens`、`max_completion_tokens`、`maxOutputTokens`）。`messages` / `model` / `stream` / `tools` 这类**结构性字段一律不在白名单**——配错一个名字最多是"没生效"，绝不会把请求打残。写白名单外的名字会被 **400** 拒收并回带合法清单（不静默忽略：静默忽略正是"配了却没生效、然后对着一个 100% 失败的渠道排查半天"的成因）。
+- 只删**这几个键**：出站副本上做浅拷贝再删，绝不原地改客户端报文对象（它在候选链里被多个渠道共用，原地删会把 A 家的怪癖串味给 B 家）；没配这个字段的渠道**零拷贝原样返回**，老配置行为一个字节不变。
+- 控制台入口：渠道编辑弹窗的「不发这些参数」输入框（逗号或空格分隔），下方 chips 来自 `GET /admin/api/config` 下发的 `dropParamWhitelist`；框留空 = 提交 `[]` = **清空**（注意与 `weight` 的"留空 = 不动"语义不同）。
+
 ## 原生出站：`anthropic` / `gemini` 协议渠道可以直接聊天了
 
 `protocol` 现在**同时决定出站报文格式**。以前它只管探活方式和对外路由，出站一律 OpenAI 格式 —— 于是「声明成 anthropic 协议的渠道」拿去敲 `/v1/messages` 必然 400，等于配了也用不了（Gemini 同理）。
