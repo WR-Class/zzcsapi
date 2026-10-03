@@ -2902,6 +2902,27 @@ function extractReply(parsed, proto) {
   return parsed.choices?.[0]?.message?.content || '';
 }
 
+/* v1.18.29：手动测试的预算与判据必须为「推理型模型」兜底。
+   现场（用户报「在咱们站点点击测试都不过」）：`/admin/api/test` 原本只给 `max_tokens: 16`，
+   而 deepseek-v4.1-flash 背后是 Fireworks 托管的推理模型——16 个 token **全被思考吃光**，
+   上游回 200 + `finish_reason=length` + 可见正文 0；控制台按「2xx 但空 = 空回复」判**不过**，
+   可这个渠道其实完全健康（它自己的 new-api 游乐场、我们的直连都正常）。
+   两处处置：① 预算 16 → `TEST_MAX_TOKENS`（cap 不是消费，健康模型会提前停）；
+   ② 没有可见正文但有**思考**时，回一个带标记的思考预览并标出 `reasoningOnly`，
+   别让控制台把一个好渠道判死。 */
+const TEST_MAX_TOKENS = 512;
+function extractReasoning(parsed, proto) {
+  if (!parsed) return '';
+  if (proto === 'anthropic') {
+    const blocks = Array.isArray(parsed.content) ? parsed.content : [];
+    const t = blocks.find((b) => b && (b.type === 'thinking' || b.type === 'redacted_thinking'));
+    return (t && (t.thinking || '')) || '';
+  }
+  if (proto === 'gemini') return '';   // Gemini 的思考不在 candidates[].content 里，无对应字段可回
+  const msg = parsed.choices?.[0]?.message || {};
+  return msg.reasoning_content || msg.reasoning || '';
+}
+
 // ─────────────────────────── 路由 ───────────────────────────
 const CONSOLE_HTML = loadConsoleHtml();
 
@@ -4500,11 +4521,11 @@ async function handleAdminApi(req, res, url) {
         const headers = applyCustomHeaders(baseHeaders, ch.def);
         let bodyOut;
         if (ch.def.protocol === 'anthropic') {
-          bodyOut = { model: c.upstream, max_tokens: 16, messages: [{ role: 'user', content: prompt }] };
+          bodyOut = { model: c.upstream, max_tokens: TEST_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] };
         } else if (ch.def.protocol === 'gemini') {
-          bodyOut = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 16 } };
+          bodyOut = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: TEST_MAX_TOKENS } };
         } else {
-          bodyOut = { model: c.upstream, max_tokens: 16, messages: [{ role: 'user', content: prompt }] };
+          bodyOut = { model: c.upstream, max_tokens: TEST_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] };
         }
         let text;
         if (ch.def.proxy) {
@@ -4528,6 +4549,12 @@ async function handleAdminApi(req, res, url) {
         let parsed = null;
         try { parsed = JSON.parse(text); } catch {}
         const errText = (parsed && (parsed.error?.message || parsed.message)) || (resp.ok ? '' : text.slice(0, 200));
+        // v1.18.29：区分「可见正文」与「只有思考」。推理型模型在小预算下会把 token 全花在思考上，
+        //   可见正文为空但渠道确实在工作——这种必须判**可用**（否则控制台把好渠道标成"空回复/不过"）。
+        const visibleReply = extractReply(parsed, ch.def.protocol || 'openai');
+        const reasoningOnlyText = visibleReply ? '' : extractReasoning(parsed, ch.def.protocol || 'openai');
+        const reasoningOnly = !visibleReply && !!reasoningOnlyText;
+        const replyOut = visibleReply || (reasoningOnly ? '[输出仅含思考，渠道可用] ' + String(reasoningOnlyText).slice(0, 160) : '');
         // 测试成功时清零 channel 失败计数并标 ok（与主调度一致）
         if (resp.ok) {
           ch.consecutiveFail = 0;
@@ -4540,9 +4567,10 @@ async function handleAdminApi(req, res, url) {
           recordUsage({
             model, channelId: c.channelId, kind: 'test',
             inputTokens: parsed?.usage?.prompt_tokens ?? estimateTokens(prompt),
-            outputTokens: parsed?.usage?.completion_tokens ?? estimateTokens(extractReply(parsed, ch.def.protocol || 'openai') || ''),
+            outputTokens: parsed?.usage?.completion_tokens ?? estimateTokens(replyOut),
             ok: true, latencyMs: ttfb,
             realUsage: parsed?.usage,
+            ...(reasoningOnly ? { outReasoning: estimateTokens(reasoningOnlyText) } : {}),
           });
         }
         results.push({
@@ -4552,7 +4580,8 @@ async function handleAdminApi(req, res, url) {
           latencyMs: ttfb,
           promptTokens: parsed?.usage?.prompt_tokens,
           completionTokens: parsed?.usage?.completion_tokens,
-          reply: extractReply(parsed, ch.def.protocol || 'openai'),
+          reply: replyOut || undefined,
+          reasoningOnly: reasoningOnly || undefined,
           error: errText || undefined,
         });
       } catch (err) {
