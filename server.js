@@ -4985,6 +4985,9 @@ async function dispatchRequest(opts) {
   return sendJson(res, 502, { error: { message: `all channels failed`, type: 'gateway_error', attempts: errors } });
 }
 
+// v1.18.21 流内错误帧哨兵：预检期（正文未出、响应未提交）扫到 data:{"error":…} 时用它跳出读取循环
+const STREAM_ABORT = Symbol('zzcsapi-stream-error-frame');
+
 async function tryChannel(opts) {
   const { res, url, body, candidate, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk } = opts;
   const ch = channels.get(candidate.channelId);
@@ -5152,17 +5155,26 @@ async function tryChannel(opts) {
       recordFailure(ch, `stream idle: 上游 ${FIRST_CHUNK_MS / 1000 | 0}s 未出首字节（挂起/排队）`);
       return `stream idle ${FIRST_CHUNK_MS}ms`;
     }
-    res.writeHead(200, {
+    // v1.18.21 懒提交（预检期可切换的前提）：writeHead/开场事件推迟到"确实要写出第一段字节"时。
+    //   预检期（正文未出）扫到流内错误帧时要能安全返回让候选链切下一家——提前 writeHead 会让
+    //   下一候选的 writeHead 撞 ERR_HTTP_HEADERS_SENT，客户端也会先看到一个空的 200 壳。
+    const headOpts = {
       'Content-Type': resp.headers.get('content-type') || 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
       'X-ZZCSAPI-Channel': candidate.channelId,
-    });
-    if (typeof opts.streamPrelude === 'function' && !passthrough) {
-      const pre = opts.streamPrelude();
-      if (pre) res.write(pre);
-    }
+    };
+    let headCommitted = false;
+    const ensureHead = () => {
+      if (headCommitted) return;
+      headCommitted = true;
+      res.writeHead(200, headOpts);
+      if (typeof opts.streamPrelude === 'function' && !passthrough) {
+        const pre = opts.streamPrelude();
+        if (pre) res.write(pre);
+      }
+    };
     const decoder = new TextDecoder();
     let buf = '';
     let streamOutText = ''; // 累计输出（用于 token 估算）
@@ -5194,6 +5206,8 @@ async function tryChannel(opts) {
         if (out) outChunks.push(out);
         return;
       }
+      noteStreamLine(line);   // v1.18.21 错误帧旁路扫描（与直通同一套判定）
+      if (streamError !== null && !sawStreamContent && !headCommitted) throw STREAM_ABORT;
       streamOutText += sseDeltaText(line);
       if (onStreamChunk) {
         const out = onStreamChunk(line + '\n', candidate);
@@ -5204,6 +5218,7 @@ async function tryChannel(opts) {
     };
     const flushOut = () => {
       if (!outChunks.length) return;
+      ensureHead();
       res.write(outChunks.join(''));
       outChunks = [];
     };
@@ -5221,7 +5236,49 @@ async function tryChannel(opts) {
     //   因此 CRLF/分帧边界/空行与上游**逐字节一致**（旧写法把 CRLF 归一成 LF，还把每帧拆成两次写）。
     //   同时旁路一份文本，只用于真实 usage 扫描与 token 估算，不影响转发内容。
     let scanBuf = '';
+    // v1.18.21 流内错误帧（旁路扫描，不改转发的字节）：上游 HTTP 200 但 SSE 里带 data:{"error":…} 时，
+    //   「正文出现之前」收到 → 响应尚未提交，取消读取并返回 stream_error 让候选链切下一家（别家上下文
+    //   上限可能更大——这是"这家吃不下"，不是渠道坏了，不记失败不冷却）；
+    //   「正文已出现之后」收到 → 客户端已经看到部分输出，如实转发收尾，但收尾处按失败记账。
+    //   旧逻辑只看 HTTP 200 + 流结束就记 ok:true，超长上下文打到上限小的渠道时账本写"成功"而
+    //   客户端拿到的是纯错误帧（调用日志 66991/0 token 就是这个形态）。
+    let streamError = null;        // 流内错误帧的原文（data:{"error":…}）
+    let sawStreamContent = false;  // 是否见过正文（delta 里除 role 外有内容 / tool_calls / 原生正文块）
+    // 判定一行 SSE 的性质。必须真解析 JSON：role-only 的开场帧不算正文（旧写法用
+    // 正则替换判 role，把 {"delta":{"role":"assistant"}} 误判成正文，错误帧就再也拦不住了）。
+    const noteStreamLine = (line) => {
+      const s = String(line);
+      if (!/^\s*data:/.test(s)) return;
+      const d = s.replace(/^\s*data:\s*/, '').trim();
+      if (!d || d === '[DONE]' || !d.startsWith('{')) return;
+      let j = null;
+      try { j = JSON.parse(d); } catch { return; }   // 半截 JSON：等下一行，不误判
+      if (j && j.error && !j.choices) {
+        if (streamError === null) {
+          const e = j.error;
+          streamError = String((e && (e.message || e.msg || e.type)) || e || 'upstream stream error');
+        }
+        return;
+      }
+      if (sawStreamContent) return;
+      const delta = j.choices && j.choices[0] && j.choices[0].delta;
+      if (delta && typeof delta === 'object') {
+        for (const k of Object.keys(delta)) {
+          if (k === 'role') continue;                  // 开场帧只报角色，不是正文
+          const v = delta[k];
+          if (v === null || v === undefined || v === '') continue;
+          if (Array.isArray(v) && v.length === 0) continue;
+          if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue;
+          sawStreamContent = true;
+          break;
+        }
+        return;
+      }
+      // 非 OpenAI 形态（原生直通）：内容块增量 / 候选文本都算正文
+      if (j.type === 'content_block_delta' || j.candidates || typeof j.delta === 'string') sawStreamContent = true;
+    };
     const passthroughWrite = (u8) => {
+      ensureHead();
       res.write(u8);
       scanBuf += decoder.decode(u8, { stream: true });
       let i;
@@ -5230,6 +5287,8 @@ async function tryChannel(opts) {
         scanBuf = scanBuf.slice(i + 1);
         passthroughUsage = nativeStreamUsageScan(passthrough, line, passthroughUsage);
         if (passthrough === 'anthropic') replayScan = thinkingStreamScan(line, replayScan);
+        noteStreamLine(line);
+        // 直通路径字节已即时写出（headCommitted 已为真），这里只累计事实，不再中断
         streamOutText += sseDeltaText(line) || line;
       }
     };
@@ -5260,23 +5319,57 @@ async function tryChannel(opts) {
         buf += decoder.decode(); // 冲掉解码器里残留的多字节字符
         drain(true);
       }
-    } catch (err) { /* 上游已断 */ }
+    } catch (err) {
+      // v1.18.21 预检期错误帧：主动取消（上游已 200 但一个正文都没出，别等了），
+      // 交由下方统一收尾——响应未提交，候选链还能切下一家
+      if (err !== STREAM_ABORT) { /* 上游真断流 */ }
+    }
+    // v1.18.21 预检期错误帧：上游 200 但正文一个字节都没出（只有 role 帧 + error 帧）。
+    //   此时响应尚未提交 → 取消读取并按"这家吃不下"返回，候选链切下一家（别家上下文上限可能更大）。
+    //   如实记 ok:false（账本不说谎），但**不** recordFailure——这不是渠道坏了，不该吃冷却。
+    if (streamError !== null && !sawStreamContent && !headCommitted) {
+      try { reader.cancel(); } catch {}
+      try {
+        recordUsage({
+          model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+          inputTokens: estimateTokens(messagesText(body && body.messages)),
+          outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+          note: 'stream error frame: ' + streamError.slice(0, 160),
+          statsCtx: opts.statsCtx,
+        });
+      } catch { /* 记账失败不影响切换 */ }
+      return `stream_error: ${streamError.slice(0, 200)}`;
+    }
     // 原生流式收尾：上游没发结束标记（异常断流）时也要把 finish_reason + [DONE] 补上，
     // 否则客户端的流式解析器会一直等（与 Anthropic 路由的 streamEpilogue 是同一类兜底）
     if (nativeStream) {
       const tail = emitNative(nativeStream.end());
-      if (tail) res.write(tail);
+      if (tail) { ensureHead(); res.write(tail); }
     }
     if (typeof opts.streamEpilogue === 'function' && !passthrough) {
       const post = opts.streamEpilogue();
-      if (post) res.write(post);
+      if (post) { ensureHead(); res.write(post); }
     }
     // v1.18.8 thinking 回放学习点（直通流式）：攒完的带签名 thinking 块顺手记下——
     // 只在直通 anthropic + 有会话键时记；没走到 content_block_stop 的半截块不记
     if (passthrough === 'anthropic' && opts.replayKey && replayScan && replayScan.done.length) {
       replayLearn(opts.replayKey, candidate.channelId, opts.requestedModel, replayScan.done);
     }
+    ensureHead();   // 空流也要把 200 头发出去（客户端不能挂在等头上）
     res.end();
+    // v1.18.21 已提交后的流内错误帧：客户端已看到部分输出，流如实收尾，但账本不许再说谎——
+    //   ok:false + 渠道记失败（连败会进冷却，这家确实在出错）
+    if (streamError !== null) {
+      recordFailure(ch, 'stream error frame: ' + streamError.slice(0, 200));
+      recordUsage({
+        model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+        inputTokens: estimateTokens(messagesText(body && body.messages)),
+        outputTokens: estimateTokens(streamOutText), ok: false, latencyMs: Date.now() - t0,
+        realUsage: passthroughUsage,
+        statsCtx: opts.statsCtx,
+      });
+      return 'success';   // 响应已提交，候选链不能再切；客户端拿到的是真实流
+    }
     recordUsage({
       model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
       inputTokens: estimateTokens(messagesText(body && body.messages)),
@@ -5288,6 +5381,27 @@ async function tryChannel(opts) {
   } else {
     // 非流式：先读全文（统计 + 转发），shim 给 handler 避免 double-read
     const rawText = await resp.text();
+    // v1.18.21 非流式的 200 + error 报文（流内错误帧的同型）：上游用 200 夹带
+    //   {"error":{…}}（超长上下文打到上限小的渠道就是这种形态）。响应尚未提交 →
+    //   如实记 ok:false 并返回 stream_error 让候选链切下一家；不记渠道失败（"这家吃不下"）。
+    //   注意必须在 passthrough 分支**之外**：OpenAI→OpenAI 非流式不走直通分支。
+    {
+      let pe = null;
+      try { pe = JSON.parse(rawText); } catch { /* 非 JSON 上游：交给下面各分支 */ }
+      if (pe && pe.error && !pe.choices) {
+        const em = String((pe.error && (pe.error.message || pe.error.msg || pe.error.type)) || pe.error || 'upstream error');
+        try {
+          recordUsage({
+            model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+            inputTokens: estimateTokens(messagesText(body && body.messages)),
+            outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+            note: 'stream error body: ' + em.slice(0, 160),
+            statsCtx: opts.statsCtx,
+          });
+        } catch { /* 记账失败不影响切换 */ }
+        return `stream_error: ${em.slice(0, 200)}`;
+      }
+    }
     // ★ 同协议直通：上游报文就是客户端想要的格式 → 一个字段都不动，原样写回（连 Content-Type 都照抄）。
     //   这条分支**必须**跳过下面的 translateResponse/onSuccessNonStream，否则等于刚省掉的翻译又加回来。
     if (passthrough) {

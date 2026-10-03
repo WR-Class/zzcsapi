@@ -11,6 +11,10 @@
   · 代价：真·客户端的错（参数写错）现在会把候选链走完才回 4xx，请求更慢、上游多挨几下；相比之下"明明有能用的渠道却给客户端报错"更糟。链长仍受 `retries.maxModelFallbacks` 约束，同一家的额外重试次数受 `retries.perChannel` 约束（但 4xx 从不重试，见 [docs/scheduling.md](scheduling.md)「同渠道重试」）。
   · 透传时用的是**最后一家**上游的错误体与状态码，客户端看到的仍是上游真实答复（不是网关伪造的 502）。
 - **流式失败**：已经开始向客户端写 200 + 任意 chunk 后，上游断开不会再换渠道（避免半截回复）。
+  · **流内错误帧与"提交分界线"（v1.18.21）**：不少中转站（new-api 系）遇到自家后端失败时**不**回 4xx，而是回 HTTP 200 的 SSE 里塞一帧 `data:{"error":{…}}` ——超长上下文打到上限小的渠道是最常见的触发（现场 `req_mur6vapv`：66,991 进 / **0 出**，流里只有 role 帧 + `The input exceeds the supported context size` + `[DONE]`，客户端报 `The server had an error`，而网关旧逻辑只看"200 + 流结束"就记 `ok:true`，渠道健康还被清零）。
+  · 判据是**响应有没有提交给客户端**：① 正文出现**之前**扫到错误帧（此时还没写出任何字节）→ 取消读取、返回 `stream_error: <上游原文>`，候选链**切下一家**（别家的上下文上限可能更大），用量如实记 `ok:false` 但**不**给这家记失败（"这家吃不下这个请求"≠渠道坏了）；② 正文已经流出去之后才扫到 → 流如实转发收尾（客户端拿到的部分是真的），但账本记 `ok:false` 并给渠道 `recordFailure`（连败进冷却）。
+  · 为了让 ① 可行，流式的 `writeHead`/开场事件（`streamPrelude`）改成**懒提交**：推迟到确实要写出第一段字节时。提前提交会让下一候选的 `writeHead` 撞 `ERR_HTTP_HEADERS_SENT`，客户端也会先收到一个空的 200 壳。
+  · 非流式同型（200 + `{"error":…}` 报文）走同一判据：还没提交响应 → 记 `ok:false` 并切下一候选。**字节保真不受影响**（直通路径仍逐字节转发；扫描只是旁路读一份文本副本）。回归：`test/stream-error-frame-e2e.test.js`。
 - **协议转换**：OpenAI ↔ Anthropic ↔ Gemini 三边都走内部 OpenAI 协议中转；**出站方向也按渠道的 `protocol` 走原生格式**（见 [docs/protocols.md](protocols.md)「原生出站」），所以任一客户端协议都能打到任一协议的渠道上。
 - **原生出站（`protocol: anthropic` / `gemini`）**：请求侧 `system`→顶层 `system`/`systemInstruction`、`tool_calls`→`tool_use`/`functionCall`、工具结果→`tool_result`/`functionResponse`（Gemini 按函数名配对）、图片→`image` 块/`inlineData`・`fileData`、`max_tokens`→`max_output_tokens`/`maxOutputTokens`、`stop`→`stop_sequences`/`stopSequences`；响应侧反向映射（`stop_reason`→`finish_reason`、`usageMetadata`→`usage`、`thinking`→`reasoning_content`）。
   · 流式：Anthropic 原生 SSE 事件与 Gemini `alt=sse` 分片都会**逐行翻译成 OpenAI 分片**，再交给该路由既有的流式转换器；上游异常断流时由收尾逻辑补 `finish_reason` + `[DONE]`（客户端不会一直等）。
