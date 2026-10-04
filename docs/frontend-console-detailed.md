@@ -1,4 +1,4 @@
-﻿# 控制台前端 · 详细设计文档
+# 控制台前端 · 详细设计文档
 
 > 对象文件：
 > - `console-redesign.html` —— **视觉唯一真源**，新版控制台的高保真静态原型（单文件、零依赖，双击即可打开）
@@ -1604,6 +1604,24 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 就必须在出门前把它翻译回人看得懂的东西——否则每一次排查都得回到服务器上翻运行态，而这些信息本来就在手上。
 排查这次问题的顺序也是教训：先看**账本的真实数字**（`in=9823~10274`，不是我们以为的 13 万）再下结论，
 差点把"上下文超限"错记成"上游抖动"。
+
+---
+
+### 8.42 v1.18.35 记账口径：工具轮不许被记成"零产出的成功"（2026-10-04，对象 `server.js` 流式记账 + 新增 `test/tool-turn-accounting-e2e.test.js` + `docs/behavior.md` + `docs/tests.md` + `AGENTS.md`）
+
+**问题**：盘账本时发现 `deepseek-v4.1-flash` 有 **196 行 `ok:true` 且 `out=0`**，耗时只有 8~38 秒（有正文的行是 45~147 秒），且与"有正文的行"在**同一渠道、同一分钟**里交错出现。我据此判定"约 35% 的调用返回空回复"，当成 P0 排查。
+
+**定性（这一步推翻了我自己的结论）**：开 `ZZCSAPI_DUMP_BODIES` 抓到 DSH 的真实报文（`stream:true`、`max_completion_tokens:32768`、**`tools:40`**、消息 119~231 条、体 450~560KB），再把留证里的报文**逐字节回放**给本地网关 —— **3/3 复现**：HTTP 200、52 个 SSE 帧里 **49 个是 `tool_calls`**、可见正文 0 字符、`finish_reason=tool_calls`；而上游 usage 帧明明自报 `prompt_tokens: 176351 / completion_tokens: 114`，账本却记 `in=56324 out=0`。**客户端拿到的是完整的工具调用，这条链路完全正常**——`out=0` 只是记账口径。
+
+**根因**：常规链路（openai 渠道 → openai 客户端）既不建 `nativeStream`、也不走同协议直通（`passthrough` 只给 anthropic/gemini），于是：
+① 上游自报的 usage 帧被**整帧丢掉**——`nativeStreamUsageScan` 只认 anthropic/gemini、`passthroughUsage` 只在直通路径填，`realUsage` 在这条路上恒为 undefined → `in` 永远是自己的估算、`out` 只数可见正文；
+② `streamOutText` 只累计 `sseDeltaText()` 取到的可见正文，纯工具轮没有正文 → `out = estimateTokens('') = 0`。
+
+**处置**（全在记账侧，失败判据路径一字未动）：新增 `openaiUsageFromFrame()` 与 `sseToolCallText()`；成功记账改为 `in/out` **上游自报优先**、缺帧或报 0 时回落估算（**把工具调用的 name+arguments 算进估算**），`reason` 优先用上游自报的 `reasoning_tokens` 并**钳到 ≤ out**，纯工具轮留 `note: 'tool_calls'`；直通路径补上思考占比累计（此前只有常规链路记）。两个必须钉住的细节：usage 帧要在 `noteStreamLine` 的 `if (sawStreamContent) return` **早退之前**抓（上游常把 usage 放在最后一个 chunk），以及**只作用于出站副本**那一类纪律照旧（本改动不碰报文）。
+
+**验证**：新增 `test/tool-turn-accounting-e2e.test.js`（**40 项**：两函数真值表；★纯工具轮 + usage 帧 → `in/out` 取上游真值并留 `tool_calls` 标记；★纯工具轮**没有** usage 帧 → `out > 0`（旧写法 = 0）；文本轮两组对照；思考轮 `reason` 用上游真数字且 ≤ out；含"usage 帧必须在早退之前抓"的顺序守卫与"旧写法已清零"的结构守卫）。全量回归 **42 文件 · 1968 项全过**。
+
+**教训**：**账本里的 `out` 不是"客户端看到了什么"，而是"这条路径当时怎么算的"**——拿一个记账数字去推客户端体验，我得出了完全相反的结论；把它纠正过来的是"留证 + 逐字节回放"，不是继续读代码。另一条老毛病又出现了一次：**同一件事两处实现、其中一处忘了对齐**（"上游 usage 优先"直通路径早就有，常规链路一直没有），这个仓库的多数真 bug 都是这一类。
 
 ---
 

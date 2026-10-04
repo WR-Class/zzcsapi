@@ -3831,6 +3831,46 @@ function sseDeltaText(line) {
   } catch { return ''; }
 }
 
+// v1.18.35：工具调用的 name + arguments 也属于"这次输出的内容"。
+//   纯工具轮（finish_reason=tool_calls、可见正文 0 字符）在 OpenAI 渠道的**常规链路**上此前只按可见正文
+//   估算 out → 一次**成功**的工具轮被记成 out=0，账本上看起来像"零产出的成功"。
+//   上游自报 usage 时以它为准，缺帧/报 0 时用它兜底。
+function sseToolCallText(line) {
+  if (!line || line.indexOf('data:') !== 0) return '';
+  if (line.indexOf('tool_calls') < 0) return '';   // 热路径：绝大多数帧一行子串判断就过
+  const data = line.slice(5).trim();
+  if (!data || data === '[DONE]') return '';
+  try {
+    const j = JSON.parse(data);
+    const tcs = j && j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.tool_calls;
+    if (!Array.isArray(tcs)) return '';
+    let t = '';
+    for (const c of tcs) {
+      const f = c && c.function;
+      if (f && typeof f.name === 'string') t += f.name;
+      if (f && typeof f.arguments === 'string') t += f.arguments;
+    }
+    return t;
+  } catch { return ''; }
+}
+
+// v1.18.35：上游 SSE 里的 usage 帧归一成内部字段（含上游自报的思考 token）。
+//   常规链路（openai 渠道 → openai 客户端）此前只在**直通**路径扫 usage（nativeStreamUsageScan 只认
+//   anthropic/gemini），这帧被整帧丢掉：`in` 永远是我们自己的估算、`out` 只数可见正文。
+//   现场（留证开关抓到 DSH 真实报文后逐字节回放）：一次纯工具轮上游自报 `completion_tokens: 114`、
+//   `prompt_tokens: 176351`，账本却记 `in=56324 out=0` —— 同一个机制也是"196 行 out=0"的全部成因。
+function openaiUsageFromFrame(j) {
+  const u = j && j.usage;
+  if (!u || typeof u !== 'object') return null;
+  const i = Number(u.prompt_tokens) || 0, o = Number(u.completion_tokens) || 0;
+  if (!i && !o) return null;   // 全 0 的空帧不覆盖已有累计
+  const det = u.completion_tokens_details || u.output_tokens_details || {};
+  const r = Number(det.reasoning_tokens) || 0;
+  const out = { prompt_tokens: i, completion_tokens: o, total_tokens: Number(u.total_tokens) || (i + o) };
+  if (r > 0) out.reasoning_tokens = r;
+  return out;
+}
+
 /* v1.18.28：把「可见正文」与「思考」分开取。推理型后端（现场实测：mjiutang 背后的
    accounts/fireworks/models/deepseek-v4p1-flash）会先流一串 reasoning_content，可见正文在后面才出；
    预算被思考吃光时上游回 finish_reason=length 且**可见正文为 0**，而账本把两者混成一个 out 数字，
@@ -5412,6 +5452,8 @@ async function tryChannel(opts) {
     let buf = '';
     let streamOutText = ''; // 累计输出（用于 token 估算）
     let streamReasonText = ''; // v1.18.28：其中属于「思考」的部分（如实记账用，见 sseDeltaSplit）
+    let streamToolText = '';   // v1.18.35：工具调用的 name+arguments（纯工具轮没有正文，不累计它 out 就是 0）
+    let streamUsage = null;    // v1.18.35：上游 SSE 自报的 usage（常规链路此前整帧丢掉，in/out 只剩估算）
     // ★ 原生渠道：把上游的原生 SSE 逐行翻译成 OpenAI SSE，再喂给路由既有的 onStreamChunk。
     //   路由没有 onStreamChunk 时（OpenAI 路由是原样透传）就直接写翻译结果 —— 否则客户端会把
     //   Anthropic/Gemini 的事件当 OpenAI 分片解析，一个字段都读不出来。
@@ -5444,6 +5486,7 @@ async function tryChannel(opts) {
       if (streamError !== null && !sawStreamContent && !headCommitted) throw STREAM_ABORT;
       streamOutText += sseDeltaText(line);
       streamReasonText += sseDeltaSplit(line).reason;   // v1.18.28：思考单独累计
+      streamToolText += sseToolCallText(line);          // v1.18.35：工具调用参数也算输出（纯工具轮兜底用）
       if (onStreamChunk) {
         const out = onStreamChunk(line + '\n', candidate);
         if (out) outChunks.push(out);
@@ -5518,6 +5561,10 @@ async function tryChannel(opts) {
         }
         return;
       }
+      // v1.18.35：usage 帧必须在这条早退**之前**抓——上游常把 usage 放在最后一个 chunk
+      //   （delta 为空、只带 usage），早退会把它整帧丢掉，in/out 就只剩我们自己的估算。
+      const uf = openaiUsageFromFrame(j);
+      if (uf) streamUsage = uf;
       // v1.18.28：finish_reason 与三类内容标记必须在下面那条 `if (sawStreamContent) return` 早退**之前**抓——
       //   推理流的思考帧会把 sawStreamContent 置位，收尾帧（往往 delta 为空、只带 finish_reason）
       //   若被早退吞掉，就永远判不出"finish=length 且可见正文为 0"。标记写入都是幂等的，重复扫无副作用。
@@ -5560,6 +5607,7 @@ async function tryChannel(opts) {
         noteStreamLine(line);
         // 直通路径字节已即时写出（headCommitted 已为真），这里只累计事实，不再中断
         streamOutText += sseDeltaText(line) || line;
+        streamReasonText += sseDeltaSplit(line).reason;   // v1.18.35：直通路径也如实记「思考占比」（此前只有常规链路记）
       }
     };
 
@@ -5751,12 +5799,27 @@ async function tryChannel(opts) {
       } catch { /* 记账失败不影响正常收尾 */ }
       return 'success';   // 响应已提交，候选链不能再切；客户端拿到的是真实流（空的）
     }
+    // v1.18.35 ★ 常规链路（openai 渠道 → openai 客户端）的记账口径与直通路径对齐。此前两个偏差：
+    //   ① 上游自报的 usage 帧被整帧丢掉（只有直通路径扫）→ `in` 永远是估算、`out` 只数可见正文；
+    //   ② 纯工具轮没有可见正文 → `out=0`，一次**成功**的工具轮在账本上显示成"零产出的成功"
+    //      （现场：DSH 的 agent 循环里 196 行 `ok:true out=0`，我据此误判成"35% 的调用返回空回复"；
+    //       开留证开关抓真实报文 + 逐字节回放才看清：客户端拿到的是 49 个 tool_call、finish=tool_calls，
+    //       上游 usage 帧自报 `completion_tokens: 114 / prompt_tokens: 176351`，账本却记 `in=56324 out=0`）。
+    //   兜底仍保留估算，但**把工具调用算进去**；纯工具轮另留 `tool_calls` 标记，下次一眼分得清
+    //   "客户端拿到工具调用"与"客户端什么都没拿到"。
+    const usageOut = streamUsage || passthroughUsage;
+    const reportedIn = usageOut && Number(usageOut.prompt_tokens) > 0 ? Number(usageOut.prompt_tokens) : 0;
+    const reportedOut = usageOut && Number(usageOut.completion_tokens) > 0 ? Number(usageOut.completion_tokens) : 0;
+    const outTok = reportedOut || estimateTokens(streamOutText + streamToolText);
+    const rawReason = usageOut && Number(usageOut.reasoning_tokens) > 0
+      ? Number(usageOut.reasoning_tokens) : estimateTokens(streamReasonText);
     recordUsage({
       model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
-      inputTokens: estimateTokens(messagesText(body && body.messages)),
-      outputTokens: estimateTokens(streamOutText), ok: true, latencyMs: Date.now() - t0,
-      realUsage: passthroughUsage,
-      outReasoning: estimateTokens(streamReasonText),   // v1.18.28：如实标出这发里有多少是思考
+      inputTokens: reportedIn || estimateTokens(messagesText(body && body.messages)),
+      outputTokens: outTok, ok: true, latencyMs: Date.now() - t0,
+      realUsage: usageOut,
+      outReasoning: Math.min(rawReason, outTok),   // v1.18.28：如实标出这发里有多少是思考（不许超过总输出）
+      note: (sawToolCall && !sawVisibleText) ? 'tool_calls' : undefined,
       statsCtx: opts.statsCtx,
     });
     return 'success';
