@@ -291,7 +291,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 ### 5.1 总览 `vOverview`（1064）
 
 - 4 张 KPI 卡：累计请求 / 成功率 / 平均延迟 / Token 消耗，各带独立曲线带
-- 请求趋势大图（`areaChart`，20 天）+ 峰值/日均 chip
+- 请求趋势大图（`areaChart`，20 天）+ 峰值/日均 chip（日界 = **北京时间 00:00**，v1.18.36 起）
 - 渠道健康环形图 `donut` + 图例（正常 23 / 降级 1 / 不可用 6）
 - Top 渠道表、Top 模型条形榜
 - 时间范围页签 `24h / 7d / 30d`
@@ -611,7 +611,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | `simTest` / `runTests` | `POST /admin/api/test` | 需覆盖各协议分支 |
 | `doImport` / `importFiles`(codex) | `POST /admin/api/codex-import` | RT 全自动建渠道 |
 | `doImport` / `importFiles`(genspark) | `POST /admin/api/genspark-import` | 提取 `sessionId` 换 key；`mode:'add'` 一会话一渠道 |
-| 用量明细 / 清零 | `GET /admin/api/usage` · `POST /admin/api/usage/clear` | 总用量 / 按模型 / 按渠道 / 按天 / 24h 分布 |
+| 用量明细 / 清零 | `GET /admin/api/usage` · `POST /admin/api/usage/clear` | 总用量 / 按模型 / 按渠道 / 按天（**北京时间日**，v1.18.36 起）/ 24h 分布（**北京时间小时**） |
 | `pgSend` | `POST /v1/chat/completions` | 支持 `stream` |
 | Playground 生图 | `POST /v1/images/generations` | 需上游支持图像接口 |
 | （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
@@ -1625,7 +1625,19 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 ---
 
-- 渠道列表分页 / 虚拟滚动（真实 30+ 渠道，模型探测可能上百）
+### 8.43 v1.18.36 账本的「天 / 小时」一律按北京时间切（2026-10-05，对象 `server.js` 账本时钟 + 新增 `test/usage-day-key.test.js` + `docs/behavior.md` / `docs/tests.md` / `AGENTS.md`）
+
+**问题**：查「yu1 渠道最近 24 小时用了多少 token」时，账本**答不了**——`recent` 明细只留 800 行（当前流量下仅覆盖 **1.7 小时**）、`byChannel` 是累计值没有时间维度、`byDay` 有日期维度却不带渠道维度。顺着这条线核对时间维度时，撞上更要紧的一处：**日桶与小时桶对不上**。
+
+**根因**：`recordUsage` 里 `const day = new Date(ts).toISOString().slice(0,10)` 取的是 **UTC 日**，而 `/admin/api/usage` 的 24 小时分布用 `new Date(r.ts).getHours()`（**本地小时**）——同一个账本里两套钟，日界落在**北京时间早上 8 点**：凌晨 0~8 点的流量被算进前一天（本次现场正好是北京时间 00:0x，请求的 `ts` 在北京 10-05，`byDay` 却记进 `2026-10-04`）。`ipStatsBumpHour` 更自相矛盾：注释写「本地时区，跨天清零」，代码是 UTC 日 + 本地小时。
+
+**处置**：新增账本时钟 `cnDayKey(ts)` / `cnHour(ts)`（**固定 +8**），账本四处口径统一走它们——`byDay` 桶键、per-IP 24 小时桶的日界与小时、`/admin/api/usage` 的 `hourly`。**为什么固定 +8 而不是图省事用 `getDate()/getHours()`**：后者取决于**进程时区**（compose 里设了 `TZ=Asia/Shanghai`，但裸跑 `node server.js` 的机器可能是 UTC），账本口径不该随部署环境漂；中国无夏令时，+8 恒定。
+
+**影响（前端要知道的两件事）**：① 趋势大图的「按天」柱子与 KPI 环比的日界从"北京 08:00"变成"北京 00:00"——**这是修正，不是回归**；② `byDay` 是累计值、不重算，所以**改动之前的桶仍是 UTC 日**：`2026-10-04` 那个桶装的是北京时间 10-04 08:00 之后的量（看着偏短），北京 10-05 从零起。前端**无需改代码**（`adapt()` 只把 `day` 字符串切 `MM-DD`，不做任何时区换算）。
+
+**教训**：**同一个账本里不许有两套钟**。这次是"日期取 UTC、小时取本地"混在同一个函数族里，注释还写着"本地时区"——**注释与代码各说一套时先信代码，再判断哪个才是本意**；本意（北京时间）是明确的，错的是实现。
+
+
 - 密钥明文显示加"仅本次会话"提示或二次确认
 - 探测结果支持"仅显示新增"过滤
 ## 9. 后续可做（未实现）

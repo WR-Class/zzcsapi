@@ -1,4 +1,4 @@
-﻿# ZZCSAPI — 本地多渠道 AI 聚合网关
+# ZZCSAPI — 本地多渠道 AI 聚合网关
 
 类似 new-api / sub2-api / one-api 的轻量自部署版，**零依赖，仅 Node 18+**。
 把所有中转 API key 集中在一处，对外同时暴露 **OpenAI / Anthropic / Gemini** 三种兼容端点。
@@ -334,7 +334,7 @@ thinking 回放修复）。矩阵表、工具调用四方向、各渠道配置�
 | `/healthz` | GET | 无 | 网关自身存活探针（只回 `{ok:true}`，v1.18.9 起不带渠道数/密钥状态——渗透整改 V-08） |
 | `/console` | GET | admin | Web 控制台 HTML |
 | `/admin/api/status` | GET | admin | 渠道详细状态（控制台用；含 `weight`/`weightedShare`/自动权重观测/`effectivePriority` 等字段） |
-| `/admin/api/usage` | GET | admin | 用量统计（总量 / 按模型 / 按渠道 / 按天 / 近 200 条 / 24h 分布） |
+| `/admin/api/usage` | GET | admin | 用量统计（总量 / 按模型 / 按渠道 / 按天〔北京时间日〕/ 近 200 条 / 24h 分布〔北京时间小时〕） |
 | `/admin/api/usage/clear` | POST | admin | 清零用量统计 |
 | `/admin/api/stats` | GET | admin | **来源 IP 态势统计**（per-IP 敲门数 / token / 模型 / 峰值并发 / 会话估计 / 24h 桶 / 封禁命中；内存态，重启清零） |
 | `/admin/api/bans` | POST | admin | 封禁来源 IP（body `{ip}`，字面量校验，立即生效 + 落库，幂等） |

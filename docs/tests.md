@@ -1,6 +1,6 @@
-# 测试清单（42 个文件 · 1968 项断言，零依赖）
+# 测试清单（43 个文件 · 1995 项断言，零依赖）
 
-> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 42 条命令与每条守的是什么。
+> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 43 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
 > **动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json` / `usage.json`**，不出网、不烧额度。
 > 退出码非 0 = 有回归。跑单个：`node test/<名字>.test.js`。
@@ -15,6 +15,7 @@
 | 流式读取循环 / 流内错误帧 / 懒提交（writeHead 时机） | `stream-error-frame-e2e` + `streaming-e2e` + `outbound-http-client`（直通字节一致性） |
 | 流式或非流式的「200 但空」记账（零正文 / 空回复判据、直通空流） | `stream-error-frame-e2e` + `same-protocol-passthrough` |
 | 常规链路的流式记账口径（上游 usage 帧 / 工具轮的 out / `reason`） | `tool-turn-accounting-e2e` + `reasoning-only-fallback-e2e` |
+| 账本的「天 / 小时」口径（`byDay` 桶、24 小时分布、per-IP 24 桶的日界） | `usage-day-key` |
 | 渠道级出站参数剔除（`dropParams` 白名单 / 出站副本不串味 / 直通路径 / 落库与清空语义） | `channel-drop-params-e2e` + `console-state`（§3b 表单回填与"总是提交"） + `same-protocol-passthrough`（直通路径） |
 | 运行期四组开关（粘性 / 限流 / metrics / 回放） | `settings-api-e2e` + 对应开关的 e2e |
 | 密钥 / 鉴权 / 会话 / 响应头 | `security-headers-e2e` + `key-rotation-e2e` + `admin-session-e2e` |
@@ -54,6 +55,7 @@ node test/auto-weight.test.js             # 66 项断言：自动权重算法（
 node test/auto-weight-e2e.test.js         # 37 项断言：真流量下预测与健康系数自洽、分流一字未动、配置往返旋钮不丢、后台节拍不依赖控制台
 node test/upstream-4xx-fallback-e2e.test.js  # 43 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）；v1.18.34 加两节——全链 429 → 502 时每条 attempts 都要带 HTTP 码与上游原文（现场 channel_error 光秃秃、看不出是余额还是 WAF）+ 对照组防拼两遍
 node test/tool-turn-accounting-e2e.test.js # 40 项断言（v1.18.35）：★工具轮不许被记成"零产出的成功"——现场账本里 deepseek-v4.1-flash 有 196 行 ok:true 且 out=0（耗时只有 8~38 秒、与有正文的行同渠道同分钟交错），开留证开关抓 DSH 真实报文后**逐字节回放**才定性：客户端拿到的是 49 个 tool_call、finish=tool_calls、可见正文 0 字符，而上游 usage 帧自报 prompt_tokens=176351 / completion_tokens=114，账本却记 in=56324 out=0。根因在常规链路（openai 渠道 → openai 客户端）的记账侧：usage 帧被整帧丢掉（只数可见正文），纯工具轮 out 就是 0。断言：两个新函数的真值表（工具帧的 name+arguments 也算输出、usage 帧归一、全 0 空帧不覆盖累计）；真链路 ★ 纯工具轮 + usage 帧 → in/out 取上游真值、留 tool_calls 标记；真链路 ★ 纯工具轮**没有** usage 帧 → out>0（旧写法=0）；文本轮两组对照（有 usage → 上游优先、没有 → 仍是估算）；思考轮 reason 用上游自报数字且 ≤ out；结构守卫：usage 帧必须在 `if (sawStreamContent) return` 早退**之前**抓（上游常把 usage 放最后一个 chunk）
+node test/usage-day-key.test.js            # 27 项断言（v1.18.36）：账本的「天 / 小时」一律按**北京时间**切——现场查「yu1 渠道 24 小时用量」时发现日桶与小时桶对不上：`byDay` 用 `new Date(ts).toISOString().slice(0,10)`（UTC 日）、24 小时分布用 `getHours()`（本地小时），同一个账本里两套钟，日界落在北京时间早上 8 点（`ipStatsBumpHour` 更自相矛盾：注释写"本地时区跨天清零"，代码是 UTC 日 + 本地小时）。处置：新增 `cnDayKey()`/`cnHour()`（**固定 +8**，不依赖进程时区——compose 设了 TZ 但裸跑可能是 UTC），账本四处统一走它们。断言：真值表（北京 00:00 边界、跨月跨年、字符串 ts、`cnHour` 三态、**老写法在同一点上差一天**的对照）；★ 真链路**用 TZ=UTC 起网关**——`byDay` 桶键 = 该行 `ts` 的北京日、不含 UTC 日桶、`hourly` 落在北京小时而 **UTC 小时那格必须是 0**、per-IP 24 桶同理；结构守卫（`bumpUsageBucket(u.byDay, …)` 的 day 来自 `cnDayKey`、`ipStatsBumpHour` 不再混用、全仓 Date→日字符串的转换只有 `cnDayKey` 一处）
 node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5）
 node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）

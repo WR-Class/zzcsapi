@@ -3100,8 +3100,18 @@ function clientLabelOf(ua) {                               // L1 自报家门：
   for (const [re, label] of table) if (re.test(s)) return label;
   return s.length > 24 ? s.slice(0, 24) + '…' : s;         // 认不出的原样截断展示，不瞎猜
 }
+/* 账本时钟（v1.18.36）：账本里所有「天 / 小时」一律按**北京时间（UTC+8）**切，且**固定 +8、不依赖进程时区**。
+   此前按天用的是 `new Date(ts).toISOString().slice(0,10)`（UTC 日），日界落在北京时间早上 8 点——
+   凌晨 0~8 点的流量被算进前一天；而小时桶用的却是本地小时（`getHours()`），同一个函数里两套钟
+   （现场：查「24 小时用量」时发现日桶与小时桶对不上，凌晨那几条被记到了昨天）。
+   为什么不用 `getDate()/getHours()` 图省事：那取决于**进程时区**（compose 里设了 TZ=Asia/Shanghai，
+   但裸跑 `node server.js` 的机器可能是 UTC），账本口径不该随部署环境漂。中国无夏令时，+8 恒定。 */
+const CN_OFFSET_MS = 8 * 3600 * 1000;
+const cnDayKey = (ts) => new Date(Number(ts) + CN_OFFSET_MS).toISOString().slice(0, 10);
+const cnHour = (ts) => new Date(Number(ts) + CN_OFFSET_MS).getUTCHours();
+
 /* per-IP 统计（内存态）：calls = 敲门次数（含 401/429——刷鉴权也是指纹）；tokens/models/sessions
-   只在成功用量上记（recordUsage 单漏斗）；buckets = 本地小时 24 桶（跨天清零）；
+   只在成功用量上记（recordUsage 单漏斗）；buckets = 北京时间小时 24 桶（跨天清零）；
    基数有界：IP 上限 512（超限丢 lastSeen 最旧的）、每 IP 会话上限 512（记满显示 ≥512）、标签 8 / 模型 64。 */
 const IP_STATS = new Map();
 const IP_STATS_CAP = 512;
@@ -3121,10 +3131,10 @@ function ipStatsEntry(ip, now) {
   }
   return r;
 }
-function ipStatsBumpHour(r, now) {                         // 24 小时桶（本地时区，跨天清零）
-  const d = new Date(now), day = d.toISOString().slice(0, 10);
+function ipStatsBumpHour(r, now) {                         // 24 小时桶（北京时间，跨天清零）
+  const day = cnDayKey(now);                               // v1.18.36：此前是 UTC 日，桶在北京时间 8 点清零
   if (r.bucketDay !== day) { r.buckets.fill(0); r.bucketDay = day; }
-  r.buckets[d.getHours()]++;
+  r.buckets[cnHour(now)]++;
 }
 function noteClientAttempt(ip, label) {
   const now = Date.now(), r = ipStatsEntry(ip, now);
@@ -3798,7 +3808,8 @@ function recordUsage({ model, channelId, kind, inputTokens, outputTokens, ok, la
     u.total.outputTokens += outTok;
     bumpUsageBucket(u.byModel, model, inTok, outTok, ok);
     bumpUsageBucket(u.byChannel, channelId, inTok, outTok, ok);
-    const day = new Date(ts).toISOString().slice(0, 10);
+    // v1.18.36：按**北京时间日**切（此前是 UTC 日 → 日界落在北京早上 8 点，凌晨的流量算进前一天）
+    const day = cnDayKey(ts);
     bumpUsageBucket(u.byDay, day, inTok, outTok, ok);
     // v1.18.28：vReason 是"这次输出里有多少属于思考"（估算值，仅在有思考时写）——
     // 推理型后端把思考算进同一份预算，混在一起看会误以为"成功产出了内容"（现场 out=30 全是思考）。
@@ -3931,10 +3942,10 @@ async function handleAdminApi(req, res, url) {
     const sorted = (obj) => Object.entries(obj)
       .map(([k, v]) => ({ key: k, ...v, total: (v.inputTokens || 0) + (v.outputTokens || 0) }))
       .sort((a, b) => (b.total || 0) - (a.total || 0));
-    // 24 小时分布（按最近 800 条请求的本地小时）
+    // 24 小时分布（按最近 800 条请求的**北京时间**小时；v1.18.36 起不再依赖进程时区）
     const hourly = Array.from({ length: 24 }, (_, h) => ({ h, requests: 0, errors: 0 }));
     for (const r of u.recent) {
-      const h = new Date(r.ts).getHours();
+      const h = cnHour(r.ts);
       if (hourly[h]) { hourly[h].requests++; if (r.ok === false) hourly[h].errors++; }
     }
     // 各渠道平均延迟（按最近成功请求）
