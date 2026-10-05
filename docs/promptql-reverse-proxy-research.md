@@ -10,10 +10,13 @@
 > 后者的收益为零、ToS 风险为正、适配成本还不小（参考 genspark 文本仿真的工作量，但那边换来的是免费额度，
 > 这边换来的只是"很有限的免费额度"）。
 >
-> 另有一条**本机实测**的硬障碍：控制面 `auth.pro.ql.app` 在本地**被 DNS 污染**
-> （本地解析返回一串国内 IP、未带凭据的 POST 直接 `302 → https://m.baidu.com`），
-> 而其余主机（`prompt.ql.app` / `chat-handler.pro.hasura.io` / `cloud.ql.app` / `data.pro.ql.app`）**都直连可达**。
-> 也就是说：控制台能打开、聊天后端能到，**唯独发令牌的那一跳过不去**。
+> 另有一条**本机实测**的硬障碍（**2026-10-05 更正，见 §2b**）：控制面 `auth.pro.ql.app` 从本机**打不通**——
+> 本地 DNS 对它返回一串国内 IP（未带凭据的 POST 会 `302 → https://m.baidu.com`），
+> 而**绕过 DNS 直连真身 `35.227.221.98`** 会拿到服务端自己的 **`403 {"error":"geo_blocked"}`**
+> （镜像域 `auth.pro.arusah.com` 同样 403）。**所以这不是"DNS 污染"这么简单，是它按来源 IP 拒绝**：
+> 本机出口是**日本 GSL Networks（机房/VPN IP）**。其余主机（`prompt.ql.app` / `chat-handler.pro.hasura.io` /
+> `cloud.ql.app` / `data.pro.ql.app`）**都直连可达且不返回 geo_blocked**。
+> 也就是说：控制台能打开、聊天后端能到、数据面能到，**唯独发令牌的那一跳过不去**。
 
 ---
 
@@ -35,13 +38,28 @@
 | `https://prompt.ql.app` | 控制台本体 | ✅ 200（下载到完整前端包） |
 | `https://chat-handler.pro.hasura.io` | **聊天/线程后端** | ✅ 存活（`/` → 404，服务在） |
 | `https://chat-handler.pro.arusah.com` | 同上，**镜像域**（`arusah` = `hasura` 倒写） | ✅ 存活（`/` → 404） |
-| `https://auth.pro.ql.app` | **控制面鉴权**（发项目令牌） | ❌ **被 DNS 污染**：本地解析 → `117.55.193.18 / 182.16.61.114-118 / 141.193.154.x / 180.178.40.218`（一堆国内 IP），DoH 真身是 `35.227.221.98`；未带凭据 POST → `302 Location: https://m.baidu.com` |
-| `https://auth.pro.arusah.com` | 控制面镜像 | ⚠️ 403（存在，边缘拒绝） |
-| `https://cloud.ql.app` | 仪表盘 | ✅ 200 |
-| `https://data.pro.ql.app` | 数据面 | ✅ 302 → `console` |
+| `https://auth.pro.ql.app` | **控制面鉴权**（发项目令牌） | ❌ **两层都过不去**（详见 §2b）：① 本地 DNS 返回一串国内 IP（`117.55.193.18 / 182.16.61.114-118 / 141.193.154.x / 180.178.40.218`），未带凭据 POST → `302 Location: https://m.baidu.com`；② **绕过 DNS 直连真身 `35.227.221.98`** → `403 {"error":"geo_blocked","message":"Access from your current location is not available…"}` |
+| `https://auth.pro.arusah.com` | 控制面镜像 | ❌ 绕过 DNS 直连（`34.54.111.255`）→ **同样 `403 geo_blocked`**（说明地区判定不在域名层） |
+| `https://cloud.ql.app` | 仪表盘 | ✅ 200（Hasura Cloud 壳） |
+| `https://data.pro.ql.app` | 数据面（DDN GraphQL） | ✅ **可达且不 geo_block**：`POST /v1/graphql` → 200 `{"errors":[{"message":"Authentication hook unauthorized this request"}]}`（只是没带令牌） |
 | `https://api.promptql.pro.hasura.io` | env 里仍写着 | ❌ **已解析不到**（陈旧配置，见 §6） |
-| `https://playground.promptql.pro.hasura.io` | Playground | （未单独探） |
+| `https://playground.promptql.pro.hasura.io` | Playground | ⚠️ 404 `fault filter abort`（Envoy 拒绝，未深究） |
 | `https://promptql.ddn.hasura.app/evals` | 评测 | （未单独探） |
+
+### 2b. 更正：不是"DNS 污染"，是**按来源 IP 的地区封锁**（2026-10-05 晚补测）
+
+初版把 `auth.pro.ql.app` 打不通记成"DNS 污染"，**这个诊断不准确**，补测后的实际是两层叠加：
+
+| 层 | 现象 | 结论 |
+| --- | --- | --- |
+| 本地 DNS | `auth.pro.ql.app` 本地解析成国内 IP 串，`POST` 得到 `302 → https://m.baidu.com` | 本地 DNS 对该名字**不可信**（污染或劫持，未分离成因） |
+| 服务端 | 用 `curl --resolve auth.pro.ql.app:443:35.227.221.98` **绕过 DNS 直连真身** → `403 {"error":"geo_blocked"}` | **服务端主动拒绝**：与 DNS 无关，换 DNS 也没用 |
+| 镜像域 | `--resolve auth.pro.arusah.com:443:34.54.111.255` → 同样 `403 geo_blocked` | 地区判定**不在域名层**，换镜像域也绕不过 |
+| 本机出口 | `api.ip.sb/geoip` → **国家 Japan、ISP GSL Networks** | 本机走的是**日本机房/VPN 出口**；`geo_blocked` 极可能是**拦机房/代理 IP 段**（而非"中国被墙"——本机此刻并不从中国大陆出口） |
+
+**可用的部分**（这是好消息）：`chat-handler`（聊天后端）、`data.pro.ql.app`（项目 GraphQL 数据面）、
+`cloud.ql.app`（Hasura Cloud 控制台）、`prompt.ql.app`（静态控制台）**都不返回 geo_blocked**。
+所以真正被卡的只有**发令牌那一跳**——换一条能过的出口即可（用户注册成功说明他当时那条线路能过）。
 
 > 镜像域的意义：包内按**当前 hostname** 选路——
 > `hostname.includes('hasura.io') || includes('.ql.app')` → 用 `*.pro.hasura.io` 并把 `hasura.io` 替换成 `ql.app`；
@@ -99,19 +117,36 @@
 2. **官方 API + PAT（若确实要用，这是唯一正经路径）。**
    需要一个 Hasura 账号 → 建 DDN 项目 → 开 PromptQL（PAYG 或试用额度）→ 取 PAT →
    `POST {auth}/ddn/promptql/token` 换项目令牌 → 走 chat-handler REST/SSE 或项目 GraphQL。
-   **本机额外障碍**：`auth.pro.ql.app` 被污染，这一跳必须走代理，或改用 `*.arusah.com` 镜像域。
+   **本机额外障碍**：`auth.pro.ql.app` 对本机出口返回 `403 geo_blocked`（§2b），这一跳必须换一条能过的出口；
+   换镜像域 `*.arusah.com` **没用**（同样 403）。
+   **用户侧补充（2026-10-05）：注册即送 $150 额度**——这把"成本"这一条从阻碍变成了不阻碍，
+   但**协议不匹配（§3）与网络那一跳（§2b）两条都还在**，所以"要不要接"仍取决于你愿不愿意为它写一个线程语义的适配器。
 3. **不用它——对"多一个模型渠道"这个目标而言，这是最优解。**
    本仓库已有 30+ 渠道；PromptQL 池子里的模型本质也是转发（开源权重走 Fireworks、Claude/GPT 走各家），
    经它中转只会**更贵 + 多一跳 + 多一层协议损耗**。真想要那几个模型，直接接 Fireworks / Anthropic / OpenAI 更直接。
+
+### 5.1 若要推进，需要的东西（最小清单）
+
+| 序号 | 需要什么 | 从哪拿 | 备注 |
+| --- | --- | --- | --- |
+| 1 | **一条能过 `auth.pro.ql.app` 的出口**（关键卡点） | 换非机房/住宅出口，或注册时那条线路 | 本机现在是日本 GSL Networks 机房 IP，被 `geo_blocked` |
+| 2 | **Hasura 控制台 PAT** | 控制台 → 账号设置 → Personal Access Token | **绝不要给账号密码**；PAT 泄漏=账号全权，建议用完即撤 |
+| 3 | **DDN 项目 ID（uuid）** | 控制台项目页 / URL | 作为 `x-hasura-project-id` |
+| 4 | 该项目**已启用 PromptQL** 且 $150 额度可用 | 控制台 | 决定调用会不会被计费/拦 |
+| 5 | （可选）指定模型名 / 是否走 BYO-LLM | 控制台 Models 页 | 影响倍率与费用 |
+
+拿到 1–3 就能**实测**这条链路（先只验"能不能发出一次程序执行"，不写网关代码）；验证通过再谈适配器。
 
 ## 6. 未找到证据 / 存疑（不许当成已确认）
 
 - **没有找到公开的 "PromptQL API" 文档页**：`/en/docs` 只有 `bots` / `rooms` / `connectors` / `models` / `plans` / `users` / `wiki` / `enterprise-deployment`，
   **没有 API / 鉴权 / PAT 章节**。所以「官方 API 可用」这一条是**从前端包反推**的，**未实测成功调用**（手里没有 PAT，也没有 DDN 项目）。
 - `api.promptql.pro.hasura.io` 仍写在生产 env 里却解析不到 —— 无法判断是已下线、还是迁到别处（**不要据此认为 API 没了**：chat-handler 与 GraphQL 都在）。
-- Playground 免费额度的**具体数字**（多少 OLU / 多少条消息）未验证。
-- `auth.pro.ql.app` 的污染层级未定：本地 DNS 返回一串国内 IP（**倾向 DNS 污染**），但 `302 → m.baidu.com` 也可能是运营商 HTTP 劫持页；
-  两者都指向"这一跳过不去"，但成因未分离。
+- Playground 免费额度的**具体数字**（多少 OLU / 多少条消息）未验证；用户所说"注册送 $150"来自用户口述，**我未独立核实**。
+- `auth.pro.ql.app` 的本地 DNS 异常成因未分离（污染 vs 运营商劫持页）——但**这一条已经不重要**：
+  绕过 DNS 直连真身同样 403 `geo_blocked`，说明真正的门在服务端而不在 DNS。
+- `geo_blocked` 的判据未确证：本机出口是**日本机房 IP（GSL Networks）**，倾向"拦机房/代理 IP 段"，
+  但**不排除**是"该 IP 所在地区被整体拒绝"。两者都需要换一条出口实测才能区分。
 - 未测试 Turnstile 在登录链路里的具体触发条件（是否每次登录、是否可用 API 绕过）。
 
 ## 7. 复现方法
@@ -126,11 +161,15 @@ curl.exe -sS -o ql-index.js https://prompt.ql.app/assets/index-iplrF-qm.js
 #    关键串：/v1/projects/、x-hasura-ddn-token、ddn/promptql/token、text/event-stream、
 #            PROMPTQL_EXECUTE_PROGRAM_REQUEST、olu_consumption_thread、chat-handler.pro.
 
-# 3) 控制面污染判定：本地解析 vs Cloudflare DoH
+# 3) 控制面为什么打不通：分两层查（先 DNS，再绕 DNS 直连真身）
 Resolve-DnsName auth.pro.ql.app -Type A
 Invoke-RestMethod "https://1.1.1.1/dns-query?name=auth.pro.ql.app&type=A" -Headers @{accept='application/dns-json'}
 curl.exe -ksS -D - -o NUL -X POST -H "content-type: application/json" -d '{}' https://auth.pro.ql.app/ddn/promptql/token
-#    → 本地一串国内 IP + 302 Location: https://m.baidu.com（真身 35.227.221.98）
+#    → 本地一串国内 IP + 302 Location: https://m.baidu.com
+curl.exe -ksS --resolve auth.pro.ql.app:443:35.227.221.98 -X POST -H "content-type: application/json" -d '{}' `
+  https://auth.pro.ql.app/ddn/promptql/token
+#    → ★ 403 {"error":"geo_blocked",...}  ← 服务端拒绝，与 DNS 无关（镜像域 arusah 同样 403）
+# 顺带确认本机出口：curl.exe -sS https://api.ip.sb/geoip   → Japan / GSL Networks（机房 IP）
 
 # 4) 成本与模型池
 curl.exe -sS -A "Mozilla/5.0" -o ql-pricing.html https://promptql.io/pricing
@@ -140,5 +179,10 @@ curl.exe -sS -A "Mozilla/5.0" -o ql-docs.html    https://promptql.io/en/docs
 ## 8. 对"要不要接"的一句话建议
 
 **不接。** 它是"多人协作 AI bot 工作台"（卖编排与协作，按 OLU 计量，$40/人/月起），
-不是可蹭的模型额度；要正经用就走官方 API + PAT，而且本机还得先解决 `auth.pro.ql.app` 被污染这一跳。
-如果目标只是"多几个强模型"，绕它一圈是最贵、最慢、最脆的那条路。
+不是可蹭的模型额度；要正经用就走官方 API + PAT——**$150 注册额度确实把"成本"这条拿掉了，
+但另外两条还在**：① 从本机（日本机房出口）打控制面 `403 geo_blocked`，必须换一条能过的出口；
+② 它的 API 是线程/程序/工件语义，接成 OpenAI 渠道要写适配器。
+如果目标只是"多几个强模型"，绕它一圈仍是最贵、最慢、最脆的那条路。
+
+> **顺带更正**：本文件初版把控制面故障写成"DNS 污染"，**那个诊断不完整**（§2b）——
+> 真正的门在服务端（`403 geo_blocked`），本地 DNS 异常只是同一现象的另一层。
