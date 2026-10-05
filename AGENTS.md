@@ -186,6 +186,7 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/arena-protocol.md` | Arena 协议（已撤渠道，留档） |
 | `docs/prism-reverse-proxy-research.md` | Prism 反代可行性研究（已撤渠道，留档） |
 | `docs/genspark-claw-reverse-proxy-research.md` | Genspark Claw 反代研究 |
+| `docs/promptql-reverse-proxy-research.md` | PromptQL（prompt.ql.app = Hasura 多人协作 AI bot 工作台）反代可行性研究：**结论是不建议接**（免费只有 Playground 基础额度、其余按 OLU 计量付费 Team $40/人/月起；API 是线程/程序/工件语义而非 chat-completions；鉴权是控制台 PAT → 项目令牌两步；本机实测控制面 `auth.pro.ql.app` 被 DNS 污染，其余主机直连可达）。含逐条证据出处、未找到证据清单与复现命令 |
 | `docs/PONYTAIL_REVIEW.md` | Ponytail 全项目审查：整改项 PT 清单（file:line 证据 + 最小修复 + 最小回归）、已验证非问题、前端独立审查 |
 | `docs/gateway-comparison.md` | 同类网关内部机制对比（本项目 vs new-api / one-api / sub2api / CLIProxyAPI）：只比内部机制/性能/全面性，**不比多用户与账户管理**；含本机实测数字（v1.15 → v1.16 的出站与流式写路径）、各家源码级证据与"未找到证据"清单、复现方法 |
 | `docs/thinking-replay-design.md` | thinking 回放缓存**设计与实现记录**（v1.18.8 **已实现**：同协议直通的签名修复，为开源后会弄丢 `signature` 的客户端而做）：三次决策的完整过程（v1.17 只落设计 → v1.18 前置验证判定"跨协议路径无收益不实现" → v1.18.8 用户拍板重启）、跨协议 thinking/签名保真度地图（逐函数出处）、as-built 边界（四元键、只回放上游真签过的、没坏不碰、4xx 作废、默认关）与验收映射。事实的可执行版本是 `test/thinking-fidelity.test.js`，行为回归是 `test/thinking-replay-e2e.test.js` |
