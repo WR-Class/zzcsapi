@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZZCSAPI · API 聚合网关</title>
-<!-- 全站字体：MiSans（小米开源，可商用）· 官方 CDN，按 unicode-range 分片按需加载。
-     注意：MiSans 没有等宽 / 衬线变体，代码块与数值列无法严格等宽对齐，层级一律靠字重区分。 -->
-<link rel="preconnect" href="https://font.sec.miui.com" crossorigin="">
-<link rel="preconnect" href="https://cdn-file.hyperos.mi.com" crossorigin="">
-<link href="https://font.sec.miui.com/font/css?family=MiSans:400,500,600,700:MiSans" rel="stylesheet">
+<!-- 全站字体：寒蝉全圆体（SIL OFL 1.1）· 自托管同源分片，按 unicode-range 按需加载。
+     资产与许可证在 assets/fonts/chillround/；依 OFL 保留字体名条款，子集化属修改版、不得沿用上游保留名，
+     故本站改名为 HCRound（见 build/fonts.js 与 docs/fonts.md）。只有 400/700 两档、无等宽/衬线变体：
+     数字对齐靠 tabular-nums，层级一律靠字重与字号区分，不要靠字体族切换。 -->
+<link href="/console/fonts/font.css" rel="stylesheet">
 <!--
   ═══════════════════════════════════════════════════════════════════════════════
   CSS 由两部分拼成，由 build/build.js 组装（本文件是头部件，不含 <style> 内容）：

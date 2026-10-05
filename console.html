@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZZCSAPI · API 聚合网关</title>
-<!-- 全站字体：MiSans（小米开源，可商用）· 官方 CDN，按 unicode-range 分片按需加载。
-     注意：MiSans 没有等宽 / 衬线变体，代码块与数值列无法严格等宽对齐，层级一律靠字重区分。 -->
-<link rel="preconnect" href="https://font.sec.miui.com" crossorigin="">
-<link rel="preconnect" href="https://cdn-file.hyperos.mi.com" crossorigin="">
-<link href="https://font.sec.miui.com/font/css?family=MiSans:400,500,600,700:MiSans" rel="stylesheet">
+<!-- 全站字体：寒蝉全圆体（SIL OFL 1.1）· 自托管同源分片，按 unicode-range 按需加载。
+     资产与许可证在 assets/fonts/chillround/；依 OFL 保留字体名条款，子集化属修改版、不得沿用上游保留名，
+     故本站改名为 HCRound（见 build/fonts.js 与 docs/fonts.md）。只有 400/700 两档、无等宽/衬线变体：
+     数字对齐靠 tabular-nums，层级一律靠字重与字号区分，不要靠字体族切换。 -->
+<link href="/console/fonts/font.css" rel="stylesheet">
 <!--
   ═══════════════════════════════════════════════════════════════════════════════
   CSS 由两部分拼成，由 build/build.js 组装（本文件是头部件，不含 <style> 内容）：
@@ -25,10 +25,10 @@
 :root{
   --rail-w:248px;
   --r-xs:4px; --r-sm:7px; --r-md:10px; --r-lg:14px;
-  /* 全站统一 MiSans；无等宽/衬线变体，层级改由字重与字距区分 */
-  --f-ui:"MiSans","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif;
-  --f-mono:"MiSans","PingFang SC","Microsoft YaHei",ui-monospace,"Cascadia Code",Consolas,monospace;
-  --f-serif:"MiSans","PingFang SC","Songti SC",Georgia,serif;
+  /* 全站统一 HCRound（寒蝉全圆体改名字集）；只有 400/700 两档，中间档已归并，层级靠字重+字号+字距 */
+  --f-ui:"HCRound","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif;
+  --f-mono:"HCRound","PingFang SC","Microsoft YaHei",ui-monospace,"Cascadia Code",Consolas,monospace;
+  --f-serif:"HCRound","PingFang SC","Songti SC",Georgia,serif;
   --fw-display:700;
   --ease:cubic-bezier(.32,.72,0,1);
 }
@@ -88,10 +88,10 @@ body{
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;background:none;border:0}
 a{color:inherit;text-decoration:none}
-h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+h1,h2,h3,h4{margin:0;font-weight:700;letter-spacing:-.01em}
 table{border-collapse:collapse;width:100%}
 .mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
-.serif{font-family:var(--f-serif);font-weight:600;letter-spacing:-.015em}
+.serif{font-family:var(--f-serif);font-weight:700;letter-spacing:-.015em}
 .micro{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
 .num{font-variant-numeric:tabular-nums}
 
@@ -120,7 +120,7 @@ table{border-collapse:collapse;width:100%}
   padding:7px 16px;background:var(--accent);color:var(--accent-ink);
   font-family:var(--f-mono);font-size:11px;letter-spacing:.02em;
 }
-.proto b{font-weight:600}
+.proto b{font-weight:700}
 .proto .x{margin-left:auto;opacity:.6;padding:0 4px}
 .proto .x:hover{opacity:1}
 /* flex:1 而不是 min-height:calc(100vh - 30px)：不写死横幅高度，横幅在不在都能正好铺满 */
@@ -144,7 +144,7 @@ table{border-collapse:collapse;width:100%}
 .rail-sec{margin:16px 0 6px;padding:0 8px}
 .rail-item{
   display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:var(--r-sm);
-  color:var(--tx-2);font-size:13.5px;font-weight:500;position:relative;
+  color:var(--tx-2);font-size:13.5px;font-weight:400;position:relative;
   transition:background .14s,color .14s;
 }
 .rail-item svg{opacity:.72;flex:0 0 auto}
@@ -193,12 +193,12 @@ table{border-collapse:collapse;width:100%}
 /* ═══════════════════════════ controls ═══════════════════════════ */
 .btn{
   display:inline-flex;align-items:center;gap:7px;padding:8px 13px;border-radius:var(--r-sm);
-  border:1px solid var(--line);background:var(--panel-2);color:var(--tx);font-size:13px;font-weight:500;
+  border:1px solid var(--line);background:var(--panel-2);color:var(--tx);font-size:13px;font-weight:400;
   transition:.15s;white-space:nowrap;
 }
 .btn:hover{border-color:var(--line-2);background:var(--panel-3)}
 .btn:active{transform:translateY(1px)}
-.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:600}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;font-weight:700}
 .btn.primary:hover{filter:brightness(1.07)}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--tx-2)}
 .btn.ghost:hover{background:var(--panel-3);color:var(--tx)}
@@ -208,7 +208,7 @@ table{border-collapse:collapse;width:100%}
 .btn[disabled]{opacity:.45;pointer-events:none}
 
 .tabs{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-2)}
-.tab{padding:6px 12px;border-radius:5px;font-size:12.5px;color:var(--tx-2);font-weight:500;transition:.14s;display:inline-flex;align-items:center;gap:6px}
+.tab{padding:6px 12px;border-radius:5px;font-size:12.5px;color:var(--tx-2);font-weight:400;transition:.14s;display:inline-flex;align-items:center;gap:6px}
 .tab:hover{color:var(--tx)}
 .tab.on{background:var(--panel-3);color:var(--tx);box-shadow:var(--hair)}
 .tab .n{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
@@ -255,7 +255,7 @@ textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-si
 .pill.ok{color:var(--ok)} .pill.degraded{color:var(--warn)} .pill.down{color:var(--err)}
 
 .tag{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;border-radius:4px;font-family:var(--f-mono);font-size:10px;background:var(--panel-3);border:1px solid var(--line);color:var(--tx-3)}
-.delta{display:inline-flex;align-items:center;gap:3px;font-family:var(--f-mono);font-size:11px;font-weight:500;padding:1px 6px;border-radius:20px}
+.delta{display:inline-flex;align-items:center;gap:3px;font-family:var(--f-mono);font-size:11px;font-weight:400;padding:1px 6px;border-radius:20px}
 /* 中国市场惯例：红涨绿跌 */
 .delta.up{color:var(--err);background:var(--err-soft)}
 .delta.down{color:var(--ok);background:var(--ok-soft)}
@@ -267,7 +267,7 @@ textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-si
   box-shadow:var(--sh-1),var(--hair);overflow:hidden;position:relative;
 }
 .card-hd{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)}
-.card-hd h3{font-size:13.5px;font-weight:600;letter-spacing:-.005em}
+.card-hd h3{font-size:13.5px;font-weight:700;letter-spacing:-.005em}
 .card-hd .sub{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
 .card-hd .r{margin-left:auto;display:flex;align-items:center;gap:8px}
 .card-bd{padding:16px}
@@ -288,7 +288,7 @@ textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-si
 .kpi::after{content:"";position:absolute;inset:0 0 auto 0;height:1px;background:linear-gradient(90deg,transparent,var(--accent-line),transparent);opacity:.7}
 .kpi-lbl{display:flex;align-items:center;gap:7px;font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3)}
 .kpi-val{font-family:var(--f-serif);font-weight:var(--fw-display);font-size:40px;line-height:1.14;letter-spacing:-.035em;margin-top:9px;display:flex;align-items:baseline;gap:7px}
-.kpi-val .unit{font-family:var(--f-mono);font-weight:500;font-size:13px;color:var(--tx-2);letter-spacing:0}
+.kpi-val .unit{font-family:var(--f-mono);font-weight:400;font-size:13px;color:var(--tx-2);letter-spacing:0}
 .kpi-foot{display:flex;align-items:center;gap:9px;margin:11px 0 14px;font-size:11.5px;color:var(--tx-3)}
 .kpi-spark{
   margin:auto -18px 0;height:46px;pointer-events:none;
@@ -302,7 +302,7 @@ table.tbl{font-size:13px}
 table.tbl thead th{
   position:sticky;top:0;z-index:1;text-align:left;padding:10px 14px;white-space:nowrap;
   font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx-3);
-  background:var(--panel-2);border-bottom:1px solid var(--line);font-weight:500;
+  background:var(--panel-2);border-bottom:1px solid var(--line);font-weight:400;
 }
 table.tbl tbody td{padding:11px 14px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);vertical-align:middle}
 table.tbl tbody tr{transition:background .12s}
@@ -312,11 +312,11 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .t-r{text-align:right}table.tbl thead th.t-r{text-align:right}/* 表头基样式 text-align:left 权重(0,1,3) 高于 .t-r(0,1,0)，右对齐列必须用更高权重补回，否则表头与数值错位 */
 .t-c{text-align:center}table.tbl thead th.t-c{text-align:center}/* 表头基样式 text-align:left 权重(0,1,3) 高于 .t-c(0,1,0)，居中列必须用更高权重补回，否则表头与数值错位 */
 .cell-main{display:flex;align-items:center;gap:9px;min-width:0}
-.cell-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cell-name{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cell-sub{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .avatar{
   width:26px;height:26px;border-radius:7px;display:grid;place-items:center;flex:0 0 auto;
-  font-family:var(--f-mono);font-size:10.5px;font-weight:600;color:var(--tx-2);
+  font-family:var(--f-mono);font-size:10.5px;font-weight:700;color:var(--tx-2);
   background:var(--panel-3);border:1px solid var(--line);text-transform:uppercase;
 }
 .proto-bar{height:3px;border-radius:3px;background:var(--panel-3);overflow:hidden;min-width:54px}
@@ -325,7 +325,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 /* bars list */
 .bars{display:flex;flex-direction:column;gap:11px}
 .bar-row{display:grid;grid-template-columns:1fr auto;gap:6px 10px;align-items:center}
-.bar-name{font-size:12.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-name{font-size:12.5px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar-val{font-family:var(--f-mono);font-size:11px;color:var(--tx-2)}
 .bar-track{grid-column:1/-1;height:5px;border-radius:4px;background:var(--panel-3);overflow:hidden}
 .bar-track i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 40%,var(--accent-2)));transition:width .9s var(--ease)}
@@ -357,13 +357,13 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .msg{display:flex;gap:11px;animation:fade .35s var(--ease) both}
 .msg .who{
   width:26px;height:26px;border-radius:7px;flex:0 0 auto;display:grid;place-items:center;
-  font-family:var(--f-mono);font-size:10px;font-weight:600;
+  font-family:var(--f-mono);font-size:10px;font-weight:700;
 }
 .msg.user .who{background:var(--panel-3);border:1px solid var(--line);color:var(--tx-2)}
 .msg.ai .who{background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent)}
 .msg .bubble{max-width:min(680px,86%)}
 .msg .meta{display:flex;align-items:center;gap:8px;margin-bottom:5px}
-.msg .meta .role{font-size:12px;font-weight:600}
+.msg .meta .role{font-size:12px;font-weight:700}
 .msg .body{
   padding:11px 14px;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);
   font-size:13.5px;line-height:1.65;
@@ -420,7 +420,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .mask.on .modal{transform:none}
 .modal.wide{width:min(760px,100%)}
 .m-hd{display:flex;align-items:center;gap:11px;padding:15px 18px;border-bottom:1px solid var(--line)}
-.m-hd h2{font-size:15px;font-weight:600}
+.m-hd h2{font-size:15px;font-weight:700}
 .m-hd .m-ico{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;flex:0 0 auto;background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent)}
 .m-bd{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:15px}
 .m-ft{border-top:1px solid var(--line);padding:13px 18px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
@@ -486,7 +486,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .test-out .r:last-child{border-bottom:0}
 .test-out .r.ok{color:var(--ok)} .test-out .r.fail{color:var(--err)} .test-out .r.wait{color:var(--tx-3)}
 .test-out .r .e{color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.test-out .r b{font-weight:600}
+.test-out .r b{font-weight:700}
 
 /* 导入：拖放区 */
 .drop{
@@ -567,7 +567,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 /* 说明 + 旋钮合成一条 meta 带：先解释"这是什么"，再列参数，不与模型数据抢层级 */
 .aw-meta{padding:11px 16px;border-bottom:1px solid var(--line);background:var(--panel-2)}
 .aw-note{font-size:12px;line-height:1.6;color:var(--tx-2);margin-bottom:9px}
-.aw-note b{color:var(--tx);font-weight:600}
+.aw-note b{color:var(--tx);font-weight:700}
 .aw-knobs{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .aw-knobs .lbl{
   font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
@@ -578,7 +578,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 /* 紧跟 meta 带的第一个块不再画上分隔线，否则与 meta 的下边线叠成双线 */
 .aw-meta+.aw-model{border-top:0}
 .aw-m-hd{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 9px;margin-bottom:11px}
-.aw-m-name{font-family:var(--f-mono);font-size:12.5px;font-weight:600;color:var(--tx)}
+.aw-m-name{font-family:var(--f-mono);font-size:12.5px;font-weight:700;color:var(--tx)}
 .aw-m-meta{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
 /* 状态类标签（未开加权轮询 / 已排除）统一靠右，与模型名拉开 */
 .aw-m-hd .tag{margin-left:auto}
@@ -601,7 +601,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
   border:1px solid var(--line);border-radius:3px;padding:0 4px;margin-left:5px;
 }
 /* 百分比是这一列的主数值，任何列宽下都要完整可见（截断留给渠道名） */
-.aw-sh{flex:0 0 auto;font-family:var(--f-mono);font-size:12.5px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.aw-sh{flex:0 0 auto;font-family:var(--f-mono);font-size:12.5px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums}
 /* 副行只在"有话说"时出现（健康系数 <1 / 有手工权重对照），健康的候选不写"健康 1.00"这种噪音 */
 .aw-sub{margin-top:2px;font-family:var(--f-mono);font-size:10px;color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 份额为 0 的候选列宽就是 0，画在列里等于看不见，单独一行交代它为什么没分到 */
@@ -623,7 +623,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .set-eff{flex:0 0 auto;min-width:96px;text-align:right;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
 .set-warn{margin:-4px 0 8px;font-family:var(--f-mono);font-size:10px;line-height:1.7;color:var(--warn)}
 .set-stat{margin-top:12px;padding-top:11px;border-top:1px solid var(--line);font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
-.set-stat b{color:var(--tx);font-weight:600}
+.set-stat b{color:var(--tx);font-weight:700}
 .set-stat .btn{margin-left:8px}
 .set-card.muted .set-desc,.set-card.muted .set-row>label{color:var(--tx-3)}
 /* 四张卡两排各两张：只用 .grid 的间距与 display，列数自己定（通用 .g4 是四连排，原型别处在用，不能改它） */
@@ -639,7 +639,7 @@ table.tbl tbody tr:last-child td{border-bottom:0}
 .st-kpi{text-align:center}
 .st-kpi .card-bd{display:flex;flex-direction:column;justify-content:center}
 .st-kpi-num{font-size:22px;font-weight:700;line-height:1.35;margin:3px 0}
-.st-kpi-unit{font-size:14px;font-weight:500;color:var(--tx-3)}
+.st-kpi-unit{font-size:14px;font-weight:400;color:var(--tx-3)}
 /* ② 来源明细：定量列宽（配 colgroup 百分比），替掉 auto 布局的挤/空失衡 */
 table.tbl.st-fixed{table-layout:fixed;min-width:1000px}
 /* ③ 按模型：模型/次数按内容收紧，占比吃掉剩余宽度 */
@@ -2643,7 +2643,7 @@ function vAccess(v){
     <div class="card-bd row" style="gap:12px;align-items:flex-start">
       <span style="color:var(--${insecure?'warn':'ok'})">${svg(insecure?'warn':'check',17)}</span>
       <div>
-        <div style="font-weight:600;font-size:13.5px">${insecure?'安全提示':'密钥状态'}</div>
+        <div style="font-weight:700;font-size:13.5px">${insecure?'安全提示':'密钥状态'}</div>
         <div class="muted" style="font-size:12.5px;margin-top:4px">${insecure
           ?'ADMIN_KEY / GATEWAY_KEY 仍是公开可猜的默认串，建议轮换成随机值：改 .env 的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY（推荐），或删掉 config.json 里的 adminKey / gatewayKey 后重启（会自动重新生成）。主机端口是否收敛到 127.0.0.1 见 docker-compose.yml。'
           :'ADMIN_KEY 与 GATEWAY_KEY 均非仓库默认值（首启自动生成或你自定义的设置）。'}</div>
@@ -3364,7 +3364,7 @@ function showKeyGate(){
   g.innerHTML=`<div style="max-width:420px;width:calc(100% - 48px);background:var(--panel);border:1px solid var(--accent-line);border-radius:14px;padding:28px 26px;box-shadow:0 18px 50px rgba(0,0,0,.45)">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
       <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
-      <span style="font-size:17px;font-weight:600">管理密钥</span></div>
+      <span style="font-size:17px;font-weight:700">管理密钥</span></div>
     <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY<br>验证通过后会换成会话（12 小时有效），密钥本身不会被浏览器存下来。</div>
     <input id="zz-gate-input" type="password" autocomplete="new-password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box">
     <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>

@@ -19,6 +19,7 @@
 - 🧠 **thinking 回放（v1.18.8，默认关）**：同协议直通上把上游自己签的 `signature` 补回给弄丢它的开源客户端——四元键绝不跨会话/渠道/模型，没坏不碰（[设计记录](docs/thinking-replay-design.md)）
 - 🔐 **双层鉴权**：`GATEWAY_KEY`（客户端）+ `ADMIN_KEY`（控制台与管理 API）；未设置则**首启自动生成**随机密钥（日志可查、写入 config.json）
 - 🖥 **Web 控制台**：浏览器打开 `http://127.0.0.1:8787/console` 看渠道状态、改优先级、启停渠道
+- 🔤 **字体自托管（v1.18.37）**：全站用**寒蝉全圆体**（ChillRoundF，SIL OFL 1.1）的子集化**改名**版 `HCRound`，266 个 woff2 分片按 `unicode-range` 从**同源** `/console/fonts/**` 按需加载——不向任何第三方域名发请求（[字体与授权记录](docs/fonts.md)）
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
 
 ## 快速开始
@@ -203,10 +204,11 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 41 个测试文件 · 1917 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 44 个测试文件 · 2039 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
+| [字体与授权记录](docs/fonts.md) | 全站 `HCRound` 的**来龙去脉**：OFL-1.1 逐条依据、**为什么必须改名**（子集化＝修改版，不得沿用保留字体名）、改了哪些 `name` 字段、交付形态与缓存分层、字重映射逐处理由、可复现的再生成步骤与两个踩坑 |
 | [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | 设置页的施工图：字段契约、四张卡结构、必须守住的交互细节、验收清单 |
 | [thinking 回放缓存设计与实现记录](docs/thinking-replay-design.md) | 三次决策完整过程、跨协议 thinking/签名保真度地图、as-built 边界与验收映射 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | 动代码前过目：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查） |
@@ -334,6 +336,7 @@ thinking 回放修复）。矩阵表、工具调用四方向、各渠道配置�
 | --- | --- | --- | --- |
 | `/healthz` | GET | 无 | 网关自身存活探针（只回 `{ok:true}`，v1.18.9 起不带渠道数/密钥状态——渗透整改 V-08） |
 | `/console` | GET | admin | Web 控制台 HTML |
+| `/console/fonts/**` | GET | 无 | **自托管字体资产**（v1.18.37）：`font.css`（按 `unicode-range` 分片入口）+ `regular/`、`bold/` 下的 woff2 + `LICENSE.txt`（OFL 原文，**承重件**）。只查启动时扫出的白名单表、不做路径拼接，分片内容哈希故 `immutable` 长缓存，入口 CSS 短缓存 + 惰性 brotli。见 [字体与授权记录](docs/fonts.md) |
 | `/admin/api/status` | GET | admin | 渠道详细状态（控制台用；含 `weight`/`weightedShare`/自动权重观测/`effectivePriority` 等字段） |
 | `/admin/api/usage` | GET | admin | 用量统计（总量 / 按模型 / 按渠道 / 按天〔北京时间日〕/ 近 200 条 / 24h 分布〔北京时间小时〕） |
 | `/admin/api/usage/clear` | POST | admin | 清零用量统计 |

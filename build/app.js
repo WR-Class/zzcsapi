@@ -1934,7 +1934,7 @@ function vAccess(v){
     <div class="card-bd row" style="gap:12px;align-items:flex-start">
       <span style="color:var(--${insecure?'warn':'ok'})">${svg(insecure?'warn':'check',17)}</span>
       <div>
-        <div style="font-weight:600;font-size:13.5px">${insecure?'安全提示':'密钥状态'}</div>
+        <div style="font-weight:700;font-size:13.5px">${insecure?'安全提示':'密钥状态'}</div>
         <div class="muted" style="font-size:12.5px;margin-top:4px">${insecure
           ?'ADMIN_KEY / GATEWAY_KEY 仍是公开可猜的默认串，建议轮换成随机值：改 .env 的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY（推荐），或删掉 config.json 里的 adminKey / gatewayKey 后重启（会自动重新生成）。主机端口是否收敛到 127.0.0.1 见 docker-compose.yml。'
           :'ADMIN_KEY 与 GATEWAY_KEY 均非仓库默认值（首启自动生成或你自定义的设置）。'}</div>
@@ -2655,7 +2655,7 @@ function showKeyGate(){
   g.innerHTML=`<div style="max-width:420px;width:calc(100% - 48px);background:var(--panel);border:1px solid var(--accent-line);border-radius:14px;padding:28px 26px;box-shadow:0 18px 50px rgba(0,0,0,.45)">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
       <span style="width:34px;height:34px;border-radius:10px;background:var(--accent-soft);display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
-      <span style="font-size:17px;font-weight:600">管理密钥</span></div>
+      <span style="font-size:17px;font-weight:700">管理密钥</span></div>
     <div class="help" style="margin-bottom:14px">首启密钥在容器日志里：docker logs zzcsapi | grep ADMIN_KEY<br>验证通过后会换成会话（12 小时有效），密钥本身不会被浏览器存下来。</div>
     <input id="zz-gate-input" type="password" autocomplete="new-password" placeholder="粘贴 ADMIN_KEY" style="width:100%;box-sizing:border-box">
     <div id="zz-gate-err" style="color:var(--err);font-size:12px;margin-top:8px;min-height:16px"></div>

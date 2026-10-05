@@ -1,4 +1,4 @@
-﻿# 前端代码地图
+# 前端代码地图
 
 > 面向「接手改前端」的 Agent / 开发者的快速定位文档。
 > 配套的深入说明见 [frontend-console-detailed.md](./frontend-console-detailed.md)。
@@ -27,7 +27,9 @@
 | 文件 | 行数 | 职责 | 本文件涉及 |
 | --- | --- | --- | --- |
 | `console-redesign.html` | ~2266 | **视觉唯一真源**：新版控制台原型（单文件 = HTML + CSS + JS + 内联 SVG），含演示用 `DATA` 快照 | ✅ §1 / §2 / §3 |
-| `build/head.html` | 21 | 生产 `<head>`：主题初值、MiSans CDN、到 `<style>` 为止 | ✅ §0.2 |
+| `build/head.html` | 21 | 生产 `<head>`：主题初值、**字体入口**（同源 `/console/fonts/font.css`，自托管）、到 `<style>` 为止 | ✅ §0.2 |
+| `font-assets.js` | 104 | 自托管字体投递：启动扫成白名单 Map、只查表不拼路径、缓存分层、惰性 brotli。见 `docs/fonts.md` | ✅ §0.2 |
+| `build/fonts.js` | 工具 | 字体资产工具（`dump` / `rename` / `merge`），**改名必须在切分之前**做。见 `docs/fonts.md` | — |
 | `build/shell.html` | 47 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 105 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**、**数据统计页 `.st-*` / 占位符 `.t-c-ph`**） | ✅ §0.2 |
 | `build/app.js` | 2660 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
@@ -112,7 +114,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 | 文件 | 行号 | 内容 |
 | --- | --- | --- |
-| `build/head.html` | 1–11 | `data-theme="light"` 初值、MiSans CDN（`font.sec.miui.com`） |
+| `build/head.html` | 1–11 | doctype / `lang="zh-CN"` / `data-theme="light"` 初值 / 三条 meta / **字体入口**（7–10 行是授权与"为什么改名"的注释，第 11 行是同源 `<link href="/console/fonts/font.css">`；v1.18.37 起不再有任何第三方 CDN 与 preconnect） |
 | `build/head.html` | 12–20 | 构建管线说明注释 |
 | `build/shell.html` | 1–4 | `.bg-layer` ×3 背景氛围 |
 | `build/shell.html` | 6–24 | `.app > .rail`（brand / railNav / rail-foot） |
@@ -223,7 +225,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 | 段 | 行号范围 | 内容 |
 | --- | --- | --- |
-| `<head>` | 1–9 | `lang="zh-CN"`、`data-theme="dark"` 初始主题、**MiSans 字体 CDN**（`font.sec.miui.com`，按 unicode-range 分片） |
+| `<head>` | 1–9 | `lang="zh-CN"`、`data-theme="dark"` 初始主题（**原型骨架，与生产 `build/head.html` 不是同一份**）、6–9 行是**字体注释 + 相对路径入口** `<link href="assets/fonts/chillround/font.css">`（设计稿双击预览用；生产走同源绝对路径 `/console/fonts/font.css`）。三个字体变量 `--f-ui/--f-mono/--f-serif` 在 `<style>` 内第 16–18 行，都以 `"HCRound"` 打头 |
 | `<style>` | 10–537 | 全部 CSS（无外链样式表）。**这段原文会被逐字节复制进 `console.html`** |
 | `<body>` | 539–853 | 静态占位 markup（背景层 / 原型横幅 / rail / topbar / 占位页 / 抽屉 / 弹窗容器 / toast 容器） |
 | `<script>` | 854–2263 | 全部 JS（图标 → 数据 → 工具 → 图表 → 导航 → 6 个页面 → 弹窗 → 抽屉/主题/init）。**原型专用，不参与构建** |
@@ -241,7 +243,7 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 
 | 行号 | 区块 | 说明 |
 | --- | --- | --- |
-| 11–21 | `tokens` `:root` | 侧栏宽度、圆角、三套字体栈、缓动 `--ease` |
+| 11–21 | `tokens` `:root` | 侧栏宽度、圆角、三套字体栈（`--f-ui/--f-mono/--f-serif` 在 **16–18 行**，都以 `"HCRound"` 打头）、缓动 `--ease` |
 | 22–41 | `html[data-theme="dark"]` | **暖色暗色主题变量**（改配色只动这里） |
 | 42–61 | `html[data-theme="light"]` | **暖色亮色主题变量** |
 | 62–83 | `base` | `body` flex 外壳、`::selection`、`.mono` `.serif` `.micro` `.num` 工具类 |
@@ -528,7 +530,7 @@ DATA.*                  // 就地修改：toggleCh / delChannel / reprobe
 ## 7. 坑位清单（改代码前必读）
 
 1. **层叠上下文陷阱**：`.page` / `.stagger` 的 `fade` 动画会生成层叠上下文。任何"下拉菜单被卡片盖住"的问题，先看容器有没有 `position` + `z-index`。当前靠 `.page-hd{z-index:5}` 解决。
-2. **字体只有 MiSans**：MiSans **没有等宽变体**，数字是比例宽度。`--f-mono` 只是同一字体，代码块/数值列**无法严格对齐**（已加 `font-variant-numeric:tabular-nums` 缓解）。层级靠**字重**区分（700/600/500），不要靠字体族。
+2. **字体只有 `HCRound`（寒蝉全圆体改名版，自托管）**：**没有等宽变体**，数字是比例宽度。`--f-mono` 只是同一字体，代码块/数值列**无法严格对齐**（已加 `font-variant-numeric:tabular-nums` 缓解）。层级靠**字重**区分，但**只有 400/700 两档真实字重**（源码里已无 500/600，写了只会触发合成或就近匹配）——不要靠字体族切换，也不要改回任何第三方 CDN——`font-src 'self'` 与渗透发现 N-04 都指着这条。依据与再生成步骤见 `docs/fonts.md`。
 3. **红涨绿跌**：`.delta.up` 用 `var(--err)`、`.delta.down` 用 `var(--ok)`——这是**故意反直觉**的，改配色时别"顺手修回来"。
 4. **涨跌不要再加箭头**：方向已由 `+/-` 和颜色表达，箭头是三重冗余（KPI 卡 1057 行有注释）。
 5. **弹窗遮罩不响应点击**：拖选复制时鼠标滑出弹窗会误关，所以 `#mask` 不绑 `onclick`，只留 × / 取消 / Esc。

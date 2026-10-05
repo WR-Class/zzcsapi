@@ -27,7 +27,8 @@
 成功一次即清零，窗口式不永久锁定，正密钥不受影响）。控制台相应改成"点一下才现取一次原文"。
 
 **第三批（v1.18.6）已修**：① 补上 **CSP 响应头**（`default-src 'self'`，脚本/样式因单文件控制台开放 `'unsafe-inline'`——真正的兜底在
-`connect-src 'self'`：即使 XSS 偷到会话 cookie 也发不出去；字体走 MiSans CDN 已在 `font-src` 白名单）；② **`/console?key=…` 拆除**——渗透报告点名
+`connect-src 'self'`：即使 XSS 偷到会话 cookie 也发不出去；**字体已自托管**（v1.18.37 起 `font-src`/`style-src` 都只留 `'self'`，
+两个小米 CDN 主机已从 CSP 删除——见下 N-04）；② **`/console?key=…` 拆除**——渗透报告点名
 "密钥进浏览器历史"，v1.18.6 起管理面不再认 `?key=`（正确密钥走查询串也 401），浏览器改走**会话 cookie**（见 [docs/behavior.md](behavior.md)「管理面会话」）；
 客户端面 `?key=` **保留**（Gemini SDK 的另一默认鉴权模式，不在整改面内）。
 
@@ -90,7 +91,7 @@ v1.18.9 起只回答"活着吗"；守卫断言在 `test/security-headers-e2e.tes
 | N-01 `Server: nginx/1.28.0` 暴露版本号 | **已修**：`deploy/nginx-reverse-proxy.conf` 加 `server_tokens off`（守卫进 `test/reverse-proxy-config.test.js`） |
 | N-02 `/metrics` 401 无 `Cache-Control` | **已修**：server.js 响应头收口从 `/admin/api/`+`/healthz` 扩到 `/metrics`（401/404 全态 `no-store`；守卫进 `test/security-headers-e2e.test.js`）。修在网关收口而非 nginx 全局加——全局 `no-store` 会把 `/console` 壳自己的缓存策略一并改掉 |
 | N-03 HSTS / COOP / CORP 缺 | **已落地（v1.18.16 公网部署）**：三头加在公网 TLS 前端 `deploy/nginx-public.conf` 的 nginx 层（复测建议的原位，README「方式四」）——本机 http 前端刻意不加（http 上 HSTS 无效；与会话 cookie 刻意无 `Secure` 同一姿势） |
-| N-04 CSP 引外部字体 CDN（供应链/隐私面） | **维持**（AGENTS §2 的 MiSans 官方 CDN 是刻意约定；自托管子集化是独立工作项，风险在此记录在案） |
+| N-04 CSP 引外部字体 CDN（供应链/隐私面） | **已修（v1.18.37）**：字体改为**自托管**——寒蝉全圆体 ChillRoundF（SIL OFL 1.1）子集化**改名**版 `HCRound`，资产在 `assets/fonts/chillround/`，由 `font-assets.js` 从同源 `/console/fonts/**` 发出去；CSP 的 `font-src`/`style-src` 都收回 `'self'`，`font.sec.miui.com` 与 `cdn-file.hyperos.mi.com` 两个主机**从 CSP 删除**，页面不再向任何第三方域名发起请求。附带收益：授权风险也随之出清（OFL-1.1 明确允许商用/再分发/修改，改名合规依据见 [docs/fonts.md](fonts.md)）。守卫 `test/font-assets-e2e.test.js`（含"全仓无第三方字体主机"与 CSP 收回 `'self'` 两条断言；CSP 逐字守卫在 `test/security-headers-e2e.test.js`）。**注意**：`assets/fonts/**` 必须靠 Dockerfile 的 `COPY` 进镜像，漏了不报错、只是字变了 |
 | N-05 内联脚本无 nonce，CSP 需 `'unsafe-inline'` | **维持**（单文件交付是项目前提；XSS 防线 = 转义纪律 + `security-headers-e2e` 守卫；脚本外置是独立工作项） |
 
 **V-05 维持接受，但修正复测报告的一处事实**：报告称"8787 入站放行规则：无（仍靠默认阻止策略兜底）"——本机实测相反，Windows 防火墙存在 nginx.exe 的**显式放行规则**（公用档；nginx 首次启动弹窗时点了允许，否则局域网客户端根本连不进来）。真实边界 = 路由器 NAT + 这条放行规则；接受理由不变：用户 2026-10-04 确认**单机家用网络**，且 `0.0.0.0:8787` 是功能需要（局域网接入 = per-IP 来源统计的前提）。将来接共享网络或上公网时，先收紧防火墙档位（仅专用网络放行）或把 nginx 收到 `listen 127.0.0.1:8787`。

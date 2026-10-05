@@ -34,7 +34,7 @@
 | 原型 JS 的去向 | 原型的 JS（`DATA` / 假动作 / 渲染）**不参与构建**。生产逻辑是独立重写的 `build/app.js`，对接真实接口 |
 | 技术栈 | 原生 HTML + CSS + JS，无框架、无打包、无外部 JS 库 |
 | 图表 | **全部手写内联 SVG**（`areaChart` / `sparkline` / `donut`），不引入 ECharts 等 |
-| 字体 | MiSans（小米开源、可商用），官方 CDN 按 `unicode-range` 分片加载 |
+| 字体 | **HCRound**（寒蝉全圆体 ChillRoundF，SIL OFL 1.1）的**自托管**子集化改名版，同源 `/console/fonts/**` 按 `unicode-range` 分片加载（授权与改名依据见 [fonts.md](fonts.md)） |
 
 ---
 
@@ -70,26 +70,36 @@
 ### 2.2 字体与排版层级
 
 ```css
---f-ui     MiSans, PingFang SC, Microsoft YaHei, Hiragino Sans GB, system-ui
---f-mono   MiSans, PingFang SC, Microsoft YaHei, ui-monospace, Cascadia Code, Consolas
---f-serif  MiSans, PingFang SC, Songti SC, Georgia
+--f-ui     "HCRound","PingFang SC","Microsoft YaHei","Hiragino Sans GB",system-ui,sans-serif
+--f-mono   "HCRound","PingFang SC","Microsoft YaHei",ui-monospace,"Cascadia Code",Consolas,monospace
+--f-serif  "HCRound","PingFang SC","Songti SC",Georgia,serif
 ```
 
-MiSans **没有等宽变体，也没有真正的衬线变体**，因此三个变量实际都落到 MiSans。
-层级不再依赖字体族切换，改为：
+`HCRound` = **寒蝉全圆体 ChillRoundF（SIL OFL 1.1）的自托管子集化改名版**：入口是 `build/head.html` 里那一行
+`<link href="/console/fonts/font.css" rel="stylesheet">`（同源、绝对路径，故 `/`、`/console`、`/console/` 三种入口都成立），
+由 `font-assets.js` 从 `assets/fonts/chillround/` 发出去，266 个 woff2 分片按 `unicode-range` 按需加载。
+授权依据、**为什么必须改名**（子集化＝OFL 意义上的修改版，不得沿用上游保留名 `ChillRoundF`/`ChillRoundM`）与再生成步骤见
+[docs/fonts.md](fonts.md)。
+
+HCRound **只有 400/700 两档真实字重，既没有等宽变体、也没有真正的衬线变体**，所以三个变量实际都落到 HCRound
+（后面的 PingFang SC / 微软雅黑只是系统兜底）。层级不再依赖字体族切换，改为：
 
 | 层级 | 字重 | 用途 |
 | --- | --- | --- |
 | 展示 | `--fw-display:700` | 页面标题 `.page-title`(34px)、KPI 大数字 `.kpi-val`(40px) |
-| 副标题 | 600 | 卡片标题 `.card-hd h3`、抽屉标题 |
-| 标签 | 500 | `.rail-item`、`.btn`、`.cell-name` |
-| 辅助 | 400 | 正文、`.help` |
+| 强调 | 700 | 卡片标题 `.card-hd h3`、抽屉标题、主按钮、小字号加粗标签 |
+| 正文 | 400 | 正文、`.help`、表格正文、`.tag`、`.cell-name` |
+
+**源码里不再出现 `font-weight:500` / `600`**（字体里没有这两档，写了只能靠合成或就近匹配，属自找的视觉不一致）：
+`500` 一律落 `400`、`600` 一律落 `700`。每个改动点为什么安全（原 500 处都有底色/字距/字号在撑层级，原 600 处换成真 Bold）
+逐条列在 [docs/fonts.md](fonts.md) §6；`test/font-assets-e2e.test.js` 会扫源文件与产物，**这两档一旦回潮就报错**。
 
 其他排版约定：
 
 - `.micro` / `.sec-title` / 表头：10px、`letter-spacing:.1em`、`text-transform:uppercase` —— 全站统一"小字大写 + 宽字距"的标签风格
-- 数字：`font-variant-numeric:tabular-nums`（`body` 全局 + `.mono` + `.num`），缓解 MiSans 比例数字造成的列不对齐
-- **已知限制**：代码块与数值列**无法做到严格等宽对齐**，这是字体本身的限制，不要试图用 `font-family:monospace` 绕开（会被 MiSans 覆盖且视觉不一致）
+- 数字：`font-variant-numeric:tabular-nums`（`body` 全局 + `.mono` + `.num`），缓解比例数字造成的列不对齐
+- **已知限制**：代码块与数值列**无法做到严格等宽对齐**，这是字体本身的限制，不要试图用 `font-family:monospace` 绕开
+  （`.code pre` 用的是 `var(--f-mono)`，写 `monospace` 会被覆盖，且与全站视觉不一致）
 
 ### 2.3 视觉语言
 
@@ -1405,7 +1415,7 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **设计决策（用户拍板）**：① 两项**一起做**；② 浏览器侧走**会话 cookie**（`HttpOnly`（JS 读不到）+ `SameSite=Strict`（顺带治 CSRF），业界惯例：浏览器会话、脚本 Bearer），**不用**"仍存 localStorage 但加密"之类的折中——浏览器里根本没有能对抗 XSS 的可逆加密；③ **刻意不加 `Secure`**——本网关设计上跑 http 本地/局域网，加了 cookie 反而种不下去，兜底在 CSP `connect-src 'self'`（即使 XSS 偷到 cookie 也发不出去）；④ 会话表放**内存**（重启全部掉线是刻意接受的代价，页面文案明示）；⑤ Gemini SDK 客户端面的 `?key=` **保留**（它是另一默认鉴权模式，不在整改面内）。
 
-**后端（`server.js`）**：内存会话表 `SESSIONS`（token→过期时刻，`SESSION_TTL` 12 小时、上限 256、先清过期再逐最旧一枚）+ `readSessionToken`（cookie 手工解析）/`sessionValid`（懒过期）/`sessionCookieValue`（四旗标拼装）/`newSessionToken`（32 字节随机）/`clearSessions` + 10 分钟周期清扫（`unref` 不吊住进程）。新端点 `POST /admin/api/session`（body `{key}` 交一次 `ADMIN_KEY` → `Set-Cookie: zz_session=…; HttpOnly; SameSite=Strict; Max-Age=43200` + `expiresInSec`）与 `DELETE`（只杀自己 + `Max-Age=0` 回写，其余方法 405），**放在 authGate 分支之前**（登录时手里还没有会话）；登录失败计入 admin 失败限流（`authThrottle('admin')` + `authFail`/`authOk`，NOAUTH 放行）且响应 `no-store`。`checkAuth('admin')` 改为**会话 cookie 或 Bearer**（脚本/CI 零影响）；`?key=` 移进 `kind !== 'admin'` 块（管理面拆、客户端面留）。`rotateKeys()` 换管理密钥时 `clearSessions()`，且 keys 路由在轮换响应里**补发新会话 cookie**（发起页不被踢回登录门）；`resetManagedKeys()` 同样清空会话。CSP 进 `SEC_HEADERS`：`default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`——`'unsafe-inline'` 是单文件内联控制台的必要妥协（真实兜底在 `connect-src 'self'`），MiSans CDN 字体按 `build/head.html` 的 preconnect 进白名单，`img-src` 只放 `data:`（实测 app.js 无图片/`createObjectURL` 用途，只有 CSV 下载 blob）。
+**后端（`server.js`）**：内存会话表 `SESSIONS`（token→过期时刻，`SESSION_TTL` 12 小时、上限 256、先清过期再逐最旧一枚）+ `readSessionToken`（cookie 手工解析）/`sessionValid`（懒过期）/`sessionCookieValue`（四旗标拼装）/`newSessionToken`（32 字节随机）/`clearSessions` + 10 分钟周期清扫（`unref` 不吊住进程）。新端点 `POST /admin/api/session`（body `{key}` 交一次 `ADMIN_KEY` → `Set-Cookie: zz_session=…; HttpOnly; SameSite=Strict; Max-Age=43200` + `expiresInSec`）与 `DELETE`（只杀自己 + `Max-Age=0` 回写，其余方法 405），**放在 authGate 分支之前**（登录时手里还没有会话）；登录失败计入 admin 失败限流（`authThrottle('admin')` + `authFail`/`authOk`，NOAUTH 放行）且响应 `no-store`。`checkAuth('admin')` 改为**会话 cookie 或 Bearer**（脚本/CI 零影响）；`?key=` 移进 `kind !== 'admin'` 块（管理面拆、客户端面留）。`rotateKeys()` 换管理密钥时 `clearSessions()`，且 keys 路由在轮换响应里**补发新会话 cookie**（发起页不被踢回登录门）；`resetManagedKeys()` 同样清空会话。CSP 进 `SEC_HEADERS`：`default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`——`'unsafe-inline'` 是单文件内联控制台的必要妥协（真实兜底在 `connect-src 'self'`），MiSans CDN 字体按 `build/head.html` 的 preconnect 进白名单，`img-src` 只放 `data:`（实测 app.js 无图片/`createObjectURL` 用途，只有 CSV 下载 blob）。**⚠️ 这段是 v1.18.6 当时的历史值，不是今天的 CSP**：v1.18.37 起字体自托管，两个小米主机已删除，`style-src`/`font-src` 都只留 `'self'`（今日生效值见 §8.44 与 `server.js` 的 `SEC_HEADERS`，逐字守卫在 `test/security-headers-e2e.test.js`）——**要抄 CSP 请抄源码，不要抄历史条目**。
 
 **前端（`build/app.js`）**：`api()` 不再注入任何 `Authorization`（会话 cookie 同源自动随行）；**401 → `showKeyGate()`**（会话过期/被轮换清掉时自动闭环）。登录门改 POST `/admin/api/session` 一次换 cookie——输入框粘贴后即清空，**不落任何浏览器存储、不进地址栏**；门内文案明示"验证通过后会换成会话（12 小时有效），密钥本身不会被浏览器存下来"。新增**启动探针**（`fetch /admin/api/status`：200 = 活会话直接 `boot()`，401/网络错 = 弹门——不再问本地存储）。新增 `logout()`（密钥管理页挂「退出登录」按钮：DELETE 自己那枚会话 + 整页重载）；`keyFlow`/`__ZZ_HAS_KEY__` 整块拆除；`rotateKey` 的"轮换后同步写 localStorage/sessionStorage"块删除（服务端补发新会话，前端无事可做）；`showKeyHelp` 步骤改为粘贴密钥登录（不再有 `?key=` 带参链接）；密钥管理页页脚明示"轮换管理密钥后所有已登录会话都会失效（重启也会掉线），重开控制台重新粘一次密钥即可"。
 
@@ -1637,6 +1647,22 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **教训**：**同一个账本里不许有两套钟**。这次是"日期取 UTC、小时取本地"混在同一个函数族里，注释还写着"本地时区"——**注释与代码各说一套时先信代码，再判断哪个才是本意**；本意（北京时间）是明确的，错的是实现。
 
+### 8.44 v1.18.37 全站字体换自托管寒蝉全圆体（改名 `HCRound`）：授权出清 + N-04 关闭（2026-10-05，对象 新增 `build/fonts.js` / `font-assets.js` + 新增资产 `assets/fonts/chillround/**` + `build/head.html` + `console-redesign.html` + `build/extra.css` / `build/app.js` 字重 + `server.js` CSP 与字体路由 + `Dockerfile` + 新增 `test/font-assets-e2e.test.js` + `test/security-headers-e2e.test.js` CSP 逐字值 + 新增 `docs/fonts.md` + 全套文档）
+
+**问题**：所有者判断 MiSans（当时全站字体，官方 CDN `font.sec.miui.com` 按 `unicode-range` 分片）**使用限制太多、有法律风险**，要求换成**寒蝉全圆体**。
+
+**前置核查（两条，结论都影响了后面的做法）**：① **授权**：寒蝉全圆体（`ChillRoundF`）是 **SIL OFL 1.1**（上游 `Warren2060/ChillRound`，随包 LICENSE 原文写着 `Reserved Font Name 'ChillRoundF' 'ChillRoundM'`）——**逐条可复核**；而想复核 MiSans 的条款原文时，`hyperos.mi.com/font/` 是 JS 单页应用抓不到正文，**所以本轮没有拿到可引用的 MiSans 条款**，也就**不写"MiSans 不能商用"这种我们没核实的结论**（换到 OFL 之后这件事不再重要）。② **技术**：MiSans 是**外部 CDN**，`font-src` 里白名单着两个小米主机——这正是渗透发现 **N-04**「CSP 引外部字体 CDN（供应链/隐私面）」，此前登记为"维持（自托管子集化是独立工作项）"。
+
+**根因（换字体的真正难点不是换，是许可）**：按 SIL 官方口径，**给 webfont 做子集化属于 OFL 意义上的"修改版"**，而修改版**不得再使用上游保留字体名**（OFL-FAQ §2.6 "would not normally allow the use of RFNs"；《Webfonts and Reserved Font Names》点名 **Pre-subsetting 无法保留 FE，必须视为修改版**；§2.2.1 的"纯 WOFF 压缩可保留"例外**不覆盖**子集化）。于是"改名"不是洁癖而是**许可条件**。而切分工具（cn-font-split）自带的 `--renameOutputFont` **实测是空转的**——传了它，输出分片的 `name` 表里 `ChillRoundFRegular` / `3.200;CTQY;ChillRoundFRegular` 原封不动（该参数只影响输出**文件名**），所以改名**必须在切分之前做在源 TTF 上**。
+
+**处置**：① **新工具 `build/fonts.js`**（零依赖，三个子命令）：`dump`（列出全部 `name` 记录，含保留名即退出码 1）、`rename`（改写 `nameID 1/2/3/4/6/16/17/18/21/22` 为 `HCRound`，保留版权/商标/制造商/设计者/URL/许可，并在描述里追加一句"本站改作"与上游链接；重建 `name` 表并重组 sfnt，重算表目录与 `head.checkSumAdjustment`）、`merge`（按字重改写分片 URL 前缀、逐片存在性检查、`font-weight` 断言、扫描 CSS 里的保留名，**任一问题非零退出**）。② **新资产 `assets/fonts/chillround/`**：`LICENSE.txt`（OFL 原文）+ 入口 `font.css`（266 条 `@font-face`）+ `regular/` 129 片 + `bold/` 137 片（共 270 文件 / 7.94 MB）。③ **新投递模块 `font-assets.js`**：启动时把目录扫成**白名单 Map**，请求只做 `FILES.get(pathname)`（**不把请求路径拼进文件路径**，路径穿越面因此不存在）；扩展名只放 `.woff2`/`.css`/`.txt`；分片内容哈希 → `immutable` 长缓存、入口 CSS 名字固定 → 短缓存；26 万字符的入口 CSS **首次请求时惰性 brotli q9 压一次并缓存**（49.9 KB，gzip 兜底 75.2 KB），woff2 本身即 Brotli **绝不二次压缩**。④ **`head.html`**：preconnect 与 CDN 链接换成同源 `<link href="/console/fonts/font.css" rel="stylesheet">`（**绝对路径**，故 `/`、`/console`、`/console/` 三种入口都成立；**行数仍是 21**，构建期守卫未动）。⑤ **CSP 收口**：`style-src`/`font-src` 都只留 `'self'`，两个小米主机**删除**；`Dockerfile` 补 `COPY font-assets.js ./` 与 `COPY assets/fonts ./assets/fonts`（**漏了不报错、只是字变了**）。
+
+**字重：三档压到两档真实字重**（`--fw-display:700` 未动，`500→400`、`600→700`）——浏览器匹配时 500 落 400、600 落 700，两档都是**真实存在**的字重，**不会触发伪粗体**。逐处理由（表头靠大写+字距+底色、`.cell-name` 靠颜色与字号、`.tab.on`/`.btn`/`.delta` 靠底色与描边……）见 [docs/fonts.md](fonts.md) §6；产物 `console.html` 是 **34 增 / 34 删的行数中性改动**，所以代码地图的行号锚点**未漂移**。
+
+**影响**：**字形变了（这正是目的）**；层级仍靠字重与字号区分，`tabular-nums` 保留，**代码块与数值列依旧做不到严格等宽**（HCRound 与 MiSans 一样没有等宽变体）；页面对第三方域名的请求归零，**N-04 就此关闭**。
+
+**教训**：① **"看起来像证据"的东西要能证伪**——切分工具产出的 `result.css` 元数据头里明明写着 `LicenseDescription … SIL Open Font License …`，但实测**分片里根本没有这条记录**（工具会丢掉输出字体的 `nameID 13/14`，每片只剩 7 条 `name`）：那份头读的是**输入**字体。为此在用例里写了一个**最小 woff2 解码器**——woff2 的表数据是一整条 Brotli 流，**在压缩字节上直接搜字体名永远是"假通过"**（它连一个名字都没看过）；解码器自带"解压长度 = Σ表长"自检与 `HCRound` 正对照，才让"266 片都不含保留名"这句话有分量。② **改名必须早于切分**，否则改的是文件名不是字体内涵。③ 资产类改动要**同时**守住三条容易被静默漏掉的边：Dockerfile 的 `COPY`、CSP 的许可来源、以及"路由必须与 `/console` 同处 `try` 块内"（字体不是机密，不该被客户端面封禁闸门挡住）。
+
 
 - 密钥明文显示加"仅本次会话"提示或二次确认
 - 探测结果支持"仅显示新增"过滤
@@ -1674,7 +1700,7 @@ v0.4 换成构建式：**生产 CSS 不再手写，而是逐字节复制设计�
 | 文件 | 谁改 | 改什么 |
 | --- | --- | --- |
 | `console-redesign.html` | 改**视觉** | 它的 `<style>` 是唯一视觉真源。字号 / 留白 / 圆角 / 配色 / 卡片 / 弹窗全在这里 |
-| `build/head.html` | 极少改 | 生产 `<head>`：主题初值、MiSans CDN |
+| `build/head.html` | 极少改 | 生产 `<head>`：主题初值、**字体入口**（同源 `/console/fonts/font.css`，v1.18.37 起自托管，见 [fonts.md](fonts.md)） |
 | `build/shell.html` | 改**生产骨架** | body 结构：背景层 / rail / topbar / viewport / drawer / mask / toasts |
 | `build/extra.css` | 加**生产独有组件** | 设计稿快照里没有的组件（codex chip、抽屉密钥行等宽字、自动权重观测卡 `.aw-*`）。**必须复用设计令牌** |
 | `build/app.js` | 改**生产逻辑** | 数据层（`adapt` / `loadAll` / `api`）+ 动作层 + 6 个页面渲染 |

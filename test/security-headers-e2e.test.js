@@ -75,11 +75,12 @@ const freePort = () => new Promise((res, rej) => {
   check('管理面、/healthz 与 /metrics 加 no-store（/metrics 是外部复测 N-02 补上的）',
     /url\.pathname\.startsWith\('\/admin\/api\/'\) \|\| url\.pathname === '\/healthz' \|\| url\.pathname === '\/metrics'\) res\.setHeader\('Cache-Control', 'no-store'\)/.test(SRC));
   /* v1.18.6 第三批：CSP 从"不得偷偷加"翻成"按设计加上、值逐字核对"。
-     unsafe-inline 是单文件控制台的既定代价（脚本/样式内联）；字体走小米 CDN（font.src 与 cdn-file）；
+     unsafe-inline 是单文件控制台的既定代价（脚本/样式内联）；字体自托管（v1.18.37）后
+     style-src / font-src 都收回 'self'，不再白名单任何外部主机（渗透发现 N-04 就此关闭）；
      兜底在 connect-src 'self'（XSS 偷到会话 cookie 也发不出去）与 frame-ancestors/base-uri/form-action。 */
-  const CSP_EXPECT = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+  const CSP_EXPECT = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
   const cspEntry = SRC.match(/\['Content-Security-Policy',\s*"([^"]*)"\]/);
-  check('CSP 已按设计加上（SEC_HEADERS 第 5 项）且值逐字等于设计稿（内联开、CDN 字体、connect-src self）',
+  check('CSP 已按设计加上（SEC_HEADERS 第 5 项）且值逐字等于设计稿（内联开、同源字体、connect-src self）',
     !!cspEntry && cspEntry[1] === CSP_EXPECT, cspEntry && cspEntry[1]);
   check('CSP 兜底三件套都在（connect-src self / frame-ancestors none / base-uri self）',
     /connect-src 'self'/.test(cspEntry ? cspEntry[1] : '') &&

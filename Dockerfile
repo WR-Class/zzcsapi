@@ -7,7 +7,11 @@ COPY server.js ./
 COPY notion.js ./
 COPY notion-agent.js ./
 COPY tool-emu.js ./
+COPY font-assets.js ./
 COPY console.html ./
+# 自托管字体分片（v1.18.37）：/console/fonts/** 由 font-assets.js 从这份目录发出去。
+# 不加这行容器里就没有字体，控制台会静默回落到系统字体（页面不报错，只是字变了）。
+COPY assets/fonts ./assets/fonts
 COPY config.example.json ./config.json
 ENV PORT=8787
 EXPOSE 8787

@@ -15,6 +15,7 @@ const { URL } = require('url');
 const notion = require('./notion.js');
 const notionAgent = require('./notion-agent.js');
 const toolEmu = require('./tool-emu.js');
+const fontAssets = require('./font-assets.js');
 // Genspark 网页会话渠道常量：必须在启动探测路径（probeAll 在下方模块加载期同步触发）之前初始化，
 // 放文件底部会因 const TDZ 使首轮探测静默失败
 const crypto = require('crypto');
@@ -3010,13 +3011,14 @@ function loadConsoleHtml() {
    - Permissions-Policy：控制台不用摄像头/麦克风/定位，一并关掉
    - CSP（v1.18.6，渗透报告第三批）：控制台是单文件内联脚本/样式，故 script/style 只能放 'unsafe-inline'
      ——真正的兜底在 connect-src 'self'（偷到 cookie 也发不出去）与 img-src/frame-ancestors。
-     字体走小米 CDN：样式表在 font.sec.miui.com、字体文件在 cdn-file.hyperos.mi.com（head.html 的 preconnect 可证）。 */
+     字体自托管（v1.18.37）：入口 CSS 与全部 woff2 分片都走本网关 /console/fonts/，font-src 收回 'self'
+     ——渗透发现 N-04「CSP 引外部字体 CDN（供应链/隐私面）」就此关闭，控制台不再向任何第三方域名要字体。 */
 const SEC_HEADERS = [
   ['X-Content-Type-Options', 'nosniff'],
   ['X-Frame-Options', 'DENY'],
   ['Referrer-Policy', 'no-referrer'],
   ['Permissions-Policy', 'geolocation=(), microphone=(), camera=()'],
-  ['Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://font.sec.miui.com; font-src 'self' https://font.sec.miui.com https://cdn-file.hyperos.mi.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"],
+  ['Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"],
 ];
 
 /* Host/Origin 门（v1.18.10，渗透整改 V-07 第六批）：拦在一切路由之前。
@@ -3220,6 +3222,11 @@ const server = http.createServer(async (req, res) => {
       });
       return res.end(CONSOLE_HTML);
     }
+
+    // 自托管字体（v1.18.37）：/console/fonts/** 交给 font-assets.js —— 启动时扫成白名单后只做 Map 查表，
+    // 不把请求路径拼进文件路径，路径穿越面因此不存在（详见该模块头部注释）。
+    // 与 /console 壳同等公开：字体不是机密（控制台的机密全在 /admin/api），故也在客户端面封禁闸门之外。
+    if (fontAssets.serveFont(req, res, url.pathname)) return;
 
     if (req.method === 'GET' && url.pathname === '/healthz') {
       // 渗透整改 V-08：匿名面只回答"活着吗"。渠道数与密钥配置状态是内部信息，

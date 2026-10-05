@@ -16,7 +16,7 @@
 /* 说明 + 旋钮合成一条 meta 带：先解释"这是什么"，再列参数，不与模型数据抢层级 */
 .aw-meta{padding:11px 16px;border-bottom:1px solid var(--line);background:var(--panel-2)}
 .aw-note{font-size:12px;line-height:1.6;color:var(--tx-2);margin-bottom:9px}
-.aw-note b{color:var(--tx);font-weight:600}
+.aw-note b{color:var(--tx);font-weight:700}
 .aw-knobs{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .aw-knobs .lbl{
   font-family:var(--f-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
@@ -27,7 +27,7 @@
 /* 紧跟 meta 带的第一个块不再画上分隔线，否则与 meta 的下边线叠成双线 */
 .aw-meta+.aw-model{border-top:0}
 .aw-m-hd{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 9px;margin-bottom:11px}
-.aw-m-name{font-family:var(--f-mono);font-size:12.5px;font-weight:600;color:var(--tx)}
+.aw-m-name{font-family:var(--f-mono);font-size:12.5px;font-weight:700;color:var(--tx)}
 .aw-m-meta{font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
 /* 状态类标签（未开加权轮询 / 已排除）统一靠右，与模型名拉开 */
 .aw-m-hd .tag{margin-left:auto}
@@ -50,7 +50,7 @@
   border:1px solid var(--line);border-radius:3px;padding:0 4px;margin-left:5px;
 }
 /* 百分比是这一列的主数值，任何列宽下都要完整可见（截断留给渠道名） */
-.aw-sh{flex:0 0 auto;font-family:var(--f-mono);font-size:12.5px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.aw-sh{flex:0 0 auto;font-family:var(--f-mono);font-size:12.5px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums}
 /* 副行只在"有话说"时出现（健康系数 <1 / 有手工权重对照），健康的候选不写"健康 1.00"这种噪音 */
 .aw-sub{margin-top:2px;font-family:var(--f-mono);font-size:10px;color:var(--tx-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 份额为 0 的候选列宽就是 0，画在列里等于看不见，单独一行交代它为什么没分到 */
@@ -72,7 +72,7 @@
 .set-eff{flex:0 0 auto;min-width:96px;text-align:right;font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
 .set-warn{margin:-4px 0 8px;font-family:var(--f-mono);font-size:10px;line-height:1.7;color:var(--warn)}
 .set-stat{margin-top:12px;padding-top:11px;border-top:1px solid var(--line);font-family:var(--f-mono);font-size:10.5px;color:var(--tx-3)}
-.set-stat b{color:var(--tx);font-weight:600}
+.set-stat b{color:var(--tx);font-weight:700}
 .set-stat .btn{margin-left:8px}
 .set-card.muted .set-desc,.set-card.muted .set-row>label{color:var(--tx-3)}
 /* 四张卡两排各两张：只用 .grid 的间距与 display，列数自己定（通用 .g4 是四连排，原型别处在用，不能改它） */
@@ -88,7 +88,7 @@
 .st-kpi{text-align:center}
 .st-kpi .card-bd{display:flex;flex-direction:column;justify-content:center}
 .st-kpi-num{font-size:22px;font-weight:700;line-height:1.35;margin:3px 0}
-.st-kpi-unit{font-size:14px;font-weight:500;color:var(--tx-3)}
+.st-kpi-unit{font-size:14px;font-weight:400;color:var(--tx-3)}
 /* ② 来源明细：定量列宽（配 colgroup 百分比），替掉 auto 布局的挤/空失衡 */
 table.tbl.st-fixed{table-layout:fixed;min-width:1000px}
 /* ③ 按模型：模型/次数按内容收紧，占比吃掉剩余宽度 */
