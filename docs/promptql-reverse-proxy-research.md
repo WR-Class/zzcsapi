@@ -107,6 +107,18 @@
      （包内注释原话：*"As your project API access mode is set to private, an access token is generated and added to your request headers"*）。
 - 失败路径有专门埋点：`reason: 'project-api-token-401'`。
 
+### 3b. 三种凭据别搞混（2026-10-05 从包里核实）
+
+| 凭据 | 谁发 | 请求头 | 有无 UI 入口 |
+| --- | --- | --- | --- |
+| 控制台会话令牌 `control_plane_token` | 登录后由控制台写入 localStorage（另有 `control_plane_refresh_token` / `control_plane_token_expiry`） | `Authorization: Bearer <token>` | 无独立页面（登录即得）；**会过期** |
+| 控制台 PAT（`VITE_CONSOLE_PAT`） | 环境变量注入（嵌入/自托管模式），URL `?auth_mode=pat` | `Authorization: pat <PAT>` | ❌ **UI 里没有** |
+| **服务账号令牌**（webhook / mcp / execute_program / unrestricted / get_artifact） | prompt.ql.app → 项目 → Service accounts → 某服务账号 → **Tokens → New token** | `Authorization: Bearer <jwt>` | ✅ 有（**只对 `is_bot` 的账号渲染**） |
+
+服务账号令牌是 JWT，claims 含 `x-hasura-default-role`（`supergraph-admin` / `app-admin` / `user`）与 `x-hasura-promptql-user-id`；
+它是**长期可用、面向程序**的那一种 —— 要做"把 PromptQL 接成渠道"，凭据应该用这个，而不是去翻根本不存在的 PAT 页面。
+对应的程序执行 GraphQL 是 `mutation SendThreadExecuteProgramRequest(...) → send_thread_execute_program_request(...)`。
+
 > **这就是"反代"的症结**：要把它伪装成 OpenAI `/v1/chat/completions`，得自己维护
 > 「线程 ↔ 会话」映射、把程序执行事件/工件翻译成 `choices[].delta`、把 OLU 换算成 token、
 > 还要处理它特有的 `teaching`/artifact 语义。这不是"接一个渠道"，是写一个协议适配器。
@@ -151,12 +163,30 @@
 | 序号 | 需要什么 | 从哪拿 | 备注 |
 | --- | --- | --- | --- |
 | 1 | ~~一条能过 `auth.pro.ql.app` 的出口~~ **已解决** | 本机代理 `http://127.0.0.1:7897` | 直连被 `geo_blocked`，经 7897 就通（§2b）；渠道填 `proxy` 即可 |
-| 2 | **Hasura 控制台 PAT** | 控制台 → 账号设置 → Personal Access Token | **绝不要给账号密码**；PAT 泄漏=账号全权，建议用完即撤 |
-| 3 | **DDN 项目 ID（uuid）** | 控制台项目页 / URL | 作为 `x-hasura-project-id` |
+| 2 | **服务账号令牌**（`Execute program` 或 `MCP` 类型） | prompt.ql.app → 项目 → **Service accounts**（`/project/<项目名>/bots`，或在 **User directory** 里找服务账号）→ 建一个 service account → 打开它的详情 → **Tokens** 卡片 → **New token** | **不是 PAT**：PromptQL 控制台**没有 PAT 页面**（见 §3b）。只显示一次，拿到后写进 `keys.local.txt`，**绝不贴进对话** |
+| 3 | **DDN 项目 ID（uuid）** | 控制台项目页 / URL | 作为 `x-hasura-project-id`（非密钥，可直接给） |
 | 4 | 该项目**已启用 PromptQL** 且 $150 额度可用 | 控制台 | 决定调用会不会被计费/拦 |
 | 5 | （可选）指定模型名 / 是否走 BYO-LLM | 控制台 Models 页 | 影响倍率与费用 |
 
 拿到 2–3 就能**实测**这条链路（先只验"能不能发出一次程序执行"，不写网关代码）；验证通过再谈适配器。
+
+### 5.2 ⚠️ 更正：PromptQL 控制台**没有**「Personal Access Token」页面
+
+初版让用户"去控制台设置里建 PAT"，**这是错的**（用户反馈"没有你说的创建 pat 的地方"，属实）。从 8.3 MB 前端包里核实的真相：
+
+| 事实 | 包里证据 |
+| --- | --- |
+| PAT **只在嵌入/自托管模式**下存在，**没有 UI 入口** | `D5()`：`if (Mr.controlPlanePAT) return \`pat ${Mr.controlPlanePAT}\``，而 `controlPlanePAT: Io("VITE_CONSOLE_PAT")` —— 纯环境变量；`auth_mode=pat` 也只从 URL 查询串读（`fpn()`），非页面 |
+| 控制台自身的凭据是 **localStorage 里的 `control_plane_token`** | `zo={ACCESS_TOKEN:"control_plane_token",REFRESH_TOKEN:"control_plane_refresh_token",TOKEN_EXPIRY:"control_plane_token_expiry"}`；`Bearer ${control_plane_token}` |
+| **程序化令牌的真正入口：服务账号的 Tokens 卡片** | 组件 `Qmi=({user,isBot,canManage})=>isBot?<Gmi …/>:<Hmi …/>` —— **只有服务账号（bot）才渲染 Tokens**；卡片标题 `"Tokens"`、按钮 `"New token"`、提示 `"Only admins can create tokens."`、`data-testid: user-directory-tokens/{new-token,create,delete}` |
+| 令牌类型共四种 | 创建对话框 `[{value:"webhook"},{value:"mcp"},{value:"execute_program"}]` + 解析器里另有 `unrestricted` / `get_artifact` |
+| 这些令牌的用法 | `authorization: Bearer <userDirectoryToken>`（`QBt` 类）；令牌本身是 JWT，claims 里有 `x-hasura-default-role`（`supergraph-admin`/`app-admin`/`user`）与 `x-hasura-promptql-user-id` |
+| 服务账号的身份标记 | `is_bot===true` 或邮箱以 `@dataplaneserviceaccount.hasura.io` / `.arusah.com` 结尾 |
+
+**正确的点击路径**：`prompt.ql.app` → 项目 → 左侧 **Service accounts**（路由 `…/bots`；等价于 **User directory** → `…/user-directory` 里筛选服务账号）
+→ **New service account**（"Only admins can create service accounts."）→ 打开它 → **Tokens** → **New token** → 类型选 **Execute program**（要"程序调用"就选它；`MCP` / `Webhook` 是另外两条路）。
+对应 GraphQL 侧是 `createPersonalAccessToken`（DDN 控制台那套，`ddnConsoleUrl = https://console.hasura.io`），
+**与本控制台不是同一个入口** —— 这也是为什么在 prompt.ql.app 里翻不到。
 
 ## 6. 未找到证据 / 存疑（不许当成已确认）
 
