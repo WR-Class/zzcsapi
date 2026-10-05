@@ -10,13 +10,14 @@
 > 后者的收益为零、ToS 风险为正、适配成本还不小（参考 genspark 文本仿真的工作量，但那边换来的是免费额度，
 > 这边换来的只是"很有限的免费额度"）。
 >
-> 另有一条**本机实测**的硬障碍（**2026-10-05 更正，见 §2b**）：控制面 `auth.pro.ql.app` 从本机**打不通**——
+> 另有一条**本机实测**的硬障碍（**2026-10-05 更正 + 已找到解法，见 §2b**）：控制面 `auth.pro.ql.app` 从本机**直连**打不通——
 > 本地 DNS 对它返回一串国内 IP（未带凭据的 POST 会 `302 → https://m.baidu.com`），
 > 而**绕过 DNS 直连真身 `35.227.221.98`** 会拿到服务端自己的 **`403 {"error":"geo_blocked"}`**
 > （镜像域 `auth.pro.arusah.com` 同样 403）。**所以这不是"DNS 污染"这么简单，是它按来源 IP 拒绝**：
-> 本机出口是**日本 GSL Networks（机房/VPN IP）**。其余主机（`prompt.ql.app` / `chat-handler.pro.hasura.io` /
-> `cloud.ql.app` / `data.pro.ql.app`）**都直连可达且不返回 geo_blocked**。
-> 也就是说：控制台能打开、聊天后端能到、数据面能到，**唯独发令牌的那一跳过不去**。
+> 系统路由的出口是**日本 GSL Networks（机房 IP）**。
+> **但同一台机器上换出口就通**：经本地代理 **`http://127.0.0.1:7897`** 打同一端点 → `401 {"error":"user not found"}`
+> （到服务端了，只是没带凭据）。网关渠道本来就有 `proxy` 字段，这一跳指过去即可。
+> 其余主机（`prompt.ql.app` / `chat-handler.pro.hasura.io` / `cloud.ql.app` / `data.pro.ql.app`）**直连都可达、都不 geo_blocked**。
 
 ---
 
@@ -55,7 +56,18 @@
 | 本地 DNS | `auth.pro.ql.app` 本地解析成国内 IP 串，`POST` 得到 `302 → https://m.baidu.com` | 本地 DNS 对该名字**不可信**（污染或劫持，未分离成因） |
 | 服务端 | 用 `curl --resolve auth.pro.ql.app:443:35.227.221.98` **绕过 DNS 直连真身** → `403 {"error":"geo_blocked"}` | **服务端主动拒绝**：与 DNS 无关，换 DNS 也没用 |
 | 镜像域 | `--resolve auth.pro.arusah.com:443:34.54.111.255` → 同样 `403 geo_blocked` | 地区判定**不在域名层**，换镜像域也绕不过 |
-| 本机出口 | `api.ip.sb/geoip` → **国家 Japan、ISP GSL Networks** | 本机走的是**日本机房/VPN 出口**；`geo_blocked` 极可能是**拦机房/代理 IP 段**（而非"中国被墙"——本机此刻并不从中国大陆出口） |
+| 本机出口 | `api.ip.sb/geoip` → **国家 Japan、ISP GSL Networks**；IPv6 出口是 `2409:8a3c:…`（中国移动） | 系统路由走的是**日本机房 IP**，被 `geo_blocked`；控制面**没有 AAAA 记录**，所以走 IPv6 那条路绕不过 |
+
+**✅ 解法（同一台机器上实测）：换出口即可，本机现成有代理。**
+
+| 路径 | 打 `POST auth.pro.ql.app/ddn/promptql/token` 的结果 |
+| --- | --- |
+| 直连（系统路由，日本 GSL 机房 IP） | ❌ `403 {"error":"geo_blocked"}` |
+| **经本地代理 `http://127.0.0.1:7897`**（Clash 默认混合端口） | ✅ **`401 {"error":"user not found","status":"failure"}`** —— 到服务端了，只是没带凭据 |
+
+这同时解开了"为什么用户浏览器正常、我的 curl 被拒"这个矛盾：**浏览器走的是 7897 那条出口，curl 直连走的是被拒的那条**。
+网关侧无需新代码——渠道本来就有 `proxy` 字段（genspark 渠道就是走它），这一跳指到 `http://127.0.0.1:7897` 即可。
+`chat-handler` 经代理同样正常（`/` → 404 `{"error":"Not Found","requestId":…}`）。
 
 **可用的部分**（这是好消息）：`chat-handler`（聊天后端）、`data.pro.ql.app`（项目 GraphQL 数据面）、
 `cloud.ql.app`（Hasura Cloud 控制台）、`prompt.ql.app`（静态控制台）**都不返回 geo_blocked**。
@@ -78,10 +90,19 @@
   `olu_consumption_thread`（字段 `agent_message_id` / `execute_program_request_id` / `teaching_id` / `total_olus`）。
 - **流式**：SSE（`Accept: text/event-stream`，fetch + `ReadableStream.getReader()` 解析，含 `EventSource` 兜底），
   包内另带 `graphql-ws` 订阅依赖。
-- **鉴权链（两步）**：
+- **鉴权链（两步）——2026-10-05 实测已确证写法**：
   1. 控制台身份（OAuth 登录后的**会话 cookie**，或控制台 **PAT**：`VITE_CONSOLE_PAT`）
-     → `POST {controlPlaneAuth}/ddn/promptql/token`，头 `x-hasura-project-id: <uuid>`、`credentials: 'include'`；
+     → `POST {controlPlaneAuth}/ddn/promptql/token`，头 **`Authorization: Bearer <PAT>`** + `x-hasura-project-id: <uuid>`、`credentials: 'include'`；
      另有 `/ddn/project/token` 走 `x-hasura-project-id` + `authorization`（包内常量 `ddnApiAccessToken`）。
+     **三种错误信息正好把格式夹死**（经 7897 实测）：
+
+     | 请求 | 响应 |
+     | --- | --- |
+     | 不带凭据 | `401 {"error":"user not found","status":"failure"}` |
+     | `authorization: Bearer <假串>` | `401 {"error":"invalid access token","status":"failure"}` ← **认这个格式**（只是串假） |
+     | `authorization: <裸串>`（无 Bearer） | `401 {"error":"unexpected authorization header","status":"failure"}` ← 格式不对 |
+     | `x-hasura-admin-secret` / `x-hasura-access-key` | `401 {"error":"user not found"}` ← **不被采信**（不是 Hasura 引擎那套管理密钥） |
+
   2. 拿到**项目访问令牌**后，调 chat-handler / GraphQL 时带 **`x-hasura-ddn-token`**
      （包内注释原话：*"As your project API access mode is set to private, an access token is generated and added to your request headers"*）。
 - 失败路径有专门埋点：`reason: 'project-api-token-401'`。
@@ -129,13 +150,13 @@
 
 | 序号 | 需要什么 | 从哪拿 | 备注 |
 | --- | --- | --- | --- |
-| 1 | **一条能过 `auth.pro.ql.app` 的出口**（关键卡点） | 换非机房/住宅出口，或注册时那条线路 | 本机现在是日本 GSL Networks 机房 IP，被 `geo_blocked` |
+| 1 | ~~一条能过 `auth.pro.ql.app` 的出口~~ **已解决** | 本机代理 `http://127.0.0.1:7897` | 直连被 `geo_blocked`，经 7897 就通（§2b）；渠道填 `proxy` 即可 |
 | 2 | **Hasura 控制台 PAT** | 控制台 → 账号设置 → Personal Access Token | **绝不要给账号密码**；PAT 泄漏=账号全权，建议用完即撤 |
 | 3 | **DDN 项目 ID（uuid）** | 控制台项目页 / URL | 作为 `x-hasura-project-id` |
 | 4 | 该项目**已启用 PromptQL** 且 $150 额度可用 | 控制台 | 决定调用会不会被计费/拦 |
 | 5 | （可选）指定模型名 / 是否走 BYO-LLM | 控制台 Models 页 | 影响倍率与费用 |
 
-拿到 1–3 就能**实测**这条链路（先只验"能不能发出一次程序执行"，不写网关代码）；验证通过再谈适配器。
+拿到 2–3 就能**实测**这条链路（先只验"能不能发出一次程序执行"，不写网关代码）；验证通过再谈适配器。
 
 ## 6. 未找到证据 / 存疑（不许当成已确认）
 
@@ -145,8 +166,10 @@
 - Playground 免费额度的**具体数字**（多少 OLU / 多少条消息）未验证；用户所说"注册送 $150"来自用户口述，**我未独立核实**。
 - `auth.pro.ql.app` 的本地 DNS 异常成因未分离（污染 vs 运营商劫持页）——但**这一条已经不重要**：
   绕过 DNS 直连真身同样 403 `geo_blocked`，说明真正的门在服务端而不在 DNS。
-- `geo_blocked` 的判据未确证：本机出口是**日本机房 IP（GSL Networks）**，倾向"拦机房/代理 IP 段"，
-  但**不排除**是"该 IP 所在地区被整体拒绝"。两者都需要换一条出口实测才能区分。
+- `geo_blocked` 的判据**已缩小但仍未确证**：本机**直连**出口是日本机房 IP（GSL Networks）→ 被拒；
+  **经本地代理 7897** 的出口 → 通过。两者是同一台机器、同一时间、同一请求，所以**门确实是"按来源 IP 判"**，
+  且倾向"拦机房/代理 IP 段"（代理那条出口大概率也是机房，但显然不在名单里）——**名单怎么算的仍未确证**，
+  也不排除"该 IP 段被 Cloud Armor 判为高风险"。结论够用：**换一条能过的出口即可**。
 - 未测试 Turnstile 在登录链路里的具体触发条件（是否每次登录、是否可用 API 绕过）。
 
 ## 7. 复现方法
