@@ -75,7 +75,7 @@ async function send(ch, acct, { attach }) {
   const hdrs = notion.notionHeaders(acct, ch.apiKey, base);
   calls++;
   const t0 = Date.now();
-  const resp = await fetch(base + '/api/v3/runInferenceTranscript', { method: 'POST', headers: hdrs, body: JSON.stringify(body) });
+  const resp = await notion.notionFetch(base + '/api/v3/runInferenceTranscript', { method: 'POST', headers: hdrs, body: JSON.stringify(body), timeoutMs: 120000 });
   const raw = await resp.text();
   const ms = Date.now() - t0;
   const events = [];

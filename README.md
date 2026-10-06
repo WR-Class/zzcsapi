@@ -23,7 +23,8 @@
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
 - 🧩 **OpenAI Responses API（v1.18.38）**：`/v1/responses`（POST，含流式）+ `/v1/responses/{id}`（GET 取回 / DELETE）——入站按 Responses 报文收，出站转回 `response` 对象与 Responses 的 SSE 事件序列，中间复用同一条候选链与全部兜底（[协议详解](docs/protocols.md)）
 - 🩺 **手动测试的流式模式 + 真实流量单独一条欠账（v1.18.40）**：控制台「测试模型」默认按**流式**打（真实客户端走的就是流式，只测非流式等于只测了一半，`stream:true` 可选）；且**只有真实客户端请求成功才算"这家对话能用"**——手动测试与 `/models` 探测成功只放开冷却、还清探测侧的账，**不再清零真实流量的连败计数**，熔断因此真的会跳开"测试过、真实挂"的死家（[调度详解](docs/scheduling.md)）
-- 📎 **notion 渠道的内联附件（v1.18.41，渠道级 `notionAttachments`，默认关）**：客户端发 OpenAI `{type:"file",file:{filename,file_data:"data:…;base64,…"}}`（或 Anthropic `document` 块）时，网关把文件**内联进提示词**并打开 `enableCsvAttachmentSupport`——这是参照实现 notion2api 实发报文的形状，**CSV 不上 S3、不建任务**（[机制与诚实边界](docs/notion-attachment-upload-research.md)）。⚠️ **「模型真读到了」尚未活体验证**（判决实验撞上账号软墙），故**默认关**：不显式打开就一个字节都不改
+- 📎 **notion 渠道的内联附件（v1.18.41，渠道级 `notionAttachments`，默认关）**：客户端发 OpenAI `{type:"file",file:{filename,file_data:"data:…;base64,…"}}`（或 Anthropic `document` 块）时，网关把文件**内联进提示词**并打开 `enableCsvAttachmentSupport`——这是参照实现 notion2api 实发报文的形状，**CSV 不上 S3、不建任务**（[机制与诚实边界](docs/notion-attachment-upload-research.md)）。✅ **「模型真读到了」已活体验证（v1.18.42）**：对照那一发模型答"没找到你上传的 CSV"，带附件那一发答出**只存在于 CSV 里**的串，并经本地容器网关 `/v1/chat/completions` 复验（见研究文档 §8）
+- 🚦 **notion 出站通道链（v1.18.42）**：Notion 推理接口会对**某些客户端指纹**回一道软墙（HTTP 200 + `temporarily-unavailable`，反爬式静默拒绝）。四个环境对打后定性为**客户端指纹评分**——curl 任何协议都过、Node 24 的 h2 过、Node 的 `fetch`/undici 与 Node 20 的 h2 不过。出站因此做成 **curl 主 → HTTP/2 兜底 → fetch 最后**，且**软墙会在通道内自动换**（墙内那一发不消耗真实推理）。这是 ③ 的活体判据之所以能取得的前提（[协议详解](docs/protocols.md) §notion 出站通道链）
 
 ## 快速开始
 
@@ -217,7 +218,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 48 个测试文件 · 2260 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 50 个测试文件 · 2322 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -307,8 +308,9 @@ http://127.0.0.1:8787/console
 > 内联附件（OpenAI `{type:"file",file:{filename,file_data:"data:…;base64,…"}}` 或 Anthropic `document` 块，
 > 单文件 ≤1MB、最多 3 个）会被**内联进提示词**并同时打开 config step 的 `enableCsvAttachmentSupport`。
 > 形状抄自参照实现 notion2api 的**实发报文**（**CSV 不上 S3、不建任务、不插 attachment step**）；
-> ⚠️ 「模型真读到了」**尚未活体验证**（判决实验撞上账号软墙），故默认关——不显式打开时报文与从前**逐字相同**。
-> 非布尔值 **400**；对非 `notion` 协议配它 **400**。机制、判据与解除条件见
+> ✅ 「模型真读到了」**已活体验证**（v1.18.42：对照答"没找到文件"、带附件答出只存在于 CSV 里的串，
+> 并经本地容器网关复验），但仍**默认关**——不显式打开时报文与从前**逐字相同**（稳妥默认，不是"没验证过"）。
+> 非布尔值 **400**；对非 `notion` 协议配它 **400**。机制、判据与活体验证见
 > [notion 附件上传研究](docs/notion-attachment-upload-research.md) §4。
 > 调度旋钮（`cooldown` / `retries` / `autoWeight`）与运行期四组开关（`sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`）
 > 的全量取值与钳制范围见 [调度详解](docs/scheduling.md) 与 [运行期设置](docs/runtime-settings.md)。
@@ -419,8 +421,12 @@ node notion-attachment-verdict.js 8 notion5    # 只打某个渠道
 
 三种结论：**已打通**（答出随机串 → 可以打开渠道的 `notionAttachments`）/ **没读到**（对照与附件都真答但答不出随机串）/
 **未取得**（账号全在软墙里，实验条件不成立）。成本：还在墙里的账号一发只花 ~1~2 秒、**不消耗真实推理**。
-**报告绝不回显任何凭据**。为什么会有"未取得"、以及为什么**不要再为软墙改报文形状**，见
-[notion 附件上传研究](docs/notion-attachment-upload-research.md) §5。
+**报告绝不回显任何凭据**。
+
+**它已经给出过结论（2026-10-06，v1.18.42）**：在 `notionls` 上**已打通** —— 对照那一发模型答
+「我在这段对话里没有找到你上传的 CSV 文件」，带附件那一发答出 **`K7Q2M9`**（只存在于 CSV 里的串）。
+为什么此前它一直报"未取得"、以及为什么**不要再为软墙改报文形状**（真根因是**客户端指纹评分**，出站已改成 curl 主 → h2 兜底），
+见 [notion 附件上传研究](docs/notion-attachment-upload-research.md) §5–§8。
 
 ## 安全体检（只读脚本）
 

@@ -102,9 +102,22 @@
     没打开的渠道报文与从前**逐字相同**（回归里有对照组守着）。
   · **只认 base64 的 `data:` URL**（不做任何网络取回）、单文件 ≤1MB、最多 3 个；文件名会被净化（剥路径、删引号/换行/控制字符
     ——脏字符会破坏整条 step 的 JSON）。
-  · **诚实边界**：「模型真的读到了文件」**尚未活体验证**（判决实验那一刻 7 个账号全在软墙上，软墙是账号级且很黏），
-    所以只能 opt-in、不许默认开；解除条件与复现命令见 `docs/notion-attachment-upload-research.md` §4.4/§4.5。
+  · ✅ **诚实边界已解除（v1.18.42）**：「模型真的读到了文件」**已活体验证** —— 判决实验在 `notionls` 上给出
+    **对照答"没找到你上传的 CSV"、带附件答出 `K7Q2M9`**（只存在于 CSV 里的串），并经**本地容器网关** `/v1/chat/completions`
+    复验（纯文本「收到」、带内联 CSV 问 secret 列 → 「K7Q2M9」）。**但仍默认关**：这是"稳妥的默认"，不是"没验证过"。
+    活体验证的前提是先修好传输层（下一条）。完整证据见 `docs/notion-attachment-upload-research.md` §8。
   · 回归：`test/notion-attachment-inline-e2e.test.js`（含"产物与抓包那一行逐字相同"这条断言）。
+- **notion 渠道的出站通道链（v1.18.42，**改 notion 出站前必读**）**：Notion 推理接口会对**某些客户端指纹**回一道**软墙**——
+  HTTP 200 + `{"type":"error","subType":"temporarily-unavailable"}`（通用文案、`isRetryable:false`），反爬式**静默拒绝**。
+  用**同一发报文**在四个环境对打（出口 IP 相同），定性为**客户端指纹评分**：**curl（HTTP/1.1 或 `--http2`）三个环境全过**；
+  **`node:http2` 只在 Node 24 上过（node:20 容器被墙）**；**`fetch`/undici 全被墙**。
+  · 因此出站是**通道链**（`notion.js` 的 `notionFetch`）：非 `https:` → 全局 `fetch`（测试假上游，旧行为逐字不变）；
+    `https:` → **curl 主** → 判为软墙则 **h2 兜底** → 再不成才 `fetch`。**软墙在通道内自动换**，墙内那一发不消耗真实推理。
+  · **三条纪律**：① 通道选择只许收口在 `notionFetch` 一处（三处推理调用点都只调它——散开就会出现"某条路留在被墙的通道上"，
+    这正是 v1.18.42 之前的形态）；② **别把结论钉在"HTTP/2"上**（它条件成立，主通道必须是 curl）；③ **传输层结论必须在目标
+    运行环境复验**（本仓库测试跑 Node 24、镜像跑 `node:20-alpine`，而这道墙恰恰对 Node 版本敏感）。
+  · 留档：三次误判（"账号权益被限只能等" / "undici 指纹被 block 故只用 curl" / "Notion 拒绝 HTTP/1.1 故改 h2"）与研究文档 §5–§7。
+  · 回归：`test/notion-transport.test.js`（本地 h2c 真跑 h2 + 本地 HTTP/1.1 真跑 curl + 通道链与三处调用点装配守卫）。
 - **OpenAI Responses 客户端面（v1.18.38）**：`/v1/responses` 是**第四套客户端报文**，走"入站转 chat → 复用同一条候选链 → 出站转回 `response`"。
   · 为什么不能透传：Responses 报文的对话在 `body.input`、chat 处理器找的是 `body.messages` —— 以前它在 `handleOpenAIRequest` 的 POST 白名单里，等于把 `input` 报文原样塞给 chat 上游（不是 400 就是"200 但空"）。因此这段**绝不设 `clientProto`**（设了就触发同协议直通），且 chat 面与 Responses 面共用 `openAICandidateChain()`。
   · 出站两态：非流式回 `response` 对象（`output[]` / `output_text` / `usage.input_tokens` 口径）；流式回 Responses 的 `event:` + `data:` 事件序列（`response.created` → … → `response.completed`），`finish_reason:"length"` 记 `status:"incomplete"`（**不假装完成**）。

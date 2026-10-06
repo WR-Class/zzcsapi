@@ -215,47 +215,6 @@ function curlHttpRequest(method, url, headers, body, timeoutMs) {
   });
 }
 
-// Notion 专用 curl 请求（完整 headers 原样传递，body 走临时文件避免命令行长度/转义问题）
-// 背景：Notion 推理接口对 undici(OpenSSL) TLS 指纹返回 soft-error（temporarily-unavailable），
-//       Windows curl.exe(Schannel) / Linux curl 实测可过。
-// 返回 {status, body, error}；status>0 且 body 非空时为成功响应
-function notionCurlRequest(method, url, headers, bodyStr, timeoutMs) {
-  return new Promise((resolve) => {
-    const os = require('os');
-    const fsSync = require('fs');
-    const pathSync = require('path');
-    const bodyFile = pathSync.join(os.tmpdir(), `zznotion_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
-    let written = false;
-    try { fsSync.writeFileSync(bodyFile, bodyStr || '', 'utf8'); written = true; } catch {}
-    const args = ['-sS', '-X', String(method).toUpperCase(), '--max-time', String(Math.max(1, Math.floor((timeoutMs || 120000) / 1000)))];
-    for (const [k, v] of Object.entries(headers || {})) args.push('-H', `${k}: ${v}`);
-    if (written) args.push('--data', '@' + bodyFile);
-    args.push(String(url));
-    const bin = process.platform === 'win32' ? 'curl.exe' : 'curl';
-    const child = spawn(bin, args, { windowsHide: true });
-    let stdout = Buffer.alloc(0);
-    let stderr = '';
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch {}
-      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
-      resolve({ status: 0, body: '', error: 'curl timeout' });
-    }, (timeoutMs || 120000) + 5000);
-    child.stdout.on('data', (c) => { stdout = Buffer.concat([stdout, c]); });
-    child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
-      if (code !== 0) { resolve({ status: 0, body: stdout.toString('utf8'), error: `curl exit ${code}: ${stderr.slice(0, 200)}` }); return; }
-      resolve({ status: 200, body: stdout.toString('utf8'), error: null });
-    });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      if (written) try { fsSync.unlinkSync(bodyFile); } catch {}
-      resolve({ status: 0, body: '', error: 'curl spawn: ' + err.message });
-    });
-  });
-}
-
 // PowerShell 版（Windows）— 用 .NET Schannel/TLS
 function psHttpRequestWin(method, url, headers, body, timeoutMs) {
   return new Promise((resolve) => {
@@ -1808,7 +1767,7 @@ function applyCustomHeaders(base, def) {
 }
 
 // WorkBuddy 专用 curl 请求：该上游对 Node/undici TLS 指纹 ECONNRESET，必须走 curl 子进程。
-// 与 notionCurlRequest 同构：body 写临时文件避免转义，stdout 全量缓冲（SSE 短文本够用）。
+// 与 curl 版同构：body 写临时文件避免转义，stdout 全量缓冲（SSE 短文本够用）。
 // 返回 {status, body, error}；status>0 且 body 非空时为成功响应
 function wbCurlRequest(method, url, headers, bodyStr, timeoutMs, proxy) {
   return new Promise((resolve) => {
@@ -4641,7 +4600,7 @@ async function handleAdminApi(req, res, url) {
           continue;
         }
         if (ch.def.protocol === 'notion') {
-          // Notion 渠道：跑一次最小 runInferenceTranscript（真实模型调用，curl 优先）
+          // Notion 渠道：跑一次最小 runInferenceTranscript（真实模型调用，必须走 HTTP/2 —— 见 notionFetch 注释）
           const acct = await ensureNotionAccount(ch, 15000);
           const built = notion.buildNotionTranscript([{ role: 'user', content: prompt }], c.upstream, acct);
           const payload = notion.notionBuildPayload(built.transcript, built.threadType, acct, {});
@@ -4652,16 +4611,11 @@ async function handleAdminApi(req, res, url) {
           let text = '';
           let ok = false;
           let status = 0;
-          const curlOut = await notionCurlRequest('POST', target, headers, bodyStr, tmo);
-          if (curlOut.status > 0 && curlOut.body && !curlOut.error) {
-            text = curlOut.body; status = 200; ok = true;
-          } else {
-            try {
-              resp = await zzFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
-              text = await resp.text();
-              ok = resp.ok; status = resp.status;
-            } catch (e) { text = String(e.message || e); }
-          }
+          try {
+            const r = await notion.notionFetch(target, { method: 'POST', headers, body: bodyStr, timeoutMs: tmo });
+            text = await r.text();
+            ok = r.ok; status = r.status;
+          } catch (e) { text = String(e.message || e); }
           ttfb = Date.now() - t0;
           // 流内错误检测（temporarily-unavailable 等 soft-block）
           const streamErr = (text.match(/"subType":"([^"]+)"/) || [])[1];
@@ -7370,7 +7324,11 @@ async function notionRefetchAnswer(ch, acct, built, threadId, budgetMs) {
     const body = JSON.stringify(notion.notionBuildPayload(built.transcript, built.threadType, acct, {
       threadId, createThread: false, isPartialTranscript: true,
     }));
-    const out = await notionCurlRequest('POST', target, headers, body, Math.max(5000, budgetMs - (Date.now() - t0)));
+    const out = await notion.notionFetch(target, {
+      method: 'POST', headers, body,
+      timeoutMs: Math.max(5000, budgetMs - (Date.now() - t0)),
+    }).then(async (r) => ({ status: r.status, body: await r.text(), error: r.ok ? null : 'HTTP ' + r.status }))
+      .catch((e) => ({ status: 0, body: '', error: e.message || String(e) }));
     const text = (out && out.body) || '';
     if (!text.trim()) continue;
     if (/"isNotionError":\s*true/.test(text)) return best;   // 报文级错误（校验/权限）→ 再试也没用
@@ -7413,21 +7371,19 @@ async function tryNotionChannel(opts) {
   const target = ch.def.baseUrl.replace(/\/+$/, '') + '/api/v3/runInferenceTranscript';
   const bodyStr = JSON.stringify(payload);
 
-  // 3) 发请求 —— curl 子进程优先（undici TLS 指纹被 Notion 推理服务 soft-block，
-  //    实测 curl.exe(Schannel)/Linux curl 可过）；curl 不可用时降级 fetch
-  const curlOut = await notionCurlRequest('POST', target, headers, bodyStr, timeoutMs);
+  // 3) 发请求 —— 必须走 HTTP/2：Notion 推理接口对 HTTP/1.1 静默软墙
+  //    （200 + temporarily-unavailable）。见 notion.js 的 notionFetch 注释与
+  //    docs/notion-attachment-upload-research.md §7 的判决实验。
+  //    历史上这里先走 curl 子进程（误判为 undici TLS 指纹），而 curl 默认也是 HTTP/1.1，同样被墙。
   let ndjsonText = '';
   let httpStatus = 200;
-  if (curlOut.status > 0 && curlOut.body && !curlOut.error) {
-    ndjsonText = curlOut.body;
-  } else {
-    // curl 失败 → fetch 降级（万一某环境 curl 也能过）
+  {
     let resp;
     try {
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), timeoutMs);
       try {
-        resp = await zzFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal });
+        resp = await notion.notionFetch(target, { method: 'POST', headers, body: bodyStr, signal: ctrl.signal, timeoutMs });
       } finally { clearTimeout(to); }
       httpStatus = resp.status;
       if (resp.ok) ndjsonText = await resp.text();

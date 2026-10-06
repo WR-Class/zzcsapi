@@ -154,7 +154,14 @@ function makeAnthropicUpstream() {
     check('★ server.js 里不再出现裸 fetch(（出站全部走 zzFetch）', bareFetch === 0, bareFetch);
 
     const awaitCalls = (SRC.match(/await zzFetch\(/g) || []).length;
-    check('★ 6 个出站调用点全部换成 zzFetch（探测 2 + 聊天/测试/原生/直通 4）', awaitCalls === 6, awaitCalls);
+    // v1.18.42：6 → 4 —— notion 推理的两处（主推理 tryNotionChannel、管理面手动测试）**刻意**改走
+    // `notion.notionFetch`（curl 主 → h2 兜底的通道链）：Notion 会对 Node 的 HTTP/1.1 客户端回"软墙"，
+    // 那两处留在 zzFetch 上就是留在被墙的通道上。剩下的 4 处是探测 2 + 常规聊天 1 + 原生/直通 1。
+    check('★ 4 个出站调用点走 zzFetch（探测 2 + 聊天 1 + 原生/直通 1），notion 推理那 2 处走 notionFetch',
+      awaitCalls === 4, awaitCalls);
+    const notionOut = (SRC.match(/notion\.notionFetch\(/g) || []).length;
+    check('★ notion 推理的三处（主推理 / 流断取回 / 管理面手动测试）都走 notionFetch 的通道链',
+      notionOut === 3, notionOut);
 
     const modArgs = (SRC.match(/, zzFetch, /g) || []).length;
     check('★ notion / notion-agent 模块拿到的也是 zzFetch（11 处实参）', modArgs === 11, modArgs);

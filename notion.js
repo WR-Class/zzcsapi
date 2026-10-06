@@ -8,7 +8,189 @@
 
 const https = require('https');
 const http = require('http');
+const http2 = require('http2');
 const { URL } = require('url');
+
+// ────────────────── 出站传输：curl 主 + HTTP/2 兜底（v1.18.42） ──────────────────
+// Notion 推理接口的「软墙」= 200 + {"type":"error","subType":"temporarily-unavailable"}（通用文案、
+// isRetryable:false）。2026-10-06 用**同一发报文**在四个环境逐一对打，得到的是**客户端指纹评分**：
+//
+//   | 客户端                    | node:20 容器 | node:24 容器 | 宿主机 Node 24 |
+//   | curl（HTTP/1.1 或 --http2）| ★真答        | ★真答        | ★真答          |
+//   | node:http2                | 软墙         | ★真答        | ★真答          |
+//   | fetch / undici（HTTP/1.1） | 软墙         | 软墙         | 软墙           |
+//
+// 所以「HTTP/2」不是充分条件（Node 20 的 h2 照样被墙），**curl 才是两个部署环境都实测通过的通道**；
+// 故 curl 为主、h2 为兜底、fetch 为最后手段，并且**软墙会在本函数内自动换下一通道**（软墙不消耗真实推理，
+// 代价只有 1~2 秒）。历史误判留档：§5「账号权益被限只能等」、旧注释「undici TLS 指纹被 block」——
+// 后者方向对（是客户端指纹），但只做了 curl 一条路，没意识到 Node 版本会让 h2 的成败翻面。
+function notionIsSoftWall(text) {
+  return /temporarily-unavailable/.test(String(text || ''));
+}
+
+// curl 通道（主）。返回与 fetch 同构的响应壳；curl 不存在（ENOENT）或超时/非零退出时抛错。
+function notionCurlFetch(urlStr, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const os = require('os');
+    const fsSync = require('fs');
+    const pathSync = require('path');
+    const { spawn } = require('child_process');
+    const bodyFile = pathSync.join(os.tmpdir(), `zznotion_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+    let written = false;
+    if (opts.body != null) { try { fsSync.writeFileSync(bodyFile, String(opts.body), 'utf8'); written = true; } catch { } }
+    const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 120000;
+    const args = ['-sS', '-X', String(opts.method || 'GET').toUpperCase(), '--max-time', String(Math.max(1, Math.ceil(timeoutMs / 1000)))];
+    for (const [k, v] of Object.entries(opts.headers || {})) if (v !== undefined && v !== null) args.push('-H', `${k}: ${v}`);
+    if (written) args.push('--data', '@' + bodyFile);
+    args.push('-w', '\n__ZZCODE__%{http_code}');
+    args.push(String(urlStr));
+
+    const bin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+    let child;
+    try { child = spawn(bin, args, { windowsHide: true }); } catch (err) { return reject(err); }
+    let settled = false;
+    let stdout = Buffer.alloc(0);
+    let stderr = '';
+    let timer = null;
+    const cleanup = () => { if (written) try { fsSync.unlinkSync(bodyFile); } catch { } };
+    const done = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      cleanup();
+      fn(v);
+    };
+    const onAbort = () => { try { child.kill('SIGKILL'); } catch { } done(reject, Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })); };
+    if (opts.signal) {
+      if (opts.signal.aborted) { try { child.kill('SIGKILL'); } catch { } return done(reject, Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })); }
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { } done(reject, new Error('notion curl timeout after ' + timeoutMs + 'ms')); }, timeoutMs + 5000);
+    child.stdout.on('data', (c) => { stdout = Buffer.concat([stdout, c]); });
+    child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
+    child.on('error', (err) => done(reject, err));
+    child.on('close', (code) => {
+      const raw = stdout.toString('utf8');
+      const m = raw.match(/__ZZCODE__(\d+)\s*$/);
+      if (code !== 0 || !m) {
+        return done(reject, new Error('curl exit ' + code + (stderr ? ': ' + stderr.slice(0, 200) : '') + (m ? '' : ' (no status marker)')));
+      }
+      const text = raw.slice(0, raw.lastIndexOf('__ZZCODE__')).replace(/\n$/, '');
+      const status = Number(m[1]);
+      done(resolve, {
+        status,
+        ok: status >= 200 && status < 300,
+        headers: { get: () => null },
+        text: async () => text,
+        json: async () => JSON.parse(text),
+      });
+    });
+  });
+}
+
+// 协议门 + 通道链：非 https（测试假上游是 http）→ 全局 fetch，行为与从前逐字一致。
+// https：curl 主 → 软墙则 h2 兜底 → 再不成 fetch。软墙换通道是**免费**的（墙内那一发不消耗真实推理）。
+function notionFetch(urlStr, opts = {}) {
+  let u;
+  try { u = new URL(String(urlStr)); } catch (e) { return Promise.reject(e); }
+  if (u.protocol !== 'https:') return fetch(urlStr, opts);
+
+  return (async () => {
+    let first = null;
+    try {
+      first = await notionCurlFetch(urlStr, opts);
+      if (!notionIsSoftWall(await first.text())) return first;
+    } catch (err) {
+      if (err && err.name === 'AbortError') throw err;   // 取消就是取消，不换通道
+    }
+    // curl 不可用 / 被软墙 → HTTP/2（Node ≥24 的 h2 实测可过）
+    try {
+      const r2 = await notionH2Request(urlStr, opts);
+      if (!notionIsSoftWall(await r2.text())) return r2;
+      return first || r2;
+    } catch (err) {
+      if (first) return first;      // 两条都软墙时，把 curl 那一发的结果如实交回（上层按软墙处理）
+      throw err;
+    }
+  })();
+}
+
+// HTTP/2 内核（无条件走 h2，协议门在 notionFetch）。拆出来是为了可单测：
+// 测试起一个本地 **h2c**（明文 HTTP/2）服务器即可真跑这条路径，无需 TLS 证书。
+// 契约与 zzFetch 的响应壳一致：{status, ok, headers, text(), json()}；网络错抛异常（同 fetch）。
+function notionH2Request(urlStr, opts = {}) {
+  const u = new URL(String(urlStr));
+  const method = String(opts.method || 'GET').toUpperCase();
+  const payload = opts.body == null ? null : Buffer.from(String(opts.body), 'utf8');
+  const headers = {};
+  for (const [k, v] of Object.entries(opts.headers || {})) {
+    if (v === undefined || v === null) continue;
+    const n = k.toLowerCase();
+    // HTTP/2 禁止连接级头（伪头之外的 connection/host/keep-alive/transfer-encoding/upgrade）
+    if (n === 'host' || n === 'connection' || n === 'keep-alive' || n === 'transfer-encoding' || n === 'upgrade') continue;
+    headers[n] = String(v);
+  }
+  if (payload && !headers['content-length']) headers['content-length'] = String(payload.length);
+  // 要明文：与 zzFetch 同口径，避免上游压缩体带来的解压分支
+  if (!headers['accept-encoding']) headers['accept-encoding'] = 'identity';
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    const client = http2.connect(u.origin);
+    const finish = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      try { client.close(); } catch { }
+      fn(v);
+    };
+    const onAbort = () => finish(reject, Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+    if (opts.signal) {
+      if (opts.signal.aborted) return finish(reject, Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+    if (opts.timeoutMs > 0) timer = setTimeout(() => finish(reject, new Error('notion h2 timeout after ' + opts.timeoutMs + 'ms')), opts.timeoutMs);
+
+    client.on('error', (err) => finish(reject, err));
+    let req;
+    try {
+      req = client.request({
+        ':method': method,
+        ':path': u.pathname + u.search,
+        ':authority': u.host,
+        ':scheme': u.protocol.replace(':', ''),
+        ...headers,
+      });
+    } catch (err) { return finish(reject, err); }
+
+    let status = 0;
+    let respHeaders = {};
+    const chunks = [];
+    req.on('response', (h) => {
+      status = Number(h[':status']) || 0;
+      respHeaders = h;
+    });
+    req.on('data', (c) => chunks.push(Buffer.from(c)));
+    req.on('error', (err) => finish(reject, err));
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      finish(resolve, {
+        status,
+        ok: status >= 200 && status < 300,
+        headers: {
+          ...respHeaders,
+          get: (n) => respHeaders[String(n).toLowerCase()] ?? null,
+        },
+        text: async () => text,
+        json: async () => JSON.parse(text),
+      });
+    });
+    req.end(payload || undefined);
+  });
+}
 
 // ─────────────────────────── 模型映射 ───────────────────────────
 // 对外模型名 → Notion 内部代号
@@ -220,8 +402,11 @@ function uuid4() {
      ② **CSV 根本不上 S3**——它把文件内联进 user step 正文，追加一行
         {"file":{"file_data":"data:text/csv;base64,…","filename":"probe.csv"},"type":"file"}
    所以这里按同一形状实现：不需要上传链、不需要登记任务，改的只是 user step 正文与一个开关。
-   ⚠️ 诚实边界：「模型真的读到文件」尚未活体验证（7 个账号当时全在软墙上），
-   故本能力**默认关闭**，只在渠道显式打开 notionAttachments 时才改变报文。 */
+   ✅ 活体验证（v1.18.42）：传输层的软墙修好之后，判决实验在 notionls 上给出「已打通」——
+   同一账号成对打：对照那一发答「我在这段对话里没有找到你上传的 CSV 文件」，带附件那一发答出
+   只存在于 CSV 里的 `K7Q2M9`（研究文档 §8）。
+   ⚠️ 仍**默认关闭**：这是"稳妥默认"，不是"没验证过"——内联附件会改 user step 正文、吃 prompt 预算，
+   要不要开由渠道自己决定（渠道级 notionAttachments）。 */
 const ATTACH_MAX_FILES = 3;
 const ATTACH_MAX_BYTES = 1024 * 1024;      // 单文件 1MB（内联进 prompt，不能无限大）
 
@@ -699,6 +884,10 @@ function createNotionStreamParser(onEvent) {
 module.exports = {
   NOTION_MODEL_MAP,
   NOTION_MODEL_REVERSE,
+  notionFetch,
+  notionH2Request,
+  notionCurlFetch,
+  notionIsSoftWall,
   notionModel,
   notionThreadType,
   notionListModels,

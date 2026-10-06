@@ -88,15 +88,19 @@
 | 1 | **账号/渠道路由与兜底** | **本项目强** | 我们是多渠道路由 + 候选链 + 逐家切换 + 同渠道重试；它是**账号池 + 分组**，账号一旦 `status:error` 整组报 `unknown model`（**实发报文实证**：今天把一个账号打成 error 后，同一分组的所有请求都 400 `unknown model`，不是"换下一个账号"）。强度：**强**（现象可复现） |
 | 2 | **熔断记账与冷却** | **本项目强** | 我们有两条 streak（真实流量 / 探测）、冷却分级 + 半愈合 + `Retry-After`；它只有 `active` / `error` 两态（`/admin/accounts` 与 `/admin/groups/{id}/accounts` 下发的字段只有 `status`）。强度：**中**（字段面窄是实证，但它内部是否另有退避逻辑只有二进制、无法排除） |
 | 3 | **客户端报文面** | **本项目强** | 我们四套（chat / Anthropic / Gemini / Responses）+ 专用渠道输出收口；它以 OpenAI 兼容为主（`/v1/chat/completions`、`/v1/models` 实测）。强度：**强**（端点面可直接列举） |
-| 4 | **附件 / CSV 让 AI 读** | **notion2api 强（领先一个身位）** | 它**已经在用**：`enableCsvAttachmentSupport:true` + 把内联文件行追加进 user step 正文（**实发报文实证**，逐字抄录在研究文档 §4.2）。我们 v1.18.41 才按同一形状实现，且**默认关**——因为「模型真读到了」的活体判据还没拿到（判决实验撞上 7 个账号同时软墙）。强度：**强（它的形状）+ 弱（它的"真读到了"同样没被我们验证）** |
+| 4 | **附件 / CSV 让 AI 读** | **v1.18.42 起：本项目追平并反超** | 它**已经在用**：`enableCsvAttachmentSupport:true` + 把内联文件行追加进 user step 正文（**实发报文实证**，逐字抄录在研究文档 §4.2）；我们 v1.18.41 按同一形状实现（产物与它那一行**逐字相同**，有断言守着）。**v1.18.42 变了**：传输层修好之后，「模型真读到了」的活体判据**已取得**——对照那一发模型答"没找到你上传的 CSV"，带附件那一发答出**只存在于 CSV 里**的 `K7Q2M9`，并经本地容器网关复验（研究文档 §8）。⇒ 它领先的那"一个身位"**已经没有了**；我们多出来的反而是它没有的：**对照实验 + 可复现的判决工具**（`notion-attachment-verdict.js`）。强度：**强（我们的活体判据是成对打，能排除"模型在猜"）** |
 | 5 | **流断取回兜底** | **各有所长，本项目更直接** | 我们有**同 threadId 重发**取回成品全文（v1.18.39 活体验证：首发 6.3s 拿 `record-map`、再发 4.7s 拿同一条线程全文）；它点名走 `getInferenceTranscriptsForUser`（形状今天我们抓到了：回的是**线程清单 + usage**，**不是成品正文**）→ 它要拿正文还得再取一次。强度：**中**（我们的路已验证；它那条路我们只验证了形状、没跑完它自己的取回链） |
-| 6 | **报文保真与记账口径** | **本项目强** | 我们的 `runInferenceTranscript` 顶层字段与它**逐字同构**（traceId / spaceId / threadId / threadType / createThread / generateTitle / saveAllThreadOperations / setUnreadState / isPartialTranscript / asPatchResponse / isUserInAnySalesAssistedSpace / isSpaceSalesAssisted / threadParentPointer / transcript / debugOverrides 全部对得上，**实发报文实证**）；差异只在两处：① 我们的 config step 只有 4 个字段、它是 61 个；② 它的 user 正文带 `user: ` 前缀（我们不带，且已跑过 20+ 版本）。记账口径（usage 帧采集、思考占比、工具轮 token、预算透传）是我们的实现细节，**无法与它对比**。强度：**中**（结构同构是实证；"口径谁准"没有共同基准） |
+| 6 | **报文保真与记账口径** | **本项目强** | 我们的 `runInferenceTranscript` 顶层字段与它**逐字同构**（traceId / spaceId / threadId / threadType / createThread / generateTitle / saveAllThreadOperations / setUnreadState / isPartialTranscript / asPatchResponse / isUserInAnySalesAssistedSpace / isSpaceAssisted / threadParentPointer / transcript / debugOverrides 全部对得上，**实发报文实证**）；差异只在两处：① 我们的 config step 只有 4 个字段、它是 61 个；② 它的 user 正文带 `user: ` 前缀（我们不带，且已跑过 20+ 版本）。记账口径（usage 帧采集、思考占比、工具轮 token、预算透传）是我们的实现细节，**无法与它对比**。强度：**中**（结构同构是实证；"口径谁准"没有共同基准） |
+| 7 | **出站传输（v1.18.42 新增的一轴）** | **本项目强（它没解决这个问题）** | Notion 会对**某些客户端指纹**回"软墙"（200 + `temporarily-unavailable`）。我们的出站是**通道链**（curl 主 → h2 兜底 → fetch 最后）+ 软墙自动换通道（协议详解 §notion 出站通道链）。它的 Go 出站走标准 `net/http`——**指纹与 Node 不同、我们没测它会不会被墙**，但它**没有任何软墙判据或换通道机制**（这点从它的实发报文与我们抓到的行为看不出来，**属于未验证**，故不写成"它弱"）。强度：**弱→中**（我们这一侧的机制是实证；它那一侧是"未验证"） |
 
-**净结论**：**六项里五项本项目占优或持平，第 4 项（附件/CSV）是 notion2api 实打实领先的一格**——
-它已经上线在用，我们才刚按它的形状补上且默认关。**其余五项里最值钱的两条是"多渠道路由"与"四套客户端报文"**，
-这也正是"给 notion 套壳"与"做网关"两类目标的必然分岔。
+**净结论（v1.18.42 修订）**：**六项里五项本项目占优或持平，第 4 项（附件/CSV）在 v1.18.42 已被追平**——
+它上线更早，但"模型真的读到了"这个判据**我们现在也有**（而且是成对打、能排除模型瞎猜），并且我们多一套可复现的判决工具。
+**其余五项里最值钱的两条仍是"多渠道路由"与"四套客户端报文"**，这也正是"给 notion 套壳"与"做网关"两类目标的必然分岔。
 唯一需要留意的**反向**证据：它的 config step 有 61 个开关、我们只有 4 个（§4.2）——
 今天看只影响附件，但**它提示我们可能还缺别的能力开关**（下一批候选：`enableScriptAgent*` 那一组）。
+另有一条**教训型的差异**（不构成强弱）：这轮"软墙"我们连错三次（账号权益 → TLS 指纹 → HTTP/1.1），
+**每一次都是单环境一次成功就下结论**；最终的判据是"同一发报文跨四个环境对打"。这类**反爬式静默拒绝**，
+单环境结论的可信度接近零。
 
 ---
 
