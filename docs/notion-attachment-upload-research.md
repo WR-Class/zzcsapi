@@ -30,8 +30,8 @@
 | 拿文件的可下载直链 | ✅ **通** | 响应里的 `signedGetUrl`（6 小时签名直链）；公开 URL = 桶根 + `fields.key` |
 | **CSV 进模型的机制** | ✅ **已查明（§4）** | notion2api 实发报文：`enableCsvAttachmentSupport:true` + user step 正文里内联一行 file JSON。**不走 S3、不建任务、不插 attachment step** |
 | **网关侧实现** | ✅ **已实现（opt-in，默认关）** | `notionAttachments` 渠道字段；产出字节与抓包**逐字相同**（`test/notion-attachment-inline-e2e.test.js` 45 项） |
-| **「模型真读到了」的活体判据** | ❌ **未取得** | 判决实验那一刻 7 个账号**全在软墙**上（§4.4）；这一格只能等窗口 |
-| **软墙到底是什么** | ✅ **已定位（§5）** | 两个排除性实验：换客户端版本（旧 `23.13.20260228.0625` / 新 `23.13.20261006.0243`）**一样被墙**；同一批账号的 `getInferenceTranscriptsForUser` **全部 200、各读得出 50 条线程** → 墙**只挂在 AI 推理层**，与报文形状/版本/token 都无关 |
+| **「模型真读到了」的活体判据** | ❌ **未取得** | 判决实验那一发全撞软墙（§4.4）；且第 6 轮证明**软墙是我们自己的报文引起的**（§6），不是账号问题 |
+| **软墙到底是什么** | ✅ **已定位（§5 打底 + §6 更正）** | 账号侧全部排除（额度 `isEligible:true` / `type:"unlimited"`、空间 1 个、用户 1 个、token 活）；**决定性反证**：同一账号同一分钟**浏览器能答、我们不能** → 墙在**我们这一侧**。11 类报文/请求头假设已逐条排掉（§6.1），只差浏览器那发成功报文的 diff |
 | attachment step / 任务队列那条路 | ⏸️ **搁置** | 对 CSV 用途已被证伪为"不必要的弯路"（§4.2）；只有非 CSV（图片/大文件）才可能还要它 |
 
 > **本轮（第 4 轮）的关键增量**：**不用再猜，也不用再翻前端源码——直接把参照实现的出站报文抓下来看**（§4.1）。
@@ -535,10 +535,63 @@ node test\notion-attachment-inline-e2e.test.js
 
 因为非推理端点在被墙时**照样返回 200**，它**检测不出恢复**；唯一可靠的探测器就是真打一发推理：
 
-| 状态 | 一发推理的代价 |
-| --- | --- |
-| 还在墙里 | ~1~2 秒、**无真实推理**（不发额度） |
-| 恢复 | 真答一次（这是我们要的结果） |
+| 状态 | 还在墙里 | 恢复 |
+| --- | --- | --- |
+| 一发推理的代价 | ~1~2 秒、**无真实推理**（不发额度） | 真答一次（这是我们要的结果） |
+
+---
+
+## 6. ★★★ §5 的结论被推翻：墙不在账号侧，在我们这一侧（同日追加）
+
+**触发证据（用户提供）**：同一时刻、同一个账号（`notionls`，空间就是 `hixzlctain's Space`）、**同一个浏览器窗口**里，
+我们发的那条 CSV 问题显示「出错了。请稍后再试。」，而用户**紧接着自己发的一条消息正常答完了**（带 6 个步骤的 agent 回答）。
+同一账号、同一空间、同一出口 IP、同一分钟 —— **浏览器能答，我们不能**。
+
+**⇒ §5.3 那句"属 Notion 侧权益/限流、只能等"是错的，撤回。** 下面是这一轮排掉的东西与剩下的。
+
+### 6.1 排掉的（每条都是一发实测，同一账号同一时刻）
+
+| 假设 | 怎么试的 | 结果 |
+| --- | --- | --- |
+| 账号没额度/没资格 | `getAIUsageEligibility` | **`isEligible:true`、`type:"unlimited"`**（notionls / notion1 / notion5 三个都是）→ 不是额度 |
+| 挑错了空间 | `getSpaces` 看空间数；逐个空间打 | 只有 **1 个**空间（`cb718596…`），不是挑错 |
+| 挑错了用户 | `getSpaces` 看用户数 | 只有 **1 个** notion_user，`x-notion-active-user-header` 与之一致 |
+| 域名不对 | `app.notion.com` vs `www.notion.so` | 两个都墙（origin/referer 跟着域名一起换） |
+| 客户端版本过旧 | 旧 `23.13.20260228.0625` vs 新 `23.13.20261006.0243` | 都墙（§5.1 已记） |
+| config step 字段不对 | 5 个变体：基线 / 去掉 model / `modelFromUser:false` / **逐字对齐 Notion 回写的 7 字段** / 加 `user: ` 前缀 | 全墙 |
+| 请求体多发了调试字段 | 4 个变体：基线 / 去 `debugOverrides` / 再两个 `isSalesAssisted` / **只留浏览器那 12 个键** | 全墙 |
+| 请求头不对 | 5 个变体：基线 / `Accept:*/*` / 去 `notion-audit-log-platform` / 新版本+`Accept` / 新版本+浏览器式 referer | 全墙 |
+| step 缺 `userId`/`createdAt` | 三个 step 全补上（参照实现有、我们没有） | 墙 |
+| threadType 该用轻量聊天 | `markdown-chat` | **换了一种错**：400 `ValidationError / Invalid input.`（形状错，不是墙） |
+| 模型别名无效 | `model:"auto"` / 用注册表第一个 id | 墙 |
+
+### 6.2 这一轮新拿到的两条硬事实
+
+1. **Notion 回写给我们记录里的 config step 被它整个改写了**：我们发的 `{type, model:'claude-opus5', modelFromUser:true, useWebSearch}`
+   在它记录的线程里变成 `{type, modelFromUser:false, useWebSearch:true, isCustomAgent:false,
+   enableLargeToolResultComputerOffload:false, useContextualCoreDocsAutoLoad:false, useDocPreviewsForCoreAutoLoad:true}`
+   —— **`model` 没了、`modelFromUser` 被改成 false**。说明服务端**没接受我们的 config**、替成了它自己的默认。
+2. **`getAvailableModels` 今天返回空**：`{"modelSelectionRestricted":true,"restrictedGeoPolicyApplied":false,
+   "restrictedGeoHiddenWorkflowModels":[],"models":[]}`，而 `notion.js:15` 记着 **2026-09-06 这个端点还返回 33 个模型**。
+   一个月内模型注册表被清空 —— 与"今天正好滚了新客户端版本"撞在一起。
+
+### 6.3 剩下的唯一未知：**能用的浏览器到底发了什么**
+
+上面 11 类假设全部排掉之后，唯一还没拿到的证据是**浏览器那发成功请求的原始报文**。
+拿到它就能机械 diff 出差别（我们与它的差异只剩"还没试过的字段"），不需要再猜。
+`_tmp_notion2api\browser-capture.txt` 就是这个用途（见 §6.4 的取法）。
+
+> ⚠️ **纪律**：抓到的 cURL **含 `token_v2`**。必须**存进 `_tmp_notion2api\browser-capture.txt`（已 gitignore）**，
+> **绝不许贴进对话**；用完即删。这与 §4.1 的抓包纪律是同一条。
+
+### 6.4 取法（60 秒）
+
+1. 在**能正常回答**的那个 Notion AI 窗口按 `F12` → 切到 **Network**
+2. 过滤框输入 `runInferenceTranscript`
+3. 在窗口里**再发一条**（例如 `1+1=?`），等它答完
+4. 列表里会多出一条 `runInferenceTranscript` → 右键 → **Copy → Copy as cURL (bash)**
+5. 粘贴保存为 `D:\DSHXM\ZZCSAPI\_tmp_notion2api\browser-capture.txt`（**不要贴进对话**）
+
 
 所以 `_probe_inline_csv.js`（阶段 A 逐账号打对照）本身就是探测器：**7 个账号 × 1 发 ≈ 10 秒**，
 一轮跑下来既能探测恢复、又能在恢复的瞬间直接给出 ③ 的判决。**这就是"等窗口"的正确姿势**，不需要额外写轮询器。
