@@ -404,6 +404,24 @@ thinking 回放修复）。五条**专用报文**渠道（`notion` / `notion-age
 | `/gemini/v1beta/models/{m}:generateContent` | POST | gateway | Gemini 非流式（支持 `inlineData`/`fileData` 图片） |
 | `/gemini/v1beta/models/{m}:streamGenerateContent` | POST | gateway | Gemini 流式 |
 
+## notion 附件判决实验（只读脚本，低额度）
+
+`node notion-attachment-verdict.js` 回答一个问题：**notion 渠道的「内联附件」到底有没有让模型读到文件？**
+判据只有一条——模型能不能答出**只存在于 CSV 里**的随机串（`K7Q2M9`）。做法是**成对打**：同一账号同一时刻先打**对照**（不带附件），
+对照真答了才打**附件**那一发。**为什么必须成对**：软墙（200 + `temporarily-unavailable`）下发出来的"空"与"附件没生效"长得一模一样，
+不成对打就会把软墙误判成"附件不生效"。
+
+```powershell
+node notion-attachment-verdict.js              # 默认预算 14 发
+node notion-attachment-verdict.js 8            # 更小的预算
+node notion-attachment-verdict.js 8 notion5    # 只打某个渠道
+```
+
+三种结论：**已打通**（答出随机串 → 可以打开渠道的 `notionAttachments`）/ **没读到**（对照与附件都真答但答不出随机串）/
+**未取得**（账号全在软墙里，实验条件不成立）。成本：还在墙里的账号一发只花 ~1~2 秒、**不消耗真实推理**。
+**报告绝不回显任何凭据**。为什么会有"未取得"、以及为什么**不要再为软墙改报文形状**，见
+[notion 附件上传研究](docs/notion-attachment-upload-research.md) §5。
+
 ## 安全体检（只读脚本）
 
 `node sec-audit.js` 对任意部署跑一遍只读体检，**报告里绝不回显密钥**：

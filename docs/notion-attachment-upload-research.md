@@ -458,10 +458,14 @@ node _n2a_probe.js notion5 openai-file
 # 2) 导出它 config step 的字段集（对齐用）
 node _n2a_extract_cfg.js
 # 3) 判决实验：我们自己的报文 + 两样新东西，对照与附件成对打（自带预算上限）
-node _probe_inline_csv.js 14
+node notion-attachment-verdict.js 14      # ★ 已入库的一等工具（仓库根，非 test/）；旧的 _probe_inline_csv.js 是它的草稿
 # 4) 回归：产出的字节必须与抓包逐字相同（离线，不花额度）
 node test\notion-attachment-inline-e2e.test.js
 ```
+
+> **工具已入库**：`notion-attachment-verdict.js`（仓库根，`README.md`「notion 附件判决实验」一节 + `AGENTS.md` §3 都有登记）。
+> 它把上面这个实验做成了一等公民：三种结论（**已打通** / **没读到** / **未取得**）、成对打的纪律、
+> 预算上限、以及**报告绝不回显凭据**。所以"等窗口"不再依赖任何 `_tmp_*` 草稿——草稿删了也不会丢。
 
 ### 4.6 与 notion2api 的六项差异强弱结论
 
