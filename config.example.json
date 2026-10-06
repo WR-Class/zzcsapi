@@ -64,6 +64,19 @@
       "models": {}
     },
     {
+      "id": "vendor-notion",
+      "name": "Notion AI 逆向",
+      "baseUrl": "https://www.notion.so",
+      "apiKey": "token_v2 的值（绝不外传）",
+      "protocol": "notion",
+      "priority": 20,
+      "weight": 0,
+      "enabled": false,
+      "autoAlias": true,
+      "models": {},
+      "notionAttachments": false
+    },
+    {
       "id": "vendor-anthropic",
       "name": "Anthropic 中转",
       "baseUrl": "https://api.example-c.com",

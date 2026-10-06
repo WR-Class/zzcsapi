@@ -2,7 +2,7 @@
 
 > 本文从 README 拆出（v1.18.8）：README 只留协议速查表，本文收全量细节——原生出站、同协议直通、
 > 客户端路由的工具调用方向与 Responses API（第四套报文，v1.18.38）、专用报文渠道的**输出收口**（v1.18.38 修正）、
-> notion 渠道的**流断取回兜底**（v1.18.39）、四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
+> notion 渠道的**流断取回兜底**（v1.18.39）、**内联附件**（v1.18.41）、四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
 > 路由与调度语义见 [docs/scheduling.md](scheduling.md)；鉴权写法与管理面会话见 [docs/behavior.md](behavior.md)。
 
 ## 协议速查表
@@ -187,8 +187,33 @@ notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构�
 
 **诚实边界**：notion2api 的对应能力点名叫 `getInferenceTranscriptsForUser`（Go 侧 `loadFinalAnswerWithPolling`），
 我们无法确认它的请求形状（18 种全败），因此**不实现**——发一个自己验不了的调用，等于把"兜底"变成"再多一次失败"。
+**v1.18.41 补充**：那个形状后来**抓到了**（把 notion2api 的 `upstream.base_url` 指向记录代理，白捡的）——
+`{includeWorkflowThreads:true, includeWriterChats:false, limit:50, threadParentPointer:{id:<spaceId>,spaceId:<spaceId>,table:"space"}}`
+→ 200 回**线程清单**（id/title/usage_summary），**不是成品正文**。所以"不实现"这个结论不变（它替代不了同 threadId 重发），
+但它可以做一个只读的"列线程"诊断端点（见 `docs/notion-attachment-upload-research.md` §4.3）。
 
 守卫：`test/notion-refetch-fallback-e2e.test.js`。
+
+## notion 渠道的内联附件（`notionAttachments`，v1.18.41，默认关）
+
+**机制来自参照实现 notion2api 的实发报文**（抓法见 `docs/notion-attachment-upload-research.md` §4.1），
+两件事，与"上传到 S3 再插 attachment step"完全不是一条路：
+
+| 客户端发来 | 网关出站 |
+| --- | --- |
+| OpenAI `{type:"file",file:{filename,file_data:"data:<mime>;base64,…"}}` 或 Anthropic `{type:"document",source:{type:"base64",media_type,data}}` | ① config step 加 `enableCsvAttachmentSupport: true`（**只在真有文件时加**）；② 文件按 `{"file":{"file_data":"data:<mime>;base64,…","filename":"…"},"type":"file"}` 追加到**最后一条 user step** 正文末尾（一个换行分隔，多个文件多行） |
+
+- **只对 `notion` 协议有意义**（`notion-agent` 走官方 API，不受影响）；非布尔值 **400**，配在非 notion 协议上也 **400**。
+- **上限**：单文件 ≤1MB、最多 3 个（内联进 prompt，不能无限大）；只认 **base64 的 `data:` URL**（不做任何网络取回）；
+  文件名会被净化（剥路径、删引号/换行/控制字符——脏字符会破坏整条 step 的 JSON）。
+- **默认关**，且"默认关"是源码事实（`=== true` 判定 + 开关只为真带附件而加）：不打开时报文与从前**逐字相同**。
+- ⚠️ **诚实边界**：「模型真的读到了文件」**尚未活体验证**——判决实验（对照 + 附件成对打，判据是"能否答出只存在于 CSV 里的随机串"）
+  撞上 7 个账号**同时软墙**的窗口。机制按参照实现逐字实现、有回归守着字节，但**没有活体证据**，故默认关。
+  解除条件与复现命令见研究文档 §4.4/§4.5。
+- **为什么不上 S3**：上传链（取目标 → S3 桶根 204 → 公开 URL）是打通的，但 CSV 这条用途**不需要它**；
+  只有图片/大文件（内联不现实）才可能回到那条路 + 附件 step（那条路上的三个障碍见研究文档 §2.0.1）。
+
+守卫：`test/notion-attachment-inline-e2e.test.js`（45 项：单元 + 与抓包逐字比对 + 真链路 + 渠道字段落库 + 默认关）。
 
 ## 工具调用：三条客户端路由的四个往返方向
 

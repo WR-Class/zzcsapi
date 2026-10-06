@@ -23,6 +23,7 @@
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
 - 🧩 **OpenAI Responses API（v1.18.38）**：`/v1/responses`（POST，含流式）+ `/v1/responses/{id}`（GET 取回 / DELETE）——入站按 Responses 报文收，出站转回 `response` 对象与 Responses 的 SSE 事件序列，中间复用同一条候选链与全部兜底（[协议详解](docs/protocols.md)）
 - 🩺 **手动测试的流式模式 + 真实流量单独一条欠账（v1.18.40）**：控制台「测试模型」默认按**流式**打（真实客户端走的就是流式，只测非流式等于只测了一半，`stream:true` 可选）；且**只有真实客户端请求成功才算"这家对话能用"**——手动测试与 `/models` 探测成功只放开冷却、还清探测侧的账，**不再清零真实流量的连败计数**，熔断因此真的会跳开"测试过、真实挂"的死家（[调度详解](docs/scheduling.md)）
+- 📎 **notion 渠道的内联附件（v1.18.41，渠道级 `notionAttachments`，默认关）**：客户端发 OpenAI `{type:"file",file:{filename,file_data:"data:…;base64,…"}}`（或 Anthropic `document` 块）时，网关把文件**内联进提示词**并打开 `enableCsvAttachmentSupport`——这是参照实现 notion2api 实发报文的形状，**CSV 不上 S3、不建任务**（[机制与诚实边界](docs/notion-attachment-upload-research.md)）。⚠️ **「模型真读到了」尚未活体验证**（判决实验撞上账号软墙），故**默认关**：不显式打开就一个字节都不改
 
 ## 快速开始
 
@@ -224,11 +225,11 @@ http://127.0.0.1:8787/console
 | [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | 设置页的施工图：字段契约、四张卡结构、必须守住的交互细节、验收清单 |
 | [thinking 回放缓存设计与实现记录](docs/thinking-replay-design.md) | 三次决策完整过程、跨协议 thinking/签名保真度地图、as-built 边界与验收映射 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | 动代码前过目：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查） |
-| [同类网关内部机制对比](docs/gateway-comparison.md) | 本项目 vs new-api / one-api / sub2api / CLIProxyAPI 的内部机制/性能/全面性对照（只比机制，不比多用户），含实测数字与各家源码级证据 |
+| [同类网关内部机制对比](docs/gateway-comparison.md) | 本项目 vs new-api / one-api / sub2api / CLIProxyAPI / **notion2api** 的内部机制/性能/全面性对照（只比机制，不比多用户），含实测数字与各家源码级证据；**§1.5 = 与 notion2api 六项差异的强弱结论**（五项本项目占优或持平，附件/CSV 那一格是它实打实领先，含反向证据：它的 config step 有 61 个开关、我们只有 4 个） |
 | [Genspark Claw 反代研究](docs/genspark-claw-reverse-proxy-research.md) | 逆向过程留档 |
 | [PromptQL（prompt.ql.app）反代研究](docs/promptql-reverse-proxy-research.md) | 结论：不建议接（多人协作 bot 工作台、按 OLU 计量付费，不是可蹭的模型额度；控制面 `auth.pro.ql.app` 本机被 DNS 污染） |
 | [Arena 协议](docs/arena-protocol.md) / [Prism 反代研究](docs/prism-reverse-proxy-research.md) | 已撤渠道留档 |
-| [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **未完成能力的留档**：上传链（取目标 → S3 桶根 204 → 公开 URL）已打通并活体验证；「让 AI 读到」未打通。**★ 含可复用的「抓 Notion 自己的前端源码」方法**（chunk URL 规则 `/_assets/<名字‖id>-<哈希>.js`、名字表 1394 项 / 哈希表 2460 项、大对象上跑正则会回溯卡死），据此抄到官方形状（`getUploadFileUrlForAssistantChatTranscriptUpload` + `assistantChatTranscriptSessionPointer`、扁平 step `{type:"attachment", fileUrl}`），照抄仍 200 空答 → 缺口收敛到一个字段。另含端点清单、键白名单、**软墙 ≠ 形状错的判别纪律** |
+| [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **机制查明 + 诚实边界**：**★ 最有价值的是抓法**——notion2api 的 `upstream.base_url` 可配，指向记录代理就抓到它发给 Notion 的原始报文（含三个必踩的坑：`origin`/`referer` 由 base_url 推出来、账号要按完整 probe JSON 导入、失败会把账号打成 `error`）。据此查明：CSV **不上 S3**，而是 `enableCsvAttachmentSupport:true` + 把 `{"file":{"file_data":"data:…","filename":"…"},"type":"file"}` 内联进 user step 正文（已按此实现为 opt-in 渠道字段，字节逐字对齐，见 `test/notion-attachment-inline-e2e.test.js`）；另白捡到 `getInferenceTranscriptsForUser` 的正确形状。**「模型真读到了」仍未活体验证**（7 个账号同时软墙）→ 默认关。含上传链留档（取目标 → S3 桶根 204 → 公开 URL）、**软墙 ≠ 形状错的判别纪律**、判决实验与复现命令 |
 | [AI 工具调用桥接](docs/AI工具调用桥接-群友分享版.md) | 群友分享版说明 |
 
 ### 前端构建管线（一句话版）
@@ -302,6 +303,13 @@ http://127.0.0.1:8787/console
 > 白名单外的名字 **400** 并回带合法清单（不静默忽略）。生效于常规链路与同协议直通；`workbuddy` / `codex` / `genspark` /
 > `notion-agent` 自带专用报文构造，**不适用**。控制台入口：渠道编辑弹窗「不发这些参数」，合法名清单由
 > `GET /admin/api/config` 的 `dropParamWhitelist` 下发。细则见 [协议与渠道详解](docs/protocols.md)。
+> 渠道字段 `notionAttachments`（可选，v1.18.41，**默认关**）：**只对 `notion` 协议有意义**——打开后，客户端发来的
+> 内联附件（OpenAI `{type:"file",file:{filename,file_data:"data:…;base64,…"}}` 或 Anthropic `document` 块，
+> 单文件 ≤1MB、最多 3 个）会被**内联进提示词**并同时打开 config step 的 `enableCsvAttachmentSupport`。
+> 形状抄自参照实现 notion2api 的**实发报文**（**CSV 不上 S3、不建任务、不插 attachment step**）；
+> ⚠️ 「模型真读到了」**尚未活体验证**（判决实验撞上账号软墙），故默认关——不显式打开时报文与从前**逐字相同**。
+> 非布尔值 **400**；对非 `notion` 协议配它 **400**。机制、判据与解除条件见
+> [notion 附件上传研究](docs/notion-attachment-upload-research.md) §4。
 > 调度旋钮（`cooldown` / `retries` / `autoWeight`）与运行期四组开关（`sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`）
 > 的全量取值与钳制范围见 [调度详解](docs/scheduling.md) 与 [运行期设置](docs/runtime-settings.md)。
 > `security.trustedProxy` 只在网关部署在反向代理后面时才需要：留空 = 直连模式，一律只认 socket 地址

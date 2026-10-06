@@ -3421,6 +3421,8 @@ function channelStatusAll() {
       // v1.18.40：探测/手动测试的欠账（与真实流量那条分开）。控制台据此说明"这个渠道的真实流量欠账是多少、
       // 探测侧又欠了多少"——"测试过、真实挂"的现场就靠这两个数字分得清。
       probeFail: Number(ch.probeFail) || 0,
+      // v1.18.41 notion 内联附件（opt-in）：下发布尔，控制台/诊断能看出"这个渠道到底开没开"
+      notionAttachments: ch.def.notionAttachments === true,
       cooldownUntil: ch.cooldownUntil,
       // 观察期（探测"半愈合"过、还欠着失败的账）：排序排在健康渠道之后、不进加权池，控制台/回归都靠它判读
       probation: !!ch.probation,
@@ -3496,6 +3498,8 @@ function persistConfig() {
       //   漏一行就会在下一次任意渠道保存时被静默抹掉。加渠道字段必须三处一起加：
       //   这里 + /admin/api/channels 的 GET + POST 的 def 构造。
       dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
+      // v1.18.41 notion 内联附件（opt-in）：与 dropParams 同一个坑，漏一行就被下一次渠道保存抹掉
+      notionAttachments: ch.def.notionAttachments === true ? true : undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -4053,6 +4057,14 @@ function validateChannelDef(def, opts) {
     const w = Number(def.weight);
     if (!Number.isFinite(w) || w < 0) return 'weight must be a finite number >= 0 (0 = 不参与加权轮询)';
   }
+  // v1.18.41 notion 内联附件（opt-in）：只接受布尔；写成字符串/数字一律 400，不静默当成"开了"
+  //   （"配了却没生效"正是 v1.18.33 dropParams 那条现场教训）
+  if (def.notionAttachments !== undefined && def.notionAttachments !== null && def.notionAttachments !== '') {
+    if (def.notionAttachments !== true && def.notionAttachments !== false && def.notionAttachments !== 'true' && def.notionAttachments !== 'false') {
+      return 'notionAttachments must be a boolean（true = 让 notion 渠道接收内联附件，默认关）';
+    }
+    if (def.protocol && def.protocol !== 'notion') return 'notionAttachments 只对 notion 渠道有意义';
+  }
   return null;
 }
 
@@ -4323,6 +4335,8 @@ async function handleAdminApi(req, res, url) {
       weight: ch.def.weight ?? undefined,
       // v1.18.33 渠道级「不发这些参数」：控制台表单要回填它（见 POST 的 def 构造与 persistConfig）
       dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
+      // v1.18.41 notion 内联附件（opt-in）：同样要回填
+      notionAttachments: ch.def.notionAttachments === true ? true : undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -4367,6 +4381,8 @@ async function handleAdminApi(req, res, url) {
       // v1.18.33 渠道级「不发这些参数」：显式传空数组 = 清空（用户就是要恢复"原样转发"）；
       // 只有那些压根不传这个字段的老客户端/导入流程才沿用旧值（与 weight 同款语义）
       dropParams: body.dropParams !== undefined ? normDropParams(body.dropParams) : (prevDef ? prevDef.dropParams : undefined),
+      // v1.18.41 notion 内联附件（opt-in，默认关）：显式传 false 就是关掉；不传则沿用旧值
+      notionAttachments: body.notionAttachments !== undefined ? (body.notionAttachments === true || body.notionAttachments === 'true') : (prevDef ? prevDef.notionAttachments : undefined),
     };
     const existed = channels.has(def.id);
     const ch = upsertChannel(def);
@@ -7386,7 +7402,7 @@ async function tryNotionChannel(opts) {
   // 工具仿真：notion 无原生 function calling → tools 注入 system，响应解析围栏
   const toolEmuReq = toolEmu.emulateRequest(body);
   const effMessages = toolEmuReq ? compactMessagesForNotion(toolEmuReq.messages) : compactMessagesForNotion(body.messages);
-  const built = notion.buildNotionTranscript(effMessages, candidate.upstream, acct, { useWebSearch: !toolEmuReq });
+  const built = notion.buildNotionTranscript(effMessages, candidate.upstream, acct, { useWebSearch: !toolEmuReq, attachments: ch.def.notionAttachments === true });
   if (built.error) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: built.error, type: 'invalid_request_error' } }));

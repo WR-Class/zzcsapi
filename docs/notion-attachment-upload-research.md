@@ -1,8 +1,17 @@
 # notion 附件上传（CSV / 文件）反代研究
 
-> **结论先行**：**上传链已打通**（活体验证，可复现）；**「让 AI 读到」尚未打通**，卡在
-> 「附件 step 的正确形状」与「上游的附件处理任务队列」之间。本文只记三类东西：
-> ① 已验证的事实（带复现命令）② 被证伪的猜测 ③ 下一步该找什么。
+> **结论先行（v1.18.41 更新）**：**机制已经拿到手了，而且比原先设想的简单得多**——
+> §4 记了一个可复用的抓法：notion2api 的 `upstream.base_url` 是可配的，把它指向一个记录代理，
+> 就抓到了它发给 Notion 的**原始报文**。抓到的两样东西直接改写了本研究的结论：
+> ① `config` step 里有一个 **`enableCsvAttachmentSupport: true`**（我们此前只发 4 个字段，没有它）；
+> ② **CSV 根本不上 S3**——它把文件**内联进 user step 正文**，追加一行
+> `{"file":{"file_data":"data:text/csv;base64,…","filename":"…"},"type":"file"}`。
+> 所以「上传链」（§1，虽然已打通）**对 CSV 这条用途其实用不上**。
+>
+> **已按此形状实现**（v1.18.41，渠道级 opt-in `notionAttachments`，**默认关**），
+> 并有回归守着"产出的字节与抓包逐字相同"（`test/notion-attachment-inline-e2e.test.js`）。
+> **但「模型真的读到了文件」仍未活体验证**——判决实验要的那一发落在 7 个账号**同时**在软墙上的窗口里（§4.4）。
+> 故本能力默认关：不活体验证就不默认上线，这条纪律不变。
 >
 > 研究日期 2026-10-06 · 上游 `https://www.notion.so`（云端容器内、真实 `token_v2`）·
 > 参照实现 notion2api（Go / Apache-2.0，Windows 包 0.1.0，source commit `189b0ecb…`，本机只有二进制，仓库未定位到）。
@@ -16,14 +25,19 @@
 | 取上传目标（`getUploadFileUrl`） | ✅ **通** | `POST /api/v3/getUploadFileUrl {bucket:"public",name,contentType}` → **200** |
 | 把字节传到 Notion S3 | ✅ **通** | `POST` 到**桶根** multipart（fields 全带 + file 最后）→ **204** |
 | 拿文件的可下载直链 | ✅ **通** | 响应里的 `signedGetUrl`（6 小时签名直链）；公开 URL = 桶根 + `fields.key` |
-| **让 AI 读到文件内容** | ❌ **未通** | 三个真障碍已逐个查明并解决（§2.0）：指针必须是记录指针对象、step 的 `id` 必须是 uuid、文件要挂 `attachment:<fileId>:<name>` URI。**仍差最后一格**：附件请求会被上游**大量软墙**，拿不到干净的判据 |
+| **CSV 进模型的机制** | ✅ **已查明（§4）** | notion2api 实发报文：`enableCsvAttachmentSupport:true` + user step 正文里内联一行 file JSON。**不走 S3、不建任务、不插 attachment step** |
+| **网关侧实现** | ✅ **已实现（opt-in，默认关）** | `notionAttachments` 渠道字段；产出字节与抓包**逐字相同**（`test/notion-attachment-inline-e2e.test.js` 45 项） |
+| **「模型真读到了」的活体判据** | ❌ **未取得** | 判决实验那一刻 7 个账号**全在软墙**上（§4.4）；这一格只能等窗口 |
+| attachment step / 任务队列那条路 | ⏸️ **搁置** | 对 CSV 用途已被证伪为"不必要的弯路"（§4.2）；只有非 CSV（图片/大文件）才可能还要它 |
 
-> **本轮（第 3 轮）的关键增量**：**拿到了 Notion 自己的前端源码**（方法见 §2.0），
-> 于是「附件 step 长什么样」「助手对话的上传走哪个事件」不再是猜测，而是抄官方代码；
-> 照着抄完仍不生效，把缺口精确收敛到**一个字段**：`assistantChatTranscriptSessionPointer`（已排除 `spaceId`）。
+> **本轮（第 4 轮）的关键增量**：**不用再猜，也不用再翻前端源码——直接把参照实现的出站报文抓下来看**（§4.1）。
+> 这一步把「附件 step 的正确形状」这个问题整个绕过去了：CSV 走的是**内联**，不是附件 step。
+> 前 3 轮攒下的 §1（上传链）与 §2.0/§2.0.1（附件 step 的三个障碍）**仍然是真事实**，只是**不属于 CSV 这条路**。
 
-**没有打通「让 AI 读到」之前不要实现这个功能**——一个"文件传上去了、模型却读不到"的附件能力，
-是"看起来成功、实际没用"的**静默降级**，与本项目对静默失败的一贯态度相反。
+> 关于「不实现」这条纪律的更新：它原本的理由是"机制不清楚，实现出来就是静默降级"。
+> 现在机制清楚了（有参照实现的实发报文 + 逐字节回归），**但活体判据还没拿到**，
+> 所以落点是：**实现，但默认关**，并在渠道字段/文档/测试三处都写明"未活体验证"。
+> 默认关这一条本身也有断言守着——不许有人"顺手"把它打开。
 
 ---
 
@@ -328,8 +342,120 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST 'https://s3-us-west-2.amazonaws
 
 ## 3. 对本网关的意义
 
-- **不实现**：能力不完整时不上线（理由见开头的静默降级）。
-- 已确认可复用的部分：**上传链**（§1）、**端点清单**（§1.3）、**三态判据与软墙识别**（§2.3）。
-- 一旦补上 §2.4 那个缺口，落地形态很清楚：客户端面的附件 → 取目标 → 上传 → 按正确形状注入
-  `runInferenceTranscript` 的 transcript（在 user step **之前**插 step，id 用 `attachment-%d`），
-  并把 `bucket:"public"` 写死（其余桶实测 400）。
+- **已实现（v1.18.41，opt-in 默认关）**：机制见 §4；落地形态是「把内联文件行追加到最后一条 user step
+  正文 + 只在真带附件时加 `enableCsvAttachmentSupport:true`」，**与 §2.4/§2.5 设想的"取目标→上传→插 step"完全不是一条路**。
+- 已确认可复用的部分：**上传链**（§1，对图片/大文件仍可能有用）、**端点清单**（§1.3）、
+  **三态判据与软墙识别**（§2.3）、**抓参照实现出站报文的方法**（§4.1，本轮最有价值的产出）。
+- **默认关**的理由与解除条件写在 §4.4：判决实验是**一发**（对照 + 附件成对），
+  一旦有账号从软墙里出来就能立刻做，命令骨架见 §4.5。
+
+---
+
+## 4. ★★ 机制查明：抓参照实现的出站报文（v1.18.41）
+
+### 4.1 抓法（可复用，成本极低）
+
+notion2api 的 Windows 发布包**没有源码**，但它的配置里 `upstream.base_url` 是**可配的**。
+于是：本机起一个记录代理 → 把 `upstream.base_url` 指向它 → 用它的 API 发一发带 CSV 的对话 →
+代理把**它发给 Notion 的原始报文**逐条落盘。这比翻 2460 个前端 chunk 便宜一个数量级。
+
+```yaml
+# _tmp_n2a_run/config/config.yaml（脚手架，_tmp_* 已 gitignore）
+upstream:
+  base_url: http://127.0.0.1:19001        # ← 记录代理
+  origin: https://www.notion.so
+  poll_interval_seconds: 0.5
+```
+
+代理侧有三件事必须做（都是踩出来的）：
+
+| 坑 | 现象 | 处置 |
+| --- | --- | --- |
+| `origin`/`referer` 是**由 base_url 推出来的** | 它忽略配置里的 `upstream.origin`，发 `origin: http://127.0.0.1:19001` → Notion 回 401 `Must be authenticated.` | 代理层改写 `origin`/`referer` 回 `https://www.notion.so`（这一步同时**证明**了它没用那个配置项） |
+| 账号导入会走"自动发现" | `POST /admin/accounts/manual {token_v2}` → 400，且自动发现也 401 | 用**完整 probe JSON** 导入（`probe_json_text`：`email`/`user_id`/`space_id`/`client_version`/`cookies:[{name:"token_v2",value:…}]`），绕开登录校验流程 |
+| 账号状态会被失败打成 `error` | 随后所有请求 400 `unknown model`（不是模型名错，是**没有可用账号**） | `POST /admin/accounts/{id}/activate` 设为活跃；真出错后要重导账号 |
+
+> ⚠️ 这条抓法有个**副作用**必须记住：抓到的 `capture.ndjson` 里**含 `token_v2`**。
+> 落盘前打码（`token_v2`/`cookie`/`signature`/`X-Amz-*`），用完删目录——与仓库"密钥绝不落盘进对话"同一条纪律。
+
+### 4.2 抓到的两样关键事实
+
+**① `config` step 有 61 个字段，我们只有 4 个。** 其中与附件直接相关的是 `enableCsvAttachmentSupport: true`：
+
+```json
+{"type":"config","id":"<uuid>","value":{
+  "type":"workflow","model":"…","modelFromUser":false,"useWebSearch":true,
+  "enableCsvAttachmentSupport": true, "enableScriptAgent": true, …共 61 项}}
+```
+
+**② CSV 不上 S3 —— 内联进 user step 正文。** 这是实发报文的 `user` step（逐字抄录）：
+
+```json
+{"type":"user","id":"<uuid>","userId":"<uuid>","createdAt":"…",
+ "value":[["user: 我上传的 CSV 里 secret 这一列的值是什么？只回答那个值本身。\n{\"file\":{\"file_data\":\"data:text/csv;base64,c2VjcmV0LG5vdGUKSzdRMk05LG9ubHktaW4tZmlsZQo=\",\"filename\":\"probe.csv\"},\"type\":\"file\"}"]]}
+```
+
+也就是说：**客户端的内联文件（`data:` URL）→ 原样内联进提示词 + 打开那个开关**，
+没有 `getUploadFileUrl`、没有 S3 multipart、没有 `enqueueTask`、没有 attachment step。
+（`user: ` 前缀是 notion2api 自己的约定，我们不带它——我们不带它已经跑了 20 多个版本。）
+
+**顺带得到的第三个事实**：它确实实现了 S3 那条路（符号表里有 `uploadAssistantAttachmentToS3` /
+`enqueueAssistantAttachmentProcessing` / `waitForAssistantAttachmentTasks`），
+但**对 CSV 没走**。所以 §1 的上传链不是错，只是**不属于 CSV 这条用途**。
+
+### 4.3 同时抓到 `getInferenceTranscriptsForUser` 的**正确形状**（v1.18.39 试了 18 种全败的那个）
+
+同一个代理里白捡的。当时失败是因为形状不对，正确形状是（`table:"space"` + `threadParentPointer` + 两个 include 开关）：
+
+```json
+POST /api/v3/getInferenceTranscriptsForUser
+{"includeWorkflowThreads":true,"includeWriterChats":false,"limit":50,
+ "threadParentPointer":{"id":"<spaceId>","spaceId":"<spaceId>","table":"space"}}
+→ 200 {"transcripts":[{"id":"<threadId>","title":"…","created_at":…,"updated_at":…,
+                      "created_by_display_name":"…","type":"workflow","usage_summary":{…}}]}
+```
+
+注意它回的是**线程清单（含 usage）**，不是成品正文——所以 v1.18.39 的取回兜底仍走"同 threadId 重发"
+（那条路已验证能拿全文）。这个端点的价值是**列线程 / 看 usage / 确认线程落库**，与兜底是两件事。
+
+### 4.4 判决实验（已就绪，等窗口）
+
+用**我们自己的报文构造**（`notion.js`），只加上 §4.2 的两样，打一发附件；同一个账号同一时刻再打一发**对照**。
+判据只有一条：**模型能不能答出只存在于 CSV 里的随机串**（`K7Q2M9`）。
+
+**本轮的实测结果：拿不到干净判据。** 那一刻 7 个账号（notion1…notion7）**全在软墙上**
+（`POST /api/v3/runInferenceTranscript` → 200 + `temporarily-unavailable`，`isRetryable:false`），
+唯一非软墙的 notion2 是 400 空体（token 已死）。**软墙是账号级、且很黏**——两个不同出口 IP
+（本机 `103.62.49.162` / 云端 `45.153.131.40`）撞到的是同一堵墙，说明它不是按 IP 限的。
+
+所以这一格诚实的写法是：**机制按参照实现的实发报文实现了，活体判据欠着**。
+`_probe_inline_csv.js` 就是这个判决实验（阶段 A 找健康账号、阶段 B 打附件，自带预算上限），窗口一开直接跑。
+
+### 4.5 复现命令骨架
+
+```powershell
+# 0) 起记录代理 + notion2api（都在 _tmp_* 里，跑完删）
+node _tmp_n2a_run\_capture_proxy.js                     # 127.0.0.1:19001 → https://www.notion.so
+#    notion2api 后端 127.0.0.1:19998（upstream.base_url 指向上面的代理）
+# 1) 用完整 probe JSON 导入账号 + 发一发带 CSV 的对话（会把整条链记进 capture.ndjson）
+node _n2a_probe.js notion5 openai-file
+# 2) 导出它 config step 的字段集（对齐用）
+node _n2a_extract_cfg.js
+# 3) 判决实验：我们自己的报文 + 两样新东西，对照与附件成对打（自带预算上限）
+node _probe_inline_csv.js 14
+# 4) 回归：产出的字节必须与抓包逐字相同（离线，不花额度）
+node test\notion-attachment-inline-e2e.test.js
+```
+
+### 4.6 与 notion2api 的六项差异强弱结论
+
+六项逐条的强弱判定（谁强、强多少、证据强度）**定稿在 [同类网关内部机制对比](gateway-comparison.md) §1.5**，
+不在这里重复——本节只保留与本条能力直接相关的两条：第 4 项（附件/CSV）是它实打实领先的一格；
+反向证据是它的 config step 有 61 个开关、我们只有 4 个。
+
+### 4.7 下一步（按性价比）
+
+1. **等软墙窗口，跑 §4.4 的判决实验**——一发定生死。若答出随机串 → 打开 `notionAttachments` 并把本文改成"已活体验证"；
+   若答不出 → 说明还差别的（下一个怀疑对象是 `enableScriptAgent` 那组开关，或 notion2api 那份 `user: ` 前缀）。
+2. 若要支持**图片/大文件**（内联不现实），再回到 §1 的上传链 + §2.0 的 attachment step；那时 §2.0.1 的三个障碍重新变成待办。
+3. 顺手可做：把 `getInferenceTranscriptsForUser`（§4.3）接成一个"列 notion 线程"的只读诊断端点——**成本低、无额度**。

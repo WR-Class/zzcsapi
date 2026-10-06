@@ -212,12 +212,77 @@ function uuid4() {
   try { return require('crypto').randomUUID(); } catch { return 'xxxxxxxxyxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; const v = c === 'x' ? r : (r & 3 | 8); return v.toString(16); }).replace(/^(.{8})(.{4})/, '$1-$2-'); }
 }
 
+// ─────────────────── 内联附件（v1.18.41，opt-in，默认关） ───────────────────
+/* 现场与依据：notion2api 的 windows 发布包里 `upstream.base_url` 是可配的，把它指向一个记录代理
+   就能抓到它发给 Notion 的**原始报文**（见 docs/notion-attachment-upload-research.md §4）。
+   抓到的关键两样：
+     ① config step 里有 `enableCsvAttachmentSupport: true`（我们此前只发 4 个字段，没有这个开关）；
+     ② **CSV 根本不上 S3**——它把文件内联进 user step 正文，追加一行
+        {"file":{"file_data":"data:text/csv;base64,…","filename":"probe.csv"},"type":"file"}
+   所以这里按同一形状实现：不需要上传链、不需要登记任务，改的只是 user step 正文与一个开关。
+   ⚠️ 诚实边界：「模型真的读到文件」尚未活体验证（7 个账号当时全在软墙上），
+   故本能力**默认关闭**，只在渠道显式打开 notionAttachments 时才改变报文。 */
+const ATTACH_MAX_FILES = 3;
+const ATTACH_MAX_BYTES = 1024 * 1024;      // 单文件 1MB（内联进 prompt，不能无限大）
+
+// 文件名只留安全字符：它会进 JSON 字符串，脏字符（引号/换行/路径分隔符）会破坏整条 step
+function sanitizeAttachmentFileName(raw) {
+  const base = String(raw == null ? '' : raw).split(/[\\/]/).pop() || '';
+  const clean = base.replace(/[\u0000-\u001f\u007f"\\]/g, '').trim().slice(0, 120);
+  return clean || 'attachment';
+}
+
+// data URL（data:<mime>;base64,<b64>）→ { mime, base64 }；只认 base64 形式，不做任何网络取回
+function parseInlineDataUrl(v) {
+  const s = String(v == null ? '' : v);
+  const m = /^data:([^;,]+)?(;base64)?,([A-Za-z0-9+/=\s]*)$/.exec(s);
+  if (!m) return null;
+  if (!m[2]) return null;                                  // 非 base64 的 data URL 不收（会破坏 JSON 语义）
+  const b64 = m[3].replace(/\s+/g, '');
+  if (!b64) return null;
+  const bytes = Math.floor(b64.length * 3 / 4);
+  if (bytes > ATTACH_MAX_BYTES) return null;
+  return { mime: m[1] || 'application/octet-stream', base64: b64 };
+}
+
+/* 从 OpenAI / Anthropic 两种客户端报文里收集内联文件。
+   认的形状（其余一律忽略，绝不猜）：
+     OpenAI    { type:'file', file:{ filename, file_data:'data:…;base64,…' } }
+     Anthropic { type:'document', source:{ type:'base64', media_type, data } }（+ 可选 title/name） */
+function notionCollectInlineFiles(messages) {
+  const out = [];
+  for (const m of Array.isArray(messages) ? messages : []) {
+    if (!m || !Array.isArray(m.content)) continue;
+    for (const p of m.content) {
+      if (!p || typeof p !== 'object') continue;
+      if (p.type === 'file' && p.file && typeof p.file === 'object') {
+        const d = parseInlineDataUrl(p.file.file_data);
+        if (d) out.push({ filename: sanitizeAttachmentFileName(p.file.filename || p.file.file_name), mime: d.mime, base64: d.base64 });
+      } else if (p.type === 'document' && p.source && typeof p.source === 'object' && p.source.type === 'base64') {
+        const b64 = String(p.source.data || '').replace(/\s+/g, '');
+        if (b64 && Math.floor(b64.length * 3 / 4) <= ATTACH_MAX_BYTES) {
+          out.push({ filename: sanitizeAttachmentFileName(p.title || p.name || 'document'), mime: String(p.source.media_type || 'application/octet-stream'), base64: b64 });
+        }
+      }
+      if (out.length >= ATTACH_MAX_FILES) return out;
+    }
+  }
+  return out;
+}
+
+// 附件在 user step 正文里的那一行——与 notion2api 抓到的字节形状逐字对齐（键序 file_data 在前）
+function notionInlineAttachmentLine(f) {
+  return JSON.stringify({ file: { file_data: 'data:' + f.mime + ';base64,' + f.base64, filename: f.filename }, type: 'file' });
+}
+
 function buildNotionTranscript(messages, upstreamModel, acct, opts) {
   const notionModelId = notionModel(upstreamModel);
   const threadType = notionThreadType(notionModelId);
   // opts.useWebSearch === false：请求带外部工具仿真时关掉 notion 内置搜索
   // （否则超长上下文下模型可能调用内置搜索工具、输出 notion 内部格式）
   const useWebSearch = !(opts && opts.useWebSearch === false);
+  // opts.attachments：渠道显式打开 notionAttachments 才收内联附件（默认关 → 报文与从前逐字节一致）
+  const files = (opts && opts.attachments) ? notionCollectInlineFiles(messages) : [];
   const t = [];
   t.push({
     id: uuid4(),
@@ -227,6 +292,8 @@ function buildNotionTranscript(messages, upstreamModel, acct, opts) {
       model: notionModelId,
       modelFromUser: true,
       useWebSearch,
+      // 只在真带附件时加这个开关：Notion 自己的客户端一直带着它，我们此前没有
+      ...(files.length ? { enableCsvAttachmentSupport: true } : {}),
     },
   });
   t.push({
@@ -272,6 +339,11 @@ function buildNotionTranscript(messages, upstreamModel, acct, opts) {
         createdAt: new Date().toISOString(),
       });
     }
+  }
+  // 附件内联到最后一条 user step 正文末尾（与 notion2api 抓到的报文同形：提示词换行 + 一行 JSON）
+  if (files.length) {
+    const lastUser = [...t].reverse().find((s) => s.type === 'user');
+    if (lastUser) lastUser.value = [[String(lastUser.value[0][0]) + '\n' + files.map(notionInlineAttachmentLine).join('\n')]];
   }
   return { transcript: t, threadType };
 }
@@ -637,5 +709,11 @@ module.exports = {
   notionHeaders,
   createNotionStreamParser,
   reframeSystemPrompt,
+  sanitizeAttachmentFileName,
+  parseInlineDataUrl,
+  notionCollectInlineFiles,
+  notionInlineAttachmentLine,
+  ATTACH_MAX_FILES,
+  ATTACH_MAX_BYTES,
   NOTION_UA,
 };

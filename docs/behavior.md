@@ -94,6 +94,17 @@
   `ValidationError: Invalid input.` 拒或返回非 JSON → **请求形状无法确认，因此不实现**：发一个自己验不了的调用，
   等于把"兜底"变成"再多一次失败"。取回走的是上面那条已验证的路径。
   · 回归：`test/notion-refetch-fallback-e2e.test.js`（装配守卫 + 假上游三现场 + 完整首发对照组 + "两次都失败仍如实判失败"）。
+- **notion 渠道的内联附件（v1.18.41，渠道级 `notionAttachments`，默认关）**：机制**抄参照实现 notion2api 的实发报文**，
+  不是"上传到 S3 再插 attachment step"——CSV 这条用途**不上 S3、不建任务**：
+  config step 加 `enableCsvAttachmentSupport: true`（**只在真有文件时加**）+ 把
+  `{"file":{"file_data":"data:<mime>;base64,…","filename":"…"},"type":"file"}` 追加到**最后一条 user step** 正文末尾。
+  · **默认关，且"默认关"是源码事实**：`notionCollectInlineFiles` 只在 `opts.attachments` 为真时调用，开关也只在真有文件时加 →
+    没打开的渠道报文与从前**逐字相同**（回归里有对照组守着）。
+  · **只认 base64 的 `data:` URL**（不做任何网络取回）、单文件 ≤1MB、最多 3 个；文件名会被净化（剥路径、删引号/换行/控制字符
+    ——脏字符会破坏整条 step 的 JSON）。
+  · **诚实边界**：「模型真的读到了文件」**尚未活体验证**（判决实验那一刻 7 个账号全在软墙上，软墙是账号级且很黏），
+    所以只能 opt-in、不许默认开；解除条件与复现命令见 `docs/notion-attachment-upload-research.md` §4.4/§4.5。
+  · 回归：`test/notion-attachment-inline-e2e.test.js`（含"产物与抓包那一行逐字相同"这条断言）。
 - **OpenAI Responses 客户端面（v1.18.38）**：`/v1/responses` 是**第四套客户端报文**，走"入站转 chat → 复用同一条候选链 → 出站转回 `response`"。
   · 为什么不能透传：Responses 报文的对话在 `body.input`、chat 处理器找的是 `body.messages` —— 以前它在 `handleOpenAIRequest` 的 POST 白名单里，等于把 `input` 报文原样塞给 chat 上游（不是 400 就是"200 但空"）。因此这段**绝不设 `clientProto`**（设了就触发同协议直通），且 chat 面与 Responses 面共用 `openAICandidateChain()`。
   · 出站两态：非流式回 `response` 对象（`output[]` / `output_text` / `usage.input_tokens` 口径）；流式回 Responses 的 `event:` + `data:` 事件序列（`response.created` → … → `response.completed`），`finish_reason:"length"` 记 `status:"incomplete"`（**不假装完成**）。

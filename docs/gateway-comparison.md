@@ -1,4 +1,4 @@
-# 同类网关内部机制对比（本项目 vs new-api / one-api / sub2api / CLIProxyAPI）
+# 同类网关内部机制对比（本项目 vs new-api / one-api / sub2api / CLIProxyAPI / notion2api）
 
 > **这份文档回答什么**：本项目（zzcsapi）和同类开源网关在**内部机制、性能、全面性**上的差别与取舍。
 > **不回答什么**：多用户 / 账户体系 / 额度计费 / 租户隔离——这几项按需求明确排除在对比之外
@@ -17,9 +17,13 @@
 | [one-api](https://github.com/songquanpeng/one-api) | Go + gin + GORM，单二进制 | 主干 HEAD `8df4a26`，**2025-02-21 后停更** | SQLite/MySQL/PG |
 | [sub2api](https://github.com/Wei-Shaw/sub2api) | Go 1.27 + gin + Ent + Vue3 | `VERSION 0.2.9`，HEAD `9a62841`（2026-09-28，日更） | **PostgreSQL 15（必选）+ Redis 7（必选）** |
 | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) | Go 1.26 + gin，单二进制 + 插件（c-shared） | `v8.0.3`（2026-09-28） | 一份 `config.yaml`，无数据库 |
+| **notion2api**（v1.18.41 新增，**只比 notion 反代这一条轴**） | Go + gin + GORM，单二进制（前端打进二进制） | Windows 包 `0.1.0`（source commit `189b0ecb…`，仓库未定位到，**只有二进制**） | SQLite |
 
 > new-api 已从 `Calcium-Ion/new-api` 迁移到 `QuantumNous/new-api`（GitHub API 重定向确认）；one-api 主干停更，
 > 它更多是"历史基线"，不建议按它做新部署。
+> **notion2api 的取证方式与前四家不同**：没有源码，但它把 `upstream.base_url` 暴露成配置项 ——
+> 指向一个记录代理就拿到了它**发给 Notion 的原始报文**（方法与三个坑见
+> [notion 附件上传研究](notion-attachment-upload-research.md) §4.1）。下面 §1.5 的每条结论都标了是"实发报文实证"还是"二进制符号推断"。
 
 ---
 
@@ -72,6 +76,27 @@
   OAuth token 定时刷新池。README 显式免责：可能违反上游条款、账号会被限流/封禁。
 - **CLIProxyAPI**：OAuth 凭据池 + **thinking/签名回放缓存**（bounded LRU，TTL 1h，10240 条上限）——跨轮思维链保真的关键。
 - **new-api / one-api**：以 API key 为主，**未找到指纹伪装一类实现的证据**。
+
+### 1.5 六项差异的强弱结论（本项目 vs notion2api，v1.18.41 定稿）
+
+**为什么单列这一节**：notion2api 是目前唯一能对照的"notion 反代"实现，前四家都不碰这条上游。
+六项逐条给**强弱**（谁强、强多少、证据强度），不给"谁更好"的整体结论——两边目标不同：
+它是"给 notion 套一个 OpenAI 兼容壳"，我们是"多渠道路由 + 四套客户端报文"。
+
+| # | 轴 | 结论（强弱） | 证据与强度 |
+| --- | --- | --- | --- |
+| 1 | **账号/渠道路由与兜底** | **本项目强** | 我们是多渠道路由 + 候选链 + 逐家切换 + 同渠道重试；它是**账号池 + 分组**，账号一旦 `status:error` 整组报 `unknown model`（**实发报文实证**：今天把一个账号打成 error 后，同一分组的所有请求都 400 `unknown model`，不是"换下一个账号"）。强度：**强**（现象可复现） |
+| 2 | **熔断记账与冷却** | **本项目强** | 我们有两条 streak（真实流量 / 探测）、冷却分级 + 半愈合 + `Retry-After`；它只有 `active` / `error` 两态（`/admin/accounts` 与 `/admin/groups/{id}/accounts` 下发的字段只有 `status`）。强度：**中**（字段面窄是实证，但它内部是否另有退避逻辑只有二进制、无法排除） |
+| 3 | **客户端报文面** | **本项目强** | 我们四套（chat / Anthropic / Gemini / Responses）+ 专用渠道输出收口；它以 OpenAI 兼容为主（`/v1/chat/completions`、`/v1/models` 实测）。强度：**强**（端点面可直接列举） |
+| 4 | **附件 / CSV 让 AI 读** | **notion2api 强（领先一个身位）** | 它**已经在用**：`enableCsvAttachmentSupport:true` + 把内联文件行追加进 user step 正文（**实发报文实证**，逐字抄录在研究文档 §4.2）。我们 v1.18.41 才按同一形状实现，且**默认关**——因为「模型真读到了」的活体判据还没拿到（判决实验撞上 7 个账号同时软墙）。强度：**强（它的形状）+ 弱（它的"真读到了"同样没被我们验证）** |
+| 5 | **流断取回兜底** | **各有所长，本项目更直接** | 我们有**同 threadId 重发**取回成品全文（v1.18.39 活体验证：首发 6.3s 拿 `record-map`、再发 4.7s 拿同一条线程全文）；它点名走 `getInferenceTranscriptsForUser`（形状今天我们抓到了：回的是**线程清单 + usage**，**不是成品正文**）→ 它要拿正文还得再取一次。强度：**中**（我们的路已验证；它那条路我们只验证了形状、没跑完它自己的取回链） |
+| 6 | **报文保真与记账口径** | **本项目强** | 我们的 `runInferenceTranscript` 顶层字段与它**逐字同构**（traceId / spaceId / threadId / threadType / createThread / generateTitle / saveAllThreadOperations / setUnreadState / isPartialTranscript / asPatchResponse / isUserInAnySalesAssistedSpace / isSpaceSalesAssisted / threadParentPointer / transcript / debugOverrides 全部对得上，**实发报文实证**）；差异只在两处：① 我们的 config step 只有 4 个字段、它是 61 个；② 它的 user 正文带 `user: ` 前缀（我们不带，且已跑过 20+ 版本）。记账口径（usage 帧采集、思考占比、工具轮 token、预算透传）是我们的实现细节，**无法与它对比**。强度：**中**（结构同构是实证；"口径谁准"没有共同基准） |
+
+**净结论**：**六项里五项本项目占优或持平，第 4 项（附件/CSV）是 notion2api 实打实领先的一格**——
+它已经上线在用，我们才刚按它的形状补上且默认关。**其余五项里最值钱的两条是"多渠道路由"与"四套客户端报文"**，
+这也正是"给 notion 套壳"与"做网关"两类目标的必然分岔。
+唯一需要留意的**反向**证据：它的 config step 有 61 个开关、我们只有 4 个（§4.2）——
+今天看只影响附件，但**它提示我们可能还缺别的能力开关**（下一批候选：`enableScriptAgent*` 那一组）。
 
 ---
 
