@@ -58,7 +58,19 @@ function makeNotionFake(mode) {
     const iv = { step: { type: 'markdown-chat', value: [{ type: 'text', content: t }] }, last_edited_time: 1, created_time: 1 };
     return JSON.stringify({ type: 'record-map', recordMap: { thread_message: { m1: { value: { value: iv } } } } }) + '\n';
   };
-  const softBlock = JSON.stringify({ type: 'error', message: 'temporarily-unavailable', subType: 'temporarily-unavailable' }) + '\n';
+  // v1.18.43：**按真实抓到的软墙原文**构造（一条报文、两个字段同时存在）。
+  // 本地实测原文（notion7，HTTP 200，4280 字节）：
+  //   {"type":"error","message":"Something went wrong. Please try again later.","traceId":"…",
+  //    "id":"…","isRetryable":false,"subType":"temporarily-unavailable"}
+  // 关键是 message 与 subType **不一样**：这样才能守住"失败行取的是可诊断的那一个"。
+  const softBlock = JSON.stringify({
+    type: 'error',
+    message: 'Something went wrong. Please try again later.',
+    traceId: '00000000-0000-4000-8000-000000000000',
+    id: '00000000-0000-4000-8000-000000000001',
+    isRetryable: false,
+    subType: 'temporarily-unavailable',
+  }) + '\n';
   const emptyish = JSON.stringify({ type: 'patch-start' }) + '\n';
   st.server = http.createServer((req, res) => {
     const cs = []; req.on('data', (c) => cs.push(c)); req.on('end', () => {
@@ -84,6 +96,7 @@ function makeNotionFake(mode) {
         if (mode === 'ok') out = patch(FULL) + recmap(FULL);                      // 首发就完整 → 不该有第二次
         else if (mode === 'cut') out = isRefetch ? patch(FULL) + recmap(FULL) : patch(HALF);   // 流被截断（只有半截、无权威全文）
         else if (mode === 'err') out = isRefetch ? patch(FULL) + recmap(FULL) : softBlock;     // 流里带 soft-block 错误
+        else if (mode === 'wall') out = softBlock;                                // 一直软墙（首发与取回都墙）
         else out = emptyish;                                                      // dead：两次都零内容
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         return res.end(out);
@@ -158,9 +171,9 @@ function makeNotionFake(mode) {
   }
 
   /* ══════════ 2. 真链路：假 Notion 上游 + 临时网关 ══════════ */
-  const P_CUT = await freePort(), P_OK = await freePort(), P_ERR = await freePort(), P_DEAD = await freePort(), GW = await freePort();
-  const fCut = makeNotionFake('cut'), fOk = makeNotionFake('ok'), fErr = makeNotionFake('err'), fDead = makeNotionFake('dead');
-  for (const [f, p] of [[fCut, P_CUT], [fOk, P_OK], [fErr, P_ERR], [fDead, P_DEAD]]) {
+  const P_CUT = await freePort(), P_OK = await freePort(), P_ERR = await freePort(), P_DEAD = await freePort(), P_WALL = await freePort(), GW = await freePort();
+  const fCut = makeNotionFake('cut'), fOk = makeNotionFake('ok'), fErr = makeNotionFake('err'), fDead = makeNotionFake('dead'), fWall = makeNotionFake('wall');
+  for (const [f, p] of [[fCut, P_CUT], [fOk, P_OK], [fErr, P_ERR], [fDead, P_DEAD], [fWall, P_WALL]]) {
     await new Promise((r) => f.server.listen(p, '127.0.0.1', r));
   }
   const mkChan = (id, port, alias) => ({
@@ -172,7 +185,7 @@ function makeNotionFake(mode) {
   fs.writeFileSync(cfgPath, JSON.stringify({
     port: GW,
     health: { intervalSec: 3600, timeoutMs: 8000 },
-    channels: [mkChan('nt-cut', P_CUT, 'ref-cut'), mkChan('nt-ok', P_OK, 'ref-ok'), mkChan('nt-err', P_ERR, 'ref-err'), mkChan('nt-dead', P_DEAD, 'ref-dead')],
+    channels: [mkChan('nt-cut', P_CUT, 'ref-cut'), mkChan('nt-ok', P_OK, 'ref-ok'), mkChan('nt-err', P_ERR, 'ref-err'), mkChan('nt-dead', P_DEAD, 'ref-dead'), mkChan('nt-wall', P_WALL, 'ref-wall')],
   }));
   const env = { ...process.env, ZZCSAPI_CONFIG: cfgPath, ZZCSAPI_USAGE: path.join(TMP, 'u.json'), GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' };
   const gw = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env, stdio: 'ignore' });
@@ -265,9 +278,23 @@ function makeNotionFake(mode) {
       check('★ 正常行（没触发兜底）没有这个 note', !!(okRow && !okRow.note), okRow);
       check('取回行的 channelId 就是那条 notion 渠道', !!(cutRow && cutRow.channelId === 'nt-cut'), cutRow && cutRow.channelId);
     }
+
+    console.log('\n8. 失败行要能归因（v1.18.43）：软墙原文里 message 是通用文案、subType 才是原因');
+    {
+      const r = await post('/v1/chat/completions', { model: 'ref-wall', messages: [{ role: 'user', content: 'ping' }] });
+      check('★ 一直软墙 → 如实失败（单候选 502，不伪装成功）', r.code !== 200, { code: r.code, text: r.text.slice(0, 200) });
+      check('★ 失败行写的是可诊断的 subType（temporarily-unavailable）', /temporarily-unavailable/.test(r.text), r.text.slice(0, 300));
+      check('★ 没有把 Notion 那句通用文案当成原因（旧写法会）', !/Something went wrong/.test(r.text), r.text.slice(0, 300));
+      check('取回也试过了（首发墙 + 至少一次取回）', fWall.transcripts >= 2, fWall.transcripts);
+      // 结构守卫：写法顺序不许反过来（反过来 = 又回到"只剩通用文案"的旧行为）
+      const sfn = sliceFn('tryNotionChannel');
+      const subAt = sfn.indexOf('"subType":"([^"]+)"');
+      const msgAt = sfn.indexOf('"type":"error","message":"([^"]{0,120})');
+      check('★ 结构守卫：subType 那一支排在 message 之前', subAt >= 0 && msgAt >= 0 && subAt < msgAt, { subAt, msgAt });
+    }
   } finally {
     await stop();
-    for (const f of [fCut, fOk, fErr, fDead]) { try { f.server.close(); } catch { } }
+    for (const f of [fCut, fOk, fErr, fDead, fWall]) { try { f.server.close(); } catch { } }
     await sleep(200);
   }
 

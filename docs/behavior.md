@@ -128,9 +128,15 @@
     ④ **别把通道链说成"notion 一定能用"**（治不了维度 ①）；⑤ **比较两个变量时在同一时间窗内交错打**，
     不要"今天打 A、明天打 B"，并且先确认账号是否可过——那正是三次误判的共同动作。
   · 留档：三次误判（"账号权益被限只能等" / "undici 指纹被 block 故只用 curl" / "Notion 拒绝 HTTP/1.1 故改 h2"）与研究文档 §5–§7.7。
+  · **失败行取的是 `subType`，不是 `message`（v1.18.43）**：软墙是**一条**记录、两个字段同时存在——
+    `{"type":"error","message":"Something went wrong. Please try again later.","traceId":"…","id":"…","isRetryable":false,"subType":"temporarily-unavailable"}`
+    （本地实测原文）。`streamError` 原来优先取 `message`，于是失败行只剩 Notion 那句通用文案、真正可诊断的
+    `subType` 反而没进日志；现在**先取 `subType`**（`message` 退化为兜底），失败行写
+    `notion stream: temporarily-unavailable`——一眼看出"账号在墙里，等窗口或换账号"。
+    这与本仓库的归因纪律一致（v1.18.30 / v1.18.34：失败行必须看得出原因）。
   · 复现仪器：`notion-wall-probe.js`（仓库根，只读，低额度）。
   · 回归：`test/notion-transport.test.js`（本地 h2c 真跑 h2 + 本地 HTTP/1.1 真跑 curl + 通道链与三处调用点装配守卫）；
-    维度 ① 下的"如实失败"由 `test/notion-refetch-fallback-e2e.test.js` §6 守着。
+    维度 ① 下的"如实失败"与"失败行可归因"由 `test/notion-refetch-fallback-e2e.test.js` §6/§8 守着。
 - **OpenAI Responses 客户端面（v1.18.38）**：`/v1/responses` 是**第四套客户端报文**，走"入站转 chat → 复用同一条候选链 → 出站转回 `response`"。
   · 为什么不能透传：Responses 报文的对话在 `body.input`、chat 处理器找的是 `body.messages` —— 以前它在 `handleOpenAIRequest` 的 POST 白名单里，等于把 `input` 报文原样塞给 chat 上游（不是 400 就是"200 但空"）。因此这段**绝不设 `clientProto`**（设了就触发同协议直通），且 chat 面与 Responses 面共用 `openAICandidateChain()`。
   · 出站两态：非流式回 `response` 对象（`output[]` / `output_text` / `usage.input_tokens` 口径）；流式回 Responses 的 `event:` + `data:` 事件序列（`response.created` → … → `response.completed`），`finish_reason:"length"` 记 `status:"incomplete"`（**不假装完成**）。

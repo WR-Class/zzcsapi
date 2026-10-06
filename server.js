@@ -7405,8 +7405,14 @@ async function tryNotionChannel(opts) {
   }
 
   // 3.5) 流内错误检测：Notion 会返回 200 但在 NDJSON 里带 error 事件（temporarily-unavailable 等）
-  const streamError = (ndjsonText.match(/"type":"error","message":"([^"]{0,120})/) || [])[1]
-    || (ndjsonText.match(/"subType":"([^"]+)"/) || [])[1];
+  //   v1.18.43：**优先取 `subType`**。软墙那条记录是**一条**报文、两个字段同时存在（本地实测原文）：
+  //     {"type":"error","message":"Something went wrong. Please try again later.","traceId":"…",
+  //      "id":"…","isRetryable":false,"subType":"temporarily-unavailable"}
+  //   旧写法优先取 `message` → 失败行只剩一句通用文案「Something went wrong…」，
+  //   而真正可诊断的是 `subType`（`temporarily-unavailable` = 账号在墙里，等窗口或换账号）。
+  //   这与本仓库的归因纪律一致（v1.18.30/v1.18.34：失败行必须看得出原因）。`message` 退化为兜底。
+  const streamError = (ndjsonText.match(/"subType":"([^"]+)"/) || [])[1]
+    || (ndjsonText.match(/"type":"error","message":"([^"]{0,120})/) || [])[1];
 
   // 3.6) 流断兜底（v1.18.39）：**权威全文没到**时，用同一 threadId 把同一份 transcript 再发一次。
   //   三种现场：① 流里带错误（soft-block）② 200 但零内容 ③ 流被截断（只剩半截 patch，末行是 patch*）。

@@ -13,12 +13,20 @@
  *   - 若 curl 过、fetch 不过  → 维度 B 可见（账号可过，通道选择有意义）
  *   - 若两者都不过          → 这个账号此刻整体在墙里（维度 A），换传输无用
  *
- * 用法（零依赖，读仓库 config.json；被墙那一发只花 1~2 秒且**不消耗真实推理**）：
+ * 用法（零依赖，读 config.json；被墙那一发只花 1~2 秒且**不消耗真实推理**）：
  *   node notion-wall-probe.js                           # 默认 notionls，交错 curl,fetch × 3 轮
  *   node notion-wall-probe.js notion7                   # 指定渠道
  *   node notion-wall-probe.js notionls curl,fetch,h2 3  # 指定传输序列与轮数
  *   node notion-wall-probe.js notionls curl,chain 2     # chain = 线上真实走的通道链
  * 可选环境变量：ZZ_CONFIG=<config.json 路径>（默认仓库根；容器里是 /app/config.json）
+ *
+ * 想在**容器里**跑（容器里没有这个文件——Dockerfile 是显式 COPY 清单，只拷运行时依赖）：
+ *   ① 本工具自己会去找 notion.js（先同级、再 /app/notion.js），所以放进**已挂载的 dump/** 即可：
+ *        docker cp notion-wall-probe.js zzcsapi:/app/dump/
+ *        docker exec zzcsapi node /app/dump/notion-wall-probe.js notionls curl,fetch 2
+ *      （云端同理：scp 到 /opt/zzcsapi/dump/，再 docker exec）
+ *   ② 或在宿主机直接跑（读仓库 config.json，不碰容器）。
+ *   不要把 `require('./notion.js')` 写死成相对路径——放进 dump/ 就会 MODULE_NOT_FOUND。
  *
  * 判据与边界：
  *   - 只有"真答"才算过（能解出正文）；`200 + temporarily-unavailable` 记 `W`（软墙）；
@@ -31,9 +39,18 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const notion = require('./notion.js');
 
-const CFG_PATH = process.env.ZZ_CONFIG || path.join(__dirname, 'config.json');
+// notion.js 的位置：同级优先（仓库根），其次 /app/notion.js（被拷进容器 dump/ 跑时）。
+// 写死相对路径会让本工具在 dump/ 里直接 MODULE_NOT_FOUND。
+const notion = (() => {
+  for (const p of [path.join(__dirname, 'notion.js'), '/app/notion.js']) {
+    try { return require(p); } catch (e) { if (e.code !== 'MODULE_NOT_FOUND') throw e; }
+  }
+  throw new Error('找不到 notion.js（试过 ' + __dirname + '/notion.js 与 /app/notion.js）');
+})();
+
+const CFG_PATH = process.env.ZZ_CONFIG || (fs.existsSync('/app/config.json') && !fs.existsSync(path.join(__dirname, 'config.json'))
+  ? '/app/config.json' : path.join(__dirname, 'config.json'));
 const argv = process.argv.slice(2);
 const channelId = argv[0] || 'notionls';
 const transports = String(argv[1] || 'curl,fetch').split(',').map((s) => s.trim()).filter(Boolean);

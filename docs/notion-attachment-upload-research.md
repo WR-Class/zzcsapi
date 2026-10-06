@@ -753,6 +753,30 @@ notionls（账号可过）  → {"ok": true,  "status": 200, "latencyMs": 3268, 
 **这条没有验证**：唯一已知可过的账号 `notionls` 正是 ③ 活体判据的来源，拿它做压力实验的代价大于收益。
 在拿到新账号之前，请把"探测会把账号推入墙里"当作**待验证的怀疑**，并据此**克制地探测**（成对打、少打）。
 
+> **一条当场发生的旁证（2026-10-06 同日，如实记下，不下因果结论）**：上面那轮云端交错探测（`notion1/2/3/5/7`
+> 各 4~6 发）跑完之后不久，**云端 7 条 notion 渠道（`notion1`~`notion7`）全部失败**——
+> 经云端网关发一发，`502 all channels failed`，14 条 `attempts`（每条渠道 2 次）的错误原文都是
+> `notion stream: Something went wrong. Please try again later.`；而同一时刻**本地 IP 打 `notionls` 仍然正常**
+> （14.6 s 拿到「收到」）。时间上吻合"探测把账号推入维度 A"，但**无法区分因果**：也可能只是云端出口 IP
+> 恰好在这几分钟里被整体降级（十几分钟前 `notion7` 还能答）。**结论只有一条是硬的**：维度 A 会让**一批账号
+> 同时**不可用。**据此的动作**：停止从云端做探测，等窗口；不要把"通道链修好了"当成"云端 notion 现在能用"。
+
+**那句 `Something went wrong…` 不是第二种墙（已查实，v1.18.43）**：它和 `temporarily-unavailable` 是
+**同一条报文的两个字段**。本地 notion7（在墙里，免费）抓到的原文就是一条记录：
+
+```json
+{"type":"error","message":"Something went wrong. Please try again later.",
+ "traceId":"…","id":"…","isRetryable":false,"subType":"temporarily-unavailable"}
+```
+
+- `notionIsSoftWall` 判的是 `subType` → 认得出墙。
+- 而网关的失败行原来优先取 `message` → **把 Notion 那句通用文案当成了原因**，`subType` 这个真正可诊断的字段
+  反而没进日志。已修（v1.18.43）：`streamError` 改为**先取 `subType`**、`message` 退化为兜底，
+  于是失败行现在写的是 `notion stream: temporarily-unavailable`（一眼看出"账号在墙里，等窗口或换账号"）。
+  回归见 `test/notion-refetch-fallback-e2e.test.js` §8（按上面这条**真实原文**构造假上游：
+  `message` 与 `subType` 故意不同，断言失败行取的是 `subType`、且**不含**那句通用文案）。
+- **教训**：认墙别只按一个字符串去 `includes`——先看清那条 error 记录里**哪个字段才是原因**。
+
 > **纪律（v1.18.43 追加）**：比较两个变量时，**在同一时间窗内交错打**（C F C F …），
 > 不要"今天打 A、明天打 B"；并且先确认**账号是否可过**——账号在墙里时，任何传输对比都是无意义的。
 
