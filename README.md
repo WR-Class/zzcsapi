@@ -21,6 +21,7 @@
 - 🖥 **Web 控制台**：浏览器打开 `http://127.0.0.1:8787/console` 看渠道状态、改优先级、启停渠道
 - 🔤 **字体自托管（v1.18.37）**：全站用**寒蝉全圆体**（ChillRoundF，SIL OFL 1.1）的子集化**改名**版 `HCRound`，266 个 woff2 分片按 `unicode-range` 从**同源** `/console/fonts/**` 按需加载——不向任何第三方域名发请求（[字体与授权记录](docs/fonts.md)）
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
+- 🧩 **OpenAI Responses API（v1.18.38）**：`/v1/responses`（POST，含流式）+ `/v1/responses/{id}`（GET 取回 / DELETE）——入站按 Responses 报文收，出站转回 `response` 对象与 Responses 的 SSE 事件序列，中间复用同一条候选链与全部兜底（[协议详解](docs/protocols.md)）
 
 ## 快速开始
 
@@ -160,6 +161,16 @@ baseURL = http://127.0.0.1:8787/v1
 apiKey  = <GATEWAY_KEY 的值；未显式设置时看容器日志里首启生成的那一串>
 model   = <channels[*].models 里 alias，左边的键>
 ```
+
+### OpenAI Responses 协议（v1.18.38）
+```
+baseURL = http://127.0.0.1:8787/v1     # 用 /v1/responses 的客户端 SDK
+apiKey  = <GATEWAY_KEY>
+model   = <alias>
+```
+> 客户端发 `input` / `instructions` / `max_output_tokens` / 扁平工具，网关转成 chat 报文走上游再把响应转回
+> `response` 对象（流式则是 Responses 的事件序列）；`previous_response_id` **不做服务端续接**（多轮请把历史放进 `input`），
+> 内置工具（`web_search` 等）我们没有 chat 对应物、会被丢掉。
 
 ### Anthropic 协议（DSH 的 Anthropic 兼容地址）
 ```
@@ -370,7 +381,9 @@ thinking 回放修复）。矩阵表、工具调用四方向、各渠道配置�
 | `/v1/chat/completions` | POST | gateway | OpenAI chat（支持 stream） |
 | `/v1/embeddings` | POST | gateway | 透传 |
 | `/v1/images/generations` | POST | gateway | OpenAI 生图（需上游渠道支持图像接口） |
-| `/v1/responses` / `/v1/completions` | POST | gateway | 透传 |
+| `/v1/responses` | POST | gateway | **OpenAI Responses API（v1.18.38）**：入站按 Responses 报文收（`input`/`instructions`/`max_output_tokens`/扁平工具），转成 chat 报文后**复用同一条候选链**，出站转回 `response` 对象 / Responses 的 SSE 事件序列；`store:false` 不落内存表。有损点（`previous_response_id` 不续接、内置工具丢弃）见 [协议详解](docs/protocols.md) |
+| `/v1/responses/{id}` | GET / DELETE | gateway | 取回 / 删除已存响应（内存表：最近 200 条、1 小时 TTL，重启即清空；`store:false` 的取不到） |
+| `/v1/completions` | POST | gateway | 透传 |
 | `/anthropic/v1/models` | GET | gateway | Anthropic 聚合模型 |
 | `/anthropic/v1/messages` | POST | gateway | Anthropic Messages（支持 stream） |
 | `/gemini/v1beta/models/{m}:generateContent` | POST | gateway | Gemini 非流式（支持 `inlineData`/`fileData` 图片） |

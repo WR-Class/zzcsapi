@@ -6,7 +6,7 @@
  * 订阅号不被来回换家触发风控），同时**不许悄悄变成"绕过加权轮询"**。
  *
  * 覆盖：
- *   · 装配守卫：粘性只在 dispatchRequest 里改顺序、成功时才 learn、三处聊天路由都传了键、
+ *   · 装配守卫：粘性只在 dispatchRequest 里改顺序、成功时才 learn、四处聊天路由都传了键、
  *     persistConfig 白名单含 sessionAffinity、粘性代码里不许出现 SWRR_（不污染份额统计）、
  *     不许动 cooldownUntil/probation（不硬塞冷却中的渠道）；
  *   · 键推导真值表（现抠真实源码跑）：关闭时恒为空、显式头优先于正文、长度下限、
@@ -67,7 +67,7 @@ const cand = (id, extra) => ({ channelId: id, upstream: 'm', priority: 0, weight
     dispBody.indexOf('applyAffinity(candidates') > dispBody.indexOf('const maxCand'));
   check('成功路径才 learn（失败的渠道不会被粘住）', /if \(result === 'success'\) \{ affinityLearn\(opts\.affinityKey, c\.channelId\); return; \}/.test(dispBody));
   const routes = (SRC.match(/affinityKey: affinityKeyFor\(req, body\)/g) || []).length;
-  check('三处聊天路由（openai/anthropic/gemini）都传了粘性键', routes === 3, routes);
+  check('四处聊天路由（openai/anthropic/gemini/responses）都传了粘性键', routes === 4, routes);
   check('图片路由不传粘性键（它不是会话）', !/kind: 'images'[\s\S]{0,400}affinityKey/.test(SRC));
   const affOnly = AFF_SRC;
   check('粘性代码不碰 SWRR_（份额统计不会被粘性流量污染）', !/SWRR_/.test(affOnly));

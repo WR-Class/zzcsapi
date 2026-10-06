@@ -125,8 +125,8 @@ const freePort = () => new Promise((res, rej) => {
     /\/\^\\\/admin\\\/api\\\/channels\\\/\[\^\/\]\+\\\/key\$/.test(SRC) && SRC.includes("'/admin/api/gateway-key'"));
   check('恒定时间比较：sha256 + timingSafeEqual，且不再有拿 === 比密钥的写法',
     /crypto\.timingSafeEqual\(/.test(SRC) && /createHash\('sha256'\)/.test(SRC) && !/=== need/.test(SRC) && !/m\[1\] === need/.test(SRC));
-  check('9 处鉴权点全部改走 authGate，checkAuth 只被闸门调用（定义 + 调用 = 2 处）',
-    (SRC.match(/!authGate\(req, res, '/g) || []).length === 9 && (SRC.match(/checkAuth\(req, /g) || []).length === 2);
+  check('10 处鉴权点全部改走 authGate，checkAuth 只被闸门调用（定义 + 调用 = 2 处）',
+    (SRC.match(/!authGate\(req, res, '/g) || []).length === 10 && (SRC.match(/checkAuth\(req, /g) || []).length === 2);
   check('失败限流是窗口式（30 次/分钟）且成功后清零，不是永久锁定',
     /AUTH_FAIL_MAX = 30/.test(SRC) && /AUTH_FAIL_WINDOW_MS = 60000/.test(SRC) && /authOk\(kind\)/.test(SRC));
   check('编辑表单的「明文」按钮会现取原文（表单已不回填密钥，光切 input.type 点了看不到东西）',

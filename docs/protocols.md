@@ -1,7 +1,7 @@
 # 协议与渠道详解
 
 > 本文从 README 拆出（v1.18.8）：README 只留协议速查表，本文收全量细节——原生出站、同协议直通、
-> 三条客户端路由的工具调用方向、四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
+> 客户端路由的工具调用方向与 Responses API（第四套报文，v1.18.38）、四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
 > 路由与调度语义见 [docs/scheduling.md](scheduling.md)；鉴权写法与管理面会话见 [docs/behavior.md](behavior.md)。
 
 ## 协议速查表
@@ -69,6 +69,58 @@ v1.18.8 起，同协议直通的 Anthropic 这格还带 **thinking 回放修复*
 
 - **怎么配**：`"protocol": "anthropic"` + `baseUrl`（如 `https://api.anthropic.com`，写不写 `/v1` 都认）+ `apiKey`；Gemini 填 `https://generativelanguage.googleapis.com`（`/v1`、`/v1beta` 都认）。模型行照旧：alias 是**客户端请求的名字**，上游是**真实模型名**（Gemini 会拼进 URL 路径）。
 
+## OpenAI Responses API：`/v1/responses`（客户端第四套报文，v1.18.38）
+
+以前 `/v1/responses` 被当成"透传"塞在 `handleOpenAIRequest` 的 POST 白名单里，可那个处理器按 `body.messages` 找对话，
+而 Responses 客户端发的是 `body.input` —— 结果是"要么 404 无渠道、要么把 Responses 报文原样塞给 chat 上游"。
+现在它是一个**真正的客户端路由**（第四套入站/出站报文），中间完全复用既有调度链：
+
+```
+Responses 请求 ──入站转换──▶ OpenAI chat 报文 ──dispatchRequest（同一条候选链/兜底/记账/限流/粘性）──▶ 上游
+                                                                                    │
+客户端 ◀──出站转换── response 对象 / Responses SSE 事件序列 ◀─────────────────────────┘
+```
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/v1/responses` | POST | `stream:false` 回 `response` 对象；`stream:true` 回 Responses 的 `event:` + `data:` 事件序列 |
+| `/v1/responses/{id}` | GET / DELETE | 取回 / 删除已存响应（内存表：最近 **200** 条、TTL **1 小时**，重启即清空） |
+
+**入站映射**（`responsesToOpenAI`）：
+
+| Responses 字段 | chat 侧 |
+| --- | --- |
+| `instructions` | 顶层 `system` 消息（放最前） |
+| `input` 字符串 | 一条 `user` 消息 |
+| `input[]` 的 `message`（`developer` 角色） | `system` 消息（语义等同） |
+| `input[]` 的 `input_text` | 文本；**纯文本时退回字符串**（老上游对数组 content 兼容性最差，能不变形态就不变） |
+| `input[]` 的 `input_image` | `image_url` 块（因此**照旧受图片能力门约束**：带图只留 openai/anthropic/gemini 渠道） |
+| `input[]` 的 `function_call` / `function_call_output` | `assistant.tool_calls` / `role:"tool"`（`call_id` 严格配对） |
+| `tools[]`（扁平 `{type:'function',name,…}`） | chat 的嵌套 `{type:'function',function:{…}}` |
+| `tool_choice` 的 `{type:'function',name}` | chat 的同名形态；`allowed_tools` 退成 `auto`（有损） |
+| `max_output_tokens` | `max_completion_tokens`（与 `/v1/chat` 同口径，`clientBudgetOf` 认得它） |
+| `temperature` / `top_p` / `metadata` / `parallel_tool_calls` / `reasoning.effort` | 同名/近似字段透传 |
+
+**出站映射**（`openAIToResponsesResponse` / `createResponsesStreamConverter`）：正文 → `output[]` 里的 `message` item +
+`output_text` part（另给一个 `output_text` 便利字段）；`reasoning_content` → `reasoning` item 的 `summary`；
+`tool_calls` → `function_call` item；`usage` → `input_tokens` / `output_tokens` / `output_tokens_details.reasoning_tokens`。
+`finish_reason:"length"` → `status:"incomplete"` + `incomplete_details.reason:"max_output_tokens"`（**不假装完成**）。
+流式事件序列：`response.created` → `response.in_progress` → `output_item.added` → `content_part.added` →
+`output_text.delta`×n → `output_text.done` → `content_part.done` → `output_item.done` → `response.completed`
+（工具调用走 `function_call_arguments.delta/done`；`end()` 幂等，因为 `[DONE]` 与流收尾都会调它）。
+
+**有损点（诚实说明）**：
+
+- `previous_response_id` **不做服务端续接**：每次请求都是独立的一发，多轮对话请把历史放进 `input`（状态留在客户端）；
+- **内置工具会被丢掉**：`web_search` / `file_search` / `computer_use` 这类没有 chat 对应物（只有 `type:'function'` 被转换）；
+- `reasoning` item 只以**摘要**形式给出，没有加密的 reasoning 内容；`store` 只在**本网关内存表**里生效（1 小时 / 200 条 / 重启清零），
+  它不代表上游保存了响应；
+- 响应取回是**本进程内存态**，多实例/重启后取不到（404 会说明留存策略，不假装成功）。
+
+**装配纪律（改这块必看）**：① `/v1/responses` **绝不设** `clientProto` —— 设了就会触发同协议直通，把 Responses 报文原样塞给 chat 上游；
+② 两段路由共用**一次** `authGate`；③ chat 面与 Responses 面共用 `openAICandidateChain()`（各写一份候选顺序迟早出现"只在一边复现"的兜底故障）。
+守卫是 `test/responses-api-e2e.test.js`。
+
 ## 工具调用：三条客户端路由的四个往返方向
 
 **客户端路由的四个往返方向都完整支持工具调用**（v1.12 补齐 Gemini 这条入站方向，见 PT33）：
@@ -78,6 +130,7 @@ v1.18.8 起，同协议直通的 Anthropic 这格还带 **thinking 回放修复*
 | `/v1/chat/completions` | OpenAI `tool_calls` ⇄ 原样 | 完整 | `tool_call_id` |
 | `/anthropic/v1/messages` | `tool_use` ⇄ `tool_calls` | `none` 表达不了（去掉 tools） | `tool_use_id` |
 | `/gemini/v1beta/...` | `functionCall` ⇄ `tool_calls` | `AUTO`/`ANY`/`NONE` 全支持 | **按函数名配对**（id 由网关合成，见下） |
+| `/v1/responses`（v1.18.38） | `function_call` item ⇄ `tool_calls` | `{type:'function',name}` 支持；`allowed_tools` 退 `auto` | `call_id` |
 
 Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）：
 

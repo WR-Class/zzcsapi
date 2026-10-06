@@ -1,6 +1,6 @@
-# 测试清单（44 个文件 · 2039 项断言，零依赖）
+# 测试清单（45 个文件 · 2110 项断言，零依赖）
 
-> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 44 条命令与每条守的是什么。
+> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 45 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
 > **动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json` / `usage.json`**，不出网、不烧额度。
 > 退出码非 0 = 有回归。跑单个：`node test/<名字>.test.js`。
@@ -10,7 +10,8 @@
 | 你改了 | 必跑 |
 | --- | --- |
 | 渲染 / 交互 / `build/app.js` | `console-state` + `security-headers-e2e` |
-| 协议转换（入站 / 出站 / 流式） | 对应协议的 `*-tools` / `native-channels` / `streaming-e2e` / `same-protocol-passthrough` |
+| 协议转换（入站 / 出站 / 流式） | 对应协议的 `*-tools` / `native-channels` / `streaming-e2e` / `same-protocol-passthrough` / `responses-api-e2e` |
+| 新增/修改**客户端路由**（新报文面、POST 白名单、鉴权点） | `responses-api-e2e` + `gemini-multimodal` + `session-affinity-e2e` + `ip-stats-ban-e2e` + `security-headers-e2e` —— 后四个各有一条「每个客户端面都必须接上 X」的**计数守卫**（图片门 / 粘性键 / statsCtx / authGate），加一个面就会当场报错，改完必须一起更新计数 |
 | 调度 / 候选链 / 重试 / 冷却 / 权重 | `weighted-rr*` / `auto-weight*` / `per-channel-retry-e2e` / `cooldown-grading-e2e` / `upstream-4xx-fallback-e2e` / `session-affinity-e2e` |
 | 流式读取循环 / 流内错误帧 / 懒提交（writeHead 时机） | `stream-error-frame-e2e` + `streaming-e2e` + `outbound-http-client`（直通字节一致性） |
 | 流式或非流式的「200 但空」记账（零正文 / 空回复判据、直通空流） | `stream-error-frame-e2e` + `same-protocol-passthrough` |
@@ -23,7 +24,7 @@
 | 部署配置（docker-compose / 反代层 / 来源 IP 采信开关） | `reverse-proxy-config` + `ip-stats-ban-e2e`（trustedProxy 采信语义） |
 | thinking / 签名 / 回放 | `thinking-fidelity` + `thinking-replay-e2e` |
 | 静态文件 / 鉴权面 / 控制台版本 | `node sec-audit.js`（仓库根，只读体检，见 README「安全体检」） |
-| 请求体落盘诊断（`ZZCSAPI_DUMP_BODIES` 与 compose 的 dump 挂载） | `body-dump-diagnostic-e2e` |
+| 请求体落盘诊断（`ZZCSAPI_DUMP_BODIES` 与 compose 的 dump 挂载；v1.18.38 起含 `/v1/responses` 且只落 POST） | `body-dump-diagnostic-e2e` |
 | 流式提交时机 / 扣帧窗口 / 思考吃光（reasoning-only） | `reasoning-only-fallback-e2e` + `stream-error-frame-e2e` + `streaming-e2e` |
 | 渠道超时（首字/总超时）/ 挂死换家 / 失败行归因 | `channel-timeout-attribution-e2e` + `cooldown-grading-e2e` |
 | 输出预算（max_tokens / max_completion_tokens）跨协议保真 | `budget-passthrough-e2e` + `native-channels` |
@@ -40,6 +41,7 @@ node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
 node test/anthropic-tools-e2e.test.js     # 30 项断言：两轮工具回合（要工具 → 回传结果）真 HTTP 链路
+node test/responses-api-e2e.test.js       # 71 项断言（v1.18.38）：OpenAI Responses API（客户端第四套报文）——§1 单元级（从 server.js 现抠 responsesToOpenAI / openAIToResponsesResponse / createResponsesStreamConverter：instructions→system、developer→system、input_text 纯文本退回字符串、input_image→image_url、function_call/function_call_output 配对、扁平工具→嵌套、max_output_tokens→max_completion_tokens、usage 口径、finish=length→status incomplete）；§2 真链路（假上游 + 临时网关：上游**真收到** chat 报文而不是 input、instructions 变 system、URL 是 chat/completions、客户端拿到 object=response、GET/DELETE /v1/responses/{id}、未知 id 404 且说明留存策略、取回面同样要密钥、store:false 不落表、流式九类事件齐全且正文由 delta 拼成、流式那一发也能按 id 取回、账本有 kind=responses 行、**chat 面未回归的对照**、空 input/缺 model 400、GET 无 id 405）；§3 装配守卫（**不设 clientProto**（设了就直通、把 input 塞给 chat 上游）、两段路由共用一次 authGate、`/v1/responses` 已从 handleOpenAIRequest 白名单摘掉、chat 与 responses 共用 `openAICandidateChain`、`[DONE]` 与 epilogue 收敛到同一个幂等 end()）
 node test/streaming-e2e.test.js           # 19 项断言：三协议流式（首块不丢字节 / 事件序列 / 收尾兜底）
 node test/stream-error-frame-e2e.test.js  # 31 项断言（v1.18.21；v1.18.26 增场景 E；v1.18.32 增场景 F）：流内错误帧与零正文流——上游 200 但 SSE 里塞 data:{"error":…}（超长上下文打到上限小的渠道就是这么回，现场 req_mur6vapv：66,991 进 / 0 出，网关却记"成功"）。真起「假上游 + 临时网关」四条：①预检期错误帧（正文未出、响应未提交）→ 取消读取、切下一候选拿到正文、**不**记渠道失败但用量记 ok:false；②已提交后的错误帧（正文已流出）→ 流如实转发、`ok:false` 记账、渠道 lastError 带 `stream error frame`（连败进冷却）；③非流式 200+error 报文同样切候选（旧写法记成功还回 200）；④对照组：正常流逐字节透传零改动、只记一条 ok:true；**⑤v1.18.26 场景 E：200 + 零正文流**（role + usage(0) + [DONE]，无 error 帧）→ 判失败、切下一候选、用量记 ok:false、**失败行带上请求的模型名**（此前 recordFailure 写死 `—`，实测 88% 的失败行看不出在调哪个模型）；**⑥v1.18.32 场景 F：非流式 200 + 空回复**（`choices[0].message.content === ''`、无 tool_calls、无思考——现场 `gpt-6-astra` 91 行"幽灵成功"的形态，只能来自没有空正文判据的非流式路径）→ 判失败、**切下一候选**（非流式响应未提交，真换得了家）、用量记 `ok:false`、备注写明空回复、失败行带模型名，外加"good 渠道的正常非流式仍 `ok:true` 且 `out > 0`"对照
 node test/reasoning-only-fallback-e2e.test.js # 15 项断言（v1.18.28）：★「思考吃光预算」必须换下一家——上游只流 reasoning_content + finish=length + 可见正文 0（现场 dump 实证：Fireworks 托管的推理模型）→ 判失败、切到能出正文的家、账本 ok:false + reason 字段；三条对照（有思考也有正文不切 / 只有工具调用帧不切 / max_tokens=8 探测类不切）

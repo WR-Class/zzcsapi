@@ -10,7 +10,7 @@
  *     在飞数归还挂在限流同一条 finish/close settle 路径；per-IP token/模型记账只在 recordUsage 一处
  *     （单漏斗）；persistConfig 白名单含 security（否则一次渠道保存就把封禁名单抹掉）；
  *     X-Forwarded-For 只在 trustedProxy 登记来源上采信（伪造头不能把封禁变成假功能）；
- *     4 处客户端路由都注入 statsCtx；
+ *     5 处客户端路由都注入 statsCtx；
  *   · 纯函数真值表（现抠真实源码跑）：isValidIpLiteral / clientLabelOf / clientIpOf（采信与不采信）、
  *     记账/在飞/会话/桶/淘汰语义、快照形状与排序；
  *   · 真链路：预置封禁 → 403 且 bannedHits 在涨；XFF 三个来源各占一行；401 也算敲门；
@@ -77,8 +77,8 @@ function makeStats(cfg) {
     /security: \(config && config\.security\) \|\| undefined/.test(SRC));
   check('X-Forwarded-For 全仓只在 clientIpOf 里读（采信必须过 trustedProxy 匹配）',
     (SRC.match(/x-forwarded-for/g) || []).length === 1 && /for \(const tp of trustedProxyList\(\)\)/.test(SRC));
-  check('4 处客户端路由（openai/anthropic/gemini 聊天 + 图片）都注入 statsCtx',
-    (SRC.match(/statsCtx: makeStatsCtx\(req, res, body\)/g) || []).length === 4);
+  check('5 处客户端路由（openai/anthropic/gemini 聊天 + responses + 图片）都注入 statsCtx',
+    (SRC.match(/statsCtx: makeStatsCtx\(req, res, body\)/g) || []).length === 5);
   check('封禁端点在 handleAdminApi 里（管理面统一鉴权）',
     SRC.indexOf("url.pathname === '/admin/api/bans'") > SRC.indexOf('async function handleAdminApi'));
   check('启动时封禁表从 config.security.bannedIPs 初始化（重启不丢）',

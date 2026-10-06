@@ -228,13 +228,13 @@ function testAuthHeaders() {
 
 /* ═══════ 6. 装配守卫：路由里真的接上了能力门 ═══════ */
 function testWiring() {
-  G('6. 装配守卫：三条客户端路由都接上了图片能力门');
+  G('6. 装配守卫：四条客户端路由都接上了图片能力门');
   // 调用点写成「candidates = filterCandidatesForImages(candidates, …)」，定义行不带赋值，故按赋值形态计数
   const uses = (src.match(/candidates = filterCandidatesForImages\(candidates, /g) || []).length;
-  check('openai / anthropic / gemini 三条路由各调用一次（共 3 处）', uses === 3, uses);
-  // 1 处常量声明 + 3 处使用
+  check('openai / anthropic / gemini / responses 四条路由各调用一次（共 4 处）', uses === 4, uses);
+  // 1 处常量声明 + 4 处使用（v1.18.38 起 /v1/responses 也接了图片能力门）
   const msgs = (src.match(/NO_IMAGE_CHANNEL_MSG/g) || []).length;
-  check('常量 1 处声明 + 3 处使用（不静默降级）', msgs === 4, msgs);
+  check('常量 1 处声明 + 4 处使用（不静默降级）', msgs === 5, msgs);
   check('能力门白名单 = openai + anthropic + gemini（原生出站能带图后扩到三种；新增可转图协议要同时改文档）',
     JSON.stringify(api.IMAGE_CAPABLE_PROTOCOLS) === '["openai","anthropic","gemini"]', api.IMAGE_CAPABLE_PROTOCOLS);
   check('★ 三种协议各自的转图方式都写在常量旁边（出站 image 块 / inlineData）',
