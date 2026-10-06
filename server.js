@@ -1000,8 +1000,20 @@ function retryAfterMsFromHeaders(headers) {
 // 第 n 次连续失败该冷却多久（n = recordFailure 自增后的 consecutiveFail，所以 n≥1）。
 // 用 base * 2^(n-1)：第一次失败就是 base，读起来和配置一致（旧公式是 2^n，所以"第一次"是 2 秒，
 // 而 README 一直写成 1 秒——文档与实现对不上，也是这次收敛的动因之一）。
+/* v1.18.40：渠道的"欠账"分成**两条 streak**：
+     · consecutiveFail —— **真实流量**（客户端面请求）的连败。唯一能清零它的只有真实流量成功。
+     · probeFail       —— **探测 / 手动测试**的连败（GET /models、getSpaces、令牌刷新、控制台"测试"按钮）。
+   为什么必须分开：熔断跳开的唯一机制是 `cooldownUntil`（见 dispatchRequest 里 `cooldownUntil > Date.now()`
+   就 `continue`），而冷却时长是按 streak 指数退避算的。可"列表拉回来了""手动测试过了"**都不是**
+   "这家对话能用"的证据 —— 此前它们会把真实流量的欠账减半、甚至清零，于是一个"测试过、真实挂"的死家，
+   每被点一次测试就重新从 1× 退避起步，**永远熔断不掉**（用户现场：测试绿、真实流量连续挂）。
+   现在探测/测试成功只还探测侧的账，真实流量那条 streak 要等一次**真的**客户端请求成功才清零。 */
+function effFailStreak(ch) {
+  return Math.max(Number(ch.consecutiveFail) || 0, Number(ch.probeFail) || 0);
+}
+
 function cooldownMsFor(ch, kind, retryAfterMs) {
-  const n = Math.max(1, Number(ch.consecutiveFail) || 1);
+  const n = Math.max(1, effFailStreak(ch) || 1);
   const cred = kind === 'credential', rate = kind === 'rate_limit';
   const base = cred ? COOLDOWN.hardBaseMs : rate ? COOLDOWN.rateLimitBaseMs : COOLDOWN.transientBaseMs;
   const max = cred ? COOLDOWN.hardMaxMs : COOLDOWN.transientMaxMs;
@@ -1405,7 +1417,7 @@ async function probeChannel(ch) {
       ch.latencyMs = Date.now() - t0;
       healAfterProbe(ch, agents.length > 0);
     } catch (err) {
-      recordFailure(ch, 'notion-agent: ' + (err.message || err));
+      recordFailure(ch, 'notion-agent: ' + (err.message || err), undefined, { source: 'probe' });
     }
     return;
   }
@@ -1424,7 +1436,7 @@ async function probeChannel(ch) {
       ch.latencyMs = Date.now() - t0;
       healAfterProbe(ch, true);
     } catch (err) {
-      recordFailure(ch, 'notion: ' + (err.message || err));
+      recordFailure(ch, 'notion: ' + (err.message || err), undefined, { source: 'probe' });
     }
     return;
   }
@@ -1446,8 +1458,8 @@ async function probeChannel(ch) {
       // 这一支里 workbuddy 的探测本身就是一次真实对话（真凭实据 → 可满血）；genspark 只是验登录态（半愈合）
       healAfterProbe(ch, true, ch.def.protocol !== 'genspark');
     } catch (err) {
-      if (err.rateLimited || err.retryAfterMs) recordFailure(ch, 'workbuddy: ' + (err.message || err), 'rate_limit', err.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {});
-      else recordFailure(ch, 'workbuddy: ' + (err.message || err));
+      if (err.rateLimited || err.retryAfterMs) recordFailure(ch, 'workbuddy: ' + (err.message || err), 'rate_limit', { source: 'probe', ...(err.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) });
+      else recordFailure(ch, 'workbuddy: ' + (err.message || err), undefined, { source: 'probe' });
     }
     return;
   }
@@ -1461,7 +1473,7 @@ async function probeChannel(ch) {
       healAfterProbe(ch, true);   // 令牌刷新只证明凭据活着，不证明对话能成 → 半愈合
     } catch (err) {
       // RT 失效是致命错误：按凭证类退避（起步 5 分钟、封顶 6 小时），不再只给 300 秒
-      recordFailure(ch, String(err.message || err), err.fatal ? 'credential' : undefined);
+      recordFailure(ch, String(err.message || err), err.fatal ? 'credential' : undefined, { source: 'probe' });
     }
     return;
   }
@@ -1503,7 +1515,7 @@ async function probeChannel(ch) {
     }
     const ms = Date.now() - t0;
     if (!resp.ok) {
-      recordFailure(ch, `probe ${resp.status}`, failureKindFromStatus(resp.status));
+      recordFailure(ch, `probe ${resp.status}`, failureKindFromStatus(resp.status), { source: 'probe' });
       return;
     }
     const text = await resp.text();
@@ -1515,7 +1527,7 @@ async function probeChannel(ch) {
     healAfterProbe(ch, ids.length > 0);
   } catch (err) {
     clearTimeout(timer);
-    recordFailure(ch, String(err && err.message || err));
+    recordFailure(ch, String(err && err.message || err), undefined, { source: 'probe' });
   }
 }
 
@@ -3406,6 +3418,9 @@ function channelStatusAll() {
       lastCheck: ch.lastCheck,
       latencyMs: ch.latencyMs,
       consecutiveFail: ch.consecutiveFail,
+      // v1.18.40：探测/手动测试的欠账（与真实流量那条分开）。控制台据此说明"这个渠道的真实流量欠账是多少、
+      // 探测侧又欠了多少"——"测试过、真实挂"的现场就靠这两个数字分得清。
+      probeFail: Number(ch.probeFail) || 0,
       cooldownUntil: ch.cooldownUntil,
       // 观察期（探测"半愈合"过、还欠着失败的账）：排序排在健康渠道之后、不进加权池，控制台/回归都靠它判读
       probation: !!ch.probation,
@@ -3880,6 +3895,104 @@ function sseToolCallText(line) {
     }
     return t;
   } catch { return ''; }
+}
+
+/* v1.18.40：把「一行 SSE 载荷的性质」抽成一个纯函数，供**真实链路**与 /admin/api/test 的流式模式共用。
+   动机（用户报「在咱们站点点击测试都不过 / 测试过、真实挂」的镜像）：手动测试此前只发**非流式**请求，
+   而真实客户端（DSH 等）一律走流式 —— 上游完全可以"非流式答得好好的、流式那条路是坏的"
+   （200 + 流内 error 帧、200 + 零正文流、干脆忽略 stream 参数回一整个 JSON）。测试与真实流量各写一套
+   判据，就是这类"测试过、真实挂"的温床。所以判据只有这一份，谁都不许再抄第二份。
+   返回：error（流内错误帧原文）/ usage / finish / visibleText / reasoning / toolCall / content。 */
+function classifyStreamFrame(j) {
+  const f = { error: null, usage: null, finish: null, visibleText: false, reasoning: false, toolCall: false, content: false };
+  if (!j || typeof j !== 'object') return f;
+  // 错误帧：有 error 且没有 choices（有 choices 的 error 字段是别的东西）
+  if (j.error && !j.choices) {
+    const e = j.error;
+    f.error = String((e && (e.message || e.msg || e.type)) || e || 'upstream stream error');
+    return f;
+  }
+  f.usage = openaiUsageFromFrame(j);
+  const choice0 = j.choices && j.choices[0];
+  if (choice0 && choice0.finish_reason) f.finish = String(choice0.finish_reason);
+  const d0 = choice0 && choice0.delta;
+  if (d0 && typeof d0 === 'object') {
+    if (typeof d0.content === 'string' && d0.content !== '') f.visibleText = true;
+    if ((typeof d0.reasoning_content === 'string' && d0.reasoning_content !== '') ||
+        (typeof d0.reasoning === 'string' && d0.reasoning !== '')) f.reasoning = true;
+    if (d0.tool_calls && (!Array.isArray(d0.tool_calls) || d0.tool_calls.length)) f.toolCall = true;
+    for (const k of Object.keys(d0)) {
+      if (k === 'role') continue;                    // 开场帧只报角色，不是正文
+      const v = d0[k];
+      if (v === null || v === undefined || v === '') continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue;
+      f.content = true;
+      break;
+    }
+    return f;
+  }
+  // 非 OpenAI 形态（原生直通）：内容块增量 / 候选文本都算正文
+  if (j.type === 'content_block_delta' || j.candidates || typeof j.delta === 'string') f.content = true;
+  return f;
+}
+
+/* v1.18.40：把「一次流式测试拿回来的原始响应体」判成结论（纯函数，便于单测）。
+   与真实链路共用 `classifyStreamFrame`，所以"测试说好的"和"真实流量判好的"是同一把尺子——
+   这正是 ① 的目的：挡住"测试过、真实挂"。
+   三种真实世界里会遇到的坏形态都在这里现形：
+     · 上游无视 `stream:true`，回了整段 JSON（streamIgnored）→ 真实流式客户端会拿到零正文流；
+     · 流里塞 `data:{"error":…}`（error）→ 真实链路判渠道失败；
+     · 200 但流里没有可见正文（无内容帧，或思考吃光预算 finish=length）。
+   注意与**非流式**测试的刻意差异：非流式模式下"只有思考"按 v1.18.29 判**可用**（小预算会这样），
+   而流式模式下 `finish=length` + 可见正文 0 按 v1.18.28 判**失败** —— 因为真实流式流量就是这么判的。 */
+function judgeStreamTest(rawText, proto) {
+  const out = { frames: 0, error: null, finish: null, text: '', reason: '', usage: null,
+    sawVisible: false, sawReason: false, sawTool: false, streamIgnored: false, isSSE: false };
+  const text = String(rawText || '');
+  for (const ln of text.split(/\r?\n/)) {
+    const s = ln.trim();
+    if (!s.startsWith('data:')) continue;
+    const d = s.slice(5).trim();
+    if (!d || d === '[DONE]') continue;
+    let j = null;
+    try { j = JSON.parse(d); } catch { continue; }   // 半截 JSON：跳过，不误判
+    out.isSSE = true;
+    out.frames++;
+    const f = classifyStreamFrame(j);
+    if (f.error) { if (!out.error) out.error = f.error; continue; }
+    if (f.usage) out.usage = f.usage;
+    if (f.finish) out.finish = f.finish;
+    if (f.visibleText) out.sawVisible = true;
+    if (f.reasoning) out.sawReason = true;
+    if (f.toolCall) out.sawTool = true;
+    const d0 = j.choices && j.choices[0] && j.choices[0].delta;
+    if (d0) {
+      if (typeof d0.content === 'string') out.text += d0.content;
+      if (typeof d0.reasoning_content === 'string') out.reason += d0.reasoning_content;
+      else if (typeof d0.reasoning === 'string') out.reason += d0.reasoning;
+    }
+    if (j.type === 'content_block_delta' && j.delta && typeof j.delta.text === 'string') out.text += j.delta.text;
+    const cand = j.candidates && j.candidates[0];
+    if (cand && cand.content && Array.isArray(cand.content.parts)) {
+      for (const p of cand.content.parts) if (p && typeof p.text === 'string') out.text += p.text;
+    }
+  }
+  if (!out.isSSE) {
+    // 一个 data: 行都没有 → 上游要么无视了 stream、要么回的是错误 JSON。
+    // 这不是"我们没解析出来"，而是"真实流式客户端也拿不到流" —— 必须当失败报出来。
+    const j = safeJson(text);
+    if (j && (j.choices || j.content || j.candidates || j.output_text !== undefined)) {
+      out.streamIgnored = true;
+      out.text = extractReply(j, proto || 'openai') || '';
+      out.reason = out.text ? '' : (extractReasoning(j, proto || 'openai') || '');
+      out.usage = j.usage || null;
+    } else {
+      out.streamIgnored = true;   // 连 JSON 都不是：更坏，照 streamIgnored 报（附原文由调用方拼）
+      out.text = '';
+    }
+  }
+  return out;
 }
 
 // v1.18.35：上游 SSE 里的 usage 帧归一成内部字段（含上游自报的思考 token）。
@@ -4418,8 +4531,8 @@ async function handleAdminApi(req, res, url) {
       persistConfig();
       const r = await gensparkIsLogin(target.def, 15000).catch(() => null);
       if (r && r.ok) {
-        target.consecutiveFail = 0; target.probation = false; target.cooldownUntil = 0; target.lastError = null;
-        target.status = 'ok'; target.lastCheck = Date.now();
+        // ② v1.18.40：登录校验只证明凭据活着，不证明对话能用 → 半愈合（不清真实流量欠账）
+        healAfterProbe(target, true, false);
         return sendJson(res, 200, { ok: true, existed: true, created, id: target.def.id, key, email: r.email, login: true });
       }
       // 验证失败也保留新 key（可能只是代理/出口抖动），仅标记渠道状态
@@ -4497,12 +4610,12 @@ async function handleAdminApi(req, res, url) {
           const tmo = Math.min(90000, Number(body.timeoutMs) || 60000);
           const r = await notionAgent.quickChat(ch.def.baseUrl, ch.def.apiKey, c.upstream, prompt, zzFetch, tmo);
           if (r.ok) {
-            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
-            if (ch.status !== 'ok') ch.status = 'ok';
+            // ② v1.18.40：测试成功**不清零真实流量的欠账**（只放开冷却 + 还探测侧的账）
+            healAfterProbe(ch, true, false);
             ch.latencyMs = r.ms; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(r.text), ok: true, latencyMs: r.ms });
           } else {
-            recordFailure(ch, 'notion-agent: ' + String(r.error).slice(0, 150));
+            recordFailure(ch, 'notion-agent: ' + String(r.error).slice(0, 150), undefined, { source: 'test' });
           }
           results.push({
             channelId: c.channelId, ok: !!r.ok, status: r.status || 200, latencyMs: r.ms,
@@ -4546,8 +4659,8 @@ async function handleAdminApi(req, res, url) {
           const reply = contentText.trim() || finalText || '';
           const testOk = ok && !!reply && !streamErr;
           if (testOk) {
-            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
-            if (ch.status !== 'ok') ch.status = 'ok';
+            // ② v1.18.40：测试成功**不清零真实流量的欠账**（只放开冷却 + 还探测侧的账）
+            healAfterProbe(ch, true, false);
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({
               model, channelId: c.channelId, kind: 'test',
@@ -4594,12 +4707,12 @@ async function handleAdminApi(req, res, url) {
           }
           const wbOk = !wbErr && !!reply.trim();
           if (wbOk) {
-            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
-            if (ch.status !== 'ok') ch.status = 'ok';
+            // ② v1.18.40：测试成功**不清零真实流量的欠账**（只放开冷却 + 还探测侧的账）
+            healAfterProbe(ch, true, false);
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
           } else {
-            recordFailure(ch, 'workbuddy: ' + String(wbErr || 'empty reply').slice(0, 150));
+            recordFailure(ch, 'workbuddy: ' + String(wbErr || 'empty reply').slice(0, 150), undefined, { source: 'test' });
           }
           results.push({ channelId: c.channelId, ok: wbOk, status: wbStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: wbOk ? undefined : (wbErr || 'empty reply') });
           continue;
@@ -4620,8 +4733,8 @@ async function handleAdminApi(req, res, url) {
           else reply = (parsed.finalContent || parsed.fullText || '').trim();
           const gsOk = !gsErr && !!reply && !parsed.placeholder;
           if (gsOk) {
-            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
-            if (ch.status !== 'ok') ch.status = 'ok';
+            // ② v1.18.40：测试成功**不清零真实流量的欠账**（只放开冷却 + 还探测侧的账）
+            healAfterProbe(ch, true, false);
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: parsed.usage ? parsed.usage.prompt_tokens : estimateTokens(prompt), outputTokens: parsed.usage ? parsed.usage.completion_tokens : estimateTokens(reply), ok: true, latencyMs: ttfb, realUsage: parsed.usage || null });
           } else {
@@ -4630,7 +4743,7 @@ async function handleAdminApi(req, res, url) {
               ch,
               'genspark: ' + String(gsErr || (parsed.placeholder ? '上游占位符回复' : 'empty reply')).slice(0, 150),
               parsed.notLogin ? 'credential' : parsed.rateLimited ? 'rate_limit' : undefined,
-              parsed.rateLimited ? { retryAfterMs: 3600_000 } : undefined,
+              { source: 'test', ...(parsed.rateLimited ? { retryAfterMs: 3600_000 } : {}) },
             );
           }
           results.push({ channelId: c.channelId, ok: gsOk, status: gsStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: gsOk ? undefined : (gsErr || 'empty reply') });
@@ -4653,22 +4766,27 @@ async function handleAdminApi(req, res, url) {
           ttfb = Date.now() - t0;
           const cxOk = !cxErr && !!reply.trim();
           if (cxOk) {
-            ch.consecutiveFail = 0; ch.probation = false; ch.cooldownUntil = 0; ch.lastError = null;
-            if (ch.status !== 'ok') ch.status = 'ok';
+            // ② v1.18.40：测试成功**不清零真实流量的欠账**（只放开冷却 + 还探测侧的账）
+            healAfterProbe(ch, true, false);
             ch.latencyMs = ttfb; ch.lastCheck = Date.now();
             recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
           } else {
-            recordFailure(ch, 'codex: ' + String(cxErr || 'empty reply').slice(0, 150));
+            recordFailure(ch, 'codex: ' + String(cxErr || 'empty reply').slice(0, 150), undefined, { source: 'test' });
           }
           results.push({ channelId: c.channelId, ok: cxOk, status: cxStatus, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: cxOk ? undefined : (cxErr || 'empty reply') });
           continue;
         }
         // 走 dispatchRequest 复用出站请求构造
         // 简化：自己拼一个最小 chat 请求
+        // ① v1.18.40 流式模式：真实客户端（DSH 等）走的**就是流式**，只测非流式等于只测了一半。
+        //   上游完全可以"非流式答得好好的、流式那条路是坏的"（200 + 流内 error 帧 / 200 + 零正文流 /
+        //   干脆无视 stream 参数回一整个 JSON）。所以这里让测试能按真实姿势发流式请求，
+        //   判据也与真实链路共用（classifyStreamFrame）。
+        const wantStream = body.stream === true;
         const target = ch.def.protocol === 'anthropic'
           ? joinUrl(ch.def.baseUrl, 'v1/messages')
           : ch.def.protocol === 'gemini'
-            ? joinUrl(ch.def.baseUrl, 'v1beta/models/' + encodeURIComponent(c.upstream) + ':generateContent')
+            ? joinUrl(ch.def.baseUrl, 'v1beta/models/' + encodeURIComponent(c.upstream) + (wantStream ? ':streamGenerateContent?alt=sse' : ':generateContent'))
             : joinUrl(ch.def.baseUrl, 'chat/completions');
         const baseHeaders = ch.def.protocol === 'anthropic'
           ? { 'Content-Type': 'application/json', 'x-api-key': ch.def.apiKey, 'anthropic-version': '2023-06-01' }
@@ -4678,11 +4796,11 @@ async function handleAdminApi(req, res, url) {
         const headers = applyCustomHeaders(baseHeaders, ch.def);
         let bodyOut;
         if (ch.def.protocol === 'anthropic') {
-          bodyOut = { model: c.upstream, max_tokens: TEST_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] };
+          bodyOut = { model: c.upstream, max_tokens: TEST_MAX_TOKENS, messages: [{ role: 'user', content: prompt }], ...(wantStream ? { stream: true } : {}) };
         } else if (ch.def.protocol === 'gemini') {
           bodyOut = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: TEST_MAX_TOKENS } };
         } else {
-          bodyOut = { model: c.upstream, max_tokens: TEST_MAX_TOKENS, messages: [{ role: 'user', content: prompt }] };
+          bodyOut = { model: c.upstream, max_tokens: TEST_MAX_TOKENS, messages: [{ role: 'user', content: prompt }], ...(wantStream ? { stream: true } : {}) };
         }
         let text;
         if (ch.def.proxy) {
@@ -4692,7 +4810,24 @@ async function handleAdminApi(req, res, url) {
           resp = { ok: out.status >= 200 && out.status < 300, status: out.status };
         } else {
         resp = await zzFetch(target, { method: 'POST', headers, body: JSON.stringify(bodyOut), signal: ctrl.signal });
-        text = await resp.text();
+        if (wantStream && resp.ok && resp.body && resp.body.getReader) {
+          // 流式：逐块读，首块到达时刻才是真的首字延迟（一次性 text() 会把"整段读完"当首字）
+          const reader = resp.body.getReader();
+          const dec = new TextDecoder();
+          let acc = '', firstAt = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!firstAt) firstAt = Date.now();
+            acc += dec.decode(value, { stream: true });
+          }
+          acc += dec.decode();
+          text = acc;
+          ttfb = firstAt ? firstAt - t0 : Date.now() - t0;
+        } else {
+          text = await resp.text();
+          ttfb = Date.now() - t0;
+        }
         // Cloudflare 拦截 → PS Schannel 回退
         if (!resp.ok && isCloudflareBlock(resp.status, text)) {
           const ps = await psHttpRequest('POST', target, headers, JSON.stringify(bodyOut), Math.min(60000, Number(body.timeoutMs) || 30000));
@@ -4702,44 +4837,71 @@ async function handleAdminApi(req, res, url) {
           }
         }
         }
-        ttfb = Date.now() - t0;
+        if (!ttfb) ttfb = Date.now() - t0;
         let parsed = null;
         try { parsed = JSON.parse(text); } catch {}
         const errText = (parsed && (parsed.error?.message || parsed.message)) || (resp.ok ? '' : text.slice(0, 200));
         // v1.18.29：区分「可见正文」与「只有思考」。推理型模型在小预算下会把 token 全花在思考上，
         //   可见正文为空但渠道确实在工作——这种必须判**可用**（否则控制台把好渠道标成"空回复/不过"）。
-        const visibleReply = extractReply(parsed, ch.def.protocol || 'openai');
-        const reasoningOnlyText = visibleReply ? '' : extractReasoning(parsed, ch.def.protocol || 'openai');
-        const reasoningOnly = !visibleReply && !!reasoningOnlyText;
-        const replyOut = visibleReply || (reasoningOnly ? '[输出仅含思考，渠道可用] ' + String(reasoningOnlyText).slice(0, 160) : '');
-        // 测试成功时清零 channel 失败计数并标 ok（与主调度一致）
-        if (resp.ok) {
-          ch.consecutiveFail = 0;
-          ch.probation = false;
-          ch.cooldownUntil = 0;
-          ch.lastError = null;
-          if (ch.status !== 'ok') ch.status = 'ok';
+        let visibleReply = extractReply(parsed, ch.def.protocol || 'openai');
+        let reasoningOnlyText = visibleReply ? '' : extractReasoning(parsed, ch.def.protocol || 'openai');
+        let reasoningOnly = !visibleReply && !!reasoningOnlyText;
+        let replyOut = visibleReply || (reasoningOnly ? '[输出仅含思考，渠道可用] ' + String(reasoningOnlyText).slice(0, 160) : '');
+        // ① 流式模式的判据（与真实链路共用 classifyStreamFrame）——见 judgeStreamTest 的注释
+        let streamInfo = null, streamFail = '';
+        if (wantStream) {
+          streamInfo = judgeStreamTest(text, ch.def.protocol || 'openai');
+          if (resp.ok) {
+            if (streamInfo.streamIgnored) {
+              streamFail = '上游无视 stream=true，回了整段 JSON 而不是 SSE（真实流式客户端会拿到零正文流 → 判失败）';
+            } else if (streamInfo.error) {
+              streamFail = 'stream error frame: ' + streamInfo.error;
+            } else if (!streamInfo.text.trim() && !streamInfo.sawTool) {
+              streamFail = streamInfo.sawReason
+                ? (streamInfo.finish === 'length'
+                  ? '思考吃光预算（finish=length 且可见正文 0，真实链路会切下一家）'
+                  : '流里只有思考、没有可见正文')
+                : 'stream 零正文（200 但无 error 帧、无内容帧）';
+            }
+          }
+          if (streamFail) { visibleReply = ''; reasoningOnlyText = ''; reasoningOnly = false; replyOut = ''; }
+          else if (!visibleReply && streamInfo.text.trim()) { visibleReply = streamInfo.text; replyOut = streamInfo.text; }
+        }
+        const testOk = resp.ok && !streamFail;
+        // 测试成功**不再**清零真实流量的欠账（v1.18.40 ②）——见 healAfterProbe 的注释：
+        //   测试是手动、可选、可能只覆盖一条路径的；只有真实客户端请求成功才算"这家对话能用"。
+        if (testOk) {
+          healAfterProbe(ch, true, false);
           ch.latencyMs = ttfb;
-          ch.lastCheck = Date.now();
           recordUsage({
             model, channelId: c.channelId, kind: 'test',
-            inputTokens: parsed?.usage?.prompt_tokens ?? estimateTokens(prompt),
-            outputTokens: parsed?.usage?.completion_tokens ?? estimateTokens(replyOut),
+            inputTokens: (streamInfo && streamInfo.usage && streamInfo.usage.prompt_tokens) ?? parsed?.usage?.prompt_tokens ?? estimateTokens(prompt),
+            outputTokens: (streamInfo && streamInfo.usage && streamInfo.usage.completion_tokens) ?? parsed?.usage?.completion_tokens ?? estimateTokens(replyOut),
             ok: true, latencyMs: ttfb,
             realUsage: parsed?.usage,
             ...(reasoningOnly ? { outReasoning: estimateTokens(reasoningOnlyText) } : {}),
           });
+        } else if (resp.ok && streamFail) {
+          recordFailure(ch, 'test stream: ' + streamFail, undefined, { source: 'test' });
+        } else if (!resp.ok) {
+          // 手动测试失败同样是"这家的证据"，但记到**探测侧**（source:test）——绝不动真实流量那条 streak
+          recordFailure(ch, `test HTTP ${resp.status}: ${String(errText || '').slice(0, 150)}`, failureKindFromStatus(resp.status), { source: 'test' });
         }
         results.push({
           channelId: c.channelId,
-          ok: resp.ok,
+          ok: testOk,
           status: resp.status,
           latencyMs: ttfb,
           promptTokens: parsed?.usage?.prompt_tokens,
           completionTokens: parsed?.usage?.completion_tokens,
           reply: replyOut || undefined,
           reasoningOnly: reasoningOnly || undefined,
-          error: errText || undefined,
+          ...(wantStream ? {
+            stream: true,
+            streamFrames: streamInfo ? streamInfo.frames : 0,
+            streamIgnored: (streamInfo && streamInfo.streamIgnored) || undefined,
+          } : {}),
+          error: streamFail || errText || undefined,
         });
       } catch (err) {
         results.push({ channelId: c.channelId, ok: false, latencyMs: Date.now() - t0, error: String(err && err.message || err) });
@@ -5778,11 +5940,7 @@ async function tryChannel(opts) {
   }
 
   // 成功
-  ch.consecutiveFail = 0;
-  ch.probation = false;
-  ch.cooldownUntil = 0;
-  ch.lastError = null;
-  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  markTrafficOk(ch);   // v1.18.40：真实流量成功 → 唯一的清零入口（连带探测侧欠账一起还清）
   ch.latencyMs = Date.now() - t0;
 
   if (isStream) {
@@ -5958,45 +6116,21 @@ async function tryChannel(opts) {
       if (!d || d === '[DONE]' || !d.startsWith('{')) return;
       let j = null;
       try { j = JSON.parse(d); } catch { return; }   // 半截 JSON：等下一行，不误判
-      if (j && j.error && !j.choices) {
-        if (streamError === null) {
-          const e = j.error;
-          streamError = String((e && (e.message || e.msg || e.type)) || e || 'upstream stream error');
-        }
-        return;
-      }
+      // v1.18.40：帧性质判定抽到 classifyStreamFrame —— 真实链路与 /admin/api/test 的流式模式
+      //   **共用同一条判据**。理由见该函数注释：手动测试必须能挡住"非流式过、流式挂"的渠道。
+      const f = classifyStreamFrame(j);
+      if (f.error) { if (streamError === null) streamError = f.error; return; }
       // v1.18.35：usage 帧必须在这条早退**之前**抓——上游常把 usage 放在最后一个 chunk
       //   （delta 为空、只带 usage），早退会把它整帧丢掉，in/out 就只剩我们自己的估算。
-      const uf = openaiUsageFromFrame(j);
-      if (uf) streamUsage = uf;
+      if (f.usage) streamUsage = f.usage;
       // v1.18.28：finish_reason 与三类内容标记必须在下面那条 `if (sawStreamContent) return` 早退**之前**抓——
       //   推理流的思考帧会把 sawStreamContent 置位，收尾帧（往往 delta 为空、只带 finish_reason）
       //   若被早退吞掉，就永远判不出"finish=length 且可见正文为 0"。标记写入都是幂等的，重复扫无副作用。
-      const choice0 = j.choices && j.choices[0];
-      if (choice0 && choice0.finish_reason) streamFinish = String(choice0.finish_reason);
-      const d0 = choice0 && choice0.delta;
-      if (d0 && typeof d0 === 'object') {
-        if (typeof d0.content === 'string' && d0.content !== '') sawVisibleText = true;
-        if ((typeof d0.reasoning_content === 'string' && d0.reasoning_content !== '') ||
-            (typeof d0.reasoning === 'string' && d0.reasoning !== '')) sawReasoning = true;
-        if (d0.tool_calls && (!Array.isArray(d0.tool_calls) || d0.tool_calls.length)) sawToolCall = true;
-      }
-      if (sawStreamContent) return;
-      const delta = j.choices && j.choices[0] && j.choices[0].delta;
-      if (delta && typeof delta === 'object') {
-        for (const k of Object.keys(delta)) {
-          if (k === 'role') continue;                  // 开场帧只报角色，不是正文
-          const v = delta[k];
-          if (v === null || v === undefined || v === '') continue;
-          if (Array.isArray(v) && v.length === 0) continue;
-          if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue;
-          sawStreamContent = true;
-          break;
-        }
-        return;
-      }
-      // 非 OpenAI 形态（原生直通）：内容块增量 / 候选文本都算正文
-      if (j.type === 'content_block_delta' || j.candidates || typeof j.delta === 'string') sawStreamContent = true;
+      if (f.finish) streamFinish = f.finish;
+      if (f.visibleText) sawVisibleText = true;
+      if (f.reasoning) sawReasoning = true;
+      if (f.toolCall) sawToolCall = true;
+      if (f.content) sawStreamContent = true;
     };
     const passthroughWrite = (u8) => {
       ensureHead();
@@ -6541,11 +6675,7 @@ async function tryWorkbuddyChannel(opts) {
   }
 
   // 成功
-  ch.consecutiveFail = 0;
-  ch.probation = false;
-  ch.cooldownUntil = 0;
-  ch.lastError = null;
-  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  markTrafficOk(ch);   // v1.18.40：真实流量成功 → 唯一的清零入口（连带探测侧欠账一起还清）
   ch.latencyMs = Date.now() - t0;
 
   const respId = 'chatcmpl-wb-' + Date.now().toString(36);
@@ -6813,11 +6943,7 @@ async function tryGensparkChannel(opts) {
   }
 
   // 成功
-  ch.consecutiveFail = 0;
-  ch.probation = false;
-  ch.cooldownUntil = 0;
-  ch.lastError = null;
-  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  markTrafficOk(ch);   // v1.18.40：真实流量成功 → 唯一的清零入口（连带探测侧欠账一起还清）
   ch.latencyMs = Date.now() - t0;
 
   const respId = 'chatcmpl-gs-' + Date.now().toString(36);
@@ -7146,11 +7272,7 @@ async function tryCodexChannel(opts) {
     return 'codex stream: empty content';
   }
 
-  ch.consecutiveFail = 0;
-  ch.probation = false;
-  ch.cooldownUntil = 0;
-  ch.lastError = null;
-  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  markTrafficOk(ch);   // v1.18.40：真实流量成功 → 唯一的清零入口（连带探测侧欠账一起还清）
   ch.latencyMs = Date.now() - t0;
 
   const respId = 'chatcmpl-codex-' + Date.now().toString(36);
@@ -7345,11 +7467,7 @@ async function tryNotionChannel(opts) {
   }
 
   // 成功
-  ch.consecutiveFail = 0;
-  ch.probation = false;
-  ch.cooldownUntil = 0;
-  ch.lastError = null;
-  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  markTrafficOk(ch);   // v1.18.40：真实流量成功 → 唯一的清零入口（连带探测侧欠账一起还清）
   ch.latencyMs = Date.now() - t0;
 
   // 真实对话消耗了额度 → 异步刷新用量（免费接口，不阻塞响应，失败静默）
@@ -7557,11 +7675,7 @@ async function tryNotionAgentChannel(opts) {
   }
 
   // 4) 成功：清失败状态
-  ch.consecutiveFail = 0;
-  ch.probation = false;
-  ch.cooldownUntil = 0;
-  ch.lastError = null;
-  if (ch.status === 'down' || ch.status === 'unknown') ch.status = 'ok';
+  markTrafficOk(ch);   // v1.18.40：真实流量成功 → 唯一的清零入口（连带探测侧欠账一起还清）
   ch.latencyMs = Date.now() - t0;
 
   // 5) 工具仿真解析（有 tools 时协议已注入，模型可能输出 [TOOL_CALL] 标记）
@@ -7621,13 +7735,18 @@ async function tryNotionAgentChannel(opts) {
 
 // 失败记账的唯一入口：连败计数 + 分级退避 + 状态降级 + 用量留痕。
 // kind 省略时从 status / 文案推断（见 failureKindFromStatus），拿不准一律当瞬时故障（宁可多给机会）。
+// opts.source（v1.18.40）：'traffic'（默认，真实客户端请求）| 'probe' | 'test'。
+//   探测与手动测试的失败**只**记到 probeFail，绝不污染真实流量那条 streak —— 否则"点了下测试没过"
+//   会把一个真实流量里表现正常的渠道的欠账推高，反向也会（见 healAfterProbe 的注释）。
 function recordFailure(ch, msg, kind, opts) {
   const o = opts || {};
   const k = kind || failureKindFromStatus(o.status, msg);
-  ch.consecutiveFail++;
+  const fromProbe = o.source === 'probe' || o.source === 'test';
+  if (fromProbe) ch.probeFail = (Number(ch.probeFail) || 0) + 1;
+  else ch.consecutiveFail++;
   ch.lastError = msg;
   ch.cooldownUntil = Date.now() + cooldownMsFor(ch, k, o.retryAfterMs);
-  if (ch.consecutiveFail >= 3) ch.status = 'down';
+  if (effFailStreak(ch) >= 3) ch.status = 'down';
   // 失败也进用量统计（ok:false），便于排查"哪个渠道在挂"。
   // v1.18.26：带上请求的模型名（o.model，由 tryChannel 的 failModel 提供）。此前写死 '—'，
   // 于是控制台失败行的「模型」列几乎总是空的（实测 103/117 = 88%）——用户看不出失败发生在哪个模型上。
@@ -7641,33 +7760,53 @@ function recordFailure(ch, msg, kind, opts) {
 
 // ★ 探测成功 ≠ "这家的对话能用"：探测打的是 /models（或登录态、agents 列表），一个渠道完全可能
 //   列表拉得回来、真发对话却必失败（key 余额耗尽、上游下架了那个模型、参数方言不兼容）。
-//   所以探测只做**半愈合**，这是 v1.10 修掉的真正"恢复太快"的来源：
-//     · 失败计数**减半**而不是清零（欠账还记着，下次失败会更快退避回去）；
+//   所以探测只做**半愈合**：
+//     · **真实流量**的欠账一字不动（v1.18.40 起；此前是"减半"，见下）；
 //     · 冷却放开（让它有资格被再试，否则凭证类 6 小时冷却会把"用户已经换了 key"的渠道也钉住）；
 //     · 状态降成 degraded —— 排序上排在健康渠道**之后**（见 channelsServing 的 healthy() 分层），
-//       于是它不再抢链首，只作兜底；要一次**真实对话**成功才会彻底清零、恢复 ok。
+//       于是它不再抢链首，只作兜底；要一次**真实对话**成功（markTrafficOk）才会彻底清零、恢复 ok。
 //   唯一的例外（第三个参数 realCompletion）：探测**本身就是一次真实对话**的渠道（workbuddy 的
 //   chat 探针），它成功就是真凭实据，可以满血——"探测"和"对话"在这条路径上是同一件事。
+//
+//   ★ v1.18.40 为什么要从"减半"改成"一字不动"：冷却时长 = `cooldownMsFor` 按 streak 指数退避，
+//     而冷却**就是**熔断跳开的唯一机制（dispatchRequest 里 `cooldownUntil > now` → continue）。
+//     减半意味着：一个"探测能过、真实流量必挂"的死家，每被自动探测碰一次，欠账就退回一半 ——
+//     它永远在 1×~2× 退避之间打转，永远不会被真正跳开。用户的现场就是"测试绿、真实流量连着挂"。
+//     探测成功放开冷却已经足够让**可能已修好**的渠道重新有机会上场（不必等满 6 小时），
+//     而"它到底能不能对话"这件事，只有真实流量说了算。
 function healAfterProbe(ch, ok, realCompletion) {
   ch.lastCheck = Date.now();
   ch.cooldownUntil = 0;
   if (ok && realCompletion) {          // 真凭实据：彻底清零，恢复 ok
-    ch.consecutiveFail = 0;
-    ch.probation = false;
-    ch.lastError = null;
-    ch.status = 'ok';
+    markTrafficOk(ch);
     return;
   }
-  if (!ch.consecutiveFail) {           // 本来就没欠账：探测说了算（列表空则 degraded）
+  if (ok) ch.probeFail = 0;            // 探测侧自己的欠账还清了
+  const debt = Number(ch.consecutiveFail) || 0;
+  if (!debt) {                         // 真实流量本来就没欠账：探测说了算（列表空则 degraded）
     ch.status = ok ? 'ok' : 'degraded';
     ch.probation = false;
     if (ok) ch.lastError = null;
     return;
   }
-  ch.consecutiveFail = Math.max(1, Math.floor(ch.consecutiveFail / 2));
+  // ★ 真实流量的欠账**原样保留**（这就是"给真实流量单独一条 streak"）：下次再失败时，
+  //   退避是从原来的欠账继续升级，而不是从 1× 重来。
   ch.status = ok ? 'degraded' : 'down';
   ch.probation = !!ok;                 // 探测说"活着"但它还欠着账 → 进观察期（排健康渠道之后、不进权重池）
   // lastError 保留：控制台上仍能看到上次为什么被罚，别让"半愈合"顺手把证据擦掉
+}
+
+// 真实流量成功的**唯一**清零入口（v1.18.40）。此前 7 处成功路径各写一遍 `consecutiveFail = 0`，
+// 于是"哪些成功算数"散在 7 个地方、口径靠自觉；现在收敛成一处，且顺带把探测侧的账也还清
+// （真实对话成功是最高级别的证据，比任何探测都硬）。
+function markTrafficOk(ch, ms) {
+  ch.consecutiveFail = 0;
+  ch.probeFail = 0;
+  ch.probation = false;
+  ch.cooldownUntil = 0;
+  ch.lastError = null;
+  if (ms) ch.latencyMs = ms;
+  if (ch.status === 'down' || ch.status === 'unknown' || ch.status === 'degraded') ch.status = 'ok';
 }
 
 // ─────────────────────────── 启动 ───────────────────────────

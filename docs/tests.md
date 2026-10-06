@@ -1,6 +1,6 @@
-# 测试清单（47 个文件 · 2205 项断言，零依赖）
+# 测试清单（48 个文件 · 2260 项断言，零依赖）
 
-> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 46 条命令与每条守的是什么。
+> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 47 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
 > **动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json` / `usage.json`**，不出网、不烧额度。
 > 退出码非 0 = 有回归。跑单个：`node test/<名字>.test.js`。
@@ -29,8 +29,10 @@
 | notion 渠道的流断取回兜底（触发判据 = 权威全文没到 / 复用同一 threadId / 次数与预算上限 / 取不回仍如实失败） | `notion-refetch-fallback-e2e` |
 | 流式提交时机 / 扣帧窗口 / 思考吃光（reasoning-only） | `reasoning-only-fallback-e2e` + `stream-error-frame-e2e` + `streaming-e2e` |
 | 渠道超时（首字/总超时）/ 挂死换家 / 失败行归因 | `channel-timeout-attribution-e2e` + `cooldown-grading-e2e` |
+| **手动测试的判据**（流式模式 / 与非流式刻意不同的"只有思考"判定 / 测试成功只半愈合） | `channel-test-stream-and-streak-e2e` + `channel-test-reasoning-e2e` + `disabled-channel-manual-test-e2e` |
+| **熔断记账与冷却曲线**（两条 streak / `probeFail` / 半愈合不清真实欠账 / `markTrafficOk` 唯一清零入口 / `effFailStreak`） | `channel-test-stream-and-streak-e2e` + `cooldown-grading-e2e` + `weighted-rr`（不进池语义） |
 | 输出预算（max_tokens / max_completion_tokens）跨协议保真 | `budget-passthrough-e2e` + `native-channels` |
-| 手动测试（`/admin/api/test`）的预算与判据 | `channel-test-reasoning-e2e` + `disabled-channel-manual-test-e2e` |
+| 手动测试（`/admin/api/test`）的预算与判据 | `channel-test-reasoning-e2e` + `disabled-channel-manual-test-e2e` + `channel-test-stream-and-streak-e2e` |
 | 字体资产 / `head.html` 字体入口 / `font-assets.js` 投递 / CSP 的 `font-src` / Dockerfile 字体 `COPY` | `font-assets-e2e`（授权与改名断言在内，改前先读 `docs/fonts.md`） |
 
 ## 全量清单
@@ -51,6 +53,7 @@ node test/stream-error-frame-e2e.test.js  # 31 项断言（v1.18.21；v1.18.26 �
 node test/reasoning-only-fallback-e2e.test.js # 15 项断言（v1.18.28）：★「思考吃光预算」必须换下一家——上游只流 reasoning_content + finish=length + 可见正文 0（现场 dump 实证：Fireworks 托管的推理模型）→ 判失败、切到能出正文的家、账本 ok:false + reason 字段；三条对照（有思考也有正文不切 / 只有工具调用帧不切 / max_tokens=8 探测类不切）
 node test/budget-passthrough-e2e.test.js # 19 项断言（v1.18.31）：客户端的输出预算必须活着穿过每一层——DSH 发的是新字段 max_completion_tokens=32768（不发 max_tokens），而转换器只读老字段，于是 anthropic 渠道被静默换成缺省 8192、gemini 渠道整个丢掉，推理型上游把思考算进同一份预算，8192 被吃光就是「可见正文 0 字符 + finish=length」。真链路断言 anthropic 上游真收到 32768、gemini 真收到 maxOutputTokens=32768，另含"客户端没给 → anthropic 仍 8192 / gemini 仍不设"与"两个字段都给 → 老字段优先"两组对照，外加三处共用 clientBudgetOf 的结构守卫
 node test/channel-timeout-attribution-e2e.test.js # 9 项断言（v1.18.30）：挂死渠道要快速换家 + 失败行能归因——渠道连响应头都不回时首字死线必须生效（旧逻辑只在拿到头之后才起计时器，挂死家会吃掉整个 90s 总超时，客户端先超时）；断言 1s 内换家拿到正文、失败行记 ok:false+原因、失败行带 client 标签与模型名，并结构守卫默认值（首字 30s/60s、总超时 90s）
+node test/channel-test-stream-and-streak-e2e.test.js # 50 项断言（v1.18.40）：**手动测试的流式模式 + 真实流量单独一条欠账**（用户点出的两处真问题）。①`/admin/api/test` 一律发非流式、而真实客户端一律走流式 → "非流式答得好、流式那条路是坏的"渠道永远测不出来；②探测成功把欠账**减半**、手动测试成功把欠账**清零** → 熔断的唯一跳开机制（cooldownUntil，指数退避）被反复抹掉，"测试过、真实挂"的死家**永远熔断不掉**。§1 `classifyStreamFrame` 真值表（role-only 开场帧不算正文、usage 末帧、原生三形态、垃圾输入不炸）；§2 装配守卫（帧分类只有一份实现、真实链路与手动测试**共用**它、测试分支里 `markTrafficOk` 一次都不许出现、真实清零入口唯一、`probeFail` 已下发）；§3 **★ 同一个渠道「非流式测试通过、流式测试失败」必须被抓出来**（①的核心断言，上游真的收到 `stream:true`）+ 流式其余四形态（正常拼正文 / 流内 error 帧 / 上游无视 stream 回整段 JSON → `streamIgnored` / 思考吃光预算 `finish=length`）；§4 对照：同一家的**非流式**测试仍判可用（v1.18.29 的宽容只留给非流式模式）；§5 **★ 真实流量欠 2 笔 → 手动测试成功**不清零**（仍 2，`probeFail` 回 0、冷却放开、进观察期）→ `GET /models` 探测成功**也不清零** → 只有真实成功才清零**；§6 测试失败只记 `probeFail`（真实 streak 纹丝不动）
 node test/channel-test-reasoning-e2e.test.js # 8 项断言（v1.18.29）：手动测试必须为推理型模型兜底——测试请求预算 ≥256（原来只有 16，token 全被思考吃光 → 200+正文空 → 控制台判不过）；只有思考的家仍判可用并标 reasoningOnly；真·空回复仍如实显示；上游 5xx 带回原文
 node test/channel-drop-params-e2e.test.js # 85 项断言（v1.18.33）：★渠道级「不发这些参数」（dropParams）——现场 agentrouter 每天固定开放额度，却对「tools + reasoning_effort」组合直接 400（Function tools with reasoning_effort are not supported for gpt-6-astra），而 DSH 每次请求都同时带这两样 → 该渠道 19 行 0 成功。真起「假上游 + 临时网关」：主用例断言上游**真收不到** reasoning_effort 而 tools 仍在、对照组（没配的渠道）照样收到、**不串味**（第一家失败切到第二家后，第二家仍收到该参数——剔除只作用于出站副本、不污染共用报文对象）、同协议直通也生效、白名单外的名字 400 并回带合法清单、落库往返 + 保存别的渠道后仍在（persistConfig 显式字段清单）、显式空数组 = 清空、GET /admin/api/config 下发 dropParamWhitelist；边界：workbuddy/codex/genspark/notion-agent 配了**不生效**（自带专用报文构造）
 node test/body-dump-diagnostic-e2e.test.js # 14 项断言（v1.18.27）：请求体落盘诊断——开启后真落盘且内容一致、?key= 打码（密钥绝不进 dump）、/admin/ 不落盘、默认关闭零副作用、轮转只留最近 N 个、落盘失败不影响请求
@@ -62,10 +65,10 @@ node test/console-weight-e2e.test.js      # 18 项断言：控制台表单报文
 node test/auto-weight.test.js             # 66 项断言：自动权重算法（健康系数/地板/死区平滑/份额封顶）＋**静默不变式**（观测不许改分流）＋后台节拍装配守卫
 node test/auto-weight-e2e.test.js         # 37 项断言：真流量下预测与健康系数自洽、分流一字未动、配置往返旋钮不丢、后台节拍不依赖控制台
 node test/upstream-4xx-fallback-e2e.test.js  # 43 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）；v1.18.34 加两节——全链 429 → 502 时每条 attempts 都要带 HTTP 码与上游原文（现场 channel_error 光秃秃、看不出是余额还是 WAF）+ 对照组防拼两遍
-node test/tool-turn-accounting-e2e.test.js # 40 项断言（v1.18.35）：★工具轮不许被记成"零产出的成功"——现场账本里 deepseek-v4.1-flash 有 196 行 ok:true 且 out=0（耗时只有 8~38 秒、与有正文的行同渠道同分钟交错），开留证开关抓 DSH 真实报文后**逐字节回放**才定性：客户端拿到的是 49 个 tool_call、finish=tool_calls、可见正文 0 字符，而上游 usage 帧自报 prompt_tokens=176351 / completion_tokens=114，账本却记 in=56324 out=0。根因在常规链路（openai 渠道 → openai 客户端）的记账侧：usage 帧被整帧丢掉（只数可见正文），纯工具轮 out 就是 0。断言：两个新函数的真值表（工具帧的 name+arguments 也算输出、usage 帧归一、全 0 空帧不覆盖累计）；真链路 ★ 纯工具轮 + usage 帧 → in/out 取上游真值、留 tool_calls 标记；真链路 ★ 纯工具轮**没有** usage 帧 → out>0（旧写法=0）；文本轮两组对照（有 usage → 上游优先、没有 → 仍是估算）；思考轮 reason 用上游自报数字且 ≤ out；结构守卫：usage 帧必须在 `if (sawStreamContent) return` 早退**之前**抓（上游常把 usage 放最后一个 chunk）
+node test/tool-turn-accounting-e2e.test.js # 41 项断言（v1.18.35；v1.18.40 更新结构守卫）：★工具轮不许被记成"零产出的成功"——现场账本里 deepseek-v4.1-flash 有 196 行 ok:true 且 out=0（耗时只有 8~38 秒、与有正文的行同渠道同分钟交错），开留证开关抓 DSH 真实报文后**逐字节回放**才定性：客户端拿到的是 49 个 tool_call、finish=tool_calls、可见正文 0 字符，而上游 usage 帧自报 prompt_tokens=176351 / completion_tokens=114，账本却记 in=56324 out=0。根因在常规链路（openai 渠道 → openai 客户端）的记账侧：usage 帧被整帧丢掉（只数可见正文），纯工具轮 out 就是 0。断言：两个新函数的真值表（工具帧的 name+arguments 也算输出、usage 帧归一、全 0 空帧不覆盖累计）；真链路 ★ 纯工具轮 + usage 帧 → in/out 取上游真值、留 tool_calls 标记；真链路 ★ 纯工具轮**没有** usage 帧 → out>0（旧写法=0）；文本轮两组对照（有 usage → 上游优先、没有 → 仍是估算）；思考轮 reason 用上游自报数字且 ≤ out；结构守卫：usage 帧必须在 `if (sawStreamContent) return` 早退**之前**抓（上游常把 usage 放最后一个 chunk）
 node test/usage-day-key.test.js            # 27 项断言（v1.18.36）：账本的「天 / 小时」一律按**北京时间**切——现场查「yu1 渠道 24 小时用量」时发现日桶与小时桶对不上：`byDay` 用 `new Date(ts).toISOString().slice(0,10)`（UTC 日）、24 小时分布用 `getHours()`（本地小时），同一个账本里两套钟，日界落在北京时间早上 8 点（`ipStatsBumpHour` 更自相矛盾：注释写"本地时区跨天清零"，代码是 UTC 日 + 本地小时）。处置：新增 `cnDayKey()`/`cnHour()`（**固定 +8**，不依赖进程时区——compose 设了 TZ 但裸跑可能是 UTC），账本四处统一走它们。断言：真值表（北京 00:00 边界、跨月跨年、字符串 ts、`cnHour` 三态、**老写法在同一点上差一天**的对照）；★ 真链路**用 TZ=UTC 起网关**——`byDay` 桶键 = 该行 `ts` 的北京日、不含 UTC 日桶、`hourly` 落在北京小时而 **UTC 小时那格必须是 0**、per-IP 24 桶同理；结构守卫（`bumpUsageBucket(u.byDay, …)` 的 day 来自 `cnDayKey`、`ipStatsBumpHour` 不再混用、全仓 Date→日字符串的转换只有 `cnDayKey` 一处）
 node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5）
-node test/cooldown-grading-e2e.test.js    # 53 项断言：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 探测半愈合 + 观察期排序）
+node test/cooldown-grading-e2e.test.js    # 57 项断言（v1.18.40 契约更新）：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 半愈合 + 观察期排序）——**半愈合不再把欠账减半**（探测成功只放开冷却、清 probeFail、进观察期，consecutiveFail 一字不动）、探测失败不再把 3 变 1、真机第 6 节改为"欠账原样保留 + probeFail 回 0"；`cooldownMsFor` 现在读 effFailStreak，沙箱里必须一起抠出 `effFailStreak` / `markTrafficOk`
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
 node test/same-protocol-passthrough.test.js # 52 项断言：同协议直通（Anthropic/Gemini 客户端 → 同协议渠道不翻译；thinking/cache_control/seed 原样到达、响应逐字节一致、真实 token 仍记录、跨协议仍走转换、v1.18.8 修复只注入同协议直通且没坏不碰）；**v1.18.32 §3b 直通空流**：上游只回 `message_start` + `message_stop`（零 `content_block_delta`）→ 客户端仍拿 200 + 上游原始 SSE（字节已写出、换不了家）、用量如实记 `ok:false`（备注含 `no content`/零正文）、该渠道 `lastError` 写明 `stream empty` 且 `consecutiveFail ≥ 1`（下一发才会退避），并含"正常直通流之后 `ant-native` 仍是零欠账"的对照 + 那条判据逐字为 `streamError === null && !nativeStream && !sawStreamContent` 的结构守卫（`!nativeStream` 必须在，也不许再加 `streamOutText.length === 0`）

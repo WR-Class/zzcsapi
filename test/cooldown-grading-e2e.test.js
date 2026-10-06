@@ -161,7 +161,9 @@ function makeUpstream(state) {
         }
         return src.slice(at, end);
       };
-      const F = (name) => new Function('COOLDOWN', grabFn('function ' + name) + `;return ${name};`)(CD);
+      // v1.18.40：cooldownMsFor 现在读 effFailStreak（两条 streak 取大者），healAfterProbe 会调 markTrafficOk
+      const F = (name) => new Function('COOLDOWN',
+        grabFn('function effFailStreak') + ';' + grabFn('function markTrafficOk') + ';' + grabFn('function ' + name) + `;return ${name};`)(CD);
 
       const cooldownMsFor = F('cooldownMsFor');
       const kindOf = F('failureKindFromStatus');
@@ -211,14 +213,20 @@ function makeUpstream(state) {
       {
         const a = { consecutiveFail: 4, cooldownUntil: 123, lastError: 'HTTP 500', status: 'down' };
         heal(a, true);
-        check('★ 半愈合：欠着账时**减半**（4 → 2）、进观察期、冷却放开、错误证据保留',
-          a.consecutiveFail === 2 && a.probation === true && a.cooldownUntil === 0 && a.lastError === 'HTTP 500' && a.status === 'degraded');
+        check('★ v1.18.40 半愈合：欠着账时**一字不动**（4 → 4，不再减半）、进观察期、冷却放开、错误证据保留',
+          a.consecutiveFail === 4 && a.probation === true && a.cooldownUntil === 0 && a.lastError === 'HTTP 500' && a.status === 'degraded');
       }
       {
         const a = { consecutiveFail: 1, cooldownUntil: 1, lastError: 'HTTP 500', status: 'down' };
         heal(a, true);
-        check('★ 半愈合：欠 1 笔时不会减成 0（探测成功不等于账还完了）',
+        check('★ 半愈合：欠 1 笔时也不会变成 0（探测成功不等于账还完了）',
           a.consecutiveFail === 1 && a.probation === true);
+      }
+      {
+        const a = { consecutiveFail: 4, probeFail: 3, cooldownUntil: 1, lastError: 'HTTP 500', status: 'down' };
+        heal(a, true);
+        check('★ v1.18.40 探测侧的账要还清（probeFail 3 → 0），真实流量那条不许动',
+          a.probeFail === 0 && a.consecutiveFail === 4);
       }
       {
         const a = { consecutiveFail: 3, cooldownUntil: 1, lastError: 'x', status: 'ok' };
@@ -230,7 +238,7 @@ function makeUpstream(state) {
         const a = { consecutiveFail: 3, cooldownUntil: 1, lastError: 'x', status: 'degraded' };
         heal(a, false);
         check('探测失败 → down 且不进观察期（欠账保留）',
-          a.status === 'down' && !a.probation && a.consecutiveFail === 1);
+          a.status === 'down' && !a.probation && a.consecutiveFail === 3);
       }
 
       console.log('   · 装配守卫');
@@ -246,8 +254,17 @@ function makeUpstream(state) {
         /c\.probation \? 1 : 0/.test(src) && !/c\.status === 'degraded' \? 1 : 0/.test(src));
       check('★ 观察期不进加权池（否则"探测救活就抢链首"会从后门回来）',
         /Number\(c\.weight\) > 0[\s\S]{0,160}?!c\.probation/.test(src));
-      check('观察期在真实成功路径上会被清掉（否则渠道永远排人后面）',
-        (src.match(/ch\.probation = false;/g) || []).length >= 12, (src.match(/ch\.probation = false;/g) || []).length);
+      check('★ 观察期在真实成功路径上会被清掉 —— v1.18.40 起收敛成唯一入口 markTrafficOk',
+        (src.match(/ch\.probation = false;/g) || []).length <= 3
+        && /function markTrafficOk\(ch, ms\) \{[\s\S]{0,400}?ch\.probation = false;/.test(src));
+      check('★ v1.18.40：真实流量的欠账只有 markTrafficOk 能清零（探测/测试成功都不许）',
+        (src.match(/ch\.consecutiveFail = 0;/g) || []).length === 1
+        && /function markTrafficOk\(ch, ms\) \{[\s\S]{0,200}?ch\.consecutiveFail = 0;/.test(src));
+      check('★ v1.18.40：探测与手动测试的失败只记 probeFail（不许污染真实流量那条 streak）',
+        /function recordFailure\(ch, msg, kind, opts\)[\s\S]{0,700}?ch\.probeFail = \(Number\(ch\.probeFail\) \|\| 0\) \+ 1;/.test(src)
+        && /function effFailStreak\(ch\)/.test(src)
+        && (src.match(/source: 'probe'/g) || []).length >= 6
+        && (src.match(/source: 'test'/g) || []).length >= 5);
 
       const healthyLine = (src.match(/const healthy = \(c\) =>[^\n]*/) || [''])[0];
       // 抠出来的是 `const healthy = (c) => …;`：去掉声明头与行尾分号，才能当表达式用
@@ -302,7 +319,7 @@ function makeUpstream(state) {
     ca = await chan('cd-a');
     check('★ A 的冷却 ≈ 2000ms（rateLimitBaseMs）', near(cooldownLeft(ca), 2000), { left: cooldownLeft(ca) });
 
-    console.log('\n6. ★★ 真机：探测成功只"半愈合" —— 计数减半、进观察期、不再抢链首');
+    console.log('\n6. ★★ 真机：探测成功只"半愈合" —— 真实流量的欠账**原样保留**、进观察期、不再抢链首');
     reset(); UA.mode = { status: 500 }; await restart();
     await call(); await sleep(1200); await call();
     ca = await chan('cd-a');
@@ -311,7 +328,9 @@ function makeUpstream(state) {
     const rc = await admin('/admin/recheck', { method: 'POST' });
     check('手动触发全量探测：/admin/recheck 正常返回', rc.status === 200 && rc.j.ok === true, rc.status);
     ca = await chan('cd-a');
-    check('★ 探测成功 → 失败计数**减半**（2 → 1），不是清零', ca.consecutiveFail === 1, ca.consecutiveFail);
+    check('★ v1.18.40 探测成功 → 真实流量的欠账**不动**（2 还是 2，不是减半更不是清零）',
+      ca.consecutiveFail === 2, { consecutiveFail: ca.consecutiveFail, probeFail: ca.probeFail });
+    check('★ 探测侧的账已还清（probeFail 回 0）', (ca.probeFail || 0) === 0, ca.probeFail);
     check('★ 状态进观察期而是不 ok（探测证明不了"对话能成"）', ca.probation === true, ca.probation);
     check('★ 冷却被放开（否则凭证类 6 小时冷却会把"已经换好 key"的渠道也钉住）', !(ca.cooldownUntil > Date.now()), ca.cooldownUntil);
     check('★ 上次为什么被罚仍然看得到（半愈合不该擦掉证据）', /500/.test(String(ca.lastError || '')), ca.lastError);

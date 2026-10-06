@@ -589,8 +589,13 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 - **原型**：`simTest`（2154）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
   回复文案取自 `REPLIES`（2153）
-- **生产**：`runTests`（`build/app.js` 2504）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt}`），
+- **生产**：`runTests`（`build/app.js` 2506）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt, stream}`），
   逐条渲染真实 `latencyMs` / `promptTokens` / `completionTokens` / 上游回复或错误原文。
+  **v1.18.40：默认按流式打（`stream:true`）**——弹窗里多一个「流式」勾选框（默认勾上，可取消）。
+  真实客户端（DSH 等）走的**就是流式**，只测非流式等于只测了一半；服务端按真实链路同一套判据判（见
+  [docs/behavior.md](behavior.md)「手动测试的流式模式」）。结果行会标明「流式 N 帧」、上游无视 `stream` 时标「（上游无视 stream）」，
+  汇总行带上「流式 / 非流式」字样。**测试成功只"半愈合"**（放开冷却 + 清探测侧的账，不清真实流量的连败计数），
+  所以"测试通过"不再等于"渠道满血"——这正是用户报的"测试过、真实挂"。
   原型的 `simTest` 与 `REPLIES` **生产侧已删除**；跑完会 `loadAll()` 刷新一次数据
 - ⚠️ **原型未同步（有意）**：`console-redesign.html:2175` 的演示版 `openTestModels` 仍是旧的 `if(!c.on)continue;`，
   设计稿里点 3 个 demo 停用渠道仍会看到空列表。生产侧才是真实控制台；要动原型请连带重核 §1/§3 的行号锚点
@@ -1661,6 +1666,29 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **字重：三档压到两档真实字重**（`--fw-display:700` 未动，`500→400`、`600→700`）——浏览器匹配时 500 落 400、600 落 700，两档都是**真实存在**的字重，**不会触发伪粗体**。逐处理由（表头靠大写+字距+底色、`.cell-name` 靠颜色与字号、`.tab.on`/`.btn`/`.delta` 靠底色与描边……）见 [docs/fonts.md](fonts.md) §6；产物 `console.html` 是 **34 增 / 34 删的行数中性改动**，所以代码地图的行号锚点**未漂移**。
 
 **影响**：**字形变了（这正是目的）**；层级仍靠字重与字号区分，`tabular-nums` 保留，**代码块与数值列依旧做不到严格等宽**（HCRound 与 MiSans 一样没有等宽变体）；页面对第三方域名的请求归零，**N-04 就此关闭**。
+
+---
+
+### 8.45 v1.18.40 测试弹窗按真实姿势打流式 + 「测试过、真实挂」不再骗人（2026-10-06，对象 `server.js` 手动测试与熔断记账 + `build/app.js` 测试弹窗 + 产物 `console.html` + 新增 `test/channel-test-stream-and-streak-e2e.test.js` + `test/cooldown-grading-e2e.test.js` 契约更新 + `docs/scheduling.md` / `docs/behavior.md` / `docs/frontend-code-map.md` / `docs/tests.md` / `README.md` / `AGENTS.md`）
+
+**问题**（用户点出两处真问题）：「① `/admin/api/test` 加流式模式，否则"测试过、真实挂"还会再骗你一次；② 别让 `GET /models` 的成功清掉对话失败计数（或给真实流量单独一条 streak），这样熔断才真的会跳开死家。」
+
+**根因（两条都成立，且②比①更致命）**：
+
+- **① 测试与真实流量各写一套判据**。`/admin/api/test` 一律发**非流式**请求（`max_tokens:512`、不带 `stream`），而真实客户端（DSH 等）**一律走流式**。上游完全可以"非流式答得好好的、流式那条路是坏的"：200 + 流内 `data:{"error":…}`、200 + 零正文流、干脆无视 `stream:true` 回一整个 JSON（真实流式客户端拿到的是"零正文流"）。控制台因此一片绿，用户点"测试"得到的结论与真实流量**不是同一件事**。
+- **② 熔断的唯一跳开机制被"成功"抹掉**。候选被跳开的判据只有 `cooldownUntil`（`tryChannel` 里的 `if (c.cooldownUntil > Date.now()) continue`），而冷却时长按欠账 `2^(n-1)` 指数增长。可**探测成功会把欠账减半、手动测试成功直接把欠账清零**——于是一个"测试过、真实挂"的死家，**每被点一次测试就重新从 1× 退避起步**，永远长不到会真正跳开它的那一步。用户的原话就是"熔断才真的会跳开死家"。
+
+**处置**：
+
+- **① 手动测试支持流式（默认开）**：`/admin/api/test` 接受 `stream:true`，按各协议发真正的流式请求（openai/anthropic 带 `stream:true`；gemini 走 `:streamGenerateContent?alt=sse`），**逐块读**（首块到达时刻才是真的 `ttfbMs`）。判据**与真实链路共用同一份帧分类**——`classifyStreamFrame()` 从 `noteStreamLine` 里提出来（v1.18.40），`judgeStreamTest()` 是它的纯函数判定层；上游无视 `stream` 时标 `streamIgnored` 并**判失败**（真实流式客户端会拿到零正文流）。结果回带 `stream` / `streamFrames` / `streamIgnored`。控制台弹窗加「流式」勾选框（**默认勾上**，可取消），结果行标明「流式 N 帧」、汇总行带「流式 / 非流式」。
+- **② 两条 streak 分开**：`consecutiveFail` 只数**真实客户端流量**；新增 `probeFail` 数**探测与手动测试**。冷却曲线读两者较大者（新函数 `effFailStreak`）。探测/测试成功只做**半愈合**（放开冷却 + 清 `probeFail` + `degraded`/`probation`），**`consecutiveFail` 一字不动**——v1.18.40 起**不再减半**（旧行为），更不再清零。真实流量成功的清零入口收敛成**唯一一处** `markTrafficOk()`（此前 7 处各写一遍）。两个字段都从 `/admin/api/status` 下发。**不引入死锁**：半愈合放开了冷却，真实流量照旧会去试，修好的渠道下一个真实请求就满血。
+- **刻意的不一致（要能解释）**：非流式模式下"只有思考、没有可见正文"按 v1.18.29 判**可用**（小预算会这样，判死好渠道是误伤）；流式模式下 `finish=length` + 可见正文 0 按 v1.18.28 判**失败**——因为真实流式流量就是这么判的。这个差异是**刻意的**，写进了 `judgeStreamTest` 的注释与 [docs/behavior.md](behavior.md)。
+
+**行号锚点**：`build/app.js` 净 **+5 行**（弹窗勾选框 +1、`runTests` 内 +2、`setRunTests` 段 +2），**分段漂移**（不是整体平移）：`chName` 2491→**2492**、`testRowVerdict` 2497→**2498**、`runTests` 2504→**2506**、`drawer` 2554→**2559**、`closeDrawer` 2558→**2563**、`setTheme` 2565→**2570**、`ACTS` 2583→**2588**、click/change 2635/2641→**2640/2646**、`showKeyGate` 2651→**2656**、`logout` 2680→**2685**、`tick` 2690→**2695**、`boot` 2700→**2705**；`app.js` **2720 → 2725 行**、产物 `console.html` **3433 → 3438 行**，**JS 偏移仍 +709**（`extra.css` 与设计稿 CSS 一行未动）。`docs/frontend-code-map.md` §0.2 与 §7 已按 AGENTS §1.2 的机械核对重导出（历史注记未动）。
+
+**验证**：新增 `test/channel-test-stream-and-streak-e2e.test.js`（**50 项**）：§1 `classifyStreamFrame` 真值表（role-only 开场帧不算正文、usage 帧、原生三形态、垃圾输入不炸）；§2 装配守卫（帧分类只有一份实现、测试分支里 `markTrafficOk` 一次都不许出现、真实清零入口唯一、`probeFail` 已下发）；§3–§4 **★ 同一个渠道「非流式测试通过、流式测试失败」必须被抓出来**（这是①的核心断言）+ 流式其余四形态（正常 / 流内 error 帧 / 上游无视 stream / 思考吃光预算）；§5 **★ 真实流量欠 2 笔 → 手动测试成功不清零 → `GET /models` 探测成功也不清零 → 只有真实成功才清零**；§6 测试失败只记 `probeFail`。`test/cooldown-grading-e2e.test.js` 的**契约按新版改写**（57 项：`heal` 不再减半、探测失败不再把 3 变 1、真机第 6 节改成"欠账原样保留 + `probeFail` 回 0"）——这是**刻意的契约变更**，不是把测试改成迎合代码。
+
+**教训**：**"测试通过"和"真实可用"必须是同一件事，否则测试就是在替故障背书**。而"成功"的定义要跟着**谁在说话**走——探测、测试、真实流量是三份不同强度的证据，把它们混成一条计数，等于让最弱的那份证据有权力抹掉最强的那份。
 
 **教训**：① **"看起来像证据"的东西要能证伪**——切分工具产出的 `result.css` 元数据头里明明写着 `LicenseDescription … SIL Open Font License …`，但实测**分片里根本没有这条记录**（工具会丢掉输出字体的 `nameID 13/14`，每片只剩 7 条 `name`）：那份头读的是**输入**字体。为此在用例里写了一个**最小 woff2 解码器**——woff2 的表数据是一整条 Brotli 流，**在压缩字节上直接搜字体名永远是"假通过"**（它连一个名字都没看过）；解码器自带"解压长度 = Σ表长"自检与 `HCRound` 正对照，才让"266 片都不含保留名"这句话有分量。② **改名必须早于切分**，否则改的是文件名不是字体内涵。③ 资产类改动要**同时**守住三条容易被静默漏掉的边：Dockerfile 的 `COPY`、CSP 的许可来源、以及"路由必须与 `/console` 同处 `try` 块内"（字体不是机密，不该被客户端面封禁闸门挡住）。
 

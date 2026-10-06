@@ -2462,7 +2462,8 @@ function openTestModels(opts){
     <div class="m-bd">
       <div class="probe-bar">
         <span class="status-line wait" id="testSummary">${total} 个模型</span>
-        <label class="toggle ml-auto"><input type="checkbox" id="testAll" checked> 全选</label>
+        <label class="toggle ml-auto" title="真实客户端（DSH 等）走的**就是流式**；关掉只测非流式，可能漏掉「非流式答得好、流式那条路是坏的」的渠道"><input type="checkbox" id="testStream" checked> 流式</label>
+        <label class="toggle"><input type="checkbox" id="testAll" checked> 全选</label>
       </div>
       ${offN?`<div class="model-empty" style="margin-bottom:8px">其中 ${offN} 个来自<b>已停用</b>渠道：手动测试照打，测通也不会因此启用它，且停用渠道不参与自动探测。</div>`:''}
       <div class="test-list" id="testList">${total
@@ -2499,12 +2500,14 @@ function testRowVerdict(row){
   return String(row.reply==null?'':row.reply).trim()?'ok':'empty';
 }
 /* 逐个模型打真实 /admin/api/test：指定 channelId 时上游只会返回该渠道一行结果。
-   提示词与超时都走服务端默认（30s），测试成功会由服务端清零失败计数并回写渠道状态，
-   所以跑完要 loadAll() 把最新状态拉回来。 */
+   提示词与超时都走服务端默认（30s），测试成功会由服务端**半愈合**渠道状态（v1.18.40：测试成功
+   不再清零真实流量的欠账，只放开冷却 + 还探测侧的账），所以跑完要 loadAll() 把最新状态拉回来。
+   v1.18.40：默认按**流式**打 —— 真实客户端走的就是流式，只测非流式等于只测了一半。 */
 async function runTests(){
   const picks=$$('#testList input:checked').map(i=>({model:i.dataset.m,chan:i.dataset.c}));
   if(!picks.length)return toast('至少勾选一个模型');
   const prompt=($('#testPrompt').value||'').trim()||'hi';
+  const streamEl=$('#testStream'), stream=streamEl?streamEl.checked:false;
   const btn=$('#testRun'), old=btn.innerHTML;
   btn.disabled=true; btn.innerHTML=svg('send',13)+'运行中…';
   const wrap=$('#testOutWrap'), out=$('#testOut');
@@ -2517,7 +2520,7 @@ async function runTests(){
     out.appendChild(pend); out.scrollTop=out.scrollHeight;
     let row;
     try{
-      const r=await api('/admin/api/test',{method:'POST',body:JSON.stringify({model:p.model,channelId:p.chan,prompt})});
+      const r=await api('/admin/api/test',{method:'POST',body:JSON.stringify({model:p.model,channelId:p.chan,prompt,...(stream?{stream:true}:{})})});
       row=(r.results||[])[0]||{ok:false,error:'上游未返回结果'};
     }catch(e){row={ok:false,error:String((e&&e.message)||e)}}
     pend.remove();
@@ -2526,6 +2529,8 @@ async function runTests(){
     /* 三档各自给中文标签 + 图标：只靠颜色区分，用户根本不知道自己看的是"通了"还是"没通" */
     const meta={ok:['ok','check','通过'],empty:['wait','clock','空回复'],fail:['fail','warn','失败']}[v];
     const tok=(row.promptTokens!=null||row.completionTokens!=null)?` · ${row.promptTokens||0}+${row.completionTokens||0} tok`:'';
+    /* 流式结论要标明"这是流式判的"并带上帧数 —— 否则用户分不清这次绿是不是流式绿 */
+    const sm=stream?` · 流式${row.streamFrames!=null?' '+row.streamFrames+' 帧':''}${row.streamIgnored?'（上游无视 stream）':''}`:'';
     /* 每一行都带**模型名**（一个渠道挂多个模型时，只写渠道名等于没说测的是谁）+ 渠道显示名 */
     const where=`<b>${esc(p.model)}</b> <span class="muted">@ ${esc(chName(p.chan))}</span>`;
     const detail=v==='fail'
@@ -2535,14 +2540,14 @@ async function runTests(){
         : `"${esc(String(row.reply||'').slice(0,160))}"`;
     out.insertAdjacentHTML('beforeend',
       `<div class="r ${meta[0]}"><span>${svg(meta[1],12)}</span>`+
-      `<span>${where} · <b>${meta[2]}</b> · ${fMs(row.latencyMs)}${v==='fail'&&row.status?' · HTTP '+row.status:''}${tok}</span>`+
+      `<span>${where} · <b>${meta[2]}</b> · ${fMs(row.latencyMs)}${sm}${v==='fail'&&row.status?' · HTTP '+row.status:''}${tok}</span>`+
       `<span class="e">${detail}</span></div>`);
     out.scrollTop=out.scrollHeight;
   }
   const totalN=picks.length, failN=totalN-okN-emptyN;
   btn.disabled=false; btn.innerHTML=old;
   setStatus($('#testSummary'),
-    `通过 ${okN} · 空回复 ${emptyN} · 失败 ${failN}（共 ${totalN} 个 · 提示词「${prompt}」）`,
+    `通过 ${okN} · 空回复 ${emptyN} · 失败 ${failN}（共 ${totalN} 个 · ${stream?'流式':'非流式'} · 提示词「${prompt}」）`,
     failN||emptyN?(okN?'wait':'bad'):'ok');
   toast(failN===0&&emptyN===0?`✓ 全部通过（${okN}/${totalN}）`
     :okN===0&&emptyN===0?`✗ 全部失败（0/${totalN}）`

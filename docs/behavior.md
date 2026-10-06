@@ -99,6 +99,24 @@
   · 出站两态：非流式回 `response` 对象（`output[]` / `output_text` / `usage.input_tokens` 口径）；流式回 Responses 的 `event:` + `data:` 事件序列（`response.created` → … → `response.completed`），`finish_reason:"length"` 记 `status:"incomplete"`（**不假装完成**）。
   · 状态边界：`/v1/responses/{id}` 的取回/删除读的是**本进程内存表**（200 条 / 1 小时 / 重启清零），`store:false` 的请求**不落表**、GET 回 404 并说明留存策略（不假装成功）。多实例部署下取回不保证命中。
   · 有损点：`previous_response_id` 不续接（多轮由客户端把历史放进 `input`）、内置工具（`web_search` 等）丢弃、`reasoning` 只给摘要、`allowed_tools` 退成 `auto`。详见 [docs/protocols.md](protocols.md)「OpenAI Responses API」。回归：`test/responses-api-e2e.test.js`。
+- **手动测试的流式模式 + 真实流量单独一条欠账（v1.18.40）**：用户点出来的两个真问题——「测试过、真实挂还会再骗你一次」
+  与「GET /models 的成功会清掉对话失败计数，熔断永远跳不开死家」。
+  · **① `/admin/api/test` 现在能按真实姿势打流式**：真实客户端（DSH 等）走的**就是流式**，而 `/admin/api/test` 历史上
+  一律发非流式请求（`max_tokens:512`、不带 `stream`）。上游完全可以"非流式答得好好的、流式那条路是坏的"——
+  三种现场：**200 + 流内 `data:{"error":…}`**、**200 + 零正文流**、**干脆无视 `stream:true` 回一整个 JSON**
+  （真实流式客户端会拿到"零正文流"）。`body.stream === true` 时按各协议发真正的流式请求
+  （openai/anthropic 带 `stream:true`；gemini 走 `:streamGenerateContent?alt=sse`），并**逐块读**（首块到达时刻才是真的 `ttfbMs`）。
+  · **判据与真实链路共用同一份帧分类 `classifyStreamFrame`**（v1.18.40 从 `noteStreamLine` 里提出来）——
+  所以"测试说好的"与"真实流量判好的"是**同一把尺子**，不会各写一套又漂移。`judgeStreamTest()` 是它的纯函数判定层。
+  · **刻意的不一致（要能解释）**：非流式模式下"只有思考、没有可见正文"按 v1.18.29 判**可用**（小预算会这样，判死好渠道是误伤）；
+  流式模式下 `finish=length` + 可见正文 0 按 v1.18.28 判**失败**——因为**真实流式流量就是这么判的**。两者的差异是刻意的。
+  · **② 两条 streak 分开**：`consecutiveFail` 只数真实客户端流量；`probeFail` 数探测与手动测试。冷却读两者较大者（`effFailStreak`）。
+  探测成功与手动测试成功**只**放开冷却、清 `probeFail`、进观察期（`degraded` + `probation`），
+  **`consecutiveFail` 一字不动**（v1.18.40 起不再"减半"，也不再"清零"）。真实流量成功的清零入口收敛成**唯一一处** `markTrafficOk()`。
+  · **为什么必须这样**：熔断跳开死家**只**靠 `cooldownUntil`，冷却时长按欠账指数增长。旧行为下"探测成功减半 / 测试成功清零"
+  意味着**点一次测试**就把死家拉回 1× 退避起步 —— 表现就是"熔断永远跳不开"。测试是可选、手动、且可能只覆盖一条路径的，
+  它不是"这家对话能用"的证据。同时**不引入死锁**：半愈合放开了冷却，真实流量照旧会去试它（修好的渠道下一个请求就能满血复活）。
+  · 回归：`test/channel-test-stream-and-streak-e2e.test.js`（★ 同一个渠道"非流式测试过、流式测试挂"必须被抓出来 + ★ 真实欠账不被测试/探测成功抹掉）。
 - **原生出站（`protocol: anthropic` / `gemini`）**：请求侧 `system`→顶层 `system`/`systemInstruction`、`tool_calls`→`tool_use`/`functionCall`、工具结果→`tool_result`/`functionResponse`（Gemini 按函数名配对）、图片→`image` 块/`inlineData`・`fileData`、`max_tokens`→`max_output_tokens`/`maxOutputTokens`、`stop`→`stop_sequences`/`stopSequences`；响应侧反向映射（`stop_reason`→`finish_reason`、`usageMetadata`→`usage`、`thinking`→`reasoning_content`）。
   · 流式：Anthropic 原生 SSE 事件与 Gemini `alt=sse` 分片都会**逐行翻译成 OpenAI 分片**，再交给该路由既有的流式转换器；上游异常断流时由收尾逻辑补 `finish_reason` + `[DONE]`（客户端不会一直等）。
   · 上游错误体不翻译（原样透传状态码与消息），避免 400 被伪装成"成功但空"。

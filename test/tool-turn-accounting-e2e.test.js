@@ -220,9 +220,17 @@ async function waitRows(n, ms = 9000) {
   check('sseToolCallText / openaiUsageFromFrame 已定义', /function sseToolCallText\(line\) \{/.test(SRC) && /function openaiUsageFromFrame\(j\) \{/.test(SRC));
   check('handleLine 累计工具调用文本（常规链路）', sliceFrom('const handleLine = (line) => {').includes('streamToolText += sseToolCallText(line)'));
   const noteFn = sliceFrom('const noteStreamLine = (line) => {', 3200);
-  const iUsage = noteFn.indexOf('openaiUsageFromFrame(j)');
-  const iEarly = noteFn.indexOf('if (sawStreamContent) return;');
-  check('★ usage 帧在 `if (sawStreamContent) return` 早退之前抓（上游常把 usage 放在最后一个 chunk）', iUsage > 0 && iEarly > 0 && iUsage < iEarly, { iUsage, iEarly });
+  // v1.18.40：帧分类统一收进 `classifyStreamFrame`（真实链路与手动测试的流式模式**共用同一份**），
+  // 所以这里断言的是"noteStreamLine 一律走分类结果、且不再有能吞掉收尾帧的分支"，而不是旧的直呼
+  // `openaiUsageFromFrame`。旧的 `if (sawStreamContent) return;` 只是"见过正文就别再扫了"的省算，
+  // 现在分类是纯函数调用、每次都跑，这条早退连同它可能吞掉收尾帧的风险一起消失（语义等价且更强）。
+  check('★ 帧事实一律走 `classifyStreamFrame`，且 `noteStreamLine` 里已无"见过正文就早退"的分支（收尾帧不会整帧丢掉）',
+    noteFn.includes('const f = classifyStreamFrame(j);')
+    && !/if \(sawStreamContent\) return;/.test(noteFn)
+    && ['f.usage', 'f.finish', 'f.visibleText', 'f.reasoning', 'f.toolCall'].every((k) => noteFn.includes(k)));
+  check('★ usage 的解析只有一处（`classifyStreamFrame` 里调 `openaiUsageFromFrame`，全仓无第二份调用）',
+    (SRC.match(/openaiUsageFromFrame\(j\);/g) || []).length === 1
+    && /function classifyStreamFrame\(j\) \{[\s\S]{0,2400}?openaiUsageFromFrame\(j\)/.test(SRC));
   check('成功记账用 streamUsage || passthroughUsage（两条路径同一个口径）', /const usageOut = streamUsage \|\| passthroughUsage;/.test(SRC));
   check('out 的兜底把工具调用算进去（streamOutText + streamToolText）', /const outTok = reportedOut \|\| estimateTokens\(streamOutText \+ streamToolText\);/.test(SRC));
   check('★ 旧的"只按可见正文记账"已清零（outputTokens: estimateTokens(streamOutText), ok: true）', !/outputTokens: estimateTokens\(streamOutText\), ok: true/.test(SRC));

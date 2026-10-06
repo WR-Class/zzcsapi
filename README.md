@@ -22,6 +22,7 @@
 - 🔤 **字体自托管（v1.18.37）**：全站用**寒蝉全圆体**（ChillRoundF，SIL OFL 1.1）的子集化**改名**版 `HCRound`，266 个 woff2 分片按 `unicode-range` 从**同源** `/console/fonts/**` 按需加载——不向任何第三方域名发请求（[字体与授权记录](docs/fonts.md)）
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
 - 🧩 **OpenAI Responses API（v1.18.38）**：`/v1/responses`（POST，含流式）+ `/v1/responses/{id}`（GET 取回 / DELETE）——入站按 Responses 报文收，出站转回 `response` 对象与 Responses 的 SSE 事件序列，中间复用同一条候选链与全部兜底（[协议详解](docs/protocols.md)）
+- 🩺 **手动测试的流式模式 + 真实流量单独一条欠账（v1.18.40）**：控制台「测试模型」默认按**流式**打（真实客户端走的就是流式，只测非流式等于只测了一半，`stream:true` 可选）；且**只有真实客户端请求成功才算"这家对话能用"**——手动测试与 `/models` 探测成功只放开冷却、还清探测侧的账，**不再清零真实流量的连败计数**，熔断因此真的会跳开"测试过、真实挂"的死家（[调度详解](docs/scheduling.md)）
 
 ## 快速开始
 
@@ -215,7 +216,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 47 个测试文件 · 2205 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 48 个测试文件 · 2260 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -366,7 +367,7 @@ thinking 回放修复）。五条**专用报文**渠道（`notion` / `notion-age
 | `/admin/api/channels` | POST | admin | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥**；`dropParams` 显式空数组 = 清空、不传 = 沿用旧值（v1.18.33） |
 | `/admin/api/channels` | DELETE | admin | 删除渠道（body `{id}`） |
 | `/admin/api/probe` | POST | admin | 临时探测上游模型清单（不落库） |
-| `/admin/api/test` | POST | admin | 真发一次最小 chat 请求；带 `channelId` 时**只打该渠道且不看 `enabled`** |
+| `/admin/api/test` | POST | admin | 真发一次最小 chat 请求；带 `channelId` 时**只打该渠道且不看 `enabled`**；**`stream:true`（v1.18.40）= 按真实客户端姿势发流式请求**并按真实链路同一套判据（`classifyStreamFrame`）判定（流内 error 帧 / 200 零正文流 / 上游无视 `stream` 回整段 JSON 都算失败），结果回带 `stream`、`streamFrames`、`streamIgnored`、`ttfbMs`；**测试成功只"半愈合"**（放开冷却 + 清 `probeFail`），**不清真实流量的连败计数**（见[调度详解](docs/scheduling.md)） |
 | `/admin/api/codex-import` | POST | admin | 导入 codex 凭据（完整 JSON 或裸 RT） |
 | `/admin/api/codex-quota` | GET | admin | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import` | POST | admin | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
