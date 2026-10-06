@@ -26,6 +26,34 @@
 - 注意两点：流式响应经代理会**整体缓冲后一次性回放**（首字节延迟 ≈ 上游总耗时，与 CF 回退同款语义）；代理挂了渠道探测即失败、进冷却（诚实失败，不静默直连）。
 - `notion` / `notion-agent` 不支持代理（官方 API 直连）。
 
+## 渠道字段 `headers`（可选，v1.18.44 起在控制台可见可编辑）
+
+**渠道级「自定义请求头」**：出站时把这几条 HTTP 头附加到这家渠道的请求上。
+
+- 形态：`{"User-Agent": "claude-cli/2.0.0 (external, cli)"}`，控制台里写成每行一条 `Name: value` 的多行文本。
+  解析走 `parseCustomHeaders`：对象与文本两种形态都认；跳过注释行（`#`）、空行、没有冒号的行；键值两侧 `trim`；
+  **`Authorization` / `authorization` 一律被删掉**（UI 上写着"Authorization 不可覆盖"，后端也真删——否则渠道配置就能顶掉网关自己的鉴权头）。
+- 生效范围：**常规链路**（openai / anthropic / gemini 系出站）——探测、测试、聊天都经同一个 `applyCustomHeaders` 挂头。
+  `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` 自带专用报文构造，配了**不生效**（与 `dropParams` 同一类边界）。
+- 没配这个字段的渠道：`applyCustomHeaders` **返回同一个对象引用**（零拷贝），老配置行为一个字节不变。
+- 三态语义与 `dropParams`/`weight` 同款：**显式值（含 `""`）优先、`""` 清空、字段缺省则保留旧值**。
+  这条是硬要求：控制台曾用 `body.headers ? body.headers : undefined`，于是"打开渠道 → 顺手保存"会把已配的请求头**静默删掉**。
+- **为什么需要它（现场）**：有些上游不只看密钥，还**看客户端指纹**。`agentrouter` 实测（同一账号、同一时刻、同一 URL，只改请求头）：
+
+  | 出站请求头 | 结果 |
+  | --- | --- |
+  | 只带 `Authorization: Bearer <key>` | **HTTP 401** `{"error":{"message":"unauthorized client detected, contact support for assistance at https://discord.gg/HgekCyHJqB"}}` |
+  | + `User-Agent: claude-cli/2.0.0 (external, cli)` | **HTTP 200，4 个模型** |
+  | + 浏览器 UA（`Mozilla/5.0 … Chrome/120`） | **HTTP 401** |
+
+  ⚠️ **注意第三行**：它认的是 Claude CLI 的指纹**本身**，不是"任意浏览器化的 UA"——所以排查这类 401 时，正确动作是
+  **把上游要求的那条 UA 原样填进渠道的「自定义请求头」**，而不是"换一个更像浏览器的 UA"。
+  探测是免费的（不消耗推理额度），这类 A/B 可以放心做；但**必须同一时间窗内交替打**，否则会把"上游今天心情不好"当成结论。
+- 控制台入口：渠道编辑弹窗的「自定义请求头」textarea（`#f-headers`）。**v1.18.44 之前这个框从不回填**——打开详情永远是空的，
+  于是「获取模型」发出去的探测不带那个 UA，必吃 401；用户看到的是"这个渠道获取模型总是失败"，而库里配的值其实一直是好的。
+  同版还让 401 的错误文案在"该渠道一个自定义头都没配"时直接点名「自定义请求头」并给出可照抄的值。
+- 回归：`test/channel-headers-roundtrip-e2e.test.js`（38 项）。
+
 ## 渠道字段 `dropParams`（可选，v1.18.33）
 
 **渠道级「不发这些参数」**：出站前从这家渠道的请求报文里删掉指定的几个参数。

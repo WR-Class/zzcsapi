@@ -201,7 +201,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - 表单栅格用 `.field-row > .field`，窄屏自动换行
 - **生产侧对应实现**：`build/shell.html` 里只有**一个** `#mask`（49 行），内容由 `modal(html, wide)` 动态注入——
   渠道表单、四类导入、测试模型、模型编辑器全部复用这一个容器。
-  `#mask` **不绑 `onclick`**，与原型策略一致；`Esc` 由 `build/app.js` 2350 的全局 `keydown` 监听兜底
+  `#mask` **不绑 `onclick`**，与原型策略一致；`Esc` 由 `build/app.js` 2569 的全局 `keydown` 监听兜底
   （优先关弹窗，其次关抽屉）。
   > 早期版本曾有 `#codex-mask` / `#gs-mask` / `#test-mask` / `#dmask` 四个独立弹窗，重构时已统一收敛掉。
   > **新增弹窗不要再建新 `.mask`**，直接用 `modal()` 注入。
@@ -497,7 +497,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ## 6. 交互流程
 
-### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1815）
+### 6.1 添加 / 编辑渠道 `openChannelForm(id)`（1819）
 
 ```
 openChannelForm()        新增：清空表单，协议默认 openai，权重默认 0
@@ -526,19 +526,40 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 - 白名单外的名字后端 **400 并回带合法清单**（不静默忽略）；`workbuddy`/`codex`/`genspark`/`notion-agent` 自带专用报文构造，配了**不生效**。
 - 动机与现场见 §8.40（`agentrouter` 对「`tools` + `reasoning_effort`」直接 400，而客户端每次请求都同时带这两样）。
 
+**「自定义请求头」输入框（`f-headers`，v1.18.44）**：
+
+- 每行一条 `Name: value`（多行文本），**出站时附加到这家渠道的请求上**（渠道级，不是全局）。
+  解析走 `parseCustomHeaders`（对象或文本两种形态都认；跳过注释行/空行/没有冒号的行；**`Authorization` 不可覆盖**——UI 里写着"Authorization 不可覆盖"，后端也真的把它删掉，否则渠道配置就能顶掉网关自己的鉴权头）。
+- 适用面：**openai / anthropic / gemini 系出站**（`applyCustomHeaders` 在出站头构造处统一挂）；
+  `workbuddy`/`codex`/`genspark`/`notion-agent`/`notion` 自带专用报文构造，配了**不生效**。
+- **动机（现场）**：用户报「AgentRouter 这个渠道为什么获取模型总是失败？✗ HTTP 401 `unauthorized client detected`」。
+  容器内实测**同一账号、同一时刻、同一 URL，只改请求头**：① 只带 `Authorization` → 401；② 加
+  `User-Agent: claude-cli/2.0.0 (external, cli)` → **200 + 4 个模型**；③ 换浏览器 UA → **照样 401**
+  ——它认的是 Claude CLI 指纹**本身**，不是"任意浏览器化 UA"。
+  所以这不是上游抽风，是**我们自己的两个 bug 叠在一起**：① 这个 textarea **从不回填**（同一个表单里 `proxy` 是有
+  `value="${esc(c.proxy||'')}"` 的）→ 框永远空着 → 「获取模型」发出去的探测**不带那个 UA** → 必 401；
+  ② 渠道 POST 的 `headers` 没有 `prevDef` 兜底（旧写法 `body.headers ? body.headers : undefined`）→
+  **打开该渠道顺手点保存就静默删掉已配的 UA**（与 §8.26「掩码回写抹掉渠道密钥」同一类数据损失）。
+- 处置：① 新增 `headersTextOf(c)`（对象 → 多行文本）并回填 textarea（`esc()` 过）；
+  ② `saveChannel` 提交**原文**（不再 `.trim()||undefined`——那会配合空框把 UA 删掉）；
+  ③ 渠道 POST 的 `headers` 改成与 `dropParams`/`weight` 同款语义：**显式值（含 `''`）优先、`''` 清空、字段缺省则保留旧值**；
+  ④ `probeDef` 在吃 401 且**一个自定义头都没配**时，错误文案里直接点名「自定义请求头」并给出可照抄的 `claude-cli` 值
+  （**指错方向比不给指引更坏**——让人去"换个更像浏览器的 UA"是白费功夫）。
+- 回归：`test/channel-headers-roundtrip-e2e.test.js`（38 项，含"再 POST 不带该字段仍在""显式空串真能清空""真实对话上游也真收到那个 UA"与构建产物守卫）。
+
 **上游探测列表**（本轮重做，替代原来的 chip 逐个点击）：
 
 - 面板 `.probe-panel`：搜索框 + 可滚动列表（`max-height:212px`）+ 底部计数与批量按钮
 - 已存在的别名行标 `.have`（半透明 + 不可勾选），避免重复添加
 - 支持**搜索过滤** `filterProbeRows`、**全选** `probeSelectAll`、**清空** `probeClearSel`、**批量加入** `probeAddSelected`
-- **原型**：`probeUpstream`（1910）从 `PROBE_POOL`（1783，约 46 个模型）取数，贴近真实中转站规模
-- **生产**：`probeUpstream`（`build/app.js` 2131）真发 `POST /admin/api/probe`，
+- **原型**：`probeUpstream`（1914）从 `PROBE_POOL`（1783，约 46 个模型）取数，贴近真实中转站规模
+- **生产**：`probeUpstream`（`build/app.js` 2136）真发 `POST /admin/api/probe`，
   返回的是**该渠道上游真实的 `/v1/models` 清单**；搜索/全选/批量逻辑与原型同构。
   ⚠️ 注意 `server.js` 的探测协议白名单——曾漏 `workbuddy` 导致误报失败
 
 ### 6.2 导入（四类）
 
-`IMPORT_META`（2033）驱动同一套弹窗骨架，`mode` 决定形态：
+`IMPORT_META`（2037）驱动同一套弹窗骨架，`mode` 决定形态：
 
 | kind | 名称 | 形态 | 要点 |
 | --- | --- | --- | --- |
@@ -549,7 +570,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 - 粘贴式 `doImport`：分步状态动画（换令牌 → 拿账号 → 拉模型 → 建渠道）
 - 文件式 `importFiles`：逐个文件解析，逐行输出成功/失败结果与原因
-- 解析容错集中在 `parseCodexUnits`（2051）与 `parseGsSessionId`（2059），**改动务必保留多结构兼容**
+- 解析容错集中在 `parseCodexUnits`（2055）与 `parseGsSessionId`（2063），**改动务必保留多结构兼容**
 
 **生产侧（`build/app.js`）**：`IMPORT_META` 在 2302，弹窗骨架与原型同构，但**去掉了假步骤动画**，改为真实请求：
 
@@ -559,14 +580,14 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | `gs-session` / `gs-json` | `importGsSession(raw)` 2375 | `POST /admin/api/genspark-import` |
 
 - `doImport` 2381 / `importFiles` 2401 都直接转发给上面两个函数，逐条回填真实结果
-- 原型的 `hash(s)`（2115，造假渠道 ID）**生产侧已删除**
+- 原型的 `hash(s)`（2119，造假渠道 ID）**生产侧已删除**
 - 解析容错逻辑与原型一致（同样的 `parseCodexUnits` / `parseGsSessionId`），改一处要两处同步
 
-### 6.3 测试模型 `openTestModels(opts)`（2167）
+### 6.3 测试模型 `openTestModels(opts)`（2171）
 
 - 支持 `{channelId}` 预筛（从渠道行/抽屉进入时只显示该渠道的模型）
 - 分组多选列表 `.test-list`（分组头 sticky）+ 提示词输入
-- `runTests`（2213）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
+- `runTests`（2217）逐条执行：先插"等待"行 → 出结果 → 替换为成功/失败行 → 汇总"x/y 通过"
 - **停用渠道同样可测（v1.13）**：停用只是"不参与调度、不参与自动探测"，不代表不能手动打一发验证模型还活着。
   弹窗按 `DATA.channels` 里**全部**渠道构造（不再 `if(!c.on)continue`），停用渠道的分组头带「已停用」标签，
   且当列表里含停用渠道时补一行说明："手动测试照打，测通也不会因此启用它，且停用渠道不参与自动探测"。
@@ -587,9 +608,9 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
   （复用设计稿已有样式，不新增 CSS、不动行号偏移）。图标用已有的 `check` / `clock` / `warn`。
   汇总行同步改成"通过 a · 空回复 b · 失败 c（共 n 个 · 提示词「…」）"，不再只报一个 `x/y 通过`。
 
-- **原型**：`simTest`（2154）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
-  回复文案取自 `REPLIES`（2153）
-- **生产**：`runTests`（`build/app.js` 2506）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt, stream}`），
+- **原型**：`simTest`（2158）按渠道状态与历史失败率**伪造**成功或失败（停用/不可用 → 502；失败率≥50% → 429），
+  回复文案取自 `REPLIES`（2157）
+- **生产**：`runTests`（`build/app.js` 2511）改为真实 `POST /admin/api/test`（body `{model, channelId, prompt, stream}`），
   逐条渲染真实 `latencyMs` / `promptTokens` / `completionTokens` / 上游回复或错误原文。
   **v1.18.40：默认按流式打（`stream:true`）**——弹窗里多一个「流式」勾选框（默认勾上，可取消）。
   真实客户端（DSH 等）走的**就是流式**，只测非流式等于只测了一半；服务端按真实链路同一套判据判（见
@@ -1693,10 +1714,39 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **教训**：① **"看起来像证据"的东西要能证伪**——切分工具产出的 `result.css` 元数据头里明明写着 `LicenseDescription … SIL Open Font License …`，但实测**分片里根本没有这条记录**（工具会丢掉输出字体的 `nameID 13/14`，每片只剩 7 条 `name`）：那份头读的是**输入**字体。为此在用例里写了一个**最小 woff2 解码器**——woff2 的表数据是一整条 Brotli 流，**在压缩字节上直接搜字体名永远是"假通过"**（它连一个名字都没看过）；解码器自带"解压长度 = Σ表长"自检与 `HCRound` 正对照，才让"266 片都不含保留名"这句话有分量。② **改名必须早于切分**，否则改的是文件名不是字体内涵。③ 资产类改动要**同时**守住三条容易被静默漏掉的边：Dockerfile 的 `COPY`、CSP 的许可来源、以及"路由必须与 `/console` 同处 `try` 块内"（字体不是机密，不该被客户端面封禁闸门挡住）。
 
 
-- 密钥明文显示加"仅本次会话"提示或二次确认
-- 探测结果支持"仅显示新增"过滤
+### 8.46 v1.18.44 渠道「自定义请求头」：探测失败的真凶是我们自己的表单（2026-10-06，对象 `server.js` 渠道 POST 与 `probeDef` + `build/app.js` 表单回填/保存 + `console-redesign.html` 演示表单 + 产物 `console.html` + 新增 `test/channel-headers-roundtrip-e2e.test.js` + 代码地图 / 本文 / `docs/protocols.md` / `docs/tests.md` / `README.md` / `AGENTS.md` / `config.example.json`）
+
+**现场**（用户报）：「AgentRouter 这个渠道为什么获取模型总是失败？✗ HTTP 401: `{"error":{"message":"unauthorized client detected, contact support for assistance at https://discord.gg/HgekCyHJqB"}`」
+
+**定性**：容器内实测，**同一账号、同一时刻、同一 URL，只改请求头**（探测不消耗推理额度，所以这个 A/B 是免费的）：
+
+| 出站请求头 | 结果 |
+| --- | --- |
+| 只带 `Authorization: Bearer <key>` | **HTTP 401** `unauthorized client detected` |
+| + `User-Agent: claude-cli/2.0.0 (external, cli)`（渠道里本来就配着的那条） | **HTTP 200，4 个模型** |
+| + 浏览器 UA（`Mozilla/5.0 … Chrome/120`） | **HTTP 401**（**不是"任意浏览器化 UA"就行**——它认的是 Claude CLI 指纹本身） |
+
+所以上游没抽风，**是我们自己的两个 bug 叠在一起**：
+
+- **① 控制台「自定义请求头」textarea 从不回填**。同一个表单里 `proxy` 是有 `value="${esc(c.proxy||'')}"` 的，这个框却是裸 `<textarea …></textarea>`——于是打开渠道详情永远是空框，点「获取模型」发出去的探测**不带那个 UA** → 必 401。用户看到的是"这个渠道获取模型总是失败"，而库里配的 UA 其实一直是好的。
+- **② 渠道 POST 的 `headers` 没有 `prevDef` 兜底**（旧写法 `body.headers ? body.headers : undefined`）。表单提交的正是那个空框 → `undefined` → **打开 agentrouter 顺手点一下保存，就把它的 UA 静默删掉了**。与 §8.26「掩码回写抹掉渠道密钥」是同一类数据损失，只是这次丢的是请求头。
+
+**处置**：
+
+- **① 回填**：新增 `headersTextOf(c)`（对象 → `Name: value` 多行文本；字符串原样返回），textarea 改成 `${esc(headersTextOf(c))}`（外部可控值一律过 `esc()`）。
+- **② 保存语义**：`saveChannel` 提交**原文**（不再 `.trim()||undefined`——`.trim()||undefined` 配合空框正好是把 UA 删掉的配方）；渠道 POST 的 `headers` 改成与 `dropParams`/`weight` **同款三态**：显式值（含 `''`）优先、`''` **清空**、字段缺省则**保留旧值**（`parseCustomHeaders` 判空，空对象才回落 `prevDef.headers`）。探测那一发也统一提交原文（服务端 `''` 与 `undefined` 等价，留着两种写法只会让下一个人以为它们不一样）。
+- **③ 指引**：`probeDef` 吃 4xx 且报文命中 `unauthorized client detected`、并且该渠道**一个自定义头都没配**时，错误文案后面追加「← 这家上游在查客户端指纹：请把上游要求的 User-Agent 填进渠道的「自定义请求头」（AgentRouter 实测要 `claude-cli/2.0.0 (external, cli)`，浏览器 UA 一样被拒）」。**指错方向比不给指引更坏**——让人去"换个更像浏览器的 UA"是白费功夫。
+
+**行号锚点**：`build/app.js` **2724 → 2729 行**（净 +5，`headersTextOf` 落在 2031–2035）、产物 `console.html` **3437 → 3442 行**，**JS 偏移仍 +709、CSS 偏移仍 +13**（`build/extra.css` 与设计稿 `<style>` 一行未动；复核：`const IC` app.js 3 → 产物 712）。`console-redesign.html` 同步加同名 helper（`chAliases` 1802 → **1806**，文件 2266 → **2270 行**）。`docs/frontend-code-map.md` 已按 AGENTS §1.2 机械重核：**app.js 侧插入点之后整体 +5**（`openChannelForm` 2034→**2039** … `boot` 2705→**2710**）、**原型侧插入点之后整体 +4**（`renderModelRows` 1884→**1888** … `init()` 2258→**2262**）、新增 `headersTextOf` 登记进 §0.2、§5 修改路由表补一行；**历史注记（§0.1）一字未动**。核对脚本这次把「符号 + 相邻数字」从文档里抠出来与源码逐一比对，**当前锚点 0 处对不上**（剩下 23 处全是 §0.1 里刻意保留的旧值）。
+
+**顺带修掉的两处历史烂账**（都不是本轮引入，但机械核对把它们暴露出来了）：代码地图 §5 的 `setTheme` 生产锚点自 v1.18.24 起就多差 5（2565 → 真值 **2575**）、`ACTS` 同理（2583 → **2593**）；详细设计文档 §4.6 里写 `build/app.js` **2350** 的全局 `keydown` 监听，真值一直是 **2569**（差 214，早已烂掉）。
+
+**教训**：① **"表单不回填"是数据损失的近亲**——它先让一个配好的值在 UI 上"看不见"，再由保存把它真正删掉；只要某个输入框**从不回填**，它旁边的保存按钮就是一把删除键。判断一个表单字段有没有这个病，看它和同表单里回填正确的字段（这里是 `proxy`）长得一不一样即可。② **"上游在查客户端指纹"这类结论必须做成 A/B 并当场留证**：这次三轮请求头对照全在同一分钟、同一账号、同一 URL 内完成，才排除了"上游今天心情不好"这个解释；而**浏览器 UA 也 401** 这一格尤其重要——没有它，正确的结论会被写成"加个浏览器 UA 就好了"。③ 报错文案要**指向可执行的动作**，并给出**能照抄的值**；只说"unauthorized"等于什么都没说。
+
 ## 9. 后续可做（未实现）
 
+- 密钥明文显示加"仅本次会话"提示或二次确认
+- 探测结果支持"仅显示新增"过滤
 - 表单校验错误定位（当前只给行内状态文字，不滚动定位到出错字段）
 - 移动端适配（当前 ≤900px 直接隐藏侧栏，无抽屉式导航）
 - 设计稿的 `PROBE_POOL` / `DATA` 快照已是演示用途，长期可考虑删掉、让原型也能切到 mock 接口

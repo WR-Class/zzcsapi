@@ -1641,7 +1641,13 @@ async function probeDef(def, timeoutMs) {
       }
       return { ok: false, status: ps.status, error: `HTTP ${ps.status} (ps-fallback): ${ps.error || 'no body'}`, latencyMs: ms2, via: 'ps-fallback' };
     }
-    return { ok: false, status: resp.status, error: `HTTP ${resp.status}: ${body.slice(0, 120)}`, latencyMs: ms };
+    // 上游查客户端指纹时给一条可读指引（v1.18.44）：AgentRouter 实测——不带它认的 UA 一律
+    // 401 unauthorized client detected，而**浏览器 UA 同样被拒**，所以提示必须指向「把上游要的
+    // 那个 UA 原样填进渠道的自定义请求头」，而不是让人去换一个"更像浏览器"的 UA。
+    const fpHint = (/unauthorized client detected/i.test(body) && !Object.keys(parseCustomHeaders(def)).length)
+      ? ' ← 这家上游在查客户端指纹：请把上游要求的 User-Agent 填进渠道的「自定义请求头」（AgentRouter 实测要 claude-cli/2.0.0 (external, cli)，浏览器 UA 一样被拒）'
+      : '';
+    return { ok: false, status: resp.status, error: `HTTP ${resp.status}: ${body.slice(0, 120)}${fpHint}`, latencyMs: ms };
   } catch (err) {
     clearTimeout(timer);
     return { ok: false, error: String(err && err.message || err), latencyMs: Date.now() - t0 };
@@ -4335,8 +4341,14 @@ async function handleAdminApi(req, res, url) {
       autoAlias: body.autoAlias === true,
       models: body.models || {},
       proxy: body.proxy ? String(body.proxy) : undefined,
-      // 渠道级自定义请求头（对象或 "Name: value" 多行文本）
-      headers: body.headers ? body.headers : undefined,
+      // 渠道级自定义请求头（对象或 "Name: value" 多行文本）。
+      // v1.18.44：**显式传值（含空串）= 以本次为准**（空 = 清空），**字段缺失 = 沿用旧值**
+      // ——与 dropParams / weight 同款语义。此前这里既没有 prevDef 兜底，控制台表单又从不回填这个框
+      // （textarea 永远空着），于是「打开 agentrouter 顺手点保存」会把它的 User-Agent 静默删掉，
+      // 而 AgentRouter 对所有不带它认的 UA 的请求一律回 401 unauthorized client detected。
+      headers: body.headers !== undefined
+        ? (Object.keys(parseCustomHeaders({ headers: body.headers })).length ? body.headers : undefined)
+        : (prevDef ? prevDef.headers : undefined),
       // v1.18.33 渠道级「不发这些参数」：显式传空数组 = 清空（用户就是要恢复"原样转发"）；
       // 只有那些压根不传这个字段的老客户端/导入流程才沿用旧值（与 weight 同款语义）
       dropParams: body.dropParams !== undefined ? normDropParams(body.dropParams) : (prevDef ? prevDef.dropParams : undefined),

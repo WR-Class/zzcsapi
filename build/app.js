@@ -2028,6 +2028,11 @@ async function copyAllEndpoints(btn){try{const k=await gwKeyLive();await copyTex
 const maskKey=k=>{k=String(k||'');if(!k)return '—';if(k.length<=12)return k.slice(0,3)+'••••';return k.slice(0,7)+'•'.repeat(Math.min(20,k.length-11))+'•'+k.slice(-4)};
 const chBaseUrl=c=>c.baseUrl||(PROTO_META[c.proto]||{}).base||'—';
 const chAliases=c=>(c.aliases||[]).map(r=>({alias:r.alias,upstream:r.upstream}));
+/* 渠道自定义请求头 → 表单文本。接口下发的是对象，表单收的是 "Name: value" 多行文本。
+   v1.18.44 现场：这个框此前**从不回填**，于是「获取模型」发出去的探测不带 User-Agent，
+   AgentRouter 直接 401 unauthorized client detected（实测带它认的 UA 才回 200）。 */
+const headersTextOf=c=>{const h=c&&c.headers;if(!h)return '';if(typeof h==='string')return h;
+  return Object.entries(h).map(([k,v])=>`${k}: ${v}`).join('\n');};
 
 /* ═══════════════════════════ 弹窗：添加 / 编辑渠道 ═══════════════════════════ */
 let modalChId=null, modalModels=[];
@@ -2065,7 +2070,7 @@ function openChannelForm(id){
       <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / workbuddy 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
         <input class="input" id="f-proxy" value="${esc(c&&c.proxy||'')}" placeholder="留空 = 直连"></div>
       <div class="field"><label>自定义请求头 <span class="help">可选，每行一条 <code>Name: value</code>；Authorization 不可覆盖</span></label>
-        <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)"></textarea></div>
+        <textarea class="input" id="f-headers" rows="2" placeholder="User-Agent: claude-cli/2.0.0 (external, cli)">${esc(headersTextOf(c))}</textarea></div>
       <div class="field"><label>不发这些参数 <span class="help">逗号或空格分隔；出站前从这家渠道的请求报文里删掉这几个参数（上游对某个参数组合直接 400 时用，例如 tools + reasoning_effort）</span></label>
         <input class="input" id="f-drop" value="${esc(dropParamsOf(c))}" placeholder="留空 = 一个都不删；例：reasoning_effort, temperature">
         ${dropChipsHtml()}</div>
@@ -2141,7 +2146,7 @@ async function probeUpstream(){
     const r=await api('/admin/api/probe',{method:'POST',body:JSON.stringify({
       baseUrl:base,apiKey:key,protocol:$('#f-proto').value,
       proxy:$('#f-proxy').value.trim()||undefined,
-      headers:$('#f-headers').value.trim()||undefined,
+      headers:$('#f-headers').value,
     })});
     if(!r.ok){setStatus(st,'✗ '+(r.error||'探测失败'),'bad');return}
     probeFound=(r.models||[]).slice().sort();
@@ -2277,7 +2282,7 @@ async function saveChannel(){
     enabled:$('#f-on').value==='1',
     autoAlias:$('#f-autoAlias').checked,
     proxy:$('#f-proxy').value.trim()||undefined,
-    headers:$('#f-headers').value.trim()||undefined,
+    headers:$('#f-headers').value,
     /* 渠道级「不发这些参数」（v1.18.33）：**总是**提交这个字段——框空 = 显式 `[]` = 清空。
        刻意与上面几个字段的 `||undefined`（"留空 = 不动"）不同：服务端对 dropParams 的语义是
        "传了空数组就清空、压根不传才沿用旧值"，前端若不发，用户就永远清不掉已配的清单。

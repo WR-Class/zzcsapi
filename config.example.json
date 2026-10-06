@@ -60,6 +60,7 @@
       "enabled": true,
       "autoAlias": true,
       "proxy": "",
+      "headers": { "User-Agent": "claude-cli/2.0.0 (external, cli)" },
       "dropParams": ["reasoning_effort"],
       "models": {}
     },
