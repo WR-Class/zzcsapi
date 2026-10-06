@@ -215,7 +215,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 44 个测试文件 · 2039 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 47 个测试文件 · 2205 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -227,6 +227,7 @@ http://127.0.0.1:8787/console
 | [Genspark Claw 反代研究](docs/genspark-claw-reverse-proxy-research.md) | 逆向过程留档 |
 | [PromptQL（prompt.ql.app）反代研究](docs/promptql-reverse-proxy-research.md) | 结论：不建议接（多人协作 bot 工作台、按 OLU 计量付费，不是可蹭的模型额度；控制面 `auth.pro.ql.app` 本机被 DNS 污染） |
 | [Arena 协议](docs/arena-protocol.md) / [Prism 反代研究](docs/prism-reverse-proxy-research.md) | 已撤渠道留档 |
+| [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **未完成能力的留档**：上传链（取目标 → S3 桶根 204 → 公开 URL）已打通并活体验证；「让 AI 读到」未打通（独立 attachment step 要么 400 要么空答）。含端点清单、严格校验的键白名单、**软墙 ≠ 形状错的判别纪律**、以及下一步该找的 task id |
 | [AI 工具调用桥接](docs/AI工具调用桥接-群友分享版.md) | 群友分享版说明 |
 
 ### 前端构建管线（一句话版）
