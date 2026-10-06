@@ -16,7 +16,7 @@
 | 取上传目标（`getUploadFileUrl`） | ✅ **通** | `POST /api/v3/getUploadFileUrl {bucket:"public",name,contentType}` → **200** |
 | 把字节传到 Notion S3 | ✅ **通** | `POST` 到**桶根** multipart（fields 全带 + file 最后）→ **204** |
 | 拿文件的可下载直链 | ✅ **通** | 响应里的 `signedGetUrl`（6 小时签名直链）；公开 URL = 桶根 + `fields.key` |
-| **让 AI 读到文件内容** | ❌ **未通** | 形状已按 **Notion 自己的前端代码**对齐（扁平 `{type:"attachment", fileUrl}`）后仍是 **200 空答**；缺的是「文件先登记进会话」（§2.0） |
+| **让 AI 读到文件内容** | ❌ **未通** | 三个真障碍已逐个查明并解决（§2.0）：指针必须是记录指针对象、step 的 `id` 必须是 uuid、文件要挂 `attachment:<fileId>:<name>` URI。**仍差最后一格**：附件请求会被上游**大量软墙**，拿不到干净的判据 |
 
 > **本轮（第 3 轮）的关键增量**：**拿到了 Notion 自己的前端源码**（方法见 §2.0），
 > 于是「附件 step 长什么样」「助手对话的上传走哪个事件」不再是猜测，而是抄官方代码；
@@ -147,10 +147,58 @@ multipart/form-data：fields 的 11 个键各一份 + file 放最后
 `assistantChatTranscriptSessionPointer`。这也解释了为什么模型会明确说"请重新上传"：
 它收到了一条**指向未登记文件**的 step。
 
-**已排除的 pointer 取值**：`spaceId`（400）、新 `uuid`/`threadId`（400）。
-剩下的可能是一个**指针对象**（Notion 里 `(295447).Z1({environment, table, spaceId})` 是生成指针的工厂，
-`table` 可能是 `thread`/`assistantChatTranscript`），这一步**没有再猜下去**——
-猜错一次就是一次 400，性价比已低于"直接在浏览器里抓一发真报文"（见 §2.5 第 1 条）。
+**已排除的 pointer 取值**：`spaceId`（400）、新 `uuid`/`threadId`（400）、不传（400）、`null`（400）、`"thread:"+uuid`（400）。
+
+### 2.0.1 ★★ 三个真障碍（本轮逐个查明，全部是"静默失败"形态）
+
+**(1) 会话指针必须是记录指针对象，不是字符串**
+
+```jsonc
+"assistantChatTranscriptSessionPointer": { "table": "thread", "id": "<新 uuid>", "spaceId": "<spaceId>" }
+```
+
+→ **200**，`fields.bucket = "prod-files-secure"`，响应还多一个 **`chatId`**（值就等于我们传的 `id`）。
+`table:"thread"` + 客户端自己生成的 uuid，与前端 `Z1({environment, table, spaceId})` 生成指针的做法一致。
+
+**(2) step 的 `id` 必须是 uuid —— 否则整发被静默吞掉**
+
+同一份报文，只改 step 的 `id`：
+
+| step id | 上游响应 |
+| --- | --- |
+| `"attachment-0"` | **HTTP 200 + `content-type: application/x-ndjson` + 响应体 0 字节**（重发 4 次也一样） |
+| `<uuid>` | **HTTP 200 + 28 KB 正常 NDJSON 流**，模型正常作答 |
+
+**"200 空答"的真相就是这条**：上游对 id 不合法的 step 不报 400、也不给流，直接回空 body。
+（顺带排除：响应头里没有任何 task id，`x-notion-request-id`/cookie 里的 uuid 拿去问 `getTasks` 全是 `{"results":[]}`；
+`content_sha`/`first_object`/`record_status` 也不在 Notion 前端里，只是 notion2api 自己的字段名。）
+
+**(3) 文件要挂 Notion 自己的 `attachment:` URI**
+
+助手取地址响应的 **`url` 字段不是 POST 目标**，而是一个附件 URI：
+
+```
+url = attachment:9404ae49-ef82-44ef-b0cf-fe8567b335cf:probe-attach.csv
+```
+
+其中 uuid **正是 S3 `fields.key` 的中间段**（`<spaceId>/<fileId>/<name>` 里的 `<fileId>`），
+与 notion2api 二进制里的 `attachment-%d` / `attachmentURLFromS3Key` 常量完全对应。
+响应另外给：`signedGetUrl`（`https://file.notion.com/f/f/<spaceId>/<fileId>/<name>?table=thread&id=<uuid>&spaceId=…&signature=…`）、
+`signedUploadPostUrl`（桶根 `https://prod-files-secure.s3.us-west-2.amazonaws.com/`）、`chatId`。
+
+**fileUrl 形态的接受度（step id 已用 uuid）**：
+
+| fileUrl 形态 | 结果 |
+| --- | --- |
+| 路径式 `https://s3-us-west-2.amazonaws.com/<bucket>/<key>` | 200 真答，但模型答「无法读取上传的 CSV」 |
+| 虚拟主机式 `https://<bucket>.s3.us-west-2.amazonaws.com/<key>` | **400**（形状被拒） |
+| `signedGetUrl`（file.notion.com） | **400**（形状被拒） |
+| `attachment:<fileId>` | 200 真答，模型仍答「无法读取」 |
+| `attachment:<fileId>:<name>` | **每次都撞软墙，拿不到干净判据** ← 差的就是这一格 |
+
+**关于软墙的新认识**：附件类请求撞软墙的概率**远高于**普通请求——同一账号上"不带附件的对照"能连答，
+带附件的请求却可以连撞十几次（`temporarily-unavailable`, `isRetryable:false`）。
+所以**每一发附件实验都必须配一发同时刻对照**，否则会把"被限流"误读成"形状不对"。
 
 **已排除的可能**：`content_sha` / `first_object` / `single_object` / `record_status` 这些常量
 **不在** Notion 前端里（全包 0 命中），它们只是 notion2api 自己的 Go 结构体字段名，不是 Notion 的 API 字段。
@@ -235,20 +283,15 @@ notion2api 二进制里的符号名（**不是** HTTP 路径，是方法名）�
 ### 2.5 下一步建议（按性价比排序）
 
 1. **在浏览器里把一份 CSV 挂进 Notion AI 对话，抓 `runInferenceTranscript` 的真实报文**——
-   一步到位（它同时给出 `assistantChatTranscriptSessionPointer` 的真值和附件 step 的最终形状）。
-   **本轮已按 §2.0 把形状对齐到官方代码后仍不生效，所以这一步现在是唯一的低成本路径。**
-2. 找 `assistantChatTranscriptSessionPointer` 的语义：已排除 `spaceId`（400）。它是"会话指针"，
-   可能形如 `{table, id, spaceId}` 的复合指针（Notion 里 `(295447).Z1({environment, table, spaceId})`
-   就是生成指针的工厂函数）——前端里 `assistantChatTranscript` 只在壳包出现 2 次，构造点在别的 chunk。
-3. 找 task id 的来源：`getTasks` 的形状已确认（`{taskIds:[…], spaceId}` → `{results:[…]}`），
-   拿到附件处理任务的 id 后即可轮询 → 取签名 URL → 重发。
+   它一步给出最后两格的**真值**：附件 step 的 `fileUrl` 到底写什么（是 `attachment:<fileId>:<name>`、
+   还是别的形态）、以及 step 上还有没有别的必需字段。**这是唯一的低成本路径**（其余都已知）。
+2. 若走不了浏览器：就盯住 §2.0.1 表格里唯一"没有干净判据"的那一格 ——
+   同一账号上**对照 + `attachment:<fileId>:<name>` 成对打**，直到两发都不撞软墙为止（软墙是逐发间歇的）。
+3. 继续挖前端：全量 2460 个 chunk 已抓到容器 `/tmp/all/`，但构造附件 step 的**调用方**尚未定位
+   （`stageAttachmentInferenceTranscriptStep` 只出现在 store 自身的两个 chunk 里）。
+   可按 `t(401558).`（上传模块引用）或 `stageAttachment` 全量扫 `/tmp/all/`。
 4. 找 notion2api 的 `backend/internal/service/notion_attachment_upload.go` 源码
-   （发布包只给了符号名；`GALAIIS/Notion2API` 等同名仓库都不是这一份）。注意：
-   `content_sha` / `first_object` / `single_object` / `record_status` **不在** Notion 前端里（0 命中），
-   是 notion2api 自己的字段名，别再当 Notion 字段去试。
-5. 继续挖前端：本轮只抓了名字匹配 AI/附件的 **125** 个 chunk（哈希表共 2460 项）。
-   构造附件 step 的调用点（`stageAttachmentInferenceTranscriptStep` 的**调用方**）尚未定位，
-   它所在的 chunk 名字不含 AI/chat/attach 关键词；可按 `t(401558).`（上传模块的引用）全量扫一遍。
+   （发布包只给了符号名；`GALAIIS/Notion2API` 等同名仓库都不是这一份）。
 
 ### 2.6 复现命令骨架
 
