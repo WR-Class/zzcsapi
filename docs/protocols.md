@@ -236,6 +236,23 @@ Notion 推理接口会对**某些客户端指纹**回一道"软墙"：HTTP 200 +
 
 守卫：`test/notion-refetch-fallback-e2e.test.js`。
 
+### 附：模型代号表可能过期（v1.18.43 记录，**待办**）
+
+`notion.js` 的 `NOTION_MODEL_MAP`（对外模型名 → Notion 内部代号）是**硬编码**的，快照日期 2026-09-06、
+33 个模型。Notion 的内部代号是 `形容词-名词` 形状（`orlando-quinn` / `agave-flan` / `almond-croissant-low`），
+而报文里我们是**带着代号发**的（`config.value.model` + `modelFromUser: true`）——**代号一旦在 Notion 侧改名，我们就会发一个过期的值**。
+
+触发记录的现场：用户从浏览器抓到的两次 Notion 请求里，**失败那一发带 `"model":"albuquerque-quinn"`，成功那一发不带 `model`**。
+`albuquerque-quinn` **不在我们的 33 个代号里** ⇒ 要么它是个我们没映射的新模型，要么它说明代号表已经漂移。
+
+- **本轮没能确认**：唯一可用的账号 `notionls` 查 `/api/v3/getAvailableModels` 回的是
+  `{"modelSelectionRestricted":true, …, "models":[]}`（**注册表为空**）——这个账号处于"模型选择受限"状态，
+  没法用它刷新代号表。而**我们默认那一档仍正常**（`claude-sonnet4.6` → `almond-croissant-low`，2026-10-06 本地与云端都真答过），
+  所以"表过期"目前只是**可能**，不是已发生的事故。
+- **拿到新账号时的第一步**：用它查一次 `POST /api/v3/getAvailableModels`（body `{spaceId}`），把回包里的 `models[].model`
+  与 `NOTION_MODEL_MAP` 的 value 集合对一遍。这一步**只读、不碰推理接口、不消耗额度**，比继续调报文形状值钱得多。
+- 注意：`modelSelectionRestricted: true` 的账号**不能钉模型**，报文里带不带 `model` 的差别在这种账号上不可测。
+
 ## notion 渠道的内联附件（`notionAttachments`，v1.18.41，默认关）
 
 **机制来自参照实现 notion2api 的实发报文**（抓法见 `docs/notion-attachment-upload-research.md` §4.1），
