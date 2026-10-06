@@ -24,7 +24,7 @@
 - 🧩 **OpenAI Responses API（v1.18.38）**：`/v1/responses`（POST，含流式）+ `/v1/responses/{id}`（GET 取回 / DELETE）——入站按 Responses 报文收，出站转回 `response` 对象与 Responses 的 SSE 事件序列，中间复用同一条候选链与全部兜底（[协议详解](docs/protocols.md)）
 - 🩺 **手动测试的流式模式 + 真实流量单独一条欠账（v1.18.40）**：控制台「测试模型」默认按**流式**打（真实客户端走的就是流式，只测非流式等于只测了一半，`stream:true` 可选）；且**只有真实客户端请求成功才算"这家对话能用"**——手动测试与 `/models` 探测成功只放开冷却、还清探测侧的账，**不再清零真实流量的连败计数**，熔断因此真的会跳开"测试过、真实挂"的死家（[调度详解](docs/scheduling.md)）
 - 📎 **notion 渠道的内联附件（v1.18.41，渠道级 `notionAttachments`，默认关）**：客户端发 OpenAI `{type:"file",file:{filename,file_data:"data:…;base64,…"}}`（或 Anthropic `document` 块）时，网关把文件**内联进提示词**并打开 `enableCsvAttachmentSupport`——这是参照实现 notion2api 实发报文的形状，**CSV 不上 S3、不建任务**（[机制与诚实边界](docs/notion-attachment-upload-research.md)）。✅ **「模型真读到了」已活体验证（v1.18.42）**：对照那一发模型答"没找到你上传的 CSV"，带附件那一发答出**只存在于 CSV 里**的串，并经本地容器网关 `/v1/chat/completions` 复验（见研究文档 §8）
-- 🚦 **notion 出站通道链（v1.18.42）**：Notion 推理接口会对**某些客户端指纹**回一道软墙（HTTP 200 + `temporarily-unavailable`，反爬式静默拒绝）。四个环境对打后定性为**客户端指纹评分**——curl 任何协议都过、Node 24 的 h2 过、Node 的 `fetch`/undici 与 Node 20 的 h2 不过。出站因此做成 **curl 主 → HTTP/2 兜底 → fetch 最后**，且**软墙会在通道内自动换**（墙内那一发不消耗真实推理）。这是 ③ 的活体判据之所以能取得的前提（[协议详解](docs/protocols.md) §notion 出站通道链）
+- 🚦 **notion 出站通道链（v1.18.42，根因于 v1.18.43 修正为两个维度）**：Notion 推理接口会回一道软墙（HTTP 200 + `temporarily-unavailable`，反爬式静默拒绝）。**软墙有两个独立维度**：① **账号状态**（主导，与传输无关、随时间变——`notion7` 在本地与云端、五种传输一起软墙，且在云端曾有短暂开口）；② **客户端指纹**（只在账号可过时才看得见——同一秒交替打：curl 3/3 真答、fetch 0/3 软墙）。出站因此做成 **curl 主 → HTTP/2 兜底 → fetch 最后**，且**软墙会在通道内自动换**（墙内那一发不消耗真实推理）；**这一修法治 ②，治不了 ①**（那时网关如实报 `ok:false / notion: temporarily-unavailable`，不伪装成"200 空回复"）。这是 ③ 的活体判据之所以能取得的前提（[协议详解](docs/protocols.md) §notion 出站通道链 · 复现仪器 `notion-wall-probe.js`）
 
 ## 快速开始
 
@@ -226,11 +226,11 @@ http://127.0.0.1:8787/console
 | [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | 设置页的施工图：字段契约、四张卡结构、必须守住的交互细节、验收清单 |
 | [thinking 回放缓存设计与实现记录](docs/thinking-replay-design.md) | 三次决策完整过程、跨协议 thinking/签名保真度地图、as-built 边界与验收映射 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | 动代码前过目：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查） |
-| [同类网关内部机制对比](docs/gateway-comparison.md) | 本项目 vs new-api / one-api / sub2api / CLIProxyAPI / **notion2api** 的内部机制/性能/全面性对照（只比机制，不比多用户），含实测数字与各家源码级证据；**§1.5 = 与 notion2api 六项差异的强弱结论**（五项本项目占优或持平，附件/CSV 那一格是它实打实领先，含反向证据：它的 config step 有 61 个开关、我们只有 4 个） |
+| [同类网关内部机制对比](docs/gateway-comparison.md) | 本项目 vs new-api / one-api / sub2api / CLIProxyAPI / **notion2api** 的内部机制/性能/全面性对照（只比机制，不比多用户），含实测数字与各家源码级证据；**§1.5 = 与 notion2api 七项差异的强弱结论**（附件/CSV 那一格 v1.18.42 起**已追平**，另加一条"教训型差异"：同一个软墙我们误判过三次，它的实现里根本没有这道坎） |
 | [Genspark Claw 反代研究](docs/genspark-claw-reverse-proxy-research.md) | 逆向过程留档 |
 | [PromptQL（prompt.ql.app）反代研究](docs/promptql-reverse-proxy-research.md) | 结论：不建议接（多人协作 bot 工作台、按 OLU 计量付费，不是可蹭的模型额度；控制面 `auth.pro.ql.app` 本机被 DNS 污染） |
 | [Arena 协议](docs/arena-protocol.md) / [Prism 反代研究](docs/prism-reverse-proxy-research.md) | 已撤渠道留档 |
-| [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **机制查明 + 诚实边界**：**★ 最有价值的是抓法**——notion2api 的 `upstream.base_url` 可配，指向记录代理就抓到它发给 Notion 的原始报文（含三个必踩的坑：`origin`/`referer` 由 base_url 推出来、账号要按完整 probe JSON 导入、失败会把账号打成 `error`）。据此查明：CSV **不上 S3**，而是 `enableCsvAttachmentSupport:true` + 把 `{"file":{"file_data":"data:…","filename":"…"},"type":"file"}` 内联进 user step 正文（已按此实现为 opt-in 渠道字段，字节逐字对齐，见 `test/notion-attachment-inline-e2e.test.js`）；另白捡到 `getInferenceTranscriptsForUser` 的正确形状。**「模型真读到了」仍未活体验证**（7 个账号同时软墙）→ 默认关。**§5 = 软墙的层次定位**（两个排除性实验：换客户端版本一样被墙、同一批账号的 getInferenceTranscriptsForUser 全部 200 且读得出线程 → 墙只挂在 AI 推理层，与报文形状/版本/token 无关；**别再为软墙调形状**）。含上传链留档（取目标 → S3 桶根 204 → 公开 URL）、**软墙 ≠ 形状错的判别纪律**、判决实验与复现命令 |
+| [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **机制查明 + 活体验证 + 软墙根因**：**★ 最有价值的是抓法**——notion2api 的 `upstream.base_url` 可配，指向记录代理就抓到它发给 Notion 的原始报文（含三个必踩的坑：`origin`/`referer` 由 base_url 推出来、账号要按完整 probe JSON 导入、失败会把账号打成 `error`）。据此查明：CSV **不上 S3**，而是 `enableCsvAttachmentSupport:true` + 把 `{"file":{"file_data":"data:…","filename":"…"},"type":"file"}` 内联进 user step 正文（已按此实现为 opt-in 渠道字段，字节逐字对齐，见 `test/notion-attachment-inline-e2e.test.js`）；另白捡到 `getInferenceTranscriptsForUser` 的正确形状。**✅「模型真读到了」v1.18.42 已活体验证**（§8：对照答"没找到文件"、带附件答出只存在于 CSV 里的 `K7Q2M9`）——仍默认关，但那是**稳妥默认**不是"没验证过"。**§7/§7.7 = 软墙的两个维度**（账号状态主导、与传输无关且随时间变；客户端指纹只在账号可过时才看得见——同一秒交替打 curl 3/3 真答、fetch 0/3 软墙）；**§5/§6 是被推翻的旧结论、§7.4 是三次误判的留档，别重犯**。含上传链留档（取目标 → S3 桶根 204 → 公开 URL）、**软墙 ≠ 形状错的判别纪律**、判决实验与复现命令 |
 | [AI 工具调用桥接](docs/AI工具调用桥接-群友分享版.md) | 群友分享版说明 |
 
 ### 前端构建管线（一句话版）
@@ -242,7 +242,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**41 个文件 · 1917 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**50 个文件 · 2322 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
 ## 配置示例 (`config.example.json`)
@@ -425,8 +425,31 @@ node notion-attachment-verdict.js 8 notion5    # 只打某个渠道
 
 **它已经给出过结论（2026-10-06，v1.18.42）**：在 `notionls` 上**已打通** —— 对照那一发模型答
 「我在这段对话里没有找到你上传的 CSV 文件」，带附件那一发答出 **`K7Q2M9`**（只存在于 CSV 里的串）。
-为什么此前它一直报"未取得"、以及为什么**不要再为软墙改报文形状**（真根因是**客户端指纹评分**，出站已改成 curl 主 → h2 兜底），
+为什么此前它一直报"未取得"、以及为什么**不要再为软墙改报文形状**（真根因是**两个维度**：账号状态主导、客户端指纹次之），
 见 [notion 附件上传研究](docs/notion-attachment-upload-research.md) §5–§8。
+
+## notion 软墙探针（只读脚本，低额度）
+
+`node notion-wall-probe.js` 把软墙的**两个维度**分开——两个维度给客户端的表象一模一样
+（都是 `200 + temporarily-unavailable`），只看见一个就会得出**只对一半**的结论（本项目为此误判过三次）：
+
+| 维度 | 是什么 | 怎么认出来 |
+| --- | --- | --- |
+| **A · 账号状态**（主导） | 账号自身在墙里/不在墙里，**与传输无关**，且**随时间变** | 所有传输**一起**软墙 ⇒ 换传输没用，网关会如实报 `ok:false / notion: temporarily-unavailable` |
+| **B · 客户端指纹** | 账号可过时，curl 过、Node 的 `fetch`/undici 不过 | 同一窗口里 **curl 真答、fetch 软墙** ⇒ 这正是通道链的排序依据 |
+
+做法是**在同一个时间窗内把待比较的传输交错打**（C F C F …），而不是"今天打 A、明天打 B"：
+
+```powershell
+node notion-wall-probe.js                           # 默认 notionls，交错 curl,fetch × 3 轮
+node notion-wall-probe.js notion7                   # 指定渠道
+node notion-wall-probe.js notionls curl,fetch,h2 2  # 指定传输序列与轮数（chain = 线上真实走的通道链）
+```
+
+读法：`★"收到"` = 真答、`W` = 软墙、`?` = 其它响应、`E` = 异常；末尾会直接给**维度 A / 账号可过 / 未取得**的判决。
+**报告绝不回显凭据**；还在墙里的账号一发只花 ~1~2 秒、**不消耗真实推理**。
+⚠️ **克制使用**：有未验证的怀疑——高频用 Node 客户端敲门会把账号推入维度 A；
+而唯一已知可过的账号往往正是活体判据的来源，拿它刷量的代价大于收益（看维度 B，2~3 轮就够）。
 
 ## 安全体检（只读脚本）
 

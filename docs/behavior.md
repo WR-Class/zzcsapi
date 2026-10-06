@@ -107,17 +107,30 @@
     复验（纯文本「收到」、带内联 CSV 问 secret 列 → 「K7Q2M9」）。**但仍默认关**：这是"稳妥的默认"，不是"没验证过"。
     活体验证的前提是先修好传输层（下一条）。完整证据见 `docs/notion-attachment-upload-research.md` §8。
   · 回归：`test/notion-attachment-inline-e2e.test.js`（含"产物与抓包那一行逐字相同"这条断言）。
-- **notion 渠道的出站通道链（v1.18.42，**改 notion 出站前必读**）**：Notion 推理接口会对**某些客户端指纹**回一道**软墙**——
+- **notion 渠道的出站通道链（v1.18.42，v1.18.43 修正根因，**改 notion 出站前必读**）**：Notion 推理接口会回一道**软墙**——
   HTTP 200 + `{"type":"error","subType":"temporarily-unavailable"}`（通用文案、`isRetryable:false`），反爬式**静默拒绝**。
-  用**同一发报文**在四个环境对打（出口 IP 相同），定性为**客户端指纹评分**：**curl（HTTP/1.1 或 `--http2`）三个环境全过**；
-  **`node:http2` 只在 Node 24 上过（node:20 容器被墙）**；**`fetch`/undici 全被墙**。
+  **它有两个独立维度**（两个维度给客户端的表象一模一样，只看见一个就会得出"只对一半"的结论）：
+  · **维度 ① · 账号状态（主导）**：账号自身在墙里/不在墙里，**与传输无关**，且**随时间变**——
+    `notion7` 在**本地与云端、五种传输**下一起软墙（⇒ 墙跟着账号走，不跟 IP 也不跟客户端走），
+    而它在云端曾有**短暂开口**（网关连拿两发真答案），几分钟后同渠道 curl 连打 6 发全墙。
+    **账号在墙里时换任何传输都没用**，网关如实报 `ok:false / notion: temporarily-unavailable`（多候选则换下一家），
+    **不伪装成"200 空回复"**。
+  · **维度 ② · 客户端指纹**：只在**账号可过**时才看得见。本地 `notionls` **同一秒内交替**打（C F C F）：
+    **curl 3/3 真答、`fetch`/undici 0/3 软墙**——同账号、同 IP、同报文，唯一变量是客户端。
+    四个环境对打的原始表格（curl 任何协议都过 / `node:http2` 只在 Node 24 上过 / `fetch` 全被墙）描述的是**这一维**，
+    前提是账号当时不在墙里。
   · 因此出站是**通道链**（`notion.js` 的 `notionFetch`）：非 `https:` → 全局 `fetch`（测试假上游，旧行为逐字不变）；
     `https:` → **curl 主** → 判为软墙则 **h2 兜底** → 再不成才 `fetch`。**软墙在通道内自动换**，墙内那一发不消耗真实推理。
-  · **三条纪律**：① 通道选择只许收口在 `notionFetch` 一处（三处推理调用点都只调它——散开就会出现"某条路留在被墙的通道上"，
+    **通道链治维度 ②，治不了维度 ①。**
+  · **五条纪律**：① 通道选择只许收口在 `notionFetch` 一处（三处推理调用点都只调它——散开就会出现"某条路留在被墙的通道上"，
     这正是 v1.18.42 之前的形态）；② **别把结论钉在"HTTP/2"上**（它条件成立，主通道必须是 curl）；③ **传输层结论必须在目标
-    运行环境复验**（本仓库测试跑 Node 24、镜像跑 `node:20-alpine`，而这道墙恰恰对 Node 版本敏感）。
-  · 留档：三次误判（"账号权益被限只能等" / "undici 指纹被 block 故只用 curl" / "Notion 拒绝 HTTP/1.1 故改 h2"）与研究文档 §5–§7。
-  · 回归：`test/notion-transport.test.js`（本地 h2c 真跑 h2 + 本地 HTTP/1.1 真跑 curl + 通道链与三处调用点装配守卫）。
+    运行环境复验**（本仓库测试跑 Node 24、镜像跑 `node:20-alpine`，而这道墙恰恰对 Node 版本敏感）；
+    ④ **别把通道链说成"notion 一定能用"**（治不了维度 ①）；⑤ **比较两个变量时在同一时间窗内交错打**，
+    不要"今天打 A、明天打 B"，并且先确认账号是否可过——那正是三次误判的共同动作。
+  · 留档：三次误判（"账号权益被限只能等" / "undici 指纹被 block 故只用 curl" / "Notion 拒绝 HTTP/1.1 故改 h2"）与研究文档 §5–§7.7。
+  · 复现仪器：`notion-wall-probe.js`（仓库根，只读，低额度）。
+  · 回归：`test/notion-transport.test.js`（本地 h2c 真跑 h2 + 本地 HTTP/1.1 真跑 curl + 通道链与三处调用点装配守卫）；
+    维度 ① 下的"如实失败"由 `test/notion-refetch-fallback-e2e.test.js` §6 守着。
 - **OpenAI Responses 客户端面（v1.18.38）**：`/v1/responses` 是**第四套客户端报文**，走"入站转 chat → 复用同一条候选链 → 出站转回 `response`"。
   · 为什么不能透传：Responses 报文的对话在 `body.input`、chat 处理器找的是 `body.messages` —— 以前它在 `handleOpenAIRequest` 的 POST 白名单里，等于把 `input` 报文原样塞给 chat 上游（不是 400 就是"200 但空"）。因此这段**绝不设 `clientProto`**（设了就触发同协议直通），且 chat 面与 Responses 面共用 `openAICandidateChain()`。
   · 出站两态：非流式回 `response` 对象（`output[]` / `output_text` / `usage.input_tokens` 口径）；流式回 Responses 的 `event:` + `data:` 事件序列（`response.created` → … → `response.completed`），`finish_reason:"length"` 记 `status:"incomplete"`（**不假装完成**）。
