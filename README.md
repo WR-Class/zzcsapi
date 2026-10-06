@@ -227,7 +227,7 @@ http://127.0.0.1:8787/console
 | [Genspark Claw 反代研究](docs/genspark-claw-reverse-proxy-research.md) | 逆向过程留档 |
 | [PromptQL（prompt.ql.app）反代研究](docs/promptql-reverse-proxy-research.md) | 结论：不建议接（多人协作 bot 工作台、按 OLU 计量付费，不是可蹭的模型额度；控制面 `auth.pro.ql.app` 本机被 DNS 污染） |
 | [Arena 协议](docs/arena-protocol.md) / [Prism 反代研究](docs/prism-reverse-proxy-research.md) | 已撤渠道留档 |
-| [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **未完成能力的留档**：上传链（取目标 → S3 桶根 204 → 公开 URL）已打通并活体验证；「让 AI 读到」未打通（独立 attachment step 要么 400 要么空答）。含端点清单、严格校验的键白名单、**软墙 ≠ 形状错的判别纪律**、以及下一步该找的 task id |
+| [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **未完成能力的留档**：上传链（取目标 → S3 桶根 204 → 公开 URL）已打通并活体验证；「让 AI 读到」未打通。**★ 含可复用的「抓 Notion 自己的前端源码」方法**（chunk URL 规则 `/_assets/<名字‖id>-<哈希>.js`、名字表 1394 项 / 哈希表 2460 项、大对象上跑正则会回溯卡死），据此抄到官方形状（`getUploadFileUrlForAssistantChatTranscriptUpload` + `assistantChatTranscriptSessionPointer`、扁平 step `{type:"attachment", fileUrl}`），照抄仍 200 空答 → 缺口收敛到一个字段。另含端点清单、键白名单、**软墙 ≠ 形状错的判别纪律** |
 | [AI 工具调用桥接](docs/AI工具调用桥接-群友分享版.md) | 群友分享版说明 |
 
 ### 前端构建管线（一句话版）

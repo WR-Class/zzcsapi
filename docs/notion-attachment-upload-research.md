@@ -16,7 +16,11 @@
 | 取上传目标（`getUploadFileUrl`） | ✅ **通** | `POST /api/v3/getUploadFileUrl {bucket:"public",name,contentType}` → **200** |
 | 把字节传到 Notion S3 | ✅ **通** | `POST` 到**桶根** multipart（fields 全带 + file 最后）→ **204** |
 | 拿文件的可下载直链 | ✅ **通** | 响应里的 `signedGetUrl`（6 小时签名直链）；公开 URL = 桶根 + `fields.key` |
-| **让 AI 读到文件内容** | ❌ **未通** | 独立 `attachment` step：要么 400 `ValidationError`，要么 200 空答；挂进 user step：模型答「无法读取 CSV」 |
+| **让 AI 读到文件内容** | ❌ **未通** | 形状已按 **Notion 自己的前端代码**对齐（扁平 `{type:"attachment", fileUrl}`）后仍是 **200 空答**；缺的是「文件先登记进会话」（§2.0） |
+
+> **本轮（第 3 轮）的关键增量**：**拿到了 Notion 自己的前端源码**（方法见 §2.0），
+> 于是「附件 step 长什么样」「助手对话的上传走哪个事件」不再是猜测，而是抄官方代码；
+> 照着抄完仍不生效，把缺口精确收敛到**一个字段**：`assistantChatTranscriptSessionPointer`（已排除 `spaceId`）。
 
 **没有打通「让 AI 读到」之前不要实现这个功能**——一个"文件传上去了、模型却读不到"的附件能力，
 是"看起来成功、实际没用"的**静默降级**，与本项目对静默失败的一贯态度相反。
@@ -98,6 +102,53 @@ multipart/form-data：fields 的 11 个键各一份 + file 放最后
 
 ## 2. 未打通：附件怎么进模型
 
+### 2.0 ★ 已经拿到 Notion 自己的前端源码（本轮新增，方法可复用）
+
+**这是本轮最重要的进展**：不再靠猜。Notion 网页端本身就是这套 API 的客户端，把它的 JS 抓下来就有权威答案。
+
+**怎么抓（可复用，踩了三个坑）**：
+
+1. `https://www.notion.so/ai` 的壳 HTML 只挂 13 个 `/_assets/*.js`（19.9 KB，登录与否都一样）。
+2. 壳里有 webpack 运行时，chunk 的 URL 规则是
+   `.u = e => "" + (({id:"ChunkName",…})[e] || e) + "-" + ({id:"hash",…})[e] + ".js"`
+   —— **分隔符是 `-` 不是 `.`**，且**有名字的 chunk 用名字当文件名**（如 `AgentChatView-ec4dbab308a3e1d5.js`）。
+   按 `id.hash.js` 拼会全 404（回 `Not Found: _assets/13995.….js`），这是第一个坑。
+3. 两张表都在 `app-*.js` 里、**十万字节级**：名字表 **1394** 项、哈希表 **2460** 项。
+   用正则在这么大的对象上抽会**回溯卡死**（第二个坑），必须用字符扫描做括号配对 + `split(',')` 解析。
+4. 表里能直接看出功能名：`AgentChatView` / `AgentPage` / `AIChatStore` / `agentWriter` / `SharedChatAppView` /
+   `inferenceTranscriptActions` / `agent-messages` / `agent-chat-transcribe-audio-to-text` …
+
+**从中读到的权威事实（全部来自 Notion 自己的代码）**：
+
+| 事实 | 出处 |
+| --- | --- |
+| 助手对话的上传走**另一个事件**：`getUploadFileUrlForAssistantChatTranscriptUpload` | 壳包 |
+| 它的 payload：`{name, contentType, assistantChatTranscriptSessionPointer, contentLength, createThread, threadType, workflowId, agentMemorySettings, allowUnsupportedTypes}` | 同上 |
+| 上传完成后 `bucket:"temporary"`（不是我们用的 `public`） | 同上 |
+| 上传完成回调给的是 **`{fileUrl, signedToken}`** | `ai-meetingNotesUploadActions.js`（`Zn({…, onBatchComplete: t => e({fileUrl:t.fileUrl, signedToken:t.signedToken})})`） |
+| 暂存的 transcript step 是**扁平的**：`{type:"attachment", fileUrl, metadata?}`，兄弟类型 `"computer-file"` | `ai-AIChatStore.js` |
+| 安全标记写在 `metadata.guardrail.attachmentRisk` 上 | 同上 |
+| 暂存字段名：`stagedInferenceTranscriptSteps` / `stagedClientSteps` / `stagedEngineSteps`，取出函数 `getAndClearStagedAssistantAttachmentSteps()` | 同上 |
+
+**据此实测（干净账号 notion5，对照真答，见探针 `probe-notion-attachment35.js`）**：
+
+| 挂法 | 结果 |
+| --- | --- |
+| ① 对照（不带附件） | 200 **真答**「无法读取你上传的 CSV」→ 账号健康、整组有效 |
+| ② 扁平 `{id:"attachment-0", type:"attachment", fileUrl}` | 200 **空答** |
+| ③ ②+signedToken | 200 空答 |
+| ④ ②+`metadata.guardrail.attachmentRisk` | 200 空答 |
+| ⑤ ②+name/contentType/contentLength | 200 空答 |
+| 助手事件 `getUploadFileUrlForAssistantChatTranscriptUpload`（把 spaceId 当 pointer 试） | **400 ValidationError** → `assistantChatTranscriptSessionPointer` 不是 spaceId |
+
+**结论**：形状已按官方代码对齐（扁平 `fileUrl`），仍然 200 空答 —— 说明缺的**不是** step 形状，
+而是「文件先被登记进某个会话」这一步：上传必须走助手事件、且要带**正确的**
+`assistantChatTranscriptSessionPointer`。这也解释了为什么模型会明确说"请重新上传"：
+它收到了一条**指向未登记文件**的 step。
+
+**已排除的可能**：`content_sha` / `first_object` / `single_object` / `record_status` 这些常量
+**不在** Notion 前端里（全包 0 命中），它们只是 notion2api 自己的 Go 结构体字段名，不是 Notion 的 API 字段。
+
 ### 2.1 试过的挂法与结果（干净账号 notion5 / notion1，同一次实验）
 
 判据三态：`400 ValidationError` = 形状被拒 · `200 + 流内 temporarily-unavailable` = 软墙（无效） · `200 + 真答` = 有效。
@@ -178,11 +229,20 @@ notion2api 二进制里的符号名（**不是** HTTP 路径，是方法名）�
 ### 2.5 下一步建议（按性价比排序）
 
 1. **在浏览器里把一份 CSV 挂进 Notion AI 对话，抓 `runInferenceTranscript` 的真实报文**——
-   一步到位，比继续猜形状便宜得多（这是本次研究最该先做而没做的一步）。
-2. 找 task id 的来源：可能在上游**响应头**（本次只看了 body）或某个还没探到的端点；
-   `first_object` / `single_object` / `content_sha` / `record_status` 疑似是"登记文件记录"那个端点的字段。
-3. 找 notion2api 的 `backend/internal/service/notion_attachment_upload.go` 源码
-   （发布包只给了符号名；`GALIAIS/Notion2API` 等同名仓库都不是这一份）。
+   一步到位（它同时给出 `assistantChatTranscriptSessionPointer` 的真值和附件 step 的最终形状）。
+   **本轮已按 §2.0 把形状对齐到官方代码后仍不生效，所以这一步现在是唯一的低成本路径。**
+2. 找 `assistantChatTranscriptSessionPointer` 的语义：已排除 `spaceId`（400）。它是"会话指针"，
+   可能形如 `{table, id, spaceId}` 的复合指针（Notion 里 `(295447).Z1({environment, table, spaceId})`
+   就是生成指针的工厂函数）——前端里 `assistantChatTranscript` 只在壳包出现 2 次，构造点在别的 chunk。
+3. 找 task id 的来源：`getTasks` 的形状已确认（`{taskIds:[…], spaceId}` → `{results:[…]}`），
+   拿到附件处理任务的 id 后即可轮询 → 取签名 URL → 重发。
+4. 找 notion2api 的 `backend/internal/service/notion_attachment_upload.go` 源码
+   （发布包只给了符号名；`GALAIIS/Notion2API` 等同名仓库都不是这一份）。注意：
+   `content_sha` / `first_object` / `single_object` / `record_status` **不在** Notion 前端里（0 命中），
+   是 notion2api 自己的字段名，别再当 Notion 字段去试。
+5. 继续挖前端：本轮只抓了名字匹配 AI/附件的 **125** 个 chunk（哈希表共 2460 项）。
+   构造附件 step 的调用点（`stageAttachmentInferenceTranscriptStep` 的**调用方**）尚未定位，
+   它所在的 chunk 名字不含 AI/chat/attach 关键词；可按 `t(401558).`（上传模块的引用）全量扫一遍。
 
 ### 2.6 复现命令骨架
 
