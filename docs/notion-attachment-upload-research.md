@@ -160,6 +160,18 @@ notion2api 二进制里的符号名（**不是** HTTP 路径，是方法名）�
 `first_object` · `single_object` · `content_sha` · `record_status` · `task_ids` · `getTasks` · `download` ·
 `fileName` · `mimeType` · `array:%d` · `includeCounts` · `clientVersion` · `contentLength`。
 
+`first_object` / `single_object` / `content_sha` / `record_status` 这四个常量在二进制里**紧挨着**
+`attachment-%d` 与 `Attachment - `，同属 `notion_attachment_upload.go` 那个源文件的常量区；
+但本次实测 `getUploadFileUrl` 的响应里**没有**它们 —— 也就是说上游很可能**还有一个"登记文件记录"的端点**
+（task id 大概也从那里出来）。同区域还能读到的其它常量（供下一步排查）：
+
+- 记录形状类：`value_wrapper_keys` · `record_author_role` · `record_value_shape` · `record_content_shape` ·
+  `step_content_shape` · `turn-full-record-map` · `stream_message_ids`
+- 开关/特性类：`includeWriterChats` · `enableCustomAgents` · `disable_ai_feature` · `enableDatabaseAgents` ·
+  `enableCrdtOperations` · `isCustomAgentBuilder` · `enableAgentAskSurvey` · `requireWorkTypeEmail`
+- 附件流水线：`load_spaces_failed` · `storage_state.json`（notion2api 的登录助手用 Playwright，
+  `login_helper.sessions_dir` / `data/notion_accounts`）
+
 **缺口只有一个：task id 从哪来。** `getTasks` 的形状已经确认（`{taskIds:[…], spaceId}` → `{results:[…]}`），
 只要拿到附件处理任务的 id，剩下的路（轮询 → 取签名 URL → 重发/注入）就都能照着 notion2api 的符号名走通。
 
