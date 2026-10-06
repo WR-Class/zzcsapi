@@ -327,6 +327,8 @@ http://127.0.0.1:8787/console
 thinking 回放修复）。五条**专用报文**渠道（`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex`）的响应输出也走各客户端面的
 收口钩子（v1.18.38 修正：此前它们自己写 OpenAI 报文，Responses / Anthropic / Gemini 面会拿到错形态）；
 **候选链分层**——Anthropic / Gemini 两条链只兜底到 `notion` / `notion-agent` / `codex`，`workbuddy` / `genspark` 只挂在 OpenAI 类链上。
+`notion` 渠道另有**流断取回兜底**（v1.18.39：上游流断/带错误/零内容时，用同一 `threadId` 把同一份 transcript 再发一次取回成品答案；
+触发判据只看"权威全文到没到"，正常请求零额外延迟与额度，取不回仍如实判失败）。
 矩阵表、工具调用四方向、各渠道配置要点、有损点诚实清单：[协议与渠道详解](docs/protocols.md)。
 
 ## 调度顺序（摘要）

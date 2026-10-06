@@ -2,7 +2,7 @@
 
 > 本文从 README 拆出（v1.18.8）：README 只留协议速查表，本文收全量细节——原生出站、同协议直通、
 > 客户端路由的工具调用方向与 Responses API（第四套报文，v1.18.38）、专用报文渠道的**输出收口**（v1.18.38 修正）、
-> 四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
+> notion 渠道的**流断取回兜底**（v1.18.39）、四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
 > 路由与调度语义见 [docs/scheduling.md](scheduling.md)；鉴权写法与管理面会话见 [docs/behavior.md](behavior.md)。
 
 ## 协议速查表
@@ -154,6 +154,41 @@ notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构�
 `notion` / `notion-agent` / `codex`），所以"某个客户端面能不能打到某条专用渠道"是**调度语义**，不是收口能决定的。
 
 守卫：`test/special-channel-output-seam-e2e.test.js`（装配守卫 + 假 workbuddy / notion 上游 × 四套客户端面）。
+
+## notion 渠道的「流断取回」兜底（v1.18.39）
+
+`notion` 渠道的上游流是 `POST /api/v3/runInferenceTranscript` 的 NDJSON：`patch-start` → 若干 `patch` → 一条 `record-map`。
+**`record-map` 才是权威全文**，`patch` 只是流式增量。三种现场会让客户端拿到残次品：
+① 流里带 soft-block 错误（200 + `temporarily-unavailable`）② 200 但零内容 ③ 流被截断（只剩半截 `patch`、`record-map` 从没到）。
+而这条线程在 Notion 侧**已经落库**（报文里 `saveAllThreadOperations: true`），答案是能取回来的。
+
+**兜底 = 用同一 `threadId` 把同一份 `transcript` 再发一次**（`createThread:false` + `isPartialTranscript:true`）。
+
+活体验证（真实 token、云端容器内跑，2026-10-06）：
+
+| 形状 | 结果 |
+| --- | --- |
+| 首发 `createThread:true` | HTTP 200，6.3s，`{"patch-start":1,"patch":14,"record-map":1}`，正文到手 |
+| **同一 threadId + `createThread:false`** | **HTTP 200，4.7s，同一条线程的 `record-map` 全文** ← 采用 |
+| 同一 threadId + 上面再叠 `isPartialTranscript:true` | HTTP 200，4.8s，同上 |
+| 空 `transcript` 的"只取回" | **400 `ValidationError`** —— 所以取回必须带 transcript，不能只读回 |
+| `getInferenceTranscriptsForUser`（notion2api 点名的那个端点） | 试了 **18 种形状**（12 种 POST body + 6 种 GET 查询串）**全部被拒或返回非 JSON** → 不实现 |
+
+四条纪律：
+
+- **触发判据只有一个**：权威全文（`record-map` / `markdown-chat`）**没到**。到了就一个字节都不动 ——
+  正常请求**零额外延迟、零额外额度**（回归里有"首发完整 → 上游只被打一次"的对照组）。
+- **它不是廉价读回**：会让上游**重新走一次推理**（消耗额度），所以有次数上限（2 次）+ 总预算（≤30s），
+  报文级错误（`isNotionError`）立刻放弃。
+- **取回发生在写出任何字节之前**：流式面同样是先整体缓冲 NDJSON、解析、必要时取回，再开始写 ——
+  绝不会"先给客户端写了半截再回填一段"。
+- **取不回就如实失败**：渠道照旧记失败、调度器照旧切下一家（兜底不许伪装成成功）。
+  账本里真取回过的行带 `note: "notion-refetch"`（一眼分得清"这发是兜底救回来的"）。
+
+**诚实边界**：notion2api 的对应能力点名叫 `getInferenceTranscriptsForUser`（Go 侧 `loadFinalAnswerWithPolling`），
+我们无法确认它的请求形状（18 种全败），因此**不实现**——发一个自己验不了的调用，等于把"兜底"变成"再多一次失败"。
+
+守卫：`test/notion-refetch-fallback-e2e.test.js`。
 
 ## 工具调用：三条客户端路由的四个往返方向
 

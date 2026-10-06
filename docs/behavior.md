@@ -75,6 +75,25 @@
   `workbuddy` / `genspark` 不在 Anthropic / Gemini 两条候选链里（那两条只兜底到 `notion` / `notion-agent` / `codex`），
   所以"某个面能不能打到某条专用渠道"是**调度语义**，不是收口能决定的。
   · 回归：`test/special-channel-output-seam-e2e.test.js`（装配守卫 + 假 workbuddy/notion 上游 × 四套客户端面）。
+- **notion 渠道的「流断取回」兜底（v1.18.39）**：`notion` 渠道的上游 NDJSON 流里，`record-map` 才是**权威全文**，
+  `patch` 只是增量。三种现场会让客户端拿到残次品：① 流里带 soft-block 错误（200 + `temporarily-unavailable`）
+  ② 200 但零内容 ③ 流被截断（只剩半截 `patch`、`record-map` 从没到）。而这条线程在 Notion 侧**已经落库**
+  （报文里 `saveAllThreadOperations: true`）——答案是能取回来的。
+  · **处置**：用**同一 `threadId`** 把同一份 `transcript` 再发一次（`createThread:false` + `isPartialTranscript:true`）。
+  活体验证（真实 token、云端容器内）：首发 6.3s 拿到 `record-map`；同一 `threadId` 再发 → HTTP 200 + 同一条线程的 `record-map` 全文（4.7s）；
+  而**空 `transcript` 的"只取回"形状被上游 400 `ValidationError` 拒**——所以取回必须带 transcript，不能只读回。
+  · **触发判据只有一个**：权威全文（`record-map` / `markdown-chat`）**没到**。到了就一个字节都不动，
+  正常请求**零额外延迟、零额外额度**（回归里有"首发完整 → 上游只被打一次"的对照组）。
+  · **它不是廉价读回**：会让上游**重新走一次推理**（消耗额度），所以有次数上限（2 次）与总预算（≤30s），
+  且报文级错误（`isNotionError`）立刻放弃、不空耗。
+  · **取回发生在写出任何字节之前**：流式面也是先把 NDJSON 整体缓冲、解析、必要时取回，再开始写——
+  不会出现"先给客户端写了半截、再回填一段"。
+  · **取不回就如实失败**：渠道照旧记失败、调度器照旧切下一家（兜底不许伪装成成功）。
+  · **没实现的部分（诚实说明）**：notion2api 的对应能力点名叫 `getInferenceTranscriptsForUser`（Go 侧 `loadFinalAnswerWithPolling`），
+  我们用真实 token 试了 **18 种请求形状**（12 种 POST body 变体 + 6 种 GET 查询串），**全部**被
+  `ValidationError: Invalid input.` 拒或返回非 JSON → **请求形状无法确认，因此不实现**：发一个自己验不了的调用，
+  等于把"兜底"变成"再多一次失败"。取回走的是上面那条已验证的路径。
+  · 回归：`test/notion-refetch-fallback-e2e.test.js`（装配守卫 + 假上游三现场 + 完整首发对照组 + "两次都失败仍如实判失败"）。
 - **OpenAI Responses 客户端面（v1.18.38）**：`/v1/responses` 是**第四套客户端报文**，走"入站转 chat → 复用同一条候选链 → 出站转回 `response`"。
   · 为什么不能透传：Responses 报文的对话在 `body.input`、chat 处理器找的是 `body.messages` —— 以前它在 `handleOpenAIRequest` 的 POST 白名单里，等于把 `input` 报文原样塞给 chat 上游（不是 400 就是"200 但空"）。因此这段**绝不设 `clientProto`**（设了就触发同协议直通），且 chat 面与 Responses 面共用 `openAICandidateChain()`。
   · 出站两态：非流式回 `response` 对象（`output[]` / `output_text` / `usage.input_tokens` 口径）；流式回 Responses 的 `event:` + `data:` 事件序列（`response.created` → … → `response.completed`），`finish_reason:"length"` 记 `status:"incomplete"`（**不假装完成**）。

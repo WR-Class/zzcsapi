@@ -279,17 +279,22 @@ function buildNotionTranscript(messages, upstreamModel, acct, opts) {
 // ─────────────────────────── 请求组装 ───────────────────────────
 
 function notionBuildPayload(transcript, threadType, acct, opts) {
-  const threadId = uuid4();
+  // opts 只服务「流断兜底：同一线程再发一次」（v1.18.39）。不传时与首发逐字节一致：
+  //   threadId  —— 复用同一条线程（兜底必需；首发自造）
+  //   createThread:false + isPartialTranscript:true —— 活体验证过的取回形状
+  //   （见 server.js notionRefetchAnswer 的注释：A1/A2 实测 HTTP 200 + record-map 全文）
+  const o = opts || {};
+  const threadId = o.threadId || uuid4();
   return {
     traceId: uuid4(),
     spaceId: acct.spaceId,
     threadId,
     threadType,
-    createThread: true,
-    generateTitle: true,
+    createThread: o.createThread !== false,
+    generateTitle: o.generateTitle !== false,
     saveAllThreadOperations: true,
     setUnreadState: true,
-    isPartialTranscript: false,
+    isPartialTranscript: o.isPartialTranscript === true,
     asPatchResponse: true,
     isUserInAnySalesAssistedSpace: false,
     isSpaceSalesAssisted: false,
@@ -489,6 +494,7 @@ function createNotionStreamParser(onEvent) {
     nextValId: new Map(),      // notionIndex → int
     pending: [],               // 待绑定段落
     sawContent: false,
+    sawFinal: false,           // 权威全文（record-map / markdown-chat）到过没有 —— 流断兜底的触发判据
     finalText: '',
   };
   return {
@@ -502,12 +508,12 @@ function createNotionStreamParser(onEvent) {
       const dt = String(data.type || '').toLowerCase();
       if (dt === 'record-map') {
         const f = extractFinalFromRecordMap(data);
-        if (f) { st.finalText = f; onEvent({ type: 'final', text: f }); }
+        if (f) { st.finalText = f; st.sawFinal = true; onEvent({ type: 'final', text: f }); }
         return;
       }
       if (dt === 'markdown-chat') {
         const t = cleanNotionMarkup(extractMarkdownChatText(data.value) || '').trim();
-        if (t) { st.finalText = t; onEvent({ type: 'final', text: t }); }
+        if (t) { st.finalText = t; st.sawFinal = true; onEvent({ type: 'final', text: t }); }
         return;
       }
       if (dt !== 'patch') return;

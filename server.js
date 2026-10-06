@@ -7188,6 +7188,61 @@ async function tryCodexChannel(opts) {
   return 'success';
 }
 
+// ─────────────────── Notion「流断取回」兜底（v1.18.39）───────────────────
+// 现场：Notion 推理流中途断掉（上游/网络收尾）或 200 但流里带 soft-block 错误时，客户端只拿到
+// 半截正文甚至空轮次——而这条线程在 Notion 侧**已经落库**（payload.saveAllThreadOperations:true）。
+// 活体验证（真实 token、云端容器内，2026-10-06，一次真推理 6.3s）：
+//   A1 同一 threadId + createThread:false            → HTTP 200 + record-map 全文（4.7s，正文与首发一致）
+//   A2 A1 再叠 isPartialTranscript:true              → 同上 ← **本实现采用的形状**
+//   A3 空 transcript 只取回                          → 400 ValidationError（必须带 transcript，故不能"只读回"）
+//   B  getInferenceTranscriptsForUser（notion2api 点名的那个端点）→ 18 种形状（12 种 POST body + 6 种 GET 查询串）
+//      全被拒（ValidationError）或返回非 JSON → **请求形状无法确认，因此不实现**：
+//      发一个自己验不了的调用，等于把"兜底"变成"再多一次失败"。
+// 所以兜底 = 用同一 threadId 把同一份 transcript 再发一次。**它不是廉价读回**（会重走一次推理，
+// 消耗额度），因此只在"权威全文没到"时触发，且有次数上限 + 总预算。
+const NOTION_REFETCH_MAX = 2;        // 最多重发 2 次（第 2 次用于"上游还在生成"时补一次）
+const NOTION_REFETCH_GAP_MS = 800;   // 两次之间的间隔
+
+// 轻量探针：只回答两件事——权威全文到没到、最后一行是什么类型（判断"是不是断在 patch 中间"）
+function notionProbeNdjson(text) {
+  let content = '', final = '', lastType = '';
+  const p = notion.createNotionStreamParser((evt) => {
+    if (evt.type === 'content') content += evt.text;
+    else if (evt.type === 'final') final = evt.text;
+  });
+  for (const ln of String(text || '').split('\n')) {
+    if (!ln.trim()) continue;
+    try { const o = JSON.parse(ln); if (o && o.type) lastType = String(o.type).toLowerCase(); } catch { }
+    p.line(ln);
+  }
+  return { sawFinal: !!p.state.sawFinal, content: content.trim(), final: final.trim(), lastType };
+}
+
+// 同一 threadId 再发一次；返回 { body, attempts, sawFinal } 或 null
+async function notionRefetchAnswer(ch, acct, built, threadId, budgetMs) {
+  const base = ch.def.baseUrl.replace(/\/+$/, '');
+  const target = base + '/api/v3/runInferenceTranscript';
+  const headers = notion.notionHeaders(acct, ch.def.apiKey, base);
+  const t0 = Date.now();
+  let best = null, attempts = 0;
+  while (attempts < NOTION_REFETCH_MAX) {
+    if (budgetMs - (Date.now() - t0) < 3000) break;
+    if (attempts) await new Promise((r) => setTimeout(r, NOTION_REFETCH_GAP_MS));
+    attempts++;
+    const body = JSON.stringify(notion.notionBuildPayload(built.transcript, built.threadType, acct, {
+      threadId, createThread: false, isPartialTranscript: true,
+    }));
+    const out = await notionCurlRequest('POST', target, headers, body, Math.max(5000, budgetMs - (Date.now() - t0)));
+    const text = (out && out.body) || '';
+    if (!text.trim()) continue;
+    if (/"isNotionError":\s*true/.test(text)) return best;   // 报文级错误（校验/权限）→ 再试也没用
+    const p = notionProbeNdjson(text);
+    if (p.sawFinal && p.final) return { body: text, attempts, sawFinal: true };   // 权威全文到手
+    if (!best && (p.final || p.content)) best = { body: text, attempts, sawFinal: false };
+  }
+  return best;
+}
+
 async function tryNotionChannel(opts) {
   const { res, body, candidate, ch, isStream, requestedModel } = opts;
   const t0 = Date.now();
@@ -7258,7 +7313,28 @@ async function tryNotionChannel(opts) {
   // 3.5) 流内错误检测：Notion 会返回 200 但在 NDJSON 里带 error 事件（temporarily-unavailable 等）
   const streamError = (ndjsonText.match(/"type":"error","message":"([^"]{0,120})/) || [])[1]
     || (ndjsonText.match(/"subType":"([^"]+)"/) || [])[1];
-  if (streamError) {
+
+  // 3.6) 流断兜底（v1.18.39）：**权威全文没到**时，用同一 threadId 把同一份 transcript 再发一次。
+  //   三种现场：① 流里带错误（soft-block）② 200 但零内容 ③ 流被截断（只剩半截 patch，末行是 patch*）。
+  //   权威全文（record-map / markdown-chat）到了就一个字节都不动 → 正常请求零额外延迟、零额外额度。
+  const probe = notionProbeNdjson(ndjsonText);
+  const truncated = !probe.sawFinal && !!probe.content && (probe.lastType === 'patch' || probe.lastType === 'patch-start');
+  const why = streamError ? ('stream-error: ' + streamError) : (!probe.content ? 'no-content' : (truncated ? 'truncated' : ''));
+  let refetched = false;
+  if (why) {
+    const budget = Math.max(8000, Math.min(30_000, timeoutMs - (Date.now() - t0)));
+    const got = await notionRefetchAnswer(ch, acct, built, payload.threadId, budget);
+    if (got && got.body) {
+      const p2 = notionProbeNdjson(got.body);
+      if (p2.sawFinal || p2.content || p2.final) {
+        ndjsonText = got.body;   // 整段换掉：下面流式/非流式解析、工具仿真、思考合并一律不用改
+        refetched = true;
+        console.log(`[notion] 流断兜底取回成功（channel=${ch.def.id || candidate.channelId} 第 ${got.attempts} 次尝试 / 原判 ${why}）`);
+      }
+    }
+    if (!refetched) console.log(`[notion] 流断兜底未取回（channel=${ch.def.id || candidate.channelId} 原判 ${why}）`);
+  }
+  if (streamError && !refetched) {
     recordFailure(ch, 'notion stream: ' + streamError);
     // soft-block（temporarily-unavailable）按上游失败处理，让调度器切别的渠道
     return 'notion stream: ' + streamError;
@@ -7360,7 +7436,7 @@ async function tryNotionChannel(opts) {
     specialStreamLine(opts, candidate, 'data: [DONE]\n\n');
     specialStreamEnd(opts);
     const inTok = estimateTokens(messagesText(body.messages));
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx, ...(refetched ? { note: 'notion-refetch' } : {}) });
     return 'success';
   }
 
@@ -7394,7 +7470,7 @@ async function tryNotionChannel(opts) {
     const parsed = toolEmu.parseEmulatedToolCalls(reply);
     if (parsed && parsed.calls.length) {
       const inTok = estimateTokens(messagesText(body.messages));
-      recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
+      recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx, ...(refetched ? { note: 'notion-refetch' } : {}) });
       await specialNonStreamOut(opts, candidate, toolEmu.openaiToolCallsPayload(respId, displayModel, parsed.calls, parsed.text || null));
       return 'success';
     }
@@ -7402,7 +7478,7 @@ async function tryNotionChannel(opts) {
   reply = reply.trim();
   const inTok = estimateTokens(messagesText(body.messages));
   const outTok = estimateTokens(reply + (mergedReasoning ? '' : (reasoningText ? ' ' + reasoningText : '')));
-  recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx, ...(refetched ? { note: 'notion-refetch' } : {}) });
   await specialNonStreamOut(opts, candidate, {
     id: respId,
     object: 'chat.completion',
