@@ -200,6 +200,17 @@ url = attachment:9404ae49-ef82-44ef-b0cf-fe8567b335cf:probe-attach.csv
 带附件的请求却可以连撞十几次（`temporarily-unavailable`, `isRetryable:false`）。
 所以**每一发附件实验都必须配一发同时刻对照**，否则会把"被限流"误读成"形状不对"。
 
+**⚠️ 本轮结束时的现场限制（下一个人必读）**：连续实验之后，我方**云端出口 IP 对 7 个 notion 账号
+全部进入软墙状态**——最后一批实验里连"不带附件的对照"都连续 8 次软墙（探针 `#48`，
+8 账号 × 8 对 × 25 秒间隔全部命中软墙）。也就是说：
+
+- 这不是账号问题，是**出口被限流**；
+- 本机（Windows）**直连 notion.so 不通**（`fetch failed`），所以换不了出口；
+- 要拿"最后一格"的干净判据，必须**等冷却**（隔一段时间再打）或换一个出口 IP。
+
+因此 `attachment:<fileId>:<name>` 这一格的判决状态是：**未决（不是失败）**——
+按现有证据它是最可能的正解（形态与 `attachmentURLFromS3Key` 一致），只是没能在干净窗口里验完。
+
 **已排除的可能**：`content_sha` / `first_object` / `single_object` / `record_status` 这些常量
 **不在** Notion 前端里（全包 0 命中），它们只是 notion2api 自己的 Go 结构体字段名，不是 Notion 的 API 字段。
 
