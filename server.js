@@ -5631,25 +5631,38 @@ async function tryChannel(opts) {
   // 模型名（别名，和用户在控制台看到的一致）；后台探测/无请求上下文的路径仍落 '—'（那是事实，不是缺失）。
   const failModel = (body && body.model) || opts.requestedModel || '—';
   try {
+    // ★ v1.18.38：五条"专用报文"路径（notion / notion-agent / workbuddy / genspark / codex）必须
+    //   拿到**与常规路径同一组输出钩子**。此前这里只透传了 res/body/candidate/…，把
+    //   onSuccessNonStream / onStreamChunk / streamPrelude / streamEpilogue 全丢了，于是这五条路径
+    //   只能自己写 OpenAI 报文：OpenAI 客户端面看不出问题，但 Anthropic / Gemini / OpenAI Responses
+    //   客户端会拿到错形态（公网实测：Responses 客户端打到 notion 渠道，收到 object:"chat.completion"；
+    //   workbuddy 流式打到 Anthropic 面时事件序列里没有 message_start）。钩子转发后由
+    //   specialNonStreamOut / specialStreamHead / specialStreamLine / specialStreamEnd 统一收口。
+    const specialOpts = {
+      res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel,
+      hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx,
+      onSuccessNonStream: opts.onSuccessNonStream, onStreamChunk: opts.onStreamChunk,
+      streamPrelude: opts.streamPrelude, streamEpilogue: opts.streamEpilogue,
+    };
     // Notion 协议渠道：完全独立的请求/响应路径
     if ((ch.def.protocol || 'openai') === 'notion') {
-      return await tryNotionChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
+      return await tryNotionChannel(specialOpts);
     }
     // Notion 官方 Agent API 渠道：会话式调用工作区 Custom Agent
     if ((ch.def.protocol || 'openai') === 'notion-agent') {
-      return await tryNotionAgentChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
+      return await tryNotionAgentChannel(specialOpts);
     }
     // WorkBuddy 国际版反代：只支持流式 + 首条必须 system，OpenAI 兼容 SSE
     if ((ch.def.protocol || 'openai') === 'workbuddy') {
-      return await tryWorkbuddyChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
+      return await tryWorkbuddyChannel(specialOpts);
     }
     // Genspark 网页会话反代：curl+proxy 绕 cn_code 门/CF，SSE 聚合后分发
     if ((ch.def.protocol || 'openai') === 'genspark') {
-      return await tryGensparkChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
+      return await tryGensparkChannel(specialOpts);
     }
     // Codex（ChatGPT 官方订阅）：RT→AT 令牌管理 + Responses API，curl+代理传输
     if ((ch.def.protocol || 'openai') === 'codex') {
-      return await tryCodexChannel({ res, body, candidate, ch, isStream, kind: opts.kind, requestedModel: opts.requestedModel, hasMoreCandidates: opts.hasMoreCandidates, statsCtx: opts.statsCtx });
+      return await tryCodexChannel(specialOpts);
     }
   const outgoing = encodeOutgoing(dropParamsFrom(body, ch), candidate);
   const passthrough = opts.passthrough || null;   // 同协议直通时由扩展注入（'anthropic' / 'gemini'）
@@ -6405,6 +6418,70 @@ function compactMessagesForNotion(messages, charLimit) {
 //   2) messages[0] 必须是 system（否则 11128）
 //   3) 无 /models 端点（探测走真实轻量调用）
 // 处理策略：上游永远流式；客户端要非流则网关在内存里聚合后再一次性回包。
+/* ═════════════ 专用报文渠道的输出收口（v1.18.38） ═════════════
+   notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构造上游报文**（不走
+   encodeOutgoing / 原生出站），也因此历史上**自己写响应**：非流式 `res.end(JSON.stringify(chat 报文))`、
+   流式 `res.write(chat SSE 行)`。对 OpenAI 客户端面（chat/completions）这没问题——那本来就是要的形态；
+   但对**其它客户端面**（Anthropic / Gemini / OpenAI Responses）等于把翻译层整个绕过去了：
+     · 现场证据（v1.18.38，公网实例实测）：Responses 客户端打到 notion 渠道，收到的是
+       `object:"chat.completion"`（不是 Responses 报文）；workbuddy 流式打到 Anthropic 面时事件序列里
+       **没有 message_start**（那条路径只调了 onStreamChunk 逐行转换，没有开场/收尾钩子）。
+   所以把"写响应"收成四个钩子，与常规路径**共用同一组收口**：
+     · specialNonStreamOut —— 非流式：有 onSuccessNonStream 就交给它（各客户端面自己翻译），没有就原样写；
+     · specialStreamHead   —— 流式开场：写响应头 + streamPrelude（Responses 的 `response.created`、
+                              Anthropic 的 `message_start` 就靠它；漏了客户端会一直等第一帧）；
+     · specialStreamLine   —— 流式逐行：有 onStreamChunk 就喂它、写它返回的；没有就原样写（raw 兜底）；
+     · specialStreamEnd    —— 流式收尾：streamEpilogue（补 finish_reason / [DONE] / message_stop）后 end()。
+   对 OpenAI 面这四个钩子**字节等价**：handleOpenAIRequest 只设 onSuccessNonStream（写 text() 与
+   content-type），不设 onStreamChunk / prelude / epilogue，所以老路一个字节都没变。 */
+function specialResponseShim(payload) {
+  const text = JSON.stringify(payload);
+  return {
+    headers: { get: (k) => (String(k).toLowerCase() === 'content-type' ? 'application/json' : null) },
+    text: async () => text,
+    json: async () => payload,
+  };
+}
+async function specialNonStreamOut(opts, candidate, payload) {
+  if (typeof opts.onSuccessNonStream === 'function') {
+    return opts.onSuccessNonStream(specialResponseShim(payload), candidate);
+  }
+  opts.res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
+  opts.res.end(JSON.stringify(payload));
+}
+function specialStreamHead(opts, candidate) {
+  opts.res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'X-ZZCSAPI-Channel': candidate.channelId,
+  });
+  if (typeof opts.streamPrelude === 'function') {
+    const pre = opts.streamPrelude();
+    if (pre) opts.res.write(pre);
+  }
+}
+function specialStreamLine(opts, candidate, line, rawFallback) {
+  if (typeof opts.onStreamChunk === 'function') {
+    // ★ 钩子在 = 钩子说了算：返回空串表示"这一帧不产出"（例如只有 usage 的分片），
+    //   **绝不回退成原始 OpenAI 报文** —— 回退会把 chat 形态的 data 行漏进 Responses /
+    //   Anthropic 的事件流里（客户端解析到一半就崩）。这与常规路径 `if (out) outChunks.push(out)`
+    //   的语义一致。只有**没有钩子**（OpenAI 客户端面）时才原样写。
+    const o = opts.onStreamChunk(line, candidate);
+    if (o) opts.res.write(o);
+    return;
+  }
+  opts.res.write(rawFallback === undefined ? line : rawFallback);
+}
+function specialStreamEnd(opts) {
+  if (typeof opts.streamEpilogue === 'function') {
+    const post = opts.streamEpilogue();
+    if (post) opts.res.write(post);
+  }
+  opts.res.end();
+}
+
 async function tryWorkbuddyChannel(opts) {
   const { res, body, candidate, ch, isStream, requestedModel, hasMoreCandidates } = opts;
   const t0 = Date.now();
@@ -6498,19 +6575,10 @@ async function tryWorkbuddyChannel(opts) {
   }
 
   if (isStream) {
-    // workbuddy 就是 OpenAI SSE 格式：通用路径直接转发；anthropic 入口经 onStreamChunk 转换
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
-    for (const s of sseLines) {
-      if (opts.onStreamChunk) { const o = opts.onStreamChunk(s + '\n', candidate); if (o) res.write(o); }
-      else res.write(s + '\n\n');
-    }
-    res.end();
+    // workbuddy 就是 OpenAI SSE 格式：逐行走收口钩子（Anthropic / Gemini / Responses 面各自翻译）
+    specialStreamHead(opts, candidate);
+    for (const s of sseLines) specialStreamLine(opts, candidate, s + '\n', s + '\n\n');
+    specialStreamEnd(opts);
     recordUsage({
       model: displayModel, channelId: candidate.channelId, kind: opts.kind,
       inputTokens: estimateTokens(messagesText(body && body.messages)),
@@ -6534,8 +6602,7 @@ async function tryWorkbuddyChannel(opts) {
     usage: usageOut || { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(fullText), total_tokens: 0 },
   };
   if (!usageOut) assembled.usage.total_tokens = assembled.usage.prompt_tokens + assembled.usage.completion_tokens;
-  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-  res.end(JSON.stringify(assembled));
+  await specialNonStreamOut(opts, candidate, assembled);
   recordUsage({
     model: displayModel, channelId: candidate.channelId, kind: opts.kind,
     inputTokens: assembled.usage.prompt_tokens,
@@ -6559,7 +6626,10 @@ async function tryWorkbuddyChannel(opts) {
 //            ⚠ 网页会话只认 user/assistant 两种角色 → gensparkMessagesFor 把 system 折进第一条 user
 //            （否则客户端与仿真注入的 system 都会被上游丢掉，工具协议根本到不了模型）；
 //         ② 响应侧：回复文本里的 [TOOL_CALL]{…}[/TOOL_CALL] 解析回真 tool_calls（流式与非流式都发）。
-//       仅挂 OpenAI 入口（/v1/chat/completions），anthropic/gemini 入口不挂（流转换不支持）
+//       候选链：只挂在 OpenAI 类候选链上（/v1/chat/completions 与 /v1/responses）；
+//       anthropic/gemini 两条候选链不含它（调度语义，与流转换能力无关——v1.18.38 起这五条专用
+//       路径的输出统一走客户端面的收口钩子，见 specialNonStreamOut / specialStreamHead /
+//       specialStreamLine / specialStreamEnd；错误体仍原样透传）
 // （GENSPARK_UA / GENSPARK_REFERER / crypto 声明在文件顶部，防 TDZ）
 
 function gensparkCookie(def) {
@@ -6755,34 +6825,28 @@ async function tryGensparkChannel(opts) {
   const outTok = st.usage ? st.usage.completion_tokens : estimateTokens(replyOut || replyText);
 
   if (isStream) {
-    // curl 已全量缓冲 → 把聚合文本按 OpenAI SSE 重新吐出（与 workbuddy 同思路）
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
+    // curl 已全量缓冲 → 把聚合文本按 OpenAI SSE 重新吐出（与 workbuddy 同思路），逐行走收口钩子
+    specialStreamHead(opts, candidate);
     const chunk = (delta, finish) => `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta, finish_reason: finish || null }] })}\n\n`;
     if (replyTools) {
       // 工具调用：delta.tool_calls + finish_reason=tool_calls（客户端据此进入工具回合）
-      res.write(chunk({
+      specialStreamLine(opts, candidate, chunk({
         role: 'assistant', content: replyOut ? replyOut : null,
         tool_calls: replyTools.map((c, i) => ({
           index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
           function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
         })),
       }));
-      if (st.usage) res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: st.usage })}\n\n`);
-      else res.write(chunk({}, 'tool_calls'));
+      if (st.usage) specialStreamLine(opts, candidate, `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: st.usage })}\n\n`);
+      else specialStreamLine(opts, candidate, chunk({}, 'tool_calls'));
     } else {
-      res.write(chunk({ role: 'assistant', content: '' }));
-      res.write(chunk({ content: replyText }));
-      if (st.usage) res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: st.usage })}\n\n`);
-      else res.write(chunk({}, 'stop'));
+      specialStreamLine(opts, candidate, chunk({ role: 'assistant', content: '' }));
+      specialStreamLine(opts, candidate, chunk({ content: replyText }));
+      if (st.usage) specialStreamLine(opts, candidate, `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: st.usage })}\n\n`);
+      else specialStreamLine(opts, candidate, chunk({}, 'stop'));
     }
-    res.write('data: [DONE]\n\n');
-    res.end();
+    specialStreamLine(opts, candidate, 'data: [DONE]\n\n');
+    specialStreamEnd(opts);
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage, statsCtx: opts.statsCtx });
     return 'success';
   }
@@ -6793,21 +6857,20 @@ async function tryGensparkChannel(opts) {
     const payloadOut = toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyOut || null);
     payloadOut.usage = usage;
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage, statsCtx: opts.statsCtx });
-    res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-    res.end(JSON.stringify(payloadOut));
+    await specialNonStreamOut(opts, candidate, payloadOut);
     return 'success';
   }
 
-  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-  res.end(JSON.stringify({
+  const assembledGs = {
     id: respId,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: displayModel,
     choices: [{ index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }],
     usage: st.usage || { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
-  }));
+  };
   recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage, statsCtx: opts.statsCtx });
+  await specialNonStreamOut(opts, candidate, assembledGs);
   return 'success';
 }
 
@@ -7094,24 +7157,15 @@ async function tryCodexChannel(opts) {
   const created = Math.floor(Date.now() / 1000);
 
   if (isStream) {
-    // 重放为 OpenAI chunk（role → content → finish → [DONE]）；anthropic 入口经 onStreamChunk 转换
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
+    // 重放为 OpenAI chunk（role → content → finish → [DONE]）；逐行走收口钩子
+    specialStreamHead(opts, candidate);
     const mk = (delta, fr) => 'data: ' + JSON.stringify({ id: respId, object: 'chat.completion.chunk', created, model: displayModel, choices: [{ index: 0, delta, finish_reason: fr || null }] }) + '\n';
-    const emit = (line) => {
-      if (opts.onStreamChunk) { const o = opts.onStreamChunk(line, candidate); if (o) res.write(o); }
-      else res.write(line + '\n');
-    };
+    const emit = (line) => specialStreamLine(opts, candidate, line, line + '\n');
     emit(mk({ role: 'assistant', content: '' }));
     emit(mk({ content: fullText }));
     emit(mk({}, 'stop'));
     emit('data: [DONE]');
-    res.end();
+    specialStreamEnd(opts);
   } else {
     const assembled = {
       id: respId,
@@ -7122,8 +7176,7 @@ async function tryCodexChannel(opts) {
       usage: usageOut || { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(fullText), total_tokens: 0 },
     };
     if (!usageOut) assembled.usage.total_tokens = assembled.usage.prompt_tokens + assembled.usage.completion_tokens;
-    res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-    res.end(JSON.stringify(assembled));
+    await specialNonStreamOut(opts, candidate, assembled);
   }
   recordUsage({
     model: displayModel, channelId: candidate.channelId, kind: opts.kind,
@@ -7278,27 +7331,22 @@ async function tryNotionChannel(opts) {
       return 'notion empty output (quota/degraded)';
     }
 
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
+    specialStreamHead(opts, candidate);
     // thinking 直通（无工具场景）
     if (!toolEmuReq && reasoningOut.length) {
-      res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
-      for (const t of reasoningOut) res.write(notionSSEChunk(respId, displayModel, { reasoning_content: t }));
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
+      for (const t of reasoningOut) specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, { reasoning_content: t }));
       firstReasoningSent = true;
     }
     // 重放缓冲的增量
     let firstChunkSent = firstReasoningSent;
     for (const d of pendingDeltas) {
-      if (!firstChunkSent) { firstChunkSent = true; res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
-      res.write(notionSSEChunk(respId, displayModel, { content: d }));
+      if (!firstChunkSent) { firstChunkSent = true; specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' })); }
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, { content: d }));
     }
     if (toolsEmitted) {
       firstChunkSent = true;
-      res.write(notionSSEChunk(respId, displayModel, {
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, {
         role: 'assistant', content: null,
         tool_calls: pendingToolCalls.map((c, i) => ({
           index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
@@ -7307,10 +7355,10 @@ async function tryNotionChannel(opts) {
       }));
     }
     // 收尾 chunk
-    res.write(notionSSEChunk(respId, displayModel, {}));
-    res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: toolsEmitted ? 'tool_calls' : 'stop' }] })}\n\n`);
-    res.write('data: [DONE]\n\n');
-    res.end();
+    specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, {}));
+    specialStreamLine(opts, candidate, `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: toolsEmitted ? 'tool_calls' : 'stop' }] })}\n\n`);
+    specialStreamLine(opts, candidate, 'data: [DONE]\n\n');
+    specialStreamEnd(opts);
     const inTok = estimateTokens(messagesText(body.messages));
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
     return 'success';
@@ -7347,8 +7395,7 @@ async function tryNotionChannel(opts) {
     if (parsed && parsed.calls.length) {
       const inTok = estimateTokens(messagesText(body.messages));
       recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
-      res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-      res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, parsed.calls, parsed.text || null)));
+      await specialNonStreamOut(opts, candidate, toolEmu.openaiToolCallsPayload(respId, displayModel, parsed.calls, parsed.text || null));
       return 'success';
     }
   }
@@ -7356,15 +7403,14 @@ async function tryNotionChannel(opts) {
   const inTok = estimateTokens(messagesText(body.messages));
   const outTok = estimateTokens(reply + (mergedReasoning ? '' : (reasoningText ? ' ' + reasoningText : '')));
   recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
-  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-  res.end(JSON.stringify({
+  await specialNonStreamOut(opts, candidate, {
     id: respId,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: displayModel,
     choices: [{ index: 0, message: { role: 'assistant', content: reply, ...(!mergedReasoning && reasoningText ? { reasoning_content: reasoningText } : {}) }, finish_reason: 'stop' }],
     usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
-  }));
+  });
   return 'success';
 }
 
@@ -7455,30 +7501,25 @@ async function tryNotionAgentChannel(opts) {
 
   // 6) 输出（流式一次性重放整段——上游本来就是整轮完成后才有全文）
   if (isStream) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-ZZCSAPI-Channel': candidate.channelId,
-    });
+    specialStreamHead(opts, candidate);
     if (replyTools) {
-      res.write(notionSSEChunk(respId, displayModel, {
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, {
         role: 'assistant', content: null,
         tool_calls: replyTools.map((c, i) => ({
           index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
           function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
         })),
       }));
-      res.write(notionSSEChunk(respId, displayModel, {}));
-      res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, {}));
+      specialStreamLine(opts, candidate, `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
     } else {
-      res.write(notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
-      res.write(notionSSEChunk(respId, displayModel, { content: replyText }));
-      res.write(notionSSEChunk(respId, displayModel, {}));
-      res.write(`data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, { role: 'assistant', content: '' }));
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, { content: replyText }));
+      specialStreamLine(opts, candidate, notionSSEChunk(respId, displayModel, {}));
+      specialStreamLine(opts, candidate, `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
     }
-    res.write('data: [DONE]\n\n');
-    res.end();
+    specialStreamLine(opts, candidate, 'data: [DONE]\n\n');
+    specialStreamEnd(opts);
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
     return 'success';
   }
@@ -7486,21 +7527,19 @@ async function tryNotionAgentChannel(opts) {
   // 非流式
   if (replyTools) {
     recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: estimateTokens(reply), ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
-    res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-    res.end(JSON.stringify(toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyText || null)));
+    await specialNonStreamOut(opts, candidate, toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyText || null));
     return 'success';
   }
   const outTok = estimateTokens(replyText);
   recordUsage({ model: displayModel, channelId: candidate.channelId, kind: opts.kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, statsCtx: opts.statsCtx });
-  res.writeHead(200, { 'Content-Type': 'application/json', 'X-ZZCSAPI-Channel': candidate.channelId });
-  res.end(JSON.stringify({
+  await specialNonStreamOut(opts, candidate, {
     id: respId,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: displayModel,
     choices: [{ index: 0, message: { role: 'assistant', content: replyText.trim() }, finish_reason: 'stop' }],
     usage: { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok },
-  }));
+  });
   return 'success';
 }
 

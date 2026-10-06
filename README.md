@@ -324,7 +324,10 @@ http://127.0.0.1:8787/console
 
 **客户端说哪套协议、渠道讲哪套协议，互不绑定**：任一客户端路由都能打到任一协议的渠道（出站自动转原生格式）；
 **同协议的那格直通不翻译**（v1.15——`thinking` / `cache_control` / `seed` 等原样到达，响应逐字节一致；v1.18.8 起还带
-thinking 回放修复）。矩阵表、工具调用四方向、各渠道配置要点、有损点诚实清单：[协议与渠道详解](docs/protocols.md)。
+thinking 回放修复）。五条**专用报文**渠道（`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex`）的响应输出也走各客户端面的
+收口钩子（v1.18.38 修正：此前它们自己写 OpenAI 报文，Responses / Anthropic / Gemini 面会拿到错形态）；
+**候选链分层**——Anthropic / Gemini 两条链只兜底到 `notion` / `notion-agent` / `codex`，`workbuddy` / `genspark` 只挂在 OpenAI 类链上。
+矩阵表、工具调用四方向、各渠道配置要点、有损点诚实清单：[协议与渠道详解](docs/protocols.md)。
 
 ## 调度顺序（摘要）
 

@@ -1,7 +1,8 @@
 # 协议与渠道详解
 
 > 本文从 README 拆出（v1.18.8）：README 只留协议速查表，本文收全量细节——原生出站、同协议直通、
-> 客户端路由的工具调用方向与 Responses API（第四套报文，v1.18.38）、四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
+> 客户端路由的工具调用方向与 Responses API（第四套报文，v1.18.38）、专用报文渠道的**输出收口**（v1.18.38 修正）、
+> 四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
 > 路由与调度语义见 [docs/scheduling.md](scheduling.md)；鉴权写法与管理面会话见 [docs/behavior.md](behavior.md)。
 
 ## 协议速查表
@@ -120,6 +121,39 @@ Responses 请求 ──入站转换──▶ OpenAI chat 报文 ──dispatchRe
 **装配纪律（改这块必看）**：① `/v1/responses` **绝不设** `clientProto` —— 设了就会触发同协议直通，把 Responses 报文原样塞给 chat 上游；
 ② 两段路由共用**一次** `authGate`；③ chat 面与 Responses 面共用 `openAICandidateChain()`（各写一份候选顺序迟早出现"只在一边复现"的兜底故障）。
 守卫是 `test/responses-api-e2e.test.js`。
+
+## 专用报文渠道的「输出收口」（v1.18.38 修正）
+
+notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构造上游报文**（不走常规出站构造），
+也因此历史上**自己写响应**：非流式 `res.end(JSON.stringify(chat 报文))`、流式 `res.write(chat SSE 行)`。
+
+对 OpenAI 客户端面（`/v1/chat/completions`）这没问题——那本来就是要的形态；但对**其它客户端面**等于把翻译层整个绕过去了。
+公网现场（v1.18.38 部署后实测）：`/v1/responses` 客户端打到 **notion 渠道**，收到的是
+`{"object":"chat.completion","id":"chatcmpl-notion-…"}`；Anthropic 面流式打到这些渠道时事件序列里**没有 `message_start`**。
+
+根因两层，缺一层都修不好：
+
+1. `tryChannel` 分派这五条路径时只透传了 `res` / `body` / `candidate` / …，把
+   `onSuccessNonStream` / `onStreamChunk` / `streamPrelude` / `streamEpilogue` **四个输出钩子全丢了**
+   （代码注释写着"anthropic 入口经 onStreamChunk 转换"——意图是对的，转发是漏的）；
+2. 于是它们只能自己写响应，连"开场 / 收尾"都没有。
+
+现在四条纪律（`specialNonStreamOut` / `specialStreamHead` / `specialStreamLine` / `specialStreamEnd`）：
+
+- **非流式**一律交 `onSuccessNonStream`（各客户端面自己翻译），没有钩子时才自己写；
+- **流式开场**写响应头后**立刻发 `streamPrelude`**（Responses 的 `response.created`、Anthropic 的 `message_start` 就靠它，漏了客户端会一直等第一帧）；
+- **流式逐行**走 `onStreamChunk`，**有钩子时只写钩子的返回**——空串表示"这一帧不产出"，**绝不回退成原始 OpenAI 报文**
+  （回退会把 chat 形态的 `data:` 行漏进 Responses / Anthropic 的事件流，客户端解析到一半就崩）；
+- **流式收尾**先发 `streamEpilogue`（补 `finish_reason` / `[DONE]` / `message_stop`）再 `end()`。
+
+**对 OpenAI 面字节等价**：`handleOpenAIRequest` 只设 `onSuccessNonStream`、不设另外三个钩子，所以
+`/v1/chat/completions` 的报文形态与字节一个都没变（回归里有对照组）。
+
+两条边界（诚实说明）：① **上游错误体仍然原样透传**（4xx 的 `shouldPassThrough4xx` 分支照旧不翻译，这是刻意纪律，见 [behavior.md](behavior.md)）；
+② **候选链本身没动**——`workbuddy` / `genspark` **不在** Anthropic / Gemini 两条候选链里（那两条只兜底到
+`notion` / `notion-agent` / `codex`），所以"某个客户端面能不能打到某条专用渠道"是**调度语义**，不是收口能决定的。
+
+守卫：`test/special-channel-output-seam-e2e.test.js`（装配守卫 + 假 workbuddy / notion 上游 × 四套客户端面）。
 
 ## 工具调用：三条客户端路由的四个往返方向
 

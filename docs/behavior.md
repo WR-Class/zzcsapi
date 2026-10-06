@@ -60,6 +60,21 @@
 - **失败行也带模型名（v1.18.26）**：`recordFailure()` 记账时带上**请求的模型名**（`tryChannel` 的 `failModel` = 客户端请求体里的 `model`）。此前写死 `model:'—'`，实测近 200 行用量里 **88% 的失败行看不出在调哪个模型**（用户报「有的显示失败但没显示调用的哪个模型」）。后台探测/无请求上下文的路径仍落 `—`——那是"本就没有模型"，不是"我们没记"。
 - **请求体落盘诊断（v1.18.27，默认关闭）**：`ZZCSAPI_DUMP_BODIES=<目录>` 时把客户端会话类请求（`/v1/chat/completions`、`/v1/completions`、`/v1/responses`〔v1.18.38 起〕、`/anthropic/v1/messages`、Gemini `:generateContent`；只落 POST，取回/删除没有会话体）的请求体原文落盘（`ZZCSAPI_DUMP_MAX` 控制保留数量，默认 30）。动机：上游「200 + `finish_reason=length` + 输出 1 个 token」「200 + 空流」这两种失败**伪装成成功**，客户端侧只有 token 计数、无法复现请求形态；留证是唯一能定位它们的办法。边界：`/admin/*` 一律不落（有密钥）、`?key=` 打码、单文件超 12MB 截断并标记、任何异常都吞掉（诊断绝不影响请求）、不设变量即零落盘。⚠ 文件含完整对话内容，仅本机排查时开。回归：`test/body-dump-diagnostic-e2e.test.js`。
 - **协议转换**：OpenAI ↔ Anthropic ↔ Gemini 三边都走内部 OpenAI 协议中转；**出站方向也按渠道的 `protocol` 走原生格式**（见 [docs/protocols.md](protocols.md)「原生出站」），所以任一客户端协议都能打到任一协议的渠道上。
+- **专用报文渠道的「输出收口」（v1.18.38 修正，公网实测发现）**：notion / notion-agent / workbuddy / genspark / codex
+  这五条路径**自己构造上游报文**（不走常规出站），也因此历史上**自己写响应**——非流式 `res.end(JSON.stringify(chat 报文))`、
+  流式 `res.write(chat SSE 行)`。对 OpenAI 客户端面（`/v1/chat/completions`）这本来就是要的形态，但**对其它客户端面等于把翻译层绕过去了**。
+  · **现场**：v1.18.38 把 `/v1/responses` 推上公网后实测——Responses 客户端打到 **notion 渠道**，收到的是
+  `{"object":"chat.completion","id":"chatcmpl-notion-…"}`（不是 `response` 对象）；同理 Anthropic 面流式打到这些渠道时事件序列里**没有 `message_start`**。
+  · **根因两层**：① `tryChannel` 分派这五条路径时只透传了 `res`/`body`/`candidate`/…，把
+  `onSuccessNonStream` / `onStreamChunk` / `streamPrelude` / `streamEpilogue` **四个输出钩子全丢了**
+  （注释写着"anthropic 入口经 onStreamChunk 转换"——意图是对的，转发是漏的）；② 于是它们只能自己写响应，连"开场/收尾"都没有。
+  · **处置**：钩子转发 + 四个收口 helper（`specialNonStreamOut` / `specialStreamHead` / `specialStreamLine` / `specialStreamEnd`），五条路径统一走它们。
+  逐行钩子的语义要点：**有钩子时只写钩子的返回**——空串表示"这一帧不产出"，**绝不回退成原始 OpenAI 报文**（回退会把 chat 形态的 `data:` 行漏进 Responses/Anthropic 的事件流）。
+  · **对 OpenAI 面字节等价**：`handleOpenAIRequest` 只设 `onSuccessNonStream`、不设另外三个钩子，所以 chat 面的报文形态与字节一个都没变（回归里有对照组）。
+  · **两条边界（诚实说明）**：① **上游错误体仍原样透传**（`shouldPassThrough4xx` 分支照旧不翻译，刻意纪律）；② **候选链没动**——
+  `workbuddy` / `genspark` 不在 Anthropic / Gemini 两条候选链里（那两条只兜底到 `notion` / `notion-agent` / `codex`），
+  所以"某个面能不能打到某条专用渠道"是**调度语义**，不是收口能决定的。
+  · 回归：`test/special-channel-output-seam-e2e.test.js`（装配守卫 + 假 workbuddy/notion 上游 × 四套客户端面）。
 - **OpenAI Responses 客户端面（v1.18.38）**：`/v1/responses` 是**第四套客户端报文**，走"入站转 chat → 复用同一条候选链 → 出站转回 `response`"。
   · 为什么不能透传：Responses 报文的对话在 `body.input`、chat 处理器找的是 `body.messages` —— 以前它在 `handleOpenAIRequest` 的 POST 白名单里，等于把 `input` 报文原样塞给 chat 上游（不是 400 就是"200 但空"）。因此这段**绝不设 `clientProto`**（设了就触发同协议直通），且 chat 面与 Responses 面共用 `openAICandidateChain()`。
   · 出站两态：非流式回 `response` 对象（`output[]` / `output_text` / `usage.input_tokens` 口径）；流式回 Responses 的 `event:` + `data:` 事件序列（`response.created` → … → `response.completed`），`finish_reason:"length"` 记 `status:"incomplete"`（**不假装完成**）。

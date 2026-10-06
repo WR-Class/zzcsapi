@@ -104,8 +104,8 @@ function makeGensparkFake(tag) {
     check('★ 流式发 tool_calls 分片 + finish_reason=tool_calls',
       /tool_calls: replyTools\.map/.test(gs) && /finish_reason: 'tool_calls'/.test(gs));
     check('★ 没有工具调用时行为不变（照旧纯文本，不会被"有 tools"吃掉）',
-      /\} else \{\n      res\.write\(chunk\(\{ role: 'assistant', content: '' \}\)\);/.test(gs)
-      && /res\.write\(chunk\(\{ content: replyText \}\)\);/.test(gs));
+      /\} else \{\n      specialStreamLine\(opts, candidate, chunk\(\{ role: 'assistant', content: '' \}\)\);/.test(gs)
+      && /specialStreamLine\(opts, candidate, chunk\(\{ content: replyText \}\)\);/.test(gs));
     check('★ 头部注释已改正（不再写"暂不做工具仿真"）',
       !SRC.includes('本渠道暂不做工具仿真') && /v1\.14 已整改「工具调用不可用」/.test(SRC));
   }
