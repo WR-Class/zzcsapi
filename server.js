@@ -2436,6 +2436,30 @@ function normDropParams(v) {
   }
   return out.length ? out : undefined;
 }
+// ── 渠道级超时字段（v1.18.46）：`firstChunkTimeoutMs`（首字死线）/ `timeoutMs`（每渠道总超时）
+//   这两个字段**运行期一直在读**（`FIRST_BYTE_MS` 与各路径的 `ch.def.timeoutMs`），但此前"三处一起加"
+//   一处都没加：persistConfig 的显式字段清单漏了它们 → **保存任意一个渠道就把它们从 config.json 里
+//   抹掉**（下次重启悄悄退回默认），GET /channels 也不下发 → 控制台看不见它们。
+//   现场：给"上游挂死/慢"的家配一个小首字死线，好让它被**快速跳过**而不是白等 30~60 秒；
+//   结果打开渠道顺手一保存，这个配置就没了。（与 PT29 / v1.18.33 dropParams / v1.18.44 headers 同一族）
+//   值域只此一处：validateChannelDef 与 POST 共用，避免"校验一套、入库另一套"。
+const CH_MS_FIELDS = {
+  firstChunkTimeoutMs: { label: '首字死线', min: 1000, max: 300_000, dft: '有其它候选 30s / 末位 60s' },
+  timeoutMs: { label: '每渠道总超时', min: 1000, max: 600_000, dft: '按路径 90s / 120s / 180s' },
+};
+// 归一化：返回 { value } 或 { error }。**空值 = 清空（回到默认）**——控制台表单总是回填，框空就是
+//   用户真要退回默认；非法值一律报错，**绝不静默忽略**（v1.18.33 的现场教训：静默忽略 =
+//   "配了却没生效，然后对着一个 100% 失败的渠道排查半天"）。0 刻意不许：`ch.def.timeoutMs || 默认`
+//   会把 0 悄悄换成默认值，收下它就等于收下一个"配了不生效"的坑。
+function normChMsField(name, v) {
+  const spec = CH_MS_FIELDS[name];
+  if (v === undefined || v === null || v === '') return { value: undefined };
+  const n = Number(v);
+  if (!Number.isFinite(n) || n !== Math.floor(n) || n < spec.min || n > spec.max) {
+    return { error: `${name} 必须是 ${spec.min}~${spec.max} 之间的整数毫秒（${spec.label}）；0 不是"不超时"，留空才是回到默认（${spec.dft}）` };
+  }
+  return { value: n };
+}
 // 出站前剔除：没配就原样返回（零拷贝），配了就返回一份浅拷贝再删（见纪律②）
 function dropParamsFrom(body, ch) {
   const list = (ch && ch.def && ch.def.dropParams) || null;
@@ -3465,6 +3489,11 @@ function persistConfig() {
       dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
       // v1.18.41 notion 内联附件（opt-in）：与 dropParams 同一个坑，漏一行就被下一次渠道保存抹掉
       notionAttachments: ch.def.notionAttachments === true ? true : undefined,
+      // v1.18.46 渠道级超时字段（首字死线 / 每渠道总超时）：**同一族的下一例**——这两个字段
+      //   运行期一直在读，却一个字都没进这份显式清单，于是"配好 → 保存任意渠道 → 从 config.json
+      //   消失 → 下次重启悄悄回默认"。加渠道字段必须三处一起加：这里 + GET + POST 的 def 构造。
+      firstChunkTimeoutMs: ch.def.firstChunkTimeoutMs || undefined,
+      timeoutMs: ch.def.timeoutMs || undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -4017,6 +4046,13 @@ function validateChannelDef(def, opts) {
     const bad = raw.map((x) => String(x).trim()).filter(Boolean).filter((x) => !DROP_PARAM_WHITELIST.includes(x));
     if (bad.length) return `dropParams 只接受这些参数名：${DROP_PARAM_WHITELIST.join(', ')}（不认识：${bad.join(', ')}）`;
   }
+  // v1.18.46 渠道级超时字段：非法值一律 400（值域见 CH_MS_FIELDS/normChMsField）。
+  //   **必须在这里挡下**：这两个值会直接进 setTimeout / AbortSignal 的死线，一个手滑的 0 或负数
+  //   会让"这家慢"变成"这家每次都瞬间失败"（比不配更糟），而 NaN 会让死线永不触发。
+  for (const nm of Object.keys(CH_MS_FIELDS)) {
+    const r = normChMsField(nm, def[nm]);
+    if (r.error) return r.error;
+  }
   // 加权轮询权重：必须是有限数字且 ≥ 0（0 = 不参与轮询；负数/NaN 会让分流比例失去意义）
   if (def.weight !== undefined && def.weight !== null && def.weight !== '') {
     const w = Number(def.weight);
@@ -4302,6 +4338,9 @@ async function handleAdminApi(req, res, url) {
       dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
       // v1.18.41 notion 内联附件（opt-in）：同样要回填
       notionAttachments: ch.def.notionAttachments === true ? true : undefined,
+      // v1.18.46 渠道级超时字段：控制台表单要回填它们（值缺省 = 用默认，空框不是"没配"而是"回默认"）
+      firstChunkTimeoutMs: ch.def.firstChunkTimeoutMs || undefined,
+      timeoutMs: ch.def.timeoutMs || undefined,
       enabled: ch.def.enabled !== false,
       autoAlias: ch.def.autoAlias !== false,
       proxy: ch.def.proxy || undefined,
@@ -4327,6 +4366,9 @@ async function handleAdminApi(req, res, url) {
     // 已有的 weight 不能被"本次没传这个字段"抹掉（v1.5 起控制台表单会**显式**提交 weight：
     // 留空 = 真的清成 0；只有那些老客户端/导入流程不传 weight 时才沿用旧值）
     const prevDef = channels.get(body.id)?.def;
+    // v1.18.46：超时字段先归一化（值域/报错全在 normChMsField 一处；validateChannelDef 已挡过非法值）
+    const msFc = normChMsField('firstChunkTimeoutMs', body.firstChunkTimeoutMs);
+    const msTo = normChMsField('timeoutMs', body.timeoutMs);
     const def = {
       id: body.id,
       name: body.name || body.id,
@@ -4354,6 +4396,11 @@ async function handleAdminApi(req, res, url) {
       dropParams: body.dropParams !== undefined ? normDropParams(body.dropParams) : (prevDef ? prevDef.dropParams : undefined),
       // v1.18.41 notion 内联附件（opt-in，默认关）：显式传 false 就是关掉；不传则沿用旧值
       notionAttachments: body.notionAttachments !== undefined ? (body.notionAttachments === true || body.notionAttachments === 'true') : (prevDef ? prevDef.notionAttachments : undefined),
+      // v1.18.46 渠道级超时字段：**三态语义**与 dropParams/weight 同款——显式给（含空串 = 清空回默认）
+      //   就以本次为准，字段缺省才沿用旧值。这两个字段此前只被"读"、从未被"写"：
+      //   配了它，保存**任意一个**渠道就会被 persistConfig 的显式字段清单抹掉（见 CH_MS_FIELDS 的注释）。
+      firstChunkTimeoutMs: body.firstChunkTimeoutMs === undefined ? (prevDef ? prevDef.firstChunkTimeoutMs : undefined) : msFc.value,
+      timeoutMs: body.timeoutMs === undefined ? (prevDef ? prevDef.timeoutMs : undefined) : msTo.value,
     };
     const existed = channels.has(def.id);
     const ch = upsertChannel(def);
@@ -7666,7 +7713,9 @@ async function tryNotionAgentChannel(opts) {
   try {
     turn = await notionAgent.runAgentTurn({
       baseUrl: base, token, agentId, message: messageText, promptContext,
-      fetchFn: zzFetch, timeoutMs: timeoutMs - 20000,
+      // v1.18.46：`timeoutMs` 现在可由渠道配（下限 1000ms），这个减法必须兜底——旧写法在
+      //   timeoutMs < 20000 时会把**负数**当超时传进 runAgentTurn（要么立刻失败、要么行为未定义）。
+      fetchFn: zzFetch, timeoutMs: Math.max(5000, timeoutMs - 20000),
     });
   } catch (err) {
     // CF 间歇性拦截 / 网络异常等 → 渠道失败切兜底（渠道进入指数冷却）

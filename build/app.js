@@ -74,6 +74,10 @@ function adapt() {
       w:c.weight == null ? 0 : Number(c.weight) || 0,
       wHits:Number(c.weightedHits) || 0,
       wShare:Number(c.weightedShare) || 0,
+      /* 渠道级超时字段（v1.18.46）：没配就不下发该键 → 表单留空（空 = 用默认）。原样带过来，
+         表单要回填它——**不回填的输入框就是保存按钮旁边那把删除键**（v1.18.44 自定义请求头的现场） */
+      fcMs:c.firstChunkTimeoutMs==null?'':c.firstChunkTimeoutMs,
+      toMs:c.timeoutMs==null?'':c.timeoutMs,
       /* 渠道级「不发这些参数」（v1.18.33）：没配的渠道后端不下发该字段 → 统一成数组，模板可直接 join */
       dp:Array.isArray(c.dropParams)?c.dropParams.map(String):[],
       /* 自动权重观测（v1.6 静默版，**只算不生效**）：ah = 健康系数 0~1；
@@ -158,12 +162,20 @@ async function loadAll() {
     api('/admin/api/channels').catch(() => null),
   ]);
   const stChans = (st && st.channels) || [];
-  /* **只按 id 补 dropParams 一个字段**：其余一律以 status（带实时状态）为准，
-     别让这份"渠道定义快照"把 status 的实时字段覆盖回去。空数组/缺省 = 没配，不覆盖。 */
+  /* **只按 id 补表单专用字段**（dropParams / firstChunkTimeoutMs / timeoutMs）：其余一律以 status
+     （带实时状态）为准，别让这份"渠道定义快照"把 status 的实时字段覆盖回去。空值/缺省 = 没配，不覆盖。
+     v1.18.46：两个超时字段此前**不在这一份里、也不在 GET 里**，于是控制台看不见它们的存在，
+     而配了的渠道一保存就被抹掉——加渠道字段时这个 id 合并也要一起加。 */
   const defs = (chdefs && chdefs.channels) || null;
   if (defs) {
-    const dpById = new Map(defs.map((d) => [d && d.id, d && d.dropParams]));
-    for (const c of stChans) { const d = dpById.get(c.id); if (Array.isArray(d) && d.length) c.dropParams = d; }
+    const byId = new Map(defs.map((d) => [d && d.id, d]));
+    for (const c of stChans) {
+      const d = byId.get(c.id);
+      if (!d) continue;
+      if (Array.isArray(d.dropParams) && d.dropParams.length) c.dropParams = d.dropParams;
+      if (d.firstChunkTimeoutMs != null) c.firstChunkTimeoutMs = d.firstChunkTimeoutMs;
+      if (d.timeoutMs != null) c.timeoutMs = d.timeoutMs;
+    }
   }
   RAW = { channels:stChans, usage:us, config:cfg, auto:(st && st.autoWeight) || null,
           settings:settings || RAW.settings, keys:keys || RAW.keys, stats:ipst || RAW.stats };
@@ -966,6 +978,11 @@ function dropWhitelist(){
 /* 该渠道已配的清单 → 输入框里的 'a, b' 文本（没配 = 空框） */
 function dropParamsOf(c){
   return (c&&Array.isArray(c.dp)&&c.dp.length)?c.dp.join(', '):'';
+}
+/* 渠道级超时字段 → 输入框文本（v1.18.46）：配了显示数字、没配显示空框。
+   空框的语义是「回默认」而不是「没意见」——服务端对显式空串就是清空（见 POST 的三态语义）。 */
+function msTextOf(c,k){
+  return (c&&c[k]!=null&&c[k]!=='')?String(c[k]):'';
 }
 /* 合法参数名 chips：点一下把这个名字填进框（走 data-act 委托，不写内联属性）。
    名字与模板里的 data-act 双向一一对应，见 ACTS 与 test/console-state.test.js。 */
@@ -2065,6 +2082,12 @@ function openChannelForm(id){
         <div class="field" style="flex:.7"><label>启用</label>
           <select class="select" id="f-on"><option value="1" ${(c?c.on:true)?'selected':''}>是</option><option value="0" ${(c?!c.on:false)?'selected':''}>否</option></select></div>
       </div>
+      <div class="field-row">
+        <div class="field"><label>首字死线 (ms) <span class="help">留空 = 默认（有候选 30s / 末位 60s）</span></label>
+          <input class="input" id="f-fcms" type="number" min="1000" max="300000" step="100" value="${esc(msTextOf(c,'fcMs'))}" placeholder="例：8000" title="上游多久没回响应头就换下一家。挂死或很慢的家配小值（例 8000），它就会被**快速跳过**，而不是白等 30~60 秒。0 不是「不超时」——留空才是回默认"></div>
+        <div class="field"><label>总超时 (ms) <span class="help">留空 = 默认（90s 起）</span></label>
+          <input class="input" id="f-toms" type="number" min="1000" max="600000" step="1000" value="${esc(msTextOf(c,'toMs'))}" placeholder="例：120000" title="这家渠道一次请求的总死线（只影响这家）。正常渠道不必配；给慢家配小值可以更早放弃它"></div>
+      </div>
       <div class="field"><label>Base URL <span class="help">${pm.base?'默认 '+pm.base:'按上游填写'}</span></label>
         <input class="input" id="f-base" value="${esc(c?chBaseUrl(c):'')}" placeholder="https://api.example.com/v1"></div>
       <div class="field"><label>代理 <span class="help">可选；codex / genspark 必填；openai / anthropic / gemini / workbuddy 填了即生效（经代理转发，流式响应会整体缓冲后一次性回放）；notion 系不支持。如 http://host.docker.internal:7897（容器经宿主机代理出网）</span></label>
@@ -2262,6 +2285,17 @@ async function saveChannel(){
   const wRaw=($('#f-weight').value||'').trim();
   const weight=wRaw===''?0:Number(wRaw);
   if(!Number.isFinite(weight)||weight<0)return toast('权重必须是不小于 0 的数字（留空 = 0 = 不参与加权轮询）');
+  /* 渠道级超时字段（v1.18.46）：空框 = 回默认（合法），非空就必须是值域内的整数。
+     在后端 400 之前先挡一道——但**只挡明显错误**：真正的门槛仍在 validateChannelDef（值域只有一份）。 */
+  const msField=(sel,label,min,max)=>{
+    const raw=($(sel).value||'').trim();
+    if(raw==='')return{ok:true,value:''};
+    const n=Number(raw);
+    if(!Number.isInteger(n)||n<min||n>max)return{ok:false,msg:label+'必须是 '+min+'~'+max+' 之间的整数毫秒（留空 = 用默认；0 不是「不超时」）'};
+    return{ok:true,value:String(n)};
+  };
+  const fcms=msField('#f-fcms','首字死线',1000,300000); if(!fcms.ok)return toast(fcms.msg);
+  const toms=msField('#f-toms','总超时',1000,600000); if(!toms.ok)return toast(toms.msg);
   const seen=new Set(), models={};
   for(const r of modalModels){
     const alias=(r.alias||'').trim(), up=(r.upstream||'').trim();
@@ -2289,6 +2323,10 @@ async function saveChannel(){
        这里不做白名单校验（前端只做"挡住明显错误"这类便宜检查）——合法名清单由服务端下发用于**提示**，
        真正的准入门槛在后端 validateChannelDef，写错名字会 400 并把合法清单原文回显给用户。 */
     dropParams:($('#f-drop').value||'').split(/[\s,]+/).map(s=>s.trim()).filter(Boolean),
+    /* 渠道级超时字段（v1.18.46）：**总是**提交这两个字段——框空 = 显式 `''` = 回默认。
+       语义与 dropParams 同款（三态）：服务端只认"显式空值才清空"，前端不发就永远清不掉已配的值。 */
+    firstChunkTimeoutMs:fcms.value,
+    timeoutMs:toms.value,
     models,
   };
   const btn=$('.m-ft .btn.primary');

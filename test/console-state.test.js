@@ -429,6 +429,173 @@ async function testDropParams() {
   }
 }
 
+/* ═══════ 3c. 渠道级超时字段（v1.18.46）════════════════════════════════════════
+   现场：`firstChunkTimeoutMs`（首字死线）/ `timeoutMs`（每渠道总超时）是 v1.18.30 为
+   "挂死的上游要快速换家"加的两个字段，**运行期一直在读**——可登记的地方三处一处都没加
+   （`persistConfig` 显式字段清单 / `GET /admin/api/channels` / 渠道 POST 的 `def` 构造），
+   于是"给慢家配个小首字死线"变成了"配了、打开渠道顺手一保存就没了、重启悄悄回默认"。
+   后端那半（落库往返 / 三态 / 值域 400 / 400 不落库）在
+   `test/channel-timeout-attribution-e2e.test.js` §E；这一节守**控制台那半**：
+     ① 两个框必须**回填**——不回填的输入框就是保存按钮旁边那把删除键（v1.18.44 的现场教训）；
+     ② `saveChannel` **总是**提交这两个字段：框空 = 显式 `''` = 回默认（三态语义与 `dropParams`
+        同款——服务端只认"显式空值才清空"，前端不发就永远清不掉已配的值）；
+     ③ 前端那份 1000~300000 / 1000~600000 只是**控件提示用的副本**（作用=别把明显填错的发出去），
+        权威值域只有服务端一处（`CH_MS_FIELDS`）；所以这里断言的是"提示值与控件的 min/max 一致"，
+        而不是"前端就是权威"；
+     ④ 这两个字段**不在 `/admin/api/status` 的渠道投影里**，靠 `loadAll` 里那次
+        `/admin/api/channels` 按 id 合并（与 `dropParams` 同一个兜底位置）。 */
+async function testChannelTimeoutFields() {
+  G('3c. 渠道级超时字段（v1.18.46）：回填 / 总是提交 / 值域只挡明显错 / id 合并与产物');
+
+  /* 3c.1 adapt()：firstChunkTimeoutMs / timeoutMs 收成 fcMs / toMs（没配 = 空串，表单才好留空） */
+  {
+    const dom = makeDom();
+    const RAW = {
+      channels: [
+        { id: 't-set', name: '配了', protocol: 'openai', enabled: true, status: 'ok', priority: 5, firstChunkTimeoutMs: 8000, timeoutMs: 45000, aliases: [] },
+        { id: 't-none', name: '没配', protocol: 'openai', enabled: true, status: 'ok', priority: 5, aliases: [] },
+      ],
+      usage: null,
+    };
+    const a = new Function('RAW', 'DATA', 'esc', 'svg', 'nf', '$',
+      'let CFG=null, loaded=false;\n' + extract('adapt') + '\nreturn { adapt, get DATA(){ return DATA } };'
+    )(RAW, { channels: [], models: [], meta: {} }, esc, svg, nf, dom.$);
+    a.adapt();
+    const on = a.DATA.channels.find((c) => c.id === 't-set');
+    const off = a.DATA.channels.find((c) => c.id === 't-none');
+    check('★ 配了的渠道：firstChunkTimeoutMs → fcMs、timeoutMs → toMs（原值不改写）',
+      on.fcMs === 8000 && on.toMs === 45000, [on.fcMs, on.toMs]);
+    check('★ 没配的渠道：fcMs / toMs 都是**空串**（表单才好回填成空框 = 用默认）',
+      off.fcMs === '' && off.toMs === '');
+  }
+
+  /* 3c.2 msTextOf()：值 → 输入框文本（坏值如实显示，不静默当成"没配"） */
+  {
+    const f = new Function(extract('msTextOf') + '\nreturn { msTextOf };')();
+    check('配了数字 → 文本；空串 / 没这个键 / null → 空框',
+      f.msTextOf({ fcMs: 8000 }, 'fcMs') === '8000'
+      && f.msTextOf({ fcMs: '' }, 'fcMs') === ''
+      && f.msTextOf({}, 'fcMs') === '' && f.msTextOf(null, 'fcMs') === '');
+    check('★ 坏值（0）如实显示成 "0"——不静默当成"没配"，用户才看得见自己填错了（前后端都会明确拒绝 0）',
+      f.msTextOf({ toMs: 0 }, 'toMs') === '0');
+  }
+
+  /* 3c.3 ★ 真跑 openChannelForm：配了的回填、没配的留空（不回填 = 保存即删除） */
+  {
+    const dom = makeDom();
+    const capture = (chan) => {
+      let html = '';
+      const f = new Function('$', 'DATA', 'PROTO_META', 'PROTO_ORDER', 'esc', 'svg', 'modal',
+        'chAliases', 'chBaseUrl', 'maskKey', 'chKey', 'headersTextOf', 'dropChipsHtml', 'renderModelRows',
+        'probeFound', 'probeSel', 'probeQ',
+        'let modalChId=null, modalModels=[];\n'
+        + extract('msTextOf') + '\n' + extract('dropParamsOf') + '\n' + extract('openChannelForm')
+        + '\nreturn { openChannelForm };'
+      )(dom.$, { channels: chan ? [chan] : [] },
+        { openai: { label: 'OpenAI', base: '', key: '' } }, ['openai'],
+        esc, svg, (h) => { html = h; return h; },
+        () => [], (c) => c.baseUrl || '', () => 'sk-****1234', () => 'sk-****1234',
+        () => '', () => '', () => { },
+        [], new Set(), '');
+      f.openChannelForm(chan ? chan.id : undefined);
+      return html;
+    };
+    const tagOf = (html, id) => (html.match(new RegExp('<input[^>]*id="' + id + '"[^>]*>')) || [''])[0];
+    const valOf = (html, id) => ((tagOf(html, id).match(/value="([^"]*)"/) || [])[1]);
+
+    const set = capture({ id: 't-set', name: '配了', proto: 'openai', on: true, pri: 5, w: 0, fcMs: 8000, toMs: 45000 });
+    check('★ 配了 8000 / 45000 → 打开表单两个框真回填了这两个值（不回填的框就是保存按钮旁的删除键）',
+      valOf(set, 'f-fcms') === '8000' && valOf(set, 'f-toms') === '45000',
+      [valOf(set, 'f-fcms'), valOf(set, 'f-toms')]);
+    check('两个框都是 type=number 且带 min/max（浏览器侧就能拦掉明显错误）',
+      /type="number"/.test(tagOf(set, 'f-fcms')) && /min="1000" max="300000"/.test(tagOf(set, 'f-fcms'))
+      && /type="number"/.test(tagOf(set, 'f-toms')) && /min="1000" max="600000"/.test(tagOf(set, 'f-toms')));
+    check('label 旁写明默认值（首字：有候选 30s / 末位 60s；总超时：90s 起）——空框的语义要能读懂',
+      set.includes('留空 = 默认（有候选 30s / 末位 60s）') && set.includes('留空 = 默认（90s 起）'));
+    check('title 里点名「0 不是『不超时』」——这个坑不写清楚就会被填进去（v1.18.33 的教训）',
+      /0 不是「不超时」/.test(set));
+
+    const none = capture({ id: 't-none', name: '没配', proto: 'openai', on: true, pri: 5, w: 0 });
+    check('★ 没配的渠道 → 两个框都是**空框**（空 = 用默认，不是"配了 0"）',
+      valOf(none, 'f-fcms') === '' && valOf(none, 'f-toms') === '');
+    const fresh = capture(null);
+    check('新增渠道（c=null）→ 同样空框，不抛异常',
+      valOf(fresh, 'f-fcms') === '' && valOf(fresh, 'f-toms') === '');
+  }
+
+  /* 3c.4 saveChannel()：**总是**提交这两个字段（给值 / 空串）；非整数与越界在前端就挡下 */
+  {
+    const run = (fc, to) => {
+      const dom = makeDom();
+      const sent = [], toasts = [];
+      const apiStub = async (p, opt) => { sent.push({ p, body: JSON.parse(opt.body) }); return { existed: false }; };
+      const f = new Function('$', '$$', 'DATA', 'esc', 'svg', 'nf', 'toast', 'api', 'closeModal', 'loadAll',
+        'let modalChId=null, modalModels=[];\n' + extract('saveChannel') + '\nreturn { saveChannel };'
+      )(dom.$, dom.$$, { channels: [] }, esc, svg, nf, (m) => toasts.push(m), apiStub, () => { }, async () => { });
+      const v = (id, val) => { dom.$('#' + id).value = val; };
+      v('f-id', 'new-ch'); v('f-name', '新渠道'); v('f-base', 'https://x.test/v1'); v('f-key', 'sk-x');
+      v('f-proto', 'openai'); v('f-pri', '5'); v('f-weight', '0'); v('f-on', '1'); v('f-proxy', '');
+      v('f-headers', ''); v('f-drop', '');
+      v('f-fcms', fc); v('f-toms', to);
+      dom.$('#f-autoAlias').checked = true;
+      return f.saveChannel().then(() => ({ sent, toasts }));
+    };
+    /* ⚠️ 这里必须 `await` 这个 IIFE，**不能** `return` 它：`return` 写在普通块里等于返回
+       整个 testChannelTimeoutFields，后面的 3c.5 会被静默跳过而退出码仍是 0（假绿，§3b 开头
+       记着同款现场：顶层裸块的 `return` 把整节用例跳掉）。第一版就是这么写的。 */
+    await (async () => {
+      let r = await run('8000', '45000');
+      check('★ 表单里的两个值进了请求体（字段名与服务端一致）',
+        r.sent.length === 1 && r.sent[0].body.firstChunkTimeoutMs === '8000' && r.sent[0].body.timeoutMs === '45000',
+        r.sent[0] && [r.sent[0].body.firstChunkTimeoutMs, r.sent[0].body.timeoutMs]);
+      check('同一发里其它字段照旧（没被这两个新字段挤掉）',
+        r.sent[0].body.id === 'new-ch' && r.sent[0].body.weight === 0 && r.sent[0].body.protocol === 'openai');
+
+      r = await run('', '');
+      check('★ 两个框都空 = **显式提交空串**（= 回默认）。服务端只认"显式空值才清空"，'
+        + '前端不发这两个字段的话用户就永远清不掉已配的值',
+        r.sent.length === 1 && r.sent[0].body.firstChunkTimeoutMs === '' && r.sent[0].body.timeoutMs === '',
+        r.sent[0] && [r.sent[0].body.firstChunkTimeoutMs, r.sent[0].body.timeoutMs]);
+
+      r = await run('8000', '');
+      check('只配一个也各自独立（首字有值、总超时清空）',
+        r.sent[0].body.firstChunkTimeoutMs === '8000' && r.sent[0].body.timeoutMs === '');
+
+      for (const [fc, to, why] of [['0', '', '0'], ['abc', '', '非数字'], ['999', '', '低于下限'],
+        ['', '600001', '总超时越界'], ['', '-1', '负数']]) {
+        const rr = await run(fc, to);
+        check('★ 非法值「' + why + '」在前端就挡下：不发请求 + 提示带值域（别等后端 400）',
+          rr.sent.length === 0 && rr.toasts.length === 1 && /1000~/.test(rr.toasts[0]),
+          { sent: rr.sent.length, toast: rr.toasts[0] });
+      }
+    })();
+  }
+
+  /* 3c.5 结构守卫：id 合并 / 总是提交 / 前端提示值与控件 min-max 一致 / 产物已重建 */
+  {
+    check('★ loadAll 里按 id 把这两个字段并进渠道（它们不在 /admin/api/status 的投影里，'
+      + '少了这段表单就永远显示空框 → 保存即抹掉）',
+      /c\.firstChunkTimeoutMs\s*=\s*d\.firstChunkTimeoutMs/.test(src)
+      && /c\.timeoutMs\s*=\s*d\.timeoutMs/.test(src)
+      && /d\.firstChunkTimeoutMs\s*!=\s*null/.test(src) && /d\.timeoutMs\s*!=\s*null/.test(src));
+    check('★ saveChannel 里这两个字段是**无条件**提交（不是 `if (x)` 包着的可选字段）',
+      /firstChunkTimeoutMs:fcms\.value/.test(src) && /timeoutMs:toms\.value/.test(src));
+    check('两个框的 value 走 esc(msTextOf(...))——回填且转义（值来自服务端/配置文件）',
+      /value="\$\{esc\(msTextOf\(c,'fcMs'\)\)\}"/.test(src) && /value="\$\{esc\(msTextOf\(c,'toMs'\)\)\}"/.test(src));
+    check('前端那份提示值域与控件的 min/max **逐字一致**（两处不一致就会出现"框里能填、点保存却报错"）',
+      /msField\('#f-fcms','首字死线',1000,300000\)/.test(src) && /msField\('#f-toms','总超时',1000,600000\)/.test(src)
+      && /id="f-fcms" type="number" min="1000" max="300000"/.test(src)
+      && /id="f-toms" type="number" min="1000" max="600000"/.test(src));
+
+    const built = fs.readFileSync(path.join(__dirname, '..', 'console.html'), 'utf8');
+    check('★ 产物 console.html 里有这两个框（改了源没重建 → 这里就红）',
+      built.includes('id="f-fcms"') && built.includes('id="f-toms"'), built.length);
+    check('产物里也是无条件提交（console.html 与 build/app.js 同源，构建即同步）',
+      /firstChunkTimeoutMs:fcms\.value/.test(built) && /timeoutMs:toms\.value/.test(built));
+  }
+}
+
+
 /* ═══════ 4. 自动权重观测（v1.6 静默版）：adapt() 接字段 + 观测卡渲染 ═══════
    这一节守住"看得见"那一半：后端算出来的观测字段真被接进 DATA、观测卡真把
    「若启用会怎么分」画出来，并且**卡面上写明只算不生效**（不许让用户以为已经生效了）。 */
@@ -1540,6 +1707,7 @@ function testSearchClear() {
   testPlayground();
   await testWeight();
   await testDropParams();
+  await testChannelTimeoutFields();
   testAutoWeight();
   testDisabledTest();
   await testRunTests();

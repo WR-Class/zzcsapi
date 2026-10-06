@@ -13,6 +13,8 @@
  *   ② 挂死那家记 `stream idle` 且 ok:false（账本如实）；
  *   ③ ★ 失败行带 `client` 标签（能归因到客户端）——v1.18.30 前这里是空的；
  *   ④ 结构性守卫：默认首字超时 = 30s（有候选）/60s（末位），默认每渠道总超时 = 90s（防回潮到 90s/300s/120s）。
+ *   ⑤（v1.18.46）§E：这两个字段必须**三处一起加**——配了它、保存**任意一个**渠道之后，必须还在
+ *     config.json 里；GET 要下发（控制台才能回填）；三态语义（给值/缺省/空串）；非法值 400 且不落库。
  *
  * 安全约束：动态空闲端口；配置/用量在系统临时目录（绝不动仓库 config.json/usage.json）。
  * 跑法：node test/channel-timeout-attribution-e2e.test.js     （退出码非 0 表示有回归）
@@ -115,6 +117,75 @@ async function waitUp(port, ms = 20000) {
     check('默认首字超时 = 30s（有候选）/ 60s（末位）', /firstChunkTimeoutMs \|\| \(opts\.hasMoreCandidates \? 30_000 : 60_000\)/.test(src));
     check('默认每渠道总超时 = 90s', /const timeoutMs = ch\.def\.timeoutMs \|\| 90_000;/.test(src));
     check('不再有 90_000 : 300_000 的旧默认', !/hasMoreCandidates \? 90_000 : 300_000/.test(src));
+
+    /* ── §E（v1.18.46）渠道级超时字段必须"三处一起加" ─────────────────────────────
+       现场：给"上游挂死/慢"的家配一个小首字死线，好让它**被快速跳过**而不是白等 30~60 秒；
+       结果打开渠道顺手一保存，这个配置就从 config.json 里消失了（下次重启悄悄回默认）。
+       根因：`firstChunkTimeoutMs` / `timeoutMs` 运行期一直在读，但 persistConfig 的显式字段清单、
+       GET /admin/api/channels、POST 的 def 构造**一处都没登记**——与 PT29 / v1.18.33 dropParams /
+       v1.18.44 headers 同一族。下面把"配了 → 保存别的渠道 → 还在不在"钉成回归断言。 */
+    const cfgNow = () => JSON.parse(fs.readFileSync(cfg, 'utf8'));
+    const chanOf = (id) => ((cfgNow().channels) || []).find((c) => c.id === id) || {};
+    const api = async (method, p, body) => {
+      const r = await fetch(`http://127.0.0.1:${port}${p}`, {
+        method, headers: { Authorization: 'Bearer ' + AD_KEY, 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      let j = null; try { j = await r.json(); } catch { }
+      return { status: r.status, json: j };
+    };
+    const post = (b) => api('POST', '/admin/api/channels', Object.assign(
+      { name: 'x', protocol: 'openai', enabled: true, models: { mock: 'mock' } }, b, { baseUrl: chanOf(b.id).baseUrl }));
+
+    check('起点：hang 的 firstChunkTimeoutMs=1000 在磁盘上', chanOf('hang').firstChunkTimeoutMs === 1000, chanOf('hang'));
+
+    const list = await api('GET', '/admin/api/channels');
+    const lh = ((list.json && list.json.channels) || []).find((c) => c.id === 'hang') || {};
+    check('★ GET 下发已配的值（控制台回填的前提）', lh.firstChunkTimeoutMs === 1000, lh);
+    check('★ 没配就不下发该键（与 dropParams 同款：缺省 = 用默认，不是"配了 0"）',
+      !('timeoutMs' in lh), Object.keys(lh));
+
+    /* ★★ 本轮 bug 现场：保存**别的**渠道 */
+    check('保存别的渠道 → 200', (await post({ id: 'good', name: 'good' })).status === 200);
+    check('★★ 保存别的渠道之后，hang 的 firstChunkTimeoutMs 仍在磁盘上',
+      chanOf('hang').firstChunkTimeoutMs === 1000, chanOf('hang'));
+
+    /* 三态语义（与 weight/dropParams/headers 同款） */
+    check('① 显式给值 = 以本次为准',
+      (await post({ id: 'hang', name: 'hang', firstChunkTimeoutMs: 7000, timeoutMs: 45000 })).status === 200
+      && chanOf('hang').firstChunkTimeoutMs === 7000 && chanOf('hang').timeoutMs === 45000, chanOf('hang'));
+    check('★ ② 字段缺省 = 沿用旧值（缺省 ≠ 清空）',
+      (await post({ id: 'hang', name: 'hang' })).status === 200
+      && chanOf('hang').firstChunkTimeoutMs === 7000 && chanOf('hang').timeoutMs === 45000, chanOf('hang'));
+    check('★ ③ 显式空串 = 清空回默认（键从 config.json 里消失）',
+      (await post({ id: 'hang', name: 'hang', firstChunkTimeoutMs: '', timeoutMs: '' })).status === 200
+      && chanOf('hang').firstChunkTimeoutMs === undefined && chanOf('hang').timeoutMs === undefined, chanOf('hang'));
+
+    /* 非法值一律 400：这两个值直接进 setTimeout / AbortSignal，静默收下比不收更糟 */
+    for (const b of [{ firstChunkTimeoutMs: 0 }, { firstChunkTimeoutMs: -1 }, { timeoutMs: 'abc' }, { timeoutMs: 999 }, { firstChunkTimeoutMs: 999999 }]) {
+      const r = await post(Object.assign({ id: 'good', name: 'good' }, b));
+      check(`非法值 400 且文案带值域：${JSON.stringify(b)}`,
+        r.status === 400 && /必须是 1000~/.test(String((r.json || {}).error || '')), { status: r.status, err: r.json });
+    }
+    check('★ 400 不落库（非法请求一个字节都不写进配置）',
+      chanOf('good').firstChunkTimeoutMs === undefined && chanOf('good').timeoutMs === undefined, chanOf('good'));
+
+    /* 结构守卫：防止下一次加字段又漏掉某一处。两处的代码文本逐字相同，故用**出现次数 = 2** 来钉
+       （写成两条同样的正则就是同一条断言跑两遍，等于没测第二处），再用各自的注释文案区分是哪两处。 */
+    check('★ persistConfig 与 GET /admin/api/channels 两处都登记了这两个字段',
+      (src.match(/firstChunkTimeoutMs: ch\.def\.firstChunkTimeoutMs \|\| undefined,/g) || []).length === 2
+      && (src.match(/timeoutMs: ch\.def\.timeoutMs \|\| undefined,/g) || []).length === 2,
+      { fc: (src.match(/firstChunkTimeoutMs: ch\.def\.firstChunkTimeoutMs \|\| undefined,/g) || []).length });
+    check('★ 两处各自带说明（"三处一起加"与"控制台要回填"），防止后来者以为只有一处',
+      /加渠道字段必须三处一起加/.test(src) && /控制台表单要回填它们/.test(src));
+    check('★ POST 用 prevDef 兜底（三态语义，不是"没传就抹掉"）',
+      /body\.firstChunkTimeoutMs === undefined \? \(prevDef \? prevDef\.firstChunkTimeoutMs/.test(src)
+      && /body\.timeoutMs === undefined \? \(prevDef \? prevDef\.timeoutMs/.test(src));
+    check('★ 值域只在 CH_MS_FIELDS 一处声明（校验与入库共用）',
+      (src.match(/firstChunkTimeoutMs: \{ label:/g) || []).length === 1
+      && /for \(const nm of Object\.keys\(CH_MS_FIELDS\)\)/.test(src));
+    check('★ `timeoutMs - 20000` 有兜底（下限 1000ms 之后这个减法会走负数）',
+      /Math\.max\(5000, timeoutMs - 20000\)/.test(src));
   } finally { gw.kill('SIGKILL'); }
   upstream.close();
   console.log('\n' + '─'.repeat(58));

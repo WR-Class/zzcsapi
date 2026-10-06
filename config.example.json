@@ -100,6 +100,20 @@
       "enabled": true,
       "autoAlias": true,
       "models": {}
+    },
+    {
+      "id": "vendor-slow",
+      "name": "很慢/挂死的上游（配小首字死线，好让它被快速跳过而不是白等 30~60 秒）",
+      "baseUrl": "https://api.example-d.com/v1",
+      "apiKey": "sk-xxxxxxxx",
+      "protocol": "openai",
+      "priority": 90,
+      "weight": 0,
+      "enabled": true,
+      "autoAlias": true,
+      "firstChunkTimeoutMs": 8000,
+      "timeoutMs": 60000,
+      "models": {}
     }
   ]
 }
