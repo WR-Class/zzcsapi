@@ -164,8 +164,11 @@ function makeUpstream(state) {
       check('★ 装配守卫：attempts 的每条都过 attemptErr（不许退回裸 err: result）',
         /errors\.push\(\{ ch: c\.channelId, err: attemptErr\(result, c\.channelId\)/.test(src)
         && !/errors\.push\(\{ ch: c\.channelId, err: result/.test(src));
+      /* v1.18.45：早退返回的值不再是裸 `err` 了——`attemptErr` 先剥掉调度内部标记 `NO_RETRY_MARK`
+         （见 `per-channel-retry-e2e` §0 的那条守卫）。**守的是契约不是字面量**：早退必须存在，
+         且必须由"只这两类"的判据把着（有人把 attemptErr 改成什么都拼，这条仍会当场报错）。 */
       check('★ 装配守卫：attemptErr 只补 channel_error 与 upstream N 两类（其余本身带原因，再拼是噪音）',
-        /if \(err !== 'channel_error' && !\/\^upstream \\d\/\.test\(err\)\) return err;/.test(src));
+        /if \(err !== 'channel_error' && !\/\^upstream \\d\/\.test\(err\)\) return [A-Za-z_$][\w$]*;/.test(src));
     }
 
     console.log('\n1. ★ 真机场景：排第一的渠道给 404（声明了过期模型）→ 必须兜到第二家');

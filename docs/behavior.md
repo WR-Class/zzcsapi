@@ -89,6 +89,19 @@
   · **取回发生在写出任何字节之前**：流式面也是先把 NDJSON 整体缓冲、解析、必要时取回，再开始写——
   不会出现"先给客户端写了半截、再回填一段"。
   · **取不回就如实失败**：渠道照旧记失败、调度器照旧切下一家（兜底不许伪装成成功）。
+- **上游明说不可重试时，跳过同渠道重试（v1.18.45，目前只有 notion）**：notion 软墙的报文里带
+  `"isRetryable":false`（现场原文见 [docs/scheduling.md](scheduling.md)「上游否决」）——上游已经说了"这不是抖动"，
+  可网关的 `perChannel` 重试照旧会在**同一家**再敲一次门。那一次白等几百毫秒到几秒，更要紧的是：
+  **对一家正在拒绝我们的账号多敲一次门，只会把它往墙里推得更深**（软墙成因里"高频敲门推进账号维度"这条
+  尚未验证的怀疑，见 [docs/notion-attachment-upload-research.md](notion-attachment-upload-research.md) §7）。
+  · **处置**：判据只认**报文里这句话**、不看渠道是谁（`isUpstreamNonRetryable`），命中就跳过原地重试、直接换下家；
+  标记（`[no-retry]`）只由 notion 路径挂上，所以其他渠道**天然不生效**——这是"只接 notion"的落法，
+  而万一哪天别家也学会说这句话，判据不用再改一次。
+  · **边界**：`notion-agent`（官方 Agent API）不挂这个标记（另一条路径、自带 HTTP 码与 credits 语义）；
+  **「流断取回」兜底不受影响**——它是另一套机制，且真的救回过答复，没有证据表明 `isRetryable:false` 会让它必然落空。
+  · 标记是调度内部的，`attemptErr` 在拼 502 的 `attempts` 前剥掉它：客户端报文里不出现内部记号，
+  而失败原因照旧是那个可诊断的 `subType`（`temporarily-unavailable`）。
+  · 回归：`test/per-channel-retry-e2e.test.js` §8（跳过）/ §9（**对照组**：同一句软墙但没那句话 → 照旧重试）/ §10（单候选 502 不带记号）。
   · **没实现的部分（诚实说明）**：notion2api 的对应能力点名叫 `getInferenceTranscriptsForUser`（Go 侧 `loadFinalAnswerWithPolling`），
   我们用真实 token 试了 **18 种请求形状**（12 种 POST body 变体 + 6 种 GET 查询串），**全部**被
   `ValidationError: Invalid input.` 拒或返回非 JSON → **请求形状无法确认，因此不实现**：发一个自己验不了的调用，

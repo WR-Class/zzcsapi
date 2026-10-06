@@ -25,6 +25,8 @@
    请求只会再收一次同样的拒绝，其中不少还是客户端自己的参数错。每次尝试**各记一次失败**
    （`consecutiveFail` 与指数退避按真实尝试次数增长），重试成功则照常清零。
    配置里没写这个键时是 `0`（不重试 = 与接线前行为一致）；上限钳到 5，怕写错数字把上游调用量放大十倍。
+   **v1.18.45 起多一条否决权**：上游自己在报文里说了 `isRetryable:false` 时，跳过原地重试、直接换下家
+   （见下「上游否决」）。
 
 ## 同渠道重试（`retries.perChannel`）
 
@@ -40,6 +42,37 @@
 - 每次尝试都记账：`perChannel: 1` 且上游一直 502 时，该渠道一次请求里会累加 2 次失败、更快进入
   `down` 与更长的退避。502 的 `attempts` 里带 `attempt` 字段，事后能看出重试痕迹。
 - 已经在向客户端写 chunk 之后的失败**不重试**（半截回复不换渠道，见 [docs/behavior.md](behavior.md)「流式失败」）。
+
+### 上游否决：`isRetryable:false`（v1.18.45，目前只有 notion）
+
+上游有时会在**报文里**明说"这次不是抖动、重试没用"。判据只认报文里这句话，不看渠道是谁：
+
+```
+{"type":"error","message":"Something went wrong. Please try again later.","traceId":"…",
+ "id":"…","isRetryable":false,"subType":"temporarily-unavailable"}
+```
+
+命中时**跳过原地重试**（`perChannel` 配了也不试），直接换下一候选。两个理由，第二个才是重点：
+
+1. 那一发是白等的（几百毫秒到几秒），上游已经说了没用。
+2. **对一家正在拒绝我们的账号多敲一次门，只会把它往墙里推得更深。** notion 的软墙是账号级拒绝，
+   它的成因里有一条尚未验证的怀疑：高频用 Node 客户端敲门会把账号推进「账号状态」那个维度
+   （见 [docs/notion-attachment-upload-research.md](notion-attachment-upload-research.md) §7）——
+   也就是说，重试本身可能是**制造**这个故障的帮凶之一。
+
+边界（都是有意的，不是漏掉）：
+
+- **标记只由 notion 路径挂上**（`tryNotionChannel` 的流内错误出口），所以其他渠道天然不生效——
+  这就是"只接 notion、别家不接入"的落法。若哪天别家也学会说这句话，判据不用再改一次。
+- **`notion-agent`（官方 Agent API）不挂这个标记**：它是另一条路径，自带 HTTP 状态码与 credits 语义
+  （`workspace_credits_exhausted` 等），报文形状不同。
+- **只跳过"同渠道重试"，不动「流断取回」兜底**（v1.18.39 的 `notionRefetchAnswer`）：后者是**另一套机制**，
+  用同一 threadId 把 transcript 再发一次取权威全文，且它**真的救回过答复**。没有证据表明
+  `isRetryable:false` 会让它必然落空，贸然关掉就是把一条已验证有效的兜底换成猜测。
+- 标记是**调度内部**的（`[no-retry]`），`attemptErr` 在拼 502 的 `attempts` 前会剥掉它——
+  客户端可见的报文里不出现内部记号，而失败原因照旧是那个可诊断的 `subType`。
+
+回归：`test/per-channel-retry-e2e.test.js`（§8 跳过 / §9 对照组照旧重试 / §10 单候选 502 不带记号）。
 
 ## 熔断冷却（`cooldown`，按错误类型分级）
 

@@ -1,4 +1,4 @@
-# 测试清单（51 个文件 · 2365 项断言，零依赖）
+# 测试清单（51 个文件 · 2386 项断言，零依赖）
 
 > 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 50 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
@@ -25,6 +25,7 @@
 | 部署配置（docker-compose / 反代层 / 来源 IP 采信开关） | `reverse-proxy-config` + `ip-stats-ban-e2e`（trustedProxy 采信语义） |
 | thinking / 签名 / 回放 | `thinking-fidelity` + `thinking-replay-e2e` |
 | 静态文件 / 鉴权面 / 控制台版本 | `node sec-audit.js`（仓库根，只读体检，见 README「安全体检」） |
+| **怀疑某家上游在查客户端指纹**（"模型不回答"到底是被挑客户端还是上游故障）/ 渠道请求头保存被静默删掉 | `node channel-fingerprint-probe.js <渠道id> [--save-check]`（仓库根，见 README「渠道指纹判决探针」）；notion 软墙另用 `node notion-wall-probe.js` |
 | 请求体落盘诊断（`ZZCSAPI_DUMP_BODIES` 与 compose 的 dump 挂载；v1.18.38 起含 `/v1/responses` 且只落 POST） | `body-dump-diagnostic-e2e` |
 | notion 渠道的流断取回兜底（触发判据 = 权威全文没到 / 复用同一 threadId / 次数与预算上限 / 取不回仍如实失败） | `notion-refetch-fallback-e2e` |
 | **notion 内联附件**（`notionAttachments`：字节与参照实现抓包逐字相同 / 默认关时一个字节不改 / 渠道字段落库往返 / 非布尔 400） | `notion-attachment-inline-e2e` |
@@ -73,8 +74,7 @@ node test/auto-weight-e2e.test.js         # 37 项断言：真流量下预测与
 node test/upstream-4xx-fallback-e2e.test.js  # 43 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）；v1.18.34 加两节——全链 429 → 502 时每条 attempts 都要带 HTTP 码与上游原文（现场 channel_error 光秃秃、看不出是余额还是 WAF）+ 对照组防拼两遍
 node test/tool-turn-accounting-e2e.test.js # 41 项断言（v1.18.35；v1.18.40 更新结构守卫）：★工具轮不许被记成"零产出的成功"——现场账本里 deepseek-v4.1-flash 有 196 行 ok:true 且 out=0（耗时只有 8~38 秒、与有正文的行同渠道同分钟交错），开留证开关抓 DSH 真实报文后**逐字节回放**才定性：客户端拿到的是 49 个 tool_call、finish=tool_calls、可见正文 0 字符，而上游 usage 帧自报 prompt_tokens=176351 / completion_tokens=114，账本却记 in=56324 out=0。根因在常规链路（openai 渠道 → openai 客户端）的记账侧：usage 帧被整帧丢掉（只数可见正文），纯工具轮 out 就是 0。断言：两个新函数的真值表（工具帧的 name+arguments 也算输出、usage 帧归一、全 0 空帧不覆盖累计）；真链路 ★ 纯工具轮 + usage 帧 → in/out 取上游真值、留 tool_calls 标记；真链路 ★ 纯工具轮**没有** usage 帧 → out>0（旧写法=0）；文本轮两组对照（有 usage → 上游优先、没有 → 仍是估算）；思考轮 reason 用上游自报数字且 ≤ out；结构守卫：usage 帧必须在 `if (sawStreamContent) return` 早退**之前**抓（上游常把 usage 放最后一个 chunk）
 node test/usage-day-key.test.js            # 27 项断言（v1.18.36）：账本的「天 / 小时」一律按**北京时间**切——现场查「yu1 渠道 24 小时用量」时发现日桶与小时桶对不上：`byDay` 用 `new Date(ts).toISOString().slice(0,10)`（UTC 日）、24 小时分布用 `getHours()`（本地小时），同一个账本里两套钟，日界落在北京时间早上 8 点（`ipStatsBumpHour` 更自相矛盾：注释写"本地时区跨天清零"，代码是 UTC 日 + 本地小时）。处置：新增 `cnDayKey()`/`cnHour()`（**固定 +8**，不依赖进程时区——compose 设了 TZ 但裸跑可能是 UTC），账本四处统一走它们。断言：真值表（北京 00:00 边界、跨月跨年、字符串 ts、`cnHour` 三态、**老写法在同一点上差一天**的对照）；★ 真链路**用 TZ=UTC 起网关**——`byDay` 桶键 = 该行 `ts` 的北京日、不含 UTC 日桶、`hourly` 落在北京小时而 **UTC 小时那格必须是 0**、per-IP 24 桶同理；结构守卫（`bumpUsageBucket(u.byDay, …)` 的 day 来自 `cnDayKey`、`ipStatsBumpHour` 不再混用、全仓 Date→日字符串的转换只有 `cnDayKey` 一处）
-node test/per-channel-retry-e2e.test.js   # 34 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5）
-node test/cooldown-grading-e2e.test.js    # 57 项断言（v1.18.40 契约更新）：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 半愈合 + 观察期排序）——**半愈合不再把欠账减半**（探测成功只放开冷却、清 probeFail、进观察期，consecutiveFail 一字不动）、探测失败不再把 3 变 1、真机第 6 节改为"欠账原样保留 + probeFail 回 0"；`cooldownMsFor` 现在读 effFailStreak，沙箱里必须一起抠出 `effFailStreak` / `markTrafficOk`
+node test/per-channel-retry-e2e.test.js   # 55 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5；v1.18.45 增 §8 上游说 isRetryable:false → 跳过重试、§9 对照组照旧重试、§10 内部标记不漏进 502）node test/cooldown-grading-e2e.test.js    # 57 项断言（v1.18.40 契约更新）：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 半愈合 + 观察期排序）——**半愈合不再把欠账减半**（探测成功只放开冷却、清 probeFail、进观察期，consecutiveFail 一字不动）、探测失败不再把 3 变 1、真机第 6 节改为"欠账原样保留 + probeFail 回 0"；`cooldownMsFor` 现在读 effFailStreak，沙箱里必须一起抠出 `effFailStreak` / `markTrafficOk`
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
 node test/same-protocol-passthrough.test.js # 52 项断言：同协议直通（Anthropic/Gemini 客户端 → 同协议渠道不翻译；thinking/cache_control/seed 原样到达、响应逐字节一致、真实 token 仍记录、跨协议仍走转换、v1.18.8 修复只注入同协议直通且没坏不碰）；**v1.18.32 §3b 直通空流**：上游只回 `message_start` + `message_stop`（零 `content_block_delta`）→ 客户端仍拿 200 + 上游原始 SSE（字节已写出、换不了家）、用量如实记 `ok:false`（备注含 `no content`/零正文）、该渠道 `lastError` 写明 `stream empty` 且 `consecutiveFail ≥ 1`（下一发才会退避），并含"正常直通流之后 `ant-native` 仍是零欠账"的对照 + 那条判据逐字为 `streamError === null && !nativeStream && !sawStreamContent` 的结构守卫（`!nativeStream` 必须在，也不许再加 `streamOutText.length === 0`）

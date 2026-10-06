@@ -5641,6 +5641,18 @@ function shouldPassThrough4xx(status, hasMoreCandidates) {
   return !hasMoreCandidates;
 }
 
+// 上游自己说了"别重试"时，原地再试一次不但没用，还是在给一个**正在拒绝我们**的账号多敲一次门
+// ——Notion 的软墙正是这么被喂出来的（研究文档 §7：有未验证的怀疑，高频敲门会把账号推进维度①）。
+// 判据是**报文里这句话**（v1.18.43 的现场原文）：
+//   {"type":"error","message":"Something went wrong. Please try again later.","traceId":"…",
+//    "id":"…","isRetryable":false,"subType":"temporarily-unavailable"}
+// 刻意做成"报文里有没有 isRetryable:false"、而**不是**"渠道是不是 notion"：标记只由 notion 路径挂上
+// （见该路径的 return），所以对其他渠道天然不生效——这就是"只接 notion、别家不接入"的落法；
+// 而万一哪天别家也学会说这句话，判据不用再改一次。notion-agent（官方 Agent API）是另一条路径，
+// 自带 HTTP 状态码与 credits 语义、不产生这个标记——这是**有意的边界**，不是漏掉。
+const NO_RETRY_MARK = '[no-retry]';
+function isUpstreamNonRetryable(text) { return /"isRetryable"\s*:\s*false/.test(String(text || '')); }
+
 // 同渠道重试的判据：这次失败"值不值得在原地再试一次"。
 // 值得：5xx / 网络错误 / 超时 / 上游异常响应——多为瞬时故障，立刻重试常常就过了。
 // 不值得：4xx（tryChannel 以 'channel_error' 明确标注）——重发同一个请求只会再收一次同样的拒绝，
@@ -5648,6 +5660,8 @@ function shouldPassThrough4xx(status, hasMoreCandidates) {
 function isRetryableFailure(result) {
   if (result === 'channel_error') return false;
   if (result === 'success' || result === 'fatal_client') return false;
+  // 上游明说不可重试（Notion 的 isRetryable:false）→ 立刻换下家，别在原地再试（v1.18.45）
+  if (String(result).indexOf(NO_RETRY_MARK) >= 0) return false;
   return true;
 }
 
@@ -5660,10 +5674,13 @@ function isRetryableFailure(result) {
 //   「in cooldown（…：原文）」是同一招（v1.14.1）。
 //   只补这两类：其余返回值本身已带原因（`stream error frame: …` / `network: …`），再拼一遍就是噪音。
 function attemptErr(err, channelId) {
-  if (err !== 'channel_error' && !/^upstream \d/.test(err)) return err;
+  // NO_RETRY_MARK 是**调度内部**的标记（见 isRetryableFailure）：剥掉再给客户端，别把一个内部记号
+  // 混进 502 的 attempts 报文里；剥完只剩一个尾随空格，trim 掉。
+  const clean = String(err).split(NO_RETRY_MARK).join('').trim();
+  if (err !== 'channel_error' && !/^upstream \d/.test(err)) return clean;
   const st = channels.get(channelId);
   const d = st && st.lastError ? String(st.lastError).replace(/\s+/g, ' ').slice(0, 160) : '';
-  return d ? `${err}：${d}` : err;
+  return d ? `${clean}：${d}` : clean;
 }
 
 // ─────────────────────────── 调度核心（统一） ───────────────────────────
@@ -7448,8 +7465,12 @@ async function tryNotionChannel(opts) {
   }
   if (streamError && !refetched) {
     recordFailure(ch, 'notion stream: ' + streamError);
-    // soft-block（temporarily-unavailable）按上游失败处理，让调度器切别的渠道
-    return 'notion stream: ' + streamError;
+    // soft-block（temporarily-unavailable）按上游失败处理，让调度器切别的渠道。
+    // v1.18.45：上游**自己说了** isRetryable:false 时挂上 NO_RETRY_MARK —— 调度器据此跳过同渠道重试、
+    // 直接换下家（对一个正在拒绝我们的账号原地再敲一次门，只会把它往墙里推得更深）。
+    // 注意标记只进调度判据、不进 lastError：失败行给人看的是 subType（temporarily-unavailable）。
+    return 'notion stream: ' + streamError
+      + (isUpstreamNonRetryable(ndjsonText) ? ' ' + NO_RETRY_MARK : '');
   }
   if (!ndjsonText.trim()) {
     recordFailure(ch, 'notion stream: empty');
