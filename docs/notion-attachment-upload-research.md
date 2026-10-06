@@ -139,12 +139,18 @@ multipart/form-data：fields 的 11 个键各一份 + file 放最后
 | ③ ②+signedToken | 200 空答 |
 | ④ ②+`metadata.guardrail.attachmentRisk` | 200 空答 |
 | ⑤ ②+name/contentType/contentLength | 200 空答 |
-| 助手事件 `getUploadFileUrlForAssistantChatTranscriptUpload`（把 spaceId 当 pointer 试） | **400 ValidationError** → `assistantChatTranscriptSessionPointer` 不是 spaceId |
+| 助手事件 `getUploadFileUrlForAssistantChatTranscriptUpload`（把 spaceId 当 pointer 试） | **400 ValidationError** |
+| 助手事件（把**新 uuid 当 pointer**、同时当 `threadId` 试，见 `probe-notion-attachment36.js`） | **400 ValidationError** |
 
 **结论**：形状已按官方代码对齐（扁平 `fileUrl`），仍然 200 空答 —— 说明缺的**不是** step 形状，
 而是「文件先被登记进某个会话」这一步：上传必须走助手事件、且要带**正确的**
 `assistantChatTranscriptSessionPointer`。这也解释了为什么模型会明确说"请重新上传"：
 它收到了一条**指向未登记文件**的 step。
+
+**已排除的 pointer 取值**：`spaceId`（400）、新 `uuid`/`threadId`（400）。
+剩下的可能是一个**指针对象**（Notion 里 `(295447).Z1({environment, table, spaceId})` 是生成指针的工厂，
+`table` 可能是 `thread`/`assistantChatTranscript`），这一步**没有再猜下去**——
+猜错一次就是一次 400，性价比已低于"直接在浏览器里抓一发真报文"（见 §2.5 第 1 条）。
 
 **已排除的可能**：`content_sha` / `first_object` / `single_object` / `record_status` 这些常量
 **不在** Notion 前端里（全包 0 命中），它们只是 notion2api 自己的 Go 结构体字段名，不是 Notion 的 API 字段。
