@@ -187,8 +187,20 @@ function psHttpRequest(method, url, headers, body, timeoutMs) {
 
 // curl 版（Linux/macOS Docker 环境）
 // 用 -w '\n__HTTPCODE__%{http_code}' 输出状态码到 stdout 末尾；body 走 stdout。
+// v1.18.51：正文落临时文件（`--data @file`），**不再当命令行参数**——Linux 单个参数上限 128KB
+//   （Windows 约 32KB），而真实对话的正文动辄几百 KB → `spawn E2BIG`，且只在真实调用时出现
+//   （手工测试/探测的正文很小）。与 `wbCurlRequest` / `notion.js` 同一套写法。
 function curlHttpRequest(method, url, headers, body, timeoutMs) {
   return new Promise((resolve) => {
+    const os = require('os');   // 与 wbCurlRequest 同款：函数内 require（顶层没有 os）
+    let bodyFile = '';
+    if (body) {
+      try {
+        bodyFile = path.join(os.tmpdir(), `zzcurl_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+        fs.writeFileSync(bodyFile, String(body), 'utf8');
+      } catch { bodyFile = ''; }
+    }
+    const done = (payload) => { if (bodyFile) { try { fs.unlinkSync(bodyFile); } catch {} } resolve(payload); };
     const args = ['-sS', '-X', String(method).toUpperCase(), '--max-time', String(Math.max(1, Math.floor((timeoutMs || 30000) / 1000)))];
     // 模拟浏览器指纹 + 常见头，尽量绕过 WAF
     args.push('-A', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
@@ -198,22 +210,22 @@ function curlHttpRequest(method, url, headers, body, timeoutMs) {
     for (const [k, v] of Object.entries(headers || {})) {
       args.push('-H', `${k}: ${v}`);
     }
-    if (body) args.push('--data-raw', String(body));
+    if (body) args.push('--data', bodyFile ? '@' + bodyFile : String(body));
     args.push('-w', '\n__ZZCODE__%{http_code}');
     args.push(String(url));
     const child = spawn('curl', args, { windowsHide: true });
     let stdout = Buffer.alloc(0);
     let stderr = '';
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} resolve({ status: 0, headers: {}, body: '', error: 'curl timeout' }); }, (timeoutMs || 30000) + 5000);
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} done({ status: 0, headers: {}, body: '', error: 'curl timeout' }); }, (timeoutMs || 30000) + 5000);
     child.stdout.on('data', (c) => { stdout = Buffer.concat([stdout, c]); });
     child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
     child.on('close', () => {
       clearTimeout(timer);
       const text = stdout.toString('utf8');
       const m = text.match(/__ZZCODE__(\d+)\s*$/);
-      if (!m) { resolve({ status: 0, headers: {}, body: text, error: stderr ? stderr.slice(0, 300) : 'curl parse fail' }); return; }
+      if (!m) { done({ status: 0, headers: {}, body: text, error: stderr ? stderr.slice(0, 300) : 'curl parse fail' }); return; }
       const body = text.slice(0, text.lastIndexOf('__ZZCODE__')).replace(/\n$/, '');
-      resolve({ status: Number(m[1]), headers: {}, body, error: null });
+      done({ status: Number(m[1]), headers: {}, body, error: null });
     });
     child.on('error', (err) => { clearTimeout(timer); resolve({ status: 0, headers: {}, body: '', error: 'curl spawn: ' + err.message }); });
   });

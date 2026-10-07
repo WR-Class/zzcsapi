@@ -24,6 +24,9 @@
 
 const { spawn } = require('child_process');
 const crypto = require('crypto');
+const os = require('os');
+const fs = require('fs');
+const path = require('path');
 
 const HARK_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 const SESSION_COOKIE = '__Secure-hark.session_token';
@@ -64,29 +67,41 @@ function harkHeaders(def, extra) {
 // 一次性 curl（缓冲）：返回 {status, body, error}
 function harkCurl(method, url, headers, bodyStr, timeoutMs, proxy) {
   return new Promise((resolve) => {
+    // v1.18.51：**正文绝不进 argv**。真实调用会把整段会话拍平成一条几十万字符的字符串，
+    //   而 Windows 命令行上限约 32KB（Linux 单个参数上限 128KB）→ `spawn E2BIG`；
+    //   手工测试只发几十字节，所以"测试能过、真实调用失败"。落临时文件 + `--data-binary @file`
+    //   （与 server.js 的 `wbCurlRequest` 同一套写法），每条退出路径都清掉它。
+    let bodyFile = '';
+    if (bodyStr != null) {
+      try {
+        bodyFile = path.join(os.tmpdir(), `zzhark_${Date.now()}_${Math.random().toString(36).slice(2)}.txt`);
+        fs.writeFileSync(bodyFile, String(bodyStr), 'utf8');
+      } catch { bodyFile = ''; }   // 落盘失败 → 退回 argv（小正文仍可工作；大正文会如实报 E2BIG）
+    }
+    const done = (payload) => { if (bodyFile) { try { fs.unlinkSync(bodyFile); } catch {} } resolve(payload); };
     const args = ['-sS', '--max-time', String(Math.max(1, Math.ceil((timeoutMs || 30000) / 1000)))];
     if (proxy) args.push('-x', String(proxy));
     args.push('-X', String(method).toUpperCase());
     for (const [k, v] of Object.entries(headers || {})) args.push('-H', `${k}: ${v}`);
-    if (bodyStr != null) args.push('--data-binary', bodyStr);
+    if (bodyStr != null) args.push('--data-binary', bodyFile ? '@' + bodyFile : String(bodyStr));
     args.push('-w', '\n__ZZCODE__%{http_code}');
     args.push(url);
     let child;
     try { child = spawn(curlBin(), args, { windowsHide: true }); }
-    catch (e) { resolve({ status: 0, body: '', error: 'curl spawn: ' + e.message }); return; }
+    catch (e) { done({ status: 0, body: '', error: 'curl spawn: ' + e.message }); return; }
     let out = '';
     let err = '';
-    const timer = setTimeout(() => { try { child.kill(); } catch {} resolve({ status: 0, body: out, error: 'curl timeout' }); }, (timeoutMs || 30000) + 5000);
+    const timer = setTimeout(() => { try { child.kill(); } catch {} done({ status: 0, body: out, error: 'curl timeout' }); }, (timeoutMs || 30000) + 5000);
     child.stdout.on('data', (c) => { out += c.toString('utf8'); });
     child.stderr.on('data', (c) => { err += c.toString('utf8'); });
-    child.on('error', (e) => { clearTimeout(timer); resolve({ status: 0, body: '', error: 'curl spawn: ' + e.message }); });
+    child.on('error', (e) => { clearTimeout(timer); done({ status: 0, body: '', error: 'curl spawn: ' + e.message }); });
     child.on('close', (code) => {
       clearTimeout(timer);
       const m = out.match(/__ZZCODE__(\d+)\s*$/);
       const body = m ? out.slice(0, out.lastIndexOf('__ZZCODE__')) : out;
       const status = m ? Number(m[1]) : (code === 0 ? 200 : 0);
-      if (!m && code !== 0) { resolve({ status: 0, body, error: `curl exit ${code}: ${err.slice(0, 200)}` }); return; }
-      resolve({ status, body, error: null });
+      if (!m && code !== 0) { done({ status: 0, body, error: `curl exit ${code}: ${err.slice(0, 200)}` }); return; }
+      done({ status, body, error: null });
     });
   });
 }

@@ -309,6 +309,26 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
   } finally { gw6c.kill(); await up6c.close(); }
   check('真实失败不触发自愈（只在 404/not found 上）', /if \(!sent\.ok && \/404\|not found\/i\.test/.test(SRC));
 
+  console.log('\n══ §7 大正文回合：正文不许当命令行参数（spawn E2BIG，v1.18.51） ══');
+  // 现场：手工测试（几十字节）过、真实调用（DSH 把整段会话拍平成几十万字符）挂，渠道 lastError 是
+  //   `hark send: curl: curl spawn: spawn E2BIG` —— Windows 命令行上限约 32KB（Linux 单参数 128KB）。
+  //   这里经真网关发一发 12 万字符的正文：修好之前它必然 E2BIG，修好之后上游要真收到**完整**正文。
+  const BIG = '甲乙丙丁戊己庚辛壬癸'.repeat(12000) + '【末尾标记-ZZEND】';   // 12 万字符
+  const up7 = await startFakeUpstream({ reply: '大正文收到' });
+  const gw7 = await startGateway(up7.port);
+  try {
+    const r = await chat(gw7.base, { model: 'hark-agent', messages: [{ role: 'user', content: BIG }] });
+    const j = await r.json();
+    check(`★ ${BIG.length} 字符的正文经真网关发出去不报 E2BIG（HTTP 200）`, r.status === 200, { status: r.status, body: JSON.stringify(j).slice(0, 200) });
+    check('客户端拿到上游回复', j.choices && j.choices[0].message.content === '大正文收到', j.choices && j.choices[0].message.content);
+    const sent = (() => { const s = up7.seen.find((x) => x.path === '/api/messages/send'); try { return JSON.parse(s.body).message; } catch { return ''; } })();
+    check('★ 上游真收到**完整**正文（长度对得上，且末尾标记在）', typeof sent === 'string' && sent.length >= BIG.length && sent.includes('【末尾标记-ZZEND】'), { got: String(sent).length, want: BIG.length });
+    const leftovers = fs.readdirSync(os.tmpdir()).filter((f) => /^zzhark_|^zzcurl_/.test(f));
+    check('临时正文文件没有堆积（每条退出路径都清掉）', leftovers.length === 0, leftovers.slice(0, 5));
+  } finally { gw7.kill(); await up7.close(); }
+  check('★ 结构守卫：harkCurl 的正文走文件（`@` + bodyFile），不再直接进 argv', /args\.push\('--data-binary', bodyFile \? '@' \+ bodyFile : String\(bodyStr\)\)/.test(HARK_SRC));
+  check('★ 结构守卫：通用 CF 回退路径也不再把正文塞 argv（`--data-raw` 已清零）', !/args\.push\('--data-raw'/.test(SRC) && /args\.push\('--data', bodyFile \? '@' \+ bodyFile : String\(body\)\)/.test(SRC));
+
   console.log(`\n══════ 通过 ${pass} · 失败 ${fail} ══════`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
   process.exitCode = fail ? 1 : 0;
