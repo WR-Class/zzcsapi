@@ -14,6 +14,7 @@ const { spawn } = require('child_process');
 const { URL } = require('url');
 const notion = require('./notion.js');
 const notionAgent = require('./notion-agent.js');
+const hark = require('./hark.js');   // v1.18.47 hark.com 网页会话反代（专用报文渠道）
 const toolEmu = require('./tool-emu.js');
 const fontAssets = require('./font-assets.js');
 // Genspark 网页会话渠道常量：必须在启动探测路径（probeAll 在下方模块加载期同步触发）之前初始化，
@@ -1352,7 +1353,7 @@ function aggregateModels(protocol) {
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
-    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark'];
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
@@ -1433,6 +1434,26 @@ async function probeChannel(ch) {
     } catch (err) {
       // RT 失效是致命错误：按凭证类退避（起步 5 分钟、封顶 6 小时），不再只给 300 秒
       recordFailure(ch, String(err.message || err), err.fatal ? 'credential' : undefined, { source: 'probe' });
+    }
+    return;
+  }
+  // hark.com 网页会话反代（v1.18.47）：探测 = GET /api/auth/get-session（免费、不消耗 harkTokens）。
+  //   与 genspark 同理，只证明凭据活着 → **半愈合**（真对话成功才是满血证据）。
+  //   上游没有 /models 端点（只有一个 agent）→ 模型列表取 def.models 的 upstream 值。
+  if ((ch.def.protocol || 'openai') === 'hark') {
+    const t0 = Date.now();
+    try {
+      const probe = await hark.harkProbe(ch.def, HEALTH.timeoutMs || 15000);
+      if (!probe.ok) {
+        const e = new Error(probe.error || 'probe failed');
+        e.status = probe.status;
+        throw e;
+      }
+      ch.models = Object.values(ch.def.models || {}).filter(Boolean);
+      ch.latencyMs = Date.now() - t0;
+      healAfterProbe(ch, true, false);
+    } catch (err) {
+      recordFailure(ch, 'hark: ' + (err.message || err), (err.status === 401 || err.status === 403) ? 'credential' : undefined, { source: 'probe' });
     }
     return;
   }
@@ -1527,6 +1548,13 @@ async function probeDef(def, timeoutMs) {
     } catch (err) {
       return { ok: false, status: err.status || 0, error: 'notion-agent: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
+  }
+  // hark.com 网页会话反代（v1.18.47）：同上，get-session 验凭据；模型列表取 def.models
+  if ((def.protocol || 'openai') === 'hark') {
+    const t0 = Date.now();
+    const probe = await hark.harkProbe(def, timeoutMs || 15000);
+    if (!probe.ok) return { ok: false, status: probe.status || 0, error: probe.error || 'probe failed', latencyMs: Date.now() - t0 };
+    return { ok: true, latencyMs: Date.now() - t0, status: probe.status || 200, models: Object.values(def.models || {}).filter(Boolean) };
   }
   // Notion 协议：getSpaces（POST）验证 token_v2，模型列表用内置映射；顺带查 AI 额度
   if ((def.protocol || 'openai') === 'notion') {
@@ -4036,7 +4064,7 @@ function validateChannelDef(def, opts) {
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   // 更新已有渠道时允许不带 apiKey：控制台现在只拿到掩码，留空即"保持原密钥"（见 POST 分支）
   if ((!def.apiKey || typeof def.apiKey !== 'string') && !(opts && opts.allowMissingApiKey)) return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark|hark';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   // v1.18.33 渠道级「不发这些参数」：只收白名单内的名字。**写错一个名字就 400，不静默忽略**——
   //   静默忽略会让人以为"已经生效了"，然后继续对着一个 100% 失败的渠道排查半天（正是本次的现场）。
@@ -4597,7 +4625,7 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(body.protocol) ? body.protocol : 'openai',
       proxy: body.proxy ? String(body.proxy) : undefined,
       // 渠道级自定义请求头（对象或 "Name: value" 多行文本）——AgentRouter 这类查客户端
       // 指纹的上游，探测必须带同款 UA，否则 401 unauthorized client detected
@@ -4626,7 +4654,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : (channelsServing(model, 'genspark').length ? channelsServing(model, 'genspark') : channelsServing(model, 'codex')))))); // openai 优先，notion→notion-agent→workbuddy→genspark→codex 逐级兜底
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : (channelsServing(model, 'genspark').length ? channelsServing(model, 'genspark') : (channelsServing(model, 'codex').length ? channelsServing(model, 'codex') : channelsServing(model, 'hark'))))))); // openai 优先，notion→notion-agent→workbuddy→genspark→codex→hark 逐级兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -4655,6 +4683,41 @@ async function handleAdminApi(req, res, url) {
             channelId: c.channelId, ok: !!r.ok, status: r.status || 200, latencyMs: r.ms,
             reply: r.ok ? String(r.text).slice(0, 200) : undefined,
             error: r.ok ? undefined : String(r.error).slice(0, 200),
+          });
+          continue;
+        }
+        if (ch.def.protocol === 'hark') {
+          // hark 网页会话反代（v1.18.47）：**真发一条最小消息**。
+          //   凭据探测（get-session）只证明 cookie 活着，证明不了"对话这条路能成"——
+          //   手动测试的价值就在于把后者也验掉（与 notion-agent 的 quickChat 同一取舍）。
+          //   用独立的测试会话键，不占用任何客户端会话的上游会话。
+          const tmo = Math.min(120000, Number(body.timeoutMs) || 90000);
+          const conv = await hark.harkConversationFor(ch.def, '__admin_test__', 20000);
+          if (!conv.ok) {
+            recordFailure(ch, 'hark: ' + String(conv.error || 'conversation failed').slice(0, 150), undefined, { source: 'test' });
+            results.push({ channelId: c.channelId, ok: false, status: conv.status || 0, error: String(conv.error || 'conversation failed').slice(0, 200) });
+            continue;
+          }
+          const sent = await hark.harkSend(ch.def, conv.cid, prompt, tmo);
+          if (!sent.ok) {
+            recordFailure(ch, 'hark: ' + String(sent.error || 'send failed').slice(0, 150), failureKindFromStatus(sent.status), { source: 'test' });
+            results.push({ channelId: c.channelId, ok: false, status: sent.status || 0, error: String(sent.error || 'send failed').slice(0, 200) });
+            continue;
+          }
+          const rep = await hark.harkAwaitReply(ch.def, conv.cid, sent.messageId, tmo, null);
+          const harkMs = Date.now() - t0;
+          if (rep.ok) {
+            // 真对话成功 → 探测侧半愈合（**真实流量的欠账不清**，与 v1.18.40 同一条纪律）
+            healAfterProbe(ch, true, false);
+            ch.latencyMs = harkMs; ch.lastCheck = Date.now();
+            recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(rep.text), ok: true, latencyMs: harkMs });
+          } else {
+            recordFailure(ch, 'hark: ' + String(rep.error || 'no reply').slice(0, 150), undefined, { source: 'test' });
+          }
+          results.push({
+            channelId: c.channelId, ok: !!rep.ok, status: rep.ok ? 200 : 0, latencyMs: harkMs,
+            reply: rep.ok ? String(rep.text).slice(0, 200) : undefined,
+            error: rep.ok ? undefined : String(rep.error || 'no reply').slice(0, 200),
           });
           continue;
         }
@@ -5083,6 +5146,9 @@ function openAICandidateChain(requested) {
   for (const gc of channelsServing(requested, 'genspark')) if (!out.some((c) => c.channelId === gc.channelId)) out.push(gc);
   // codex（ChatGPT 官方订阅反代）兜底
   for (const xc of channelsServing(requested, 'codex')) if (!out.some((c) => c.channelId === xc.channelId)) out.push(xc);
+  // hark（hark.com 网页会话反代，v1.18.47）兜底：只有显式配了模型别名才可能命中（上游只有一个 agent，
+  //   模型名不透传）；放链尾——它消耗的是用户自己的 hark 额度（harkTokens）
+  for (const hc of channelsServing(requested, 'hark')) if (!out.some((c) => c.channelId === hc.channelId)) out.push(hc);
   return out;
 }
 
@@ -5840,8 +5906,9 @@ async function tryChannel(opts) {
   const failModel = (body && body.model) || opts.requestedModel || '—';
   try {
     // ★ v1.18.38：五条"专用报文"路径（notion / notion-agent / workbuddy / genspark / codex）必须
+    //   v1.18.47：加第六条 hark（同样自己构造上游报文）
     //   拿到**与常规路径同一组输出钩子**。此前这里只透传了 res/body/candidate/…，把
-    //   onSuccessNonStream / onStreamChunk / streamPrelude / streamEpilogue 全丢了，于是这五条路径
+    //   onSuccessNonStream / onStreamChunk / streamPrelude / streamEpilogue 全丢了，于是这六条路径
     //   只能自己写 OpenAI 报文：OpenAI 客户端面看不出问题，但 Anthropic / Gemini / OpenAI Responses
     //   客户端会拿到错形态（公网实测：Responses 客户端打到 notion 渠道，收到 object:"chat.completion"；
     //   workbuddy 流式打到 Anthropic 面时事件序列里没有 message_start）。钩子转发后由
@@ -5871,6 +5938,10 @@ async function tryChannel(opts) {
     // Codex（ChatGPT 官方订阅）：RT→AT 令牌管理 + Responses API，curl+代理传输
     if ((ch.def.protocol || 'openai') === 'codex') {
       return await tryCodexChannel(specialOpts);
+    }
+    // hark（hark.com 网页会话反代，v1.18.47）：REST 发消息 + SSE 同步流收回复，curl+代理传输
+    if ((ch.def.protocol || 'openai') === 'hark') {
+      return await tryHarkChannel(specialOpts);
     }
   const outgoing = encodeOutgoing(dropParamsFrom(body, ch), candidate);
   const passthrough = opts.passthrough || null;   // 同协议直通时由扩展注入（'anthropic' / 'gemini'）
@@ -6599,7 +6670,7 @@ function compactMessagesForNotion(messages, charLimit) {
 //   3) 无 /models 端点（探测走真实轻量调用）
 // 处理策略：上游永远流式；客户端要非流则网关在内存里聚合后再一次性回包。
 /* ═════════════ 专用报文渠道的输出收口（v1.18.38） ═════════════
-   notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构造上游报文**（不走
+   notion / notion-agent / workbuddy / genspark / codex / hark 这六条路径**自己构造上游报文**（不走
    encodeOutgoing / 原生出站），也因此历史上**自己写响应**：非流式 `res.end(JSON.stringify(chat 报文))`、
    流式 `res.write(chat SSE 行)`。对 OpenAI 客户端面（chat/completions）这没问题——那本来就是要的形态；
    但对**其它客户端面**（Anthropic / Gemini / OpenAI Responses）等于把翻译层整个绕过去了：
@@ -7043,6 +7114,116 @@ async function tryGensparkChannel(opts) {
   };
   recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, realUsage: st.usage, statsCtx: opts.statsCtx });
   await specialNonStreamOut(opts, candidate, assembledGs);
+  return 'success';
+}
+
+// ─────────────────────── hark.com 网页会话渠道（v1.18.47） ───────────────────────
+// 协议细节与实测证据见 hark.js 顶部注释 + docs/hark-reverse-proxy-research.md。三条决定形状的事实：
+//   ① 上游**没有** OpenAI 兼容面：`POST /v1/chat/completions`（带有效 cookie + 标准 OpenAI 报文）
+//      回的是 200 **text/html**（Vite SPA 的壳）→ 只能走专用报文，给 openai 渠道填 base_url 无解
+//   ② 回复正文**整段一次**下发（无 token 级增量）→ 伪流式：整段作为一次 delta 吐出（同 genspark）
+//   ③ 上游工具**全在服务端执行**，流里没有任何 tool_add/tool_update → 客户端工具走 **tool-emu 文本仿真**
+// 传输：curl 子进程 + def.proxy。本机直连 hark.com 会被 CF 403——**不是** IP 声誉问题，而是
+//   Node/curl 不读系统代理（浏览器与 Invoke-WebRequest 读）；配 `proxy` 即通（见研究文档 §2）。
+// 会话：**每轮一条新上游会话、成功后删掉**。为什么不按客户端会话复用上游会话：网关的调用方
+//   （DSH 等）都从同一个出口 IP 来，会话键极易相撞，而复用会让 **hark 自己的记忆把不同对话混在一起**
+//   （我们每轮都重发完整历史，不需要它的记忆）；复用还会让上游上下文无界增长、白烧 harkTokens。
+//   失败**不删**：留证给用户去 hark 里看那一轮到底发生了什么。
+async function tryHarkChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel, kind } = opts;
+  const t0 = Date.now();
+  const timeoutMs = ch.def.timeoutMs || 180_000;
+  const displayModel = requestedModel || candidate.upstream;
+
+  // 工具仿真（请求侧）：tools 协议注入消息 + 历史 tool_calls / 工具结果渲染成文本
+  const toolEmuReq = toolEmu.emulateRequest(body);
+  const flat = hark.flattenForHark(toolEmuReq ? toolEmuReq.messages : (body.messages || []));
+
+  const conv = await hark.harkCreateConversation(ch.def, 20000);
+  if (!conv.ok) {
+    recordFailure(ch, 'hark 建会话: ' + String(conv.error || '').slice(0, 150), failureKindFromStatus(conv.status));
+    return 'hark: ' + String(conv.error || 'create conversation failed').slice(0, 120);
+  }
+  const sent = await hark.harkSend(ch.def, conv.cid, flat, timeoutMs);
+  if (!sent.ok) {
+    recordFailure(ch, `hark send${sent.status ? ' HTTP ' + sent.status : ''}: ${String(sent.error || '').slice(0, 150)}`, failureKindFromStatus(sent.status));
+    if (shouldPassThrough4xx(sent.status, opts.hasMoreCandidates)) {
+      res.writeHead(sent.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: String(sent.error || 'hark send failed'), type: 'upstream_error' } }));
+      return 'fatal_client';
+    }
+    if (sent.status >= 400 && sent.status < 500) return 'channel_error';   // 4xx：切下家，同渠道不重试
+    return `hark send: ${String(sent.error || '').slice(0, 120)}`;
+  }
+
+  const rep = await hark.harkAwaitReply(ch.def, conv.cid, sent.messageId, timeoutMs, null);
+  if (!rep.ok || !String(rep.text || '').trim()) {
+    recordFailure(ch, 'hark: ' + String(rep.error || '空回复').slice(0, 150));
+    return 'hark: ' + String(rep.error || 'empty reply').slice(0, 120);
+  }
+  const replyText = String(rep.text).trim();
+  // 成功即清（失败留证）；删不掉不影响本轮结果
+  hark.harkDeleteConversation(ch.def, conv.cid, 10000).catch(() => {});
+
+  // 工具仿真（响应侧）：模型按注入协议回了 [TOOL_CALL] 标记 → 解析回真 tool_calls。
+  // 解析不出就照旧当纯文本（绝不因为"有 tools"就把普通回复吃掉）。
+  let replyTools = null, replyOut = replyText;
+  if (toolEmuReq) {
+    const parsed = toolEmu.parseEmulatedToolCalls(replyText);
+    if (parsed && parsed.calls.length) { replyTools = parsed.calls; replyOut = parsed.text || ''; }
+  }
+
+  markTrafficOk(ch);
+  ch.latencyMs = Date.now() - t0;
+  const respId = 'chatcmpl-hk-' + Date.now().toString(36);
+  // 上游不给 token 计量（/api/billing/summary 只有账号级 harkTokens 日额度）→ 按估算记账，
+  // 与 genspark/workbuddy 同口径（realUsage 留空 = 没有上游真值，不假装有）
+  const inTok = estimateTokens(flat);
+  const outTok = estimateTokens(replyOut || replyText);
+  // 上游"在等你回话"（jobStatus: waiting_for_input）时把状态写进备注，别让它在账本里看不出来
+  const harkNote = rep.awaitingInput ? 'hark awaiting_input' : undefined;
+
+  if (isStream) {
+    specialStreamHead(opts, candidate);
+    const chunk = (delta, finish) => `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta, finish_reason: finish || null }] })}\n\n`;
+    if (replyTools) {
+      specialStreamLine(opts, candidate, chunk({
+        role: 'assistant', content: replyOut ? replyOut : null,
+        tool_calls: replyTools.map((c, i) => ({
+          index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
+          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+        })),
+      }));
+      specialStreamLine(opts, candidate, chunk({}, 'tool_calls'));
+    } else {
+      // 伪流式：上游整段到达，这里按 OpenAI SSE 重新吐出（首帧 role、次帧正文、末帧 finish）
+      specialStreamLine(opts, candidate, chunk({ role: 'assistant', content: '' }));
+      specialStreamLine(opts, candidate, chunk({ content: replyText }));
+      specialStreamLine(opts, candidate, chunk({}, 'stop'));
+    }
+    specialStreamLine(opts, candidate, 'data: [DONE]\n\n');
+    specialStreamEnd(opts);
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: harkNote, statsCtx: opts.statsCtx });
+    return 'success';
+  }
+
+  const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok };
+  if (replyTools) {
+    const payloadOut = toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyOut || null);
+    payloadOut.usage = usage;
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: harkNote, statsCtx: opts.statsCtx });
+    await specialNonStreamOut(opts, candidate, payloadOut);
+    return 'success';
+  }
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: harkNote, statsCtx: opts.statsCtx });
+  await specialNonStreamOut(opts, candidate, {
+    id: respId,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: displayModel,
+    choices: [{ index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }],
+    usage,
+  });
   return 'success';
 }
 

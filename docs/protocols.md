@@ -2,7 +2,7 @@
 
 > 本文从 README 拆出（v1.18.8）：README 只留协议速查表，本文收全量细节——原生出站、同协议直通、
 > 客户端路由的工具调用方向与 Responses API（第四套报文，v1.18.38）、专用报文渠道的**输出收口**（v1.18.38 修正）、
-> notion 渠道的**流断取回兜底**（v1.18.39）、**内联附件**（v1.18.41）、四条逆向/订阅链（notion-agent / workbuddy / genspark / codex）的配置要点。
+> notion 渠道的**流断取回兜底**（v1.18.39）、**内联附件**（v1.18.41）、五条逆向/订阅链（notion-agent / workbuddy / genspark / codex / hark）的配置要点。
 > 路由与调度语义见 [docs/scheduling.md](scheduling.md)；鉴权写法与管理面会话见 [docs/behavior.md](behavior.md)。
 
 ## 协议速查表
@@ -18,11 +18,12 @@
 | `workbuddy`    | 自检 `chat/completions`   | `Authorization: Bearer ...` | WorkBuddy 逆向（**必须走 curl 子进程**：上游对 Node/undici 的 TLS 指纹直接 ECONNRESET；token 是 JWT，新版 CodeBuddy 已把它加密，见下） | WorkBuddy 逆向（同上） |
 | `codex`        | 一次令牌刷新             | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） |
 | `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期；**工具调用靠文本仿真**，上游会忽略原生 `tools`） | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
+| `hark`         | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；**伪流式**；**工具调用靠文本仿真**；免费日额度约 69 轮，放链尾） | hark.com 网页会话反代（同上） |
 
 ## 渠道字段 `proxy`（可选）
 
 - HTTP 代理地址（如 `http://host.docker.internal:7897`，容器经宿主机代理出网）。
-- 对 `openai / anthropic / gemini / workbuddy / codex / genspark` 协议生效——**探测、测试、聊天全部经代理转发**（curl `-x` 子进程，undici fetch 不走代理）。
+- 对 `openai / anthropic / gemini / workbuddy / codex / genspark / hark` 协议生效——**探测、测试、聊天全部经代理转发**（curl `-x` 子进程，undici fetch 不走代理）。
 - 注意两点：流式响应经代理会**整体缓冲后一次性回放**（首字节延迟 ≈ 上游总耗时，与 CF 回退同款语义）；代理挂了渠道探测即失败、进冷却（诚实失败，不静默直连）。
 - `notion` / `notion-agent` 不支持代理（官方 API 直连）。
 
@@ -34,7 +35,7 @@
   解析走 `parseCustomHeaders`：对象与文本两种形态都认；跳过注释行（`#`）、空行、没有冒号的行；键值两侧 `trim`；
   **`Authorization` / `authorization` 一律被删掉**（UI 上写着"Authorization 不可覆盖"，后端也真删——否则渠道配置就能顶掉网关自己的鉴权头）。
 - 生效范围：**常规链路**（openai / anthropic / gemini 系出站）——探测、测试、聊天都经同一个 `applyCustomHeaders` 挂头。
-  `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` 自带专用报文构造，配了**不生效**（与 `dropParams` 同一类边界）。
+  `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` / `hark` 自带专用报文构造，配了**不生效**（与 `dropParams` 同一类边界）。
 - 没配这个字段的渠道：`applyCustomHeaders` **返回同一个对象引用**（零拷贝），老配置行为一个字节不变。
 - 三态语义与 `dropParams`/`weight` 同款：**显式值（含 `""`）优先、`""` 清空、字段缺省则保留旧值**。
   这条是硬要求：控制台曾用 `body.headers ? body.headers : undefined`，于是"打开渠道 → 顺手保存"会把已配的请求头**静默删掉**。
@@ -64,7 +65,7 @@
 
 - 为什么需要它：有些上游只吃不下**某个参数**，而不是整条链路不通。现场例子——`agentrouter` 每天固定开放额度，但它对「`tools` + `reasoning_effort`」这个组合直接 400（`Function tools with reasoning_effort are not supported for gpt-6-astra`），而客户端（DSH）每次请求都同时带这两样，于是这个渠道对**我们** 100% 失败（19 行 0 成功）。参数是客户端发的、网关原样转发，客户端又不由我们控制 → 开关只能放在**渠道**上。
 - 生效范围：**常规链路**（openai / anthropic / gemini / notion 协议渠道）与**同协议直通**都生效。
-- **不适用**：`workbuddy` / `codex` / `genspark` / `notion-agent` 这四种协议自带专用报文构造（在自己的函数里从零组装报文，不经过常规出站构造）——给它们配 `dropParams` 会**静默不生效**（字段照样保存、照样显示，但报文里那几个参数不会被删）。
+- **不适用**：`workbuddy` / `codex` / `genspark` / `notion-agent` / `hark` 这五种协议自带专用报文构造（在自己的函数里从零组装报文，不经过常规出站构造）——给它们配 `dropParams` 会**静默不生效**（字段照样保存、照样显示，但报文里那几个参数不会被删）。
 - **只接受白名单内的参数名**（`reasoning_effort`、`reasoning`、`verbosity`、`thinking`、`thinkingConfig`、`temperature`、`top_p`、`top_k`、`frequency_penalty`、`presence_penalty`、`logit_bias`、`logprobs`、`top_logprobs`、`n`、`seed`、`stop`、`stop_sequences`、`stream_options`、`tool_choice`、`parallel_tool_calls`、`response_format`、`service_tier`、`store`、`metadata`、`user`、`modalities`、`prediction`、`safetySettings`、`max_tokens`、`max_completion_tokens`、`maxOutputTokens`）。`messages` / `model` / `stream` / `tools` 这类**结构性字段一律不在白名单**——配错一个名字最多是"没生效"，绝不会把请求打残。写白名单外的名字会被 **400** 拒收并回带合法清单（不静默忽略：静默忽略正是"配了却没生效、然后对着一个 100% 失败的渠道排查半天"的成因）。
 - 只删**这几个键**：出站副本上做浅拷贝再删，绝不原地改客户端报文对象（它在候选链里被多个渠道共用，原地删会把 A 家的怪癖串味给 B 家）；没配这个字段的渠道**零拷贝原样返回**，老配置行为一个字节不变。
 - 控制台入口：渠道编辑弹窗的「不发这些参数」输入框（逗号或空格分隔），下方 chips 来自 `GET /admin/api/config` 下发的 `dropParamWhitelist`；框留空 = 提交 `[]` = **清空**（注意与 `weight` 的"留空 = 不动"语义不同）。
@@ -156,7 +157,7 @@ Responses 请求 ──入站转换──▶ OpenAI chat 报文 ──dispatchRe
 
 ## 专用报文渠道的「输出收口」（v1.18.38 修正）
 
-notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构造上游报文**（不走常规出站构造），
+notion / notion-agent / workbuddy / genspark / codex / hark 这六条路径**自己构造上游报文**（不走常规出站构造），
 也因此历史上**自己写响应**：非流式 `res.end(JSON.stringify(chat 报文))`、流式 `res.write(chat SSE 行)`。
 
 对 OpenAI 客户端面（`/v1/chat/completions`）这没问题——那本来就是要的形态；但对**其它客户端面**等于把翻译层整个绕过去了。
@@ -165,7 +166,7 @@ notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构�
 
 根因两层，缺一层都修不好：
 
-1. `tryChannel` 分派这五条路径时只透传了 `res` / `body` / `candidate` / …，把
+1. `tryChannel` 分派这六条路径时只透传了 `res` / `body` / `candidate` / …，把
    `onSuccessNonStream` / `onStreamChunk` / `streamPrelude` / `streamEpilogue` **四个输出钩子全丢了**
    （代码注释写着"anthropic 入口经 onStreamChunk 转换"——意图是对的，转发是漏的）；
 2. 于是它们只能自己写响应，连"开场 / 收尾"都没有。
@@ -182,7 +183,7 @@ notion / notion-agent / workbuddy / genspark / codex 这五条路径**自己构�
 `/v1/chat/completions` 的报文形态与字节一个都没变（回归里有对照组）。
 
 两条边界（诚实说明）：① **上游错误体仍然原样透传**（4xx 的 `shouldPassThrough4xx` 分支照旧不翻译，这是刻意纪律，见 [behavior.md](behavior.md)）；
-② **候选链本身没动**——`workbuddy` / `genspark` **不在** Anthropic / Gemini 两条候选链里（那两条只兜底到
+② **候选链本身没动**——`workbuddy` / `genspark` / `hark` **不在** Anthropic / Gemini 两条候选链里（那两条只兜底到
 `notion` / `notion-agent` / `codex`），所以"某个客户端面能不能打到某条专用渠道"是**调度语义**，不是收口能决定的。
 
 守卫：`test/special-channel-output-seam-e2e.test.js`（装配守卫 + 假 workbuddy / notion 上游 × 四套客户端面）。
@@ -397,6 +398,42 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
     `tool_choice:"required"` 非流式 → 客户端收到 `tool_calls`（`get_weather` + `{"city":"北京"}`，`finish_reason:"tool_calls"`）；
     `tool_choice:"auto"` 流式 → SSE 里也是 `tool_calls` 分片 + `finish_reason:"tool_calls"`。
     也有过"模型先反问城市、没吐标记"的样本（`auto` 下偶发）——这正是上面那条有损点，多试一次或改用 `required` 即可。
+
+## hark（hark.com 网页会话反代，v1.18.47）
+
+把 hark.com 网页版的登录态当渠道用（详细逆向过程与逐条证据见 [docs/hark-reverse-proxy-research.md](hark-reverse-proxy-research.md)）。
+
+- **Base URL**：`https://hark.com`（默认值，一般不用改）
+- **API Key**：`__Secure-hark.session_token` 的**完整值**（浏览器 F12 → Application → Cookies → hark.com）。
+  值是 URL-encoded 的（含 `%2F`/`%3D`），**原样粘贴、别解码**；整段 cookie 串也能识别（`harkCookie()` 会归一）。
+- **代理**：本机**必须**配（如 `http://127.0.0.1:7897`，容器内 `http://host.docker.internal:7897`），
+  云端可留空。⚠️ 本机直连会 **403**（Cloudflare），而**这不是 IP 声誉问题**：Node/curl **不读 Windows 系统代理**，
+  同一台机器上 PowerShell 走系统代理就是 200。失败形态要分清：**403/HTML = 没配代理**，**401 = 凭据过期**。
+- **探活**：`GET /api/auth/get-session`，免费、不消耗额度。
+- **为什么不能当 `openai` 渠道填 base_url**：`POST /v1/chat/completions` 带有效 cookie 与标准报文时回的是
+  **200 `text/html`**（Vite SPA 的壳）——`/v1/*` 只是前端路由兜底，上游**没有** OpenAI 兼容面。
+  真正的协议是网页客户端那套：**建会话**（`POST /api/conversations {title, autoTitle:false}`）→
+  **REST 发消息**（`POST /api/messages/send?cid=…`，正文是**一条字符串**）→
+  **SSE 收 patch**（`GET /api/sync/conversation?conversationId=…&v=2&manager=…&mode=in_tab`）→ 成功即 `DELETE` 会话。
+- **每轮新建一条上游会话、成功即删**（绝不用用户的主会话：`POST /api/conversations {}` 返回的正是主会话）。
+  失败**不删**（留证）——用户会在自己 hark 账号里看到标题「ZZCSAPI 网关通道」的会话，这是**刻意**的。
+- **模型**：上游只有一个 agent，模型名不透传（`models` 别名只用于路由与展示）。
+- **伪流式**：上游回复**整段一次**下发（无 token 增量），网关按"首帧 role → 整段正文 → finish + `[DONE]`"收口。
+  进度信号只有 `narration_update`（如 "Checking the time"）。**不要**把它当逐字流。
+- **工具调用（走文本仿真，与 genspark 同套路）**：上游工具**全在服务端执行**，SSE 流里 **`tool_add`/`tool_update`
+  事件为 0**、也没有 OpenAI 式 `tool_calls` 帧；客户端能参与的只有 Hark 自己的 `asks` 协议。所以客户端工具靠
+  `tool-emu` 文本仿真（`[TOOL_CALL]{…}[/TOOL_CALL]` ⇄ 真 `tool_calls`）。真机复现率实测 3/3。
+  - 有损点（诚实说明）：提示词级仿真，模型不听话时不产生工具调用（文字照常返回，不报错）；
+    `tool_choice:"none"` 不注入协议。
+  - ⚠️ **上游护栏**：把目标写成 `C:\Windows\win.ini` 这类**系统路径**时，上游回一句固定话术
+    `I wasn't able to answer this message.`（2/2 复现），**不出标记**；换普通路径立刻恢复。网关只会把这句
+    当普通正文如实回传 —— 别把它当成"渠道坏了"（`hark-probe.js` 的工具探测因此刻意用普通文件路径）。
+- **额度**：`GET /api/billing/summary` → `meters.harkTokens`（`dailyLimit: 8,000,000`）。**每轮实测约 11.5 万**
+  （与提示长短几乎无关，大头是上游自己 agent 的开销）⇒ **免费日额度约 69 轮**。因此本渠道**放候选链链尾**，
+  只当兜底；上游不给 token 计量，账本按估算记 `in/out`（与 genspark/workbuddy 同口径）。
+- **不支持图片**（不在 `IMAGE_CAPABLE_PROTOCOLS` 里，含图请求会被候选裁剪挡掉）。
+- **探针**：`node hark-probe.js <渠道id>`（只读体检三层：凭据/会话/额度）；加 `--turn` 再真发一条并验工具仿真。
+- **回归**：`node test/hark-channel.test.js`（真网关 + 真 curl + 假上游兼 HTTP 代理，零外网零额度）。
 
 ## 图片（多模态）的统一转换
 

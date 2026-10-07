@@ -1791,6 +1791,26 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 **回归**：`test/channel-timeout-attribution-e2e.test.js` **28 项**（新增 §E：保存**别的**渠道后两个键仍在磁盘 / GET 下发已配的值、没配则不下发该键 / 三态 / `0`·`-1`·`'abc'`·`999`·`999999` 一律 400 且文案带值域 / 400 不落库 / 四处结构守卫）；`test/console-state.test.js` **276 项**（新增 §3c 23 项：`adapt()` 收成 `fcMs`/`toMs`、`msTextOf` 真值表（坏值 `0` 如实显示而不是静默当成"没配"）、**在最小 DOM 桩里真跑 `openChannelForm`** 断言两个框真被回填/真留空、`saveChannel` 真跑断言总是提交且非法值前端就挡下、id 合并与产物同源守卫）。**加渠道字段时这两个用例必跑**——它们守的正是"三处一起加"这条纪律。
 
 **教训**：① **"运行期一直在读"不等于"登记过"**。字段被读取、功能正常、测试全绿，都不代表它进了那几张白名单；显式字段清单（`persistConfig`）是**白名单语义**，漏一行的代价是**静默数据丢失**，而它的表现（"重启回默认"）最不像 bug，所以只能靠"加字段时同时加断言"来防。② 一个渠道字段从表单到磁盘要过**四道关**（表单回填 → POST 三态 → `persistConfig` 白名单 → GET 下发/`loadAll` 合并），本轮把它写成了代码地图 §5 的一行路由，下次加字段照那行走完。③ 值域/默认值**只留一份真源**，其余处（前端的 `min`/`max`）只当提示，并且要和真源逐字一致——不一致就会长成"框里能填、点保存却报错"。④ `x || 默认值` 这种读法下 **`0` 永远是"没配"**，所以 `0` 必须在入口就被拒绝并写清理由，而不是留到运行期被吃掉。
+### 8.48 v1.18.47 hark.com 网页会话反代接成第六条协议：前端要多改两处（`protoLabel` 与 chip 配色），漏了会露馅（2026-10-08，对象 `server.js` 协议分支（白名单 / `probeDef` / 手动测试 / 候选链 / `tryHarkChannel`）+ 新增 `hark.js` + 新增 `hark-probe.js` + `console-redesign.html` 与 `build/app.js` 的 `PROTO_META` / `PROTO_ORDER` / `protoLabel` / chip 配色 + 产物 `console.html` + 新增 `test/hark-channel.test.js` + 新增 `docs/hark-reverse-proxy-research.md` + 代码地图 / 本文 / `docs/protocols.md` / `docs/tests.md` / `README.md` / `AGENTS.md`）
+
+**现场**（用户要求）：用户贴了两枚 hark.com 的会话 cookie，问「hark 能不能反代成聚合站里的一员，**要能调用本机工具**，**本地的代理也要测**，我用云端少、用本地多」。先做只读研究（`docs/hark-reverse-proxy-research.md`）再动工，研究给出三条硬结论：① **不能当 openai 渠道填 `base_url`**——`POST /v1/chat/completions` 带有效 cookie 回的是 **200 `text/html`**（Vite SPA 壳），"能通"和"能用"是两件事；② 本机 403 的真因是 **Node/curl 不读 Windows 系统代理**（同一台机器 PowerShell 走系统代理 200、加 `-x` 立刻 200），不是 IP 声誉——**403/HTML = 没配代理，401 = 凭据过期**，这两种失败形态必须分清；③ 上游工具**全在服务端执行**（SSE 流里零 `tool_add`/`tool_update`）⇒ **客户端/本机工具只能靠 `tool-emu` 文本仿真**（`[TOOL_CALL]{…}[/TOOL_CALL]` ⇄ 真 `tool_calls`），并且上游对 `C:\Windows\…` 这类系统路径有**护栏**（回固定话术、不出标记）。
+
+**处置**：
+
+- **① 新协议 `hark`**（专用报文渠道，与 genspark 同类）：协议细节全部收进新文件 `hark.js`（发消息 / SSE 收流 / snapshot+patches 解析 / 会话生命周期 / `flattenForHark`），`server.js` 只做登记与分发——`aliasedProto`、协议白名单（两处）、`probeChannel`/`probeDef`、`/admin/api/test` 兜底链与手动测试分支、`openAICandidateChain` 尾部、`tryChannel` 里 `if (protocol === 'hark') return tryHarkChannel(...)`。
+- **② 前端四处，不是两处**（**本轮真漏过**）：`PROTO_META`（协议下拉的 label / 默认 base / 钥匙提示）与 `PROTO_ORDER`（下拉顺序）之外，还有 **`protoLabel`**（协议芯片的显示名，漏了芯片显示裸 `hark`）与 **`.chip.hark` 配色**（漏了芯片没有配色）。两处都在 `console-redesign.html` 与 `build/app.js` 各一份，产物 `console.html` 里是第三份（构建生成）。
+- **③ chip 配色与 `protoLabel` 一律"就地追加"**：`console-redesign.html` 的 `.chip.hark` 追加在既有的 `.chip.genspark` 那一行（233）、`build/extra.css` 的同款追加在既有的 `.chip.codex` 那一行（5）。**这不是偷懒**：设计稿 `<style>` 或 `extra.css` 每增删 1 行，`console.html` 的 JS 偏移（+709）就要整体重算并同步三处文档，为一条配色改偏移不划算（v1.18.12 的 `.t-c` 也是这么做的）。
+- **④ 会话纪律**：每轮**新建**会话（`POST /api/conversations {title, autoTitle:false}`），**成功即删**、**失败留证**（用户会在 hark 侧看到残留的「ZZCSAPI 网关通道」会话——这是刻意的，用于事后定位失败轮）。**绝不使用 `{}` 建会话**：那返回的是用户自己的主会话。
+- **⑤ 回复判据**：新会话的**快照里本来就有一条 assistant 问候**，"取最后一条助手消息"会把问候当成回复——只接受 `triggeredByMessageId` 命中本轮、或快照里**全新**的 assistant id（`preexisting` 集合 + `finishable()`）。回复是**整段一次**下发（无 token 流），网关侧按伪流式吐给客户端。
+- **⑥ 探测与手动测试**：`probeDef` 走只读的登录态探测（**半愈合**：只证明凭据活着），手动测试走真发一条。`hark-probe.js` 是配套活体探针，按层分开打（凭据 / 会话清单 / 额度 / `--turn` 真发一条并验工具仿真），**工具探测刻意用普通文件路径**——用系统路径会把上游护栏误报成"工具不可用"（本项目已踩过一次）。
+- **⑦ 额度**：`GET /api/billing/summary` 的 `meters.harkTokens` 实测**每轮约 11.5 万 → 免费日额度（8M）约 69 轮**，所以它排在 OpenAI 类候选链的**尾部**（与 genspark 同位：消耗的是用户自己的额度，不是网关的）。
+
+**行号锚点**：`console-redesign.html` **2270 → 2271 行**（净 +1，只加了一行 `PROTO_META` 表项；chip 色与 `protoLabel` 都是就地追加）；`build/app.js` **2767 → 2768 行**（净 +1，同为 `PROTO_META` 表项）；产物 `console.html` **3480 → 3481 行**，**JS 偏移仍 +709、CSS 偏移仍 +13**（`build/extra.css` 与设计稿 `<style>` 一行未增删；复核 `PROTO_ORDER` app.js 2033 → 产物 2742、`PROTO_META` 2022 → 产物 2731）。`docs/frontend-code-map.md` 已按 AGENTS §1.2 机械重核：**本轮替换 114 处锚点，全部命中一次**，随后用「符号 + 相邻数字 ⇄ 源码真实行号」的核对脚本复查 **147 个锚点、0 处不符**。顺带按真值修掉 **6 处历史腐烂锚点**（它们是上一版留下的、与本轮改动无关）：§3.2 的 `modalChId`/`probeFound`、§3.1 的 `IMPORT_META`/`REPLIES` 四处的真实位置比文档**大 4 行**（§3.7/§3.8 那两张表当时已更新、这四处没跟上，同一份文档里两套坐标），§4 的 `headersTextOf(c)` 生产侧文档写 **2034**、真值 **2052**，§5 的 `console-redesign.html:2175` 真值 **2172**；§0 文件清单的行数（`app.js` 2660 / `console.html` ~3376 / `server.js` ~6572）也早已是旧值，一并改为实测的 **2768 / ~3481 / ~8063**。**历史注记（§0.1 的偏移与版本注记、§8 变更日志里的行号）一字未动。**
+
+**回归**：新增 `test/hark-channel.test.js` **57 项**（§1 纯函数真值表；§2–§4 用「假上游同时当 HTTP 代理」的姿势真跑整条链：建会话 → 发消息 → 收 SSE → 解析 snapshot/patches → 工具仿真往返 → 成功即删；§5 装配守卫：`server.js` 的 7 处登记点、前端两份字典与产物、以及"**没有为 hark 新增前端字段**"）。另跑 `test/console-state.test.js` 与 `test/security-headers-e2e.test.js`（前者守前端渲染桩、后者守内联属性清零与 CSP 逐字值——`protoLabel` 与 chip 色都是静态字典，不引入新的裸插值）。
+
+**教训**：① **"新增渠道协议"的登记清单是 7（后端）+ 4（前端）处，不是 2 处**。只加 `PROTO_META`/`PROTO_ORDER` 时页面**不报错**，只是协议芯片显示裸 `hark`、且没有配色——这类"能用但露馅"的漏项不会自己跳出来，只能靠"加完协议顺手 `grep -n '\.chip\.'` 与 `grep -n protoLabel`"来兜。② **判据要选对**：`/v1/chat/completions` 回 200 但 `Content-Type: text/html`，说明"协议对不上"，此时该做的是**专用报文渠道**，而不是继续调 base_url。③ 反代的失败形态互相长得很像，**必须按层分开打**（凭据 / 代理 / 额度 / 上游护栏），否则会把"没配代理"读成"IP 被封"、把"上游护栏"读成"工具不可用"——两次都差点误判。④ 前端"就地追加一行"是**保偏移的手段**，改 CSS 前先想清楚这一行值不值得让 JS 偏移整体 ±1。
+
 ## 9. 后续可做（未实现）
 
 - 密钥明文显示加"仅本次会话"提示或二次确认

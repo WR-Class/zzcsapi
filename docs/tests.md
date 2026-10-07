@@ -1,6 +1,6 @@
-# 测试清单（51 个文件 · 2430 项断言，零依赖）
+# 测试清单（52 个文件 · 2487 项断言，零依赖）
 
-> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 51 条命令与每条守的是什么。
+> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 52 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
 > **动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json` / `usage.json`**，不出网、不烧额度。
 > 退出码非 0 = 有回归。跑单个：`node test/<名字>.test.js`。
@@ -11,7 +11,8 @@
 | --- | --- |
 | 渲染 / 交互 / `build/app.js` | `console-state` + `security-headers-e2e` |
 | 协议转换（入站 / 出站 / 流式） | 对应协议的 `*-tools` / `native-channels` / `streaming-e2e` / `same-protocol-passthrough` / `responses-api-e2e` |
-| **专用报文渠道的输出收口**（notion / notion-agent / workbuddy / genspark / codex 的响应写出口、`tryChannel` 的输出钩子转发、新增/修改客户端报文面） | `special-channel-output-seam-e2e`（装配守卫会当场抓住"某条路径又自己写响应"）+ `genspark-tools` + `workbuddy-quota` |
+| **专用报文渠道的输出收口**（notion / notion-agent / workbuddy / genspark / codex / hark 的响应写出口、`tryChannel` 的输出钩子转发、新增/修改客户端报文面） | `special-channel-output-seam-e2e`（装配守卫会当场抓住"某条路径又自己写响应"）+ `genspark-tools` + `workbuddy-quota` |
+| **新增/修改渠道协议**（协议白名单、`tryChannel` 分发、探测、手动测试、前端 `PROTO_META`/`PROTO_ORDER`、构建产物） | 该协议自己的 `*-channel` / `*-tools` 用例 + `channel-timeout-attribution-e2e`（"加渠道字段要三处一起加"）+ `console-state`（前端产物守卫）+ `security-headers-e2e`；改完**必须重新 `node build/build.js`** |
 | 新增/修改**客户端路由**（新报文面、POST 白名单、鉴权点） | `responses-api-e2e` + `gemini-multimodal` + `session-affinity-e2e` + `ip-stats-ban-e2e` + `security-headers-e2e` —— 后四个各有一条「每个客户端面都必须接上 X」的**计数守卫**（图片门 / 粘性键 / statsCtx / authGate），加一个面就会当场报错，改完必须一起更新计数 |
 | 调度 / 候选链 / 重试 / 冷却 / 权重 | `weighted-rr*` / `auto-weight*` / `per-channel-retry-e2e` / `cooldown-grading-e2e` / `upstream-4xx-fallback-e2e` / `session-affinity-e2e` |
 | 流式读取循环 / 流内错误帧 / 懒提交（writeHead 时机） | `stream-error-frame-e2e` + `streaming-e2e` + `outbound-http-client`（直通字节一致性） |
@@ -80,6 +81,7 @@ node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 
 node test/same-protocol-passthrough.test.js # 52 项断言：同协议直通（Anthropic/Gemini 客户端 → 同协议渠道不翻译；thinking/cache_control/seed 原样到达、响应逐字节一致、真实 token 仍记录、跨协议仍走转换、v1.18.8 修复只注入同协议直通且没坏不碰）；**v1.18.32 §3b 直通空流**：上游只回 `message_start` + `message_stop`（零 `content_block_delta`）→ 客户端仍拿 200 + 上游原始 SSE（字节已写出、换不了家）、用量如实记 `ok:false`（备注含 `no content`/零正文）、该渠道 `lastError` 写明 `stream empty` 且 `consecutiveFail ≥ 1`（下一发才会退避），并含"正常直通流之后 `ant-native` 仍是零欠账"的对照 + 那条判据逐字为 `streamError === null && !nativeStream && !sawStreamContent` 的结构守卫（`!nativeStream` 必须在，也不许再加 `streamOutText.length === 0`）
 node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）
 node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路；v1.18.38 起流式分支的源码断言改为 `specialStreamLine(opts, candidate, chunk(…))`——纯文本分支的行为一字未变，只是出口改走收口钩子）
+node test/hark-channel.test.js            # 57 项断言（v1.18.47）：**hark.com 网页会话反代渠道**（`protocol:"hark"`）——上游**没有 OpenAI 兼容面**（带有效 cookie 打 `POST /v1/chat/completions` 回的是 200 text/html 的 SPA 壳），真协议是「建会话 → REST 发消息 → SSE 收 patch」，回复**整段一次**下发（伪流式），工具**全在服务端执行**（流里零 `tool_add`/`tool_update`）⇒ 客户端工具走文本仿真。§1 纯函数真值表（`flattenForHark` 带角色标注/保留 `tool_calls` 历史/空白段落跳过/产物必是字符串；`harkCookie` 三形态归一：裸值补前缀、已带前缀原样、整段 cookie 串原样、空值**不伪造** cookie；请求头 Origin/Referer 去尾斜杠；会话映射有界）；§2–§4 **真链路**（真网关 + 真 curl + 假「hark 上游兼 HTTP 代理」——照 genspark 的招：`baseUrl=http://hark.invalid` + `proxy=127.0.0.1:PORT`，于是 curl 必然把请求交给假代理，**零外网零额度零凭据**）：★ 纯文本回合（客户端拿到正文、渠道头是 `hark1`、上游真收到建会话 + `POST /api/messages/send?cid=` + SSE 同步流、★ 建会话必带 `title`+`autoTitle:false`（`{}` 会命中**用户主会话**，绝不能用）、成功之后**真删会话**、发给上游的是**拍平后的单条字符串**、报文带 `idempotencyKey`/`responseMessageId`）；★ 工具回合（`finish_reason:"tool_calls"` + 名字/参数正确 + 正文清空 + **工具协议真注进了上游报文** + 尾部提醒在）；★ **失败不删会话**（上游 500 → 网关不假装成功、会话留证）；★ 流式（role 帧 → 整段正文 → finish → `[DONE]`，不伪造逐字增量）；§5 装配守卫（server.js 七处登记：require / 两处协议白名单 / `aliasedProto` / `probeChannel` / `probeDef` / `tryChannel` 分发 / OpenAI 类候选链 / 手动测试分支与独立会话键 / ★ 工具仿真两侧真接上 / ★ 删除调用在成功分支之后 / hark.js 不把 apiKey 写进日志；前端两处 `PROTO_META`/`PROTO_ORDER` **含构建产物** `console.html` 也已重建；前端没为 hark 新增字段）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 node test/outbound-http-client.test.js    # 33 项断言：出站长连接客户端（fetch 形状真值表 + 20 次请求 0 条新连接、对照 agent:false 建 20 条）+ 直通流式逐字节一致（含 CRLF 与跨片帧）；装配守卫 **v1.18.42 更新**：`await zzFetch(` 由 6 → **4**（探测 2 + 常规聊天 1 + 原生/直通 1）——notion 推理的两处（主推理、管理面手动测试）**刻意**改走 `notion.notionFetch` 的通道链，留在 `zzFetch`（HTTP/1.1）上就是留在被墙的通道上；同一条守卫另断言 `notion.notionFetch(` 恰好 3 处
 node test/session-affinity-e2e.test.js    # 67 项断言：会话粘性（键推导真值表 + 过期/淘汰 + 冷却/down 不硬塞 + 同会话 8 次落同一家 + 上游挂了重新粘 + 关闭时零状态）

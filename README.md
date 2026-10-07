@@ -215,11 +215,11 @@ http://127.0.0.1:8787/console
 
 | 文档 | 用途 |
 | --- | --- |
-| [协议与渠道详解](docs/protocols.md) | 协议速查表之外的**全量细节**：原生出站与同协议直通、三条客户端路由的工具调用方向、notion-agent / workbuddy / genspark / codex 配置要点、`proxy` 字段、图片转换 |
+| [协议与渠道详解](docs/protocols.md) | 协议速查表之外的**全量细节**：原生出站与同协议直通、三条客户端路由的工具调用方向、notion-agent / workbuddy / genspark / codex / hark 配置要点、`proxy` 字段、图片转换 |
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 51 个测试文件 · 2430 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 52 个测试文件 · 2487 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -229,6 +229,7 @@ http://127.0.0.1:8787/console
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | 动代码前过目：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查） |
 | [同类网关内部机制对比](docs/gateway-comparison.md) | 本项目 vs new-api / one-api / sub2api / CLIProxyAPI / **notion2api** 的内部机制/性能/全面性对照（只比机制，不比多用户），含实测数字与各家源码级证据；**§1.5 = 与 notion2api 七项差异的强弱结论**（附件/CSV 那一格 v1.18.42 起**已追平**，另加一条"教训型差异"：同一个软墙我们误判过三次，它的实现里根本没有这道坎） |
 | [Genspark Claw 反代研究](docs/genspark-claw-reverse-proxy-research.md) | 逆向过程留档 |
+| [hark.com 网页会话反代研究](docs/hark-reverse-proxy-research.md) | **已接入**（`protocol: "hark"`）：为什么不能当 openai 渠道填 base_url（`/v1/*` 回的是 SPA 壳）、**本机 403 的真因是 Node/curl 不读系统代理而不是 IP 声誉**（同一台机器 PowerShell 走代理 200）、回复整段下发（伪流式）、**上游工具全在服务端**（流里零 `tool_add`，客户端工具只能文本仿真）、**每轮约 11.5 万 harkTokens → 免费日额度只够约 69 轮**、系统路径护栏、复现命令 |
 | [PromptQL（prompt.ql.app）反代研究](docs/promptql-reverse-proxy-research.md) | 结论：不建议接（多人协作 bot 工作台、按 OLU 计量付费，不是可蹭的模型额度；控制面 `auth.pro.ql.app` 本机被 DNS 污染） |
 | [Arena 协议](docs/arena-protocol.md) / [Prism 反代研究](docs/prism-reverse-proxy-research.md) | 已撤渠道留档 |
 | [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **机制查明 + 活体验证 + 软墙根因**：**★ 最有价值的是抓法**——notion2api 的 `upstream.base_url` 可配，指向记录代理就抓到它发给 Notion 的原始报文（含三个必踩的坑：`origin`/`referer` 由 base_url 推出来、账号要按完整 probe JSON 导入、失败会把账号打成 `error`）。据此查明：CSV **不上 S3**，而是 `enableCsvAttachmentSupport:true` + 把 `{"file":{"file_data":"data:…","filename":"…"},"type":"file"}` 内联进 user step 正文（已按此实现为 opt-in 渠道字段，字节逐字对齐，见 `test/notion-attachment-inline-e2e.test.js`）；另白捡到 `getInferenceTranscriptsForUser` 的正确形状。**✅「模型真读到了」v1.18.42 已活体验证**（§8：对照答"没找到文件"、带附件答出只存在于 CSV 里的 `K7Q2M9`）——仍默认关，但那是**稳妥默认**不是"没验证过"。**§7/§7.7 = 软墙的两个维度**（账号状态主导、与传输无关且随时间变；客户端指纹只在账号可过时才看得见——同一秒交替打 curl 3/3 真答、fetch 0/3 软墙）；**§5/§6 是被推翻的旧结论、§7.4 是三次误判的留档，别重犯**。含上传链留档（取目标 → S3 桶根 204 → 公开 URL）、**软墙 ≠ 形状错的判别纪律**、判决实验与复现命令 |
@@ -303,13 +304,13 @@ http://127.0.0.1:8787/console
 > 参数是客户端发的、网关只原样转发 → 开关只能放在渠道上。**只接受白名单内的名字**（`reasoning_effort` / `thinking` /
 > `temperature` / `max_tokens` 等；`messages`/`model`/`stream`/`tools` 这类结构性字段不在内，配错名字最多"没生效"、不会把请求打残），
 > 白名单外的名字 **400** 并回带合法清单（不静默忽略）。生效于常规链路与同协议直通；`workbuddy` / `codex` / `genspark` /
-> `notion-agent` 自带专用报文构造，**不适用**。控制台入口：渠道编辑弹窗「不发这些参数」，合法名清单由
+> `notion-agent` / `hark` 自带专用报文构造，**不适用**。控制台入口：渠道编辑弹窗「不发这些参数」，合法名清单由
 > `GET /admin/api/config` 的 `dropParamWhitelist` 下发。细则见 [协议与渠道详解](docs/protocols.md)。
 > 渠道字段 `headers`（可选，v1.18.44）：**渠道级「自定义请求头」**——出站时把这几条头附加到这家渠道的请求上（每行一条 `Name: value`）。
 > 用于「上游不只看密钥、还看客户端指纹」的场合：`agentrouter` 实测只带 `Authorization` 一律 **401 `unauthorized client detected`**，
 > 带上 `User-Agent: claude-cli/2.0.0 (external, cli)` 才 **200**（**浏览器 UA 一样被拒**——它认的是 Claude CLI 指纹本身，所以别去"换个更像浏览器的 UA"）。
 > `Authorization` 不可覆盖（后端会删掉，防止渠道配置顶掉网关自己的鉴权头）；生效于常规链路（openai / anthropic / gemini 系出站），
-> `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` 自带专用报文构造、**不适用**。
+> `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` / `hark` 自带专用报文构造、**不适用**。
 > 语义与 `dropParams` 同款：**显式值（含 `""`）优先、`""` 清空、不传该字段则保留旧值**。控制台入口：渠道编辑弹窗「自定义请求头」。
 > 细则见 [协议与渠道详解](docs/protocols.md)。
 > 渠道字段 `notionAttachments`（可选，v1.18.41，**默认关**）：**只对 `notion` 协议有意义**——打开后，客户端发来的
@@ -348,21 +349,22 @@ http://127.0.0.1:8787/console
 | `workbuddy` | 自检 `chat/completions` | `Authorization: Bearer ...` | WorkBuddy 逆向（必须走 curl 子进程；token 是 JWT，新版已加密） |
 | `codex` | 一次令牌刷新 | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效） |
 | `genspark` | `GET /api/is_login` | `Cookie: session_id=...` | Genspark 网页会话反代（**必须配代理**；工具调用靠文本仿真） |
+| `hark` | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；伪流式、工具靠文本仿真） |
 
 `arena` 协议已撤（[留档](docs/arena-protocol.md)）。
 
 **客户端说哪套协议、渠道讲哪套协议，互不绑定**：任一客户端路由都能打到任一协议的渠道（出站自动转原生格式）；
 **同协议的那格直通不翻译**（v1.15——`thinking` / `cache_control` / `seed` 等原样到达，响应逐字节一致；v1.18.8 起还带
-thinking 回放修复）。五条**专用报文**渠道（`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex`）的响应输出也走各客户端面的
+thinking 回放修复）。六条**专用报文**渠道（`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex` / `hark`）的响应输出也走各客户端面的
 收口钩子（v1.18.38 修正：此前它们自己写 OpenAI 报文，Responses / Anthropic / Gemini 面会拿到错形态）；
-**候选链分层**——Anthropic / Gemini 两条链只兜底到 `notion` / `notion-agent` / `codex`，`workbuddy` / `genspark` 只挂在 OpenAI 类链上。
+**候选链分层**——Anthropic / Gemini 两条链只兜底到 `notion` / `notion-agent` / `codex`，`workbuddy` / `genspark` / `hark` 只挂在 OpenAI 类链上。
 `notion` 渠道另有**流断取回兜底**（v1.18.39：上游流断/带错误/零内容时，用同一 `threadId` 把同一份 transcript 再发一次取回成品答案；
 触发判据只看"权威全文到没到"，正常请求零额外延迟与额度，取不回仍如实判失败）。
 矩阵表、工具调用四方向、各渠道配置要点、有损点诚实清单：[协议与渠道详解](docs/protocols.md)。
 
 ## 调度顺序（摘要）
 
-1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias——**同协议优先，跨协议兜底**（现有 `openai` 渠道先后顺序不受影响），最后才是 notion → notion-agent → workbuddy → genspark → codex 文本链
+1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias——**同协议优先，跨协议兜底**（现有 `openai` 渠道先后顺序不受影响），最后才是 notion → notion-agent → workbuddy → genspark → hark → codex 文本链
 2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
 3. 排序：冷却中 → 末位；`down` → 倒数第二；`probation`（半愈合观察期）→ 健康渠道之后；同状态按**有效优先级**降序，再看 latency
 4. **加权轮询**（填了 `weight` 的渠道按比例决定谁排第一）；**会话粘性**（开着时）把这条会话上次成功的那家提到第一位

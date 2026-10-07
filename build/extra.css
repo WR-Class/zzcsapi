@@ -1,8 +1,8 @@
 /* ═══════════════════════════ 生产补充（设计稿未覆盖的部分） ═══════════════════════════ */
 /* 全部复用设计令牌，不引入新颜色，保证与设计稿同源 */
 
-/* Codex 协议 chip（设计稿快照里没有 codex 渠道，故缺这条） */
-.chip.codex{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
+/* Codex / hark 协议 chip（设计稿快照里没有这两种渠道）。两条**共用一行**：extra.css 每增删 1 行，console.html 的 JS 偏移（+709）就要整体重算，见 frontend-code-map.md §行号换算 */
+.chip.codex{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)} .chip.hark{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 32%,transparent);background:var(--warn-soft)}
 
 /* 渠道抽屉里的密钥行需要能换行 */
 .kv dd.mono{font-family:var(--f-mono)}
