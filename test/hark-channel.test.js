@@ -193,7 +193,7 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
     check('工具调用的正文被清空（不把标记当正文回给客户端）', m.content === null || m.content === '');
     const sentMsg = (() => { const s = up2.seen.find((x) => x.path === '/api/messages/send'); try { return JSON.parse(s.body).message; } catch { return ''; } })();
     check('★ 工具协议真的注进了上游报文（工具名 + 参数 schema + 标记格式）', /read_local_file/.test(sentMsg) && /parameters|JSON Schema/i.test(sentMsg) && /\[TOOL_CALL\]/.test(sentMsg), String(sentMsg).slice(0, 120));
-    check('尾部提醒也在（对抗超长上下文注意力稀释）', /\[提醒：若需调用工具/.test(sentMsg));
+    check('★ 尾部提醒自包含（带工具名 + 明说"你没有执行能力、别回答执行不了"）', /\[提醒：工具由调用方执行/.test(sentMsg) && /本次可用工具：read_local_file/.test(sentMsg) && /不要回答"我无法执行工具/.test(sentMsg), String(sentMsg).slice(-260));
     check('历史工具结果会被渲染成文本（第二轮靠它把结果带回上游）', (() => { const f = hark.flattenForHark(toolEmu.emulateRequest({ messages: [{ role: 'user', content: 'q' }, { role: 'assistant', tool_calls: [{ id: 'c1', function: { name: 'f', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'c1', name: 'f', content: '结果Z' }], tools: TOOLS }).messages); return /结果Z/.test(f) && /f/.test(f); })());
   } finally { gw2.kill(); await up2.close(); }
 
@@ -328,6 +328,35 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
   } finally { gw7.kill(); await up7.close(); }
   check('★ 结构守卫：harkCurl 的正文走文件（`@` + bodyFile），不再直接进 argv', /args\.push\('--data-binary', bodyFile \? '@' \+ bodyFile : String\(bodyStr\)\)/.test(HARK_SRC));
   check('★ 结构守卫：通用 CF 回退路径也不再把正文塞 argv（`--data-raw` 已清零）', !/args\.push\('--data-raw'/.test(SRC) && /args\.push\('--data', bodyFile \? '@' \+ bodyFile : String\(body\)\)/.test(SRC));
+
+  console.log('\n══ §8 工具定义形状归一：扁平 / input_schema 也必须注入真目录（v1.18.52） ══');
+  // 现场：调用方（agent 客户端）发的不是 OpenAI 嵌套形状 → 旧代码把目录渲染成 `### function` + 空 schema `{}`，
+  //   或者直接返回 null（连协议都不注入）→ 上游拿不到真工具名，只能回散文（"我执行不了这些工具调用"）。
+  const FLAT = [{ type: 'function', name: 'read_local_file', description: '读取本机文件', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }];
+  const ANTH = [{ name: 'read_local_file', description: '读取本机文件', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }];
+  for (const [label, tools] of [['扁平 type:function', FLAT], ['Anthropic 式 input_schema', ANTH]]) {
+    const up8 = await startFakeUpstream({ reply: TOOL_CALL_REPLY });
+    const gw8 = await startGateway(up8.port);
+    try {
+      const r = await chat(gw8.base, { model: 'hark-agent', messages: [{ role: 'user', content: '读 D:\\x\\a.txt' }], tools });
+      const j = await r.json();
+      const m = j.choices && j.choices[0].message;
+      const sent = (() => { const s = up8.seen.find((x) => x.path === '/api/messages/send'); try { return JSON.parse(s.body).message; } catch { return ''; } })();
+      check(`★ [${label}] 目录里是真工具名（旧代码是 ### function）`, /### read_local_file/.test(sent), String(sent).match(/### [^\n]*/g));
+      check(`★ [${label}] schema 真的注进去了（旧代码是空 {}）`, /"required":\["path"\]|"properties":\{"path"/.test(sent));
+      check(`★ [${label}] 客户端仍拿到 tool_calls`, j.choices && j.choices[0].finish_reason === 'tool_calls' && m.tool_calls && m.tool_calls[0].function.name === 'read_local_file', j.choices && j.choices[0].finish_reason);
+    } finally { gw8.kill(); await up8.close(); }
+  }
+  const EMU_SRC = fs.readFileSync(path.join(ROOT, 'tool-emu.js'), 'utf8');
+  check('★ 结构守卫：仿真器有形状归一函数 normTool，且入口先归一后过滤', /function normTool\(t\)/.test(EMU_SRC) && /\.map\(normTool\)\.filter\(\(t\) => t\.name\)/.test(EMU_SRC));
+  check('★ 结构守卫：不再只认 t.function.name 当目录名', !/f\.name \|\| t\.type \|\| 'tool'/.test(EMU_SRC));
+  check('★ 结构守卫：尾部提醒带工具名清单（抗稀释，能独立成立）', /本次可用工具：/.test(EMU_SRC) && /buildTailReminder\(toolNames\)/.test(EMU_SRC));
+  check('对照：纯文本回合不注入、tool_choice=none 不注入、无工具定义返回 null', (() => {
+    const emu = require(path.join(ROOT, 'tool-emu.js'));
+    return emu.emulateRequest({ messages: [{ role: 'user', content: 'hi' }] }) === null
+      && emu.emulateRequest({ messages: [{ role: 'user', content: 'hi' }], tools: FLAT, tool_choice: 'none' }) === null
+      && emu.emulateRequest({ messages: [{ role: 'user', content: 'hi' }], tools: [{ type: 'function' }] }) === null;
+  })());
 
   console.log(`\n══════ 通过 ${pass} · 失败 ${fail} ══════`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}

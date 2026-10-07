@@ -16,21 +16,38 @@ function toolCallId() {
   return 'call_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+// v1.18.52：工具定义**形状不止一种**，必须一处归一后再用。现场：调用方（agent 客户端）发的是
+//   扁平定义 `{type:'function',name,description,parameters}` 或 Anthropic 式 `{name,description,input_schema}`，
+//   而旧代码只读 `t.function.name` → 目录被渲染成 `### function` + 空 schema `{}`，或者
+//   `emulateRequest` 直接返回 null（**连工具协议都不注入**）→ 上游拿不到真工具名，只能回散文
+//   （"我执行不了这些工具调用"）。三种形状折成同一个内部结构：
+//   nested `{type:'function',function:{name,description,parameters}}`
+//   flat   `{type:'function',name,description,parameters}`（OpenAI Responses / 部分客户端）
+//   anthropic `{name,description,input_schema}`
+function normTool(t) {
+  const o = (t && typeof t === 'object') ? t : {};
+  const f = (o.function && typeof o.function === 'object') ? o.function : null;
+  const name = String((f && f.name) || o.name || (o.type && o.type !== 'function' ? o.type : '') || '').trim();
+  const description = String((f && f.description) || o.description || '').trim();
+  const params = (f && f.parameters) || o.parameters || o.input_schema || null;
+  return { name, description, parameters: (params && typeof params === 'object' && !Array.isArray(params)) ? params : {} };
+}
+
 function stringifyTool(t) {
-  const f = (t && t.function) || {};
-  const params = f.parameters || {};
+  const f = normTool(t);
   const lines = [
-    `### ${f.name || t.type || 'tool'}`,
-    String(f.description || '').trim(),
+    `### ${f.name || 'tool'}`,
+    f.description,
     '参数 JSON Schema（arguments 必须是满足该 schema 的合法 JSON 对象）:',
-    JSON.stringify(params),
+    JSON.stringify(f.parameters || {}),
   ];
   return lines.filter(Boolean).join('\n');
 }
 
 // 构建 tools 的注入提示。tool_choice: 'auto'|'none'|'required'|'any'|{type:'tool',name}
 function buildToolSystemPrompt(tools, toolChoice) {
-  const names = tools.map((t) => (t.function && t.function.name) || t.type).filter(Boolean);
+  const norm = (Array.isArray(tools) ? tools : []).map(normTool).filter((t) => t.name);
+  const names = norm.map((t) => t.name);
   if (!names.length) return '';
   const mode = !toolChoice || toolChoice === 'auto' ? 'auto'
     : (toolChoice === 'required' || toolChoice === 'any') ? 'required'
@@ -47,8 +64,7 @@ function buildToolSystemPrompt(tools, toolChoice) {
     '',
     '可用工具：',
     '',
-    tools.map(stringifyTool).join('\n\n'),
-    '',
+    tools.map(stringifyTool).join('\n\n'),    '',
     '## 调用格式（严格遵守）',
     '需要使用工具时，输出如下标记（每个调用一组，arguments 为参数对象）：',
     '',
@@ -66,12 +82,21 @@ function buildToolSystemPrompt(tools, toolChoice) {
 }
 
 // 尾部提醒（对抗超长上下文注意力稀释：最后一条 user 消息末尾追加）
-function buildTailReminder() {
-  return '\n\n[提醒：若需调用工具，使用 ' + TAG_OPEN + ' {"name":"...","arguments":{...}} ' + TAG_CLOSE + ' 标记输出]';
+// v1.18.52：**自包含**——带上可用工具名与"你没有执行能力"这条，因为真实 agent 请求的前半段
+//   （系统提示 + 工具目录）动辄十几万字符，顶部那段协议文本很容易被稀释掉；尾部是近因位置，必须能独立成立。
+function buildTailReminder(names) {
+  const list = Array.isArray(names) ? names.filter(Boolean) : [];
+  const shown = list.slice(0, 24).join('、');
+  const more = list.length > 24 ? `（另有 ${list.length - 24} 个，完整目录见前面的工具说明）` : '';
+  const tools = shown ? `\n本次可用工具：${shown}${more}` : '';
+  return '\n\n[提醒：工具由调用方执行，你没有执行能力，也不需要执行。' + tools +
+    '\n需要工具时，唯一正确的输出是 ' + TAG_OPEN + ' {"name":"工具名","arguments":{...}} ' + TAG_CLOSE +
+    ' 标记——不要回答"我无法执行工具/我执行不了这些工具调用"，那等于任务失败。' +
+    '\n不需要工具时正常回答。]';
 }
 
 // messages 里的 assistant.tool_calls / tool 角色 → 上游能理解的纯文本
-function renderEmulatedMessages(messages, toolsPrompt) {
+function renderEmulatedMessages(messages, toolsPrompt, toolNames) {
   const out = [];
   if (toolsPrompt) out.push({ role: 'system', content: toolsPrompt });
   const plain = [];
@@ -109,7 +134,7 @@ function renderEmulatedMessages(messages, toolsPrompt) {
   if (toolsPrompt) {
     for (let i = plain.length - 1; i >= 0; i--) {
       if (plain[i].role === 'user') {
-        plain[i] = { ...plain[i], content: String(plain[i].content || '') + buildTailReminder() };
+        plain[i] = { ...plain[i], content: String(plain[i].content || '') + buildTailReminder(toolNames) };
         break;
       }
     }
@@ -119,13 +144,15 @@ function renderEmulatedMessages(messages, toolsPrompt) {
 
 // 入口：请求带 tools 且协议要仿真 → 返回 {messages, tools}；无 tools 返回 null。
 function emulateRequest(body) {
-  const tools = Array.isArray(body && body.tools) ? body.tools.filter((t) => t && (t.function || t.type)) : [];
+  // v1.18.52：形状归一后再过滤——`{name,description,input_schema}`（Anthropic 式）没有 `function`/`type` 键，
+  //   旧过滤条件会把整批工具丢掉 → 协议完全不注入。现在只要有可归一出名字的定义就算数。
+  const tools = (Array.isArray(body && body.tools) ? body.tools : []).map(normTool).filter((t) => t.name);
   if (!tools.length) return null;
   const choice = body.tool_choice;
   if (choice === 'none') return null;
   const prompt = buildToolSystemPrompt(tools, choice);
   if (!prompt) return null;
-  return { messages: renderEmulatedMessages(body.messages, prompt), tools };
+  return { messages: renderEmulatedMessages(body.messages, prompt, tools.map((t) => t.name)), tools };
 }
 
 // ─────────────────────────── 响应侧 ───────────────────────────
