@@ -165,9 +165,19 @@ async function harkCreateConversation(def, timeoutMs) {
   return { ok: true, cid: String(cid), status: out.status };
 }
 
+// 会话映射的键必须含「这枚 cookie 是谁」（v1.18.49）：
+//   只用 sessionKey 时，**两条同类渠道会命中同一条上游会话**——现场：`hark1` 先测通过，
+//   紧接着 `hark2` 拿 B 的 cookie 去访问 A 账号下建的会话 → 上游 `404 conversation not found`
+//   （表现为"谁先测谁过、后测的必挂"，极易被误读成第二条渠道坏了）。
+//   凭据指纹取 cookie 的 sha256 前 12 位：换 cookie 即换键，天然作废旧账号的会话（不继承死会话）。
+function convKeyOf(def, sessionKey) {
+  const fp = crypto.createHash('sha256').update(harkCookie(def) || '').digest('hex').slice(0, 12);
+  return `${String((def && def.id) || '?')}|${fp}|${String(sessionKey || 'default')}`;
+}
+
 // 取/建该网关会话对应的上游会话（有界 + 空闲过期）
 async function harkConversationFor(def, sessionKey, timeoutMs, forceNew) {
-  const key = String(sessionKey || 'default');
+  const key = convKeyOf(def, sessionKey);
   const hit = convMap.get(key);
   if (!forceNew && hit && Date.now() - hit.at < CONV_IDLE_MS) { hit.at = Date.now(); return { ok: true, cid: hit.cid, reused: true }; }
   const made = await harkCreateConversation(def, timeoutMs);
@@ -359,6 +369,7 @@ module.exports = {
   harkHeaders,
   // 测试用：会话映射的观测与重置
   _convMap: convMap,
+  _convKeyOf: convKeyOf,
   _convReset: () => convMap.clear(),
   CONV_MAX,
   CONV_IDLE_MS,

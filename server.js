@@ -4724,13 +4724,24 @@ async function handleAdminApi(req, res, url) {
           //   手动测试的价值就在于把后者也验掉（与 notion-agent 的 quickChat 同一取舍）。
           //   用独立的测试会话键，不占用任何客户端会话的上游会话。
           const tmo = Math.min(120000, Number(body.timeoutMs) || 90000);
-          const conv = await hark.harkConversationFor(ch.def, '__admin_test__', 20000);
-          if (!conv.ok) {
-            recordFailure(ch, 'hark: ' + String(conv.error || 'conversation failed').slice(0, 150), undefined, { source: 'test' });
-            results.push({ channelId: c.channelId, ok: false, status: conv.status || 0, error: String(conv.error || 'conversation failed').slice(0, 200) });
+          // v1.18.49：会话键在 hark.js 里按「渠道 id + 凭据指纹 + sessionKey」拼（见 convKeyOf），
+          //   两条 hark 渠道不会再互相命中对方的上游会话。这里再加**一次性自愈**：缓存里的会话可能已经不在
+          //   （用户在 hark 那边删了它 / 换过 cookie / 被上游回收）→ 上游回 `404 conversation not found`；
+          //   丢掉缓存重建一条**只重试一次**，否则一条死缓存会把这个渠道钉死到 30 分钟空闲过期为止
+          //   （用户看到的是"渠道坏了"，而唯一的出路是重启网关）。
+          const conv0 = await hark.harkConversationFor(ch.def, '__admin_test__', 20000);
+          if (!conv0.ok) {
+            recordFailure(ch, 'hark: ' + String(conv0.error || 'conversation failed').slice(0, 150), undefined, { source: 'test' });
+            results.push({ channelId: c.channelId, ok: false, status: conv0.status || 0, error: String(conv0.error || 'conversation failed').slice(0, 200) });
             continue;
           }
-          const sent = await hark.harkSend(ch.def, conv.cid, prompt, tmo);
+          let conv = conv0;
+          let sent = await hark.harkSend(ch.def, conv.cid, prompt, tmo);
+          if (!sent.ok && /404|not found/i.test(String(sent.error || '') + ' ' + String(sent.status || ''))) {
+            // 死缓存 → forceNew 重建（覆盖该键），只重试这一次；成功则上面那条失败**不记渠道失败**
+            conv = await hark.harkConversationFor(ch.def, '__admin_test__', 20000, true);
+            if (conv.ok) sent = await hark.harkSend(ch.def, conv.cid, prompt, tmo);
+          }
           if (!sent.ok) {
             recordFailure(ch, 'hark: ' + String(sent.error || 'send failed').slice(0, 150), failureKindFromStatus(sent.status), { source: 'test' });
             results.push({ channelId: c.channelId, ok: false, status: sent.status || 0, error: String(sent.error || 'send failed').slice(0, 200) });

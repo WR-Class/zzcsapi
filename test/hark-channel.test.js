@@ -24,6 +24,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8').replace(/\r\n/g, '\n');
@@ -45,26 +46,45 @@ const freePort = () => new Promise((res, rej) => { const s = net.createServer();
 function startFakeUpstream(opts) {
   const seen = [];
   const o = opts || {};
+  // §6 专用：ownerCheck = 像真 hark 那样**按 cookie 归属会话**（谁的 cookie 只能发/收自己的会话，
+  //   否则 404 conversation not found）。这正是"两条渠道共用会话键"必须被抓住的前提；
+  //   默认关，§2–§4 的行为一字不变。
+  const convOwner = new Map();   // convId -> cookie
+  const dead = new Set();        // 已"被删"的会话（模拟用户在 hark 里删掉了缓存里那条）
   const srv = http.createServer((req, res) => {
     const full = req.url || '';
     const u = new URL(full.startsWith('http') ? full : 'http://hark.invalid' + full);
     let body = '';
     req.on('data', (c) => { body += c.toString('utf8'); });
     req.on('end', () => {
-      const rec = { method: req.method, path: u.pathname, query: u.search, body, headers: req.headers };
+      const rec = { method: req.method, path: u.pathname, query: u.search, body, headers: req.headers, status: 0 };
       seen.push(rec);
-      const send = (code, obj, ctype) => { res.writeHead(code, { 'Content-Type': ctype || 'application/json' }); res.end(typeof obj === 'string' ? obj : JSON.stringify(obj)); };
+      const ck = () => String(req.headers.cookie || '');
+      const owned = (cid) => !o.ownerCheck || (convOwner.get(cid) === ck() && !dead.has(cid));
+      // record 状态码：§6 靠"这一发是不是打到别人的会话（404）"来判别键有没有按身份分——
+      //   只看"最终通过"是不够的，**自愈会把键的错误掩盖过去**（旧键 + 自愈也能测过）。
+      const send = (code, obj, ctype) => { rec.status = code; res.writeHead(code, { 'Content-Type': ctype || 'application/json' }); res.end(typeof obj === 'string' ? obj : JSON.stringify(obj)); };
       if (u.pathname === '/api/auth/get-session') return send(200, { user: { id: 'u-test', hasAppAccess: true } });
-      if (u.pathname === '/api/conversations' && req.method === 'POST') return send(200, { conversationId: o.convId || 'conv-1', success: true });
+      if (u.pathname === '/api/conversations' && req.method === 'POST') {
+        if (!o.ownerCheck) return send(200, { conversationId: o.convId || 'conv-1', success: true });
+        const cid = 'conv-' + (convOwner.size + 1) + '-' + crypto.createHash('sha1').update(ck()).digest('hex').slice(0, 6);
+        convOwner.set(cid, ck());
+        if (o.staleFirstConv && convOwner.size === 1) dead.add(cid);   // 第一条会话"已被删"→ 首发必 404
+        return send(200, { conversationId: cid, success: true });
+      }
       if (u.pathname.startsWith('/api/conversations/') && req.method === 'DELETE') return send(200, { success: true });
       if (u.pathname === '/api/messages/send') {
+        const cid = u.searchParams.get('cid') || '';
+        if (!owned(cid)) return send(404, { error: 'conversation not found' });
         if (o.sendFail) return send(o.sendFail, { error: 'upstream refused' });
-        return send(200, { agentId: 'agent-1', conversationId: o.convId || 'conv-1', messageId: o.msgId || 'msg-1', redirected: false, success: true });
+        return send(200, { agentId: 'agent-1', conversationId: cid || o.convId || 'conv-1', messageId: o.msgId || 'msg-1', redirected: false, success: true });
       }
       if (u.pathname === '/api/sync/conversation') {
+        const cid = u.searchParams.get('conversationId') || '';
+        if (!owned(cid)) return send(404, { error: 'conversation not found' });
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
         res.write(': ok\n\n');
-        const convId = o.convId || 'conv-1';
+        const convId = cid || o.convId || 'conv-1';
         // 快照（空）→ 助手占位 → narration → 整段正文 → 完成（与真机实测的帧序一致）
         res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'snapshot', data: { messages: {}, log: [] }, seq: 1 } })}\n\n`);
         res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'patches', data: [{ op: 'entry_add', entry: 'message', value: { id: 'a-1', role: 'assistant', content: '', isStreaming: true, jobStatus: 'running', triggeredByMessageId: o.msgId || 'msg-1' } }], patchSeq: 2 } })}\n\n`);
@@ -222,6 +242,72 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
     check(`${name} 的 PROTO_ORDER 含 hark`, /'genspark','hark'\]/.test(txt), name);
   }
   check('前端没有为 hark 新增字段（复用 proxy/apiKey → 无三态负担）', !/harkFreshConversation|harkConvMax/.test(APP_SRC));
+
+  console.log('\n══ §6 两条同类渠道：会话键按「渠道+凭据」隔离 + 死缓存自愈（v1.18.49） ══');
+  // 现场（用户报「两个 hark 渠道，一个测试没问题一个测试有问题」）：手动测试的会话键是**常量**
+  //   '__admin_test__'，而 convMap 只用这个字符串做键 → 第二条渠道命中第一条建的会话，
+  //   拿 B 的 cookie 去访问 A 账号下的会话 → 上游 404 conversation not found。
+  //   规律是"谁先测谁过"，极易被读成"第二条渠道坏了"。
+  check('★ hark.js 有 convKeyOf（键 = 渠道 id + 凭据指纹 + sessionKey）', /function convKeyOf\(def, sessionKey\) \{[\s\S]{0,200}createHash\('sha256'\)[\s\S]{0,200}def && def\.id[\s\S]{0,200}sessionKey/.test(HARK_SRC));
+  check('★ 会话映射不再只用 sessionKey 当键（旧写法必须消失）', !/const key = String\(sessionKey \|\| 'default'\)/.test(HARK_SRC));
+  check('convKeyOf 真的被 harkConversationFor 用上（不是写了没用）', /harkConversationFor\(def, sessionKey, timeoutMs, forceNew\) \{\s*\n\s*const key = convKeyOf\(def, sessionKey\);/.test(HARK_SRC));
+  check('凭据指纹变了 → 键就变了（换 cookie 不继承旧账号的死会话）', hark._convKeyOf
+    ? hark._convKeyOf({ id: 'c1', apiKey: 'A' }, 'k') !== hark._convKeyOf({ id: 'c1', apiKey: 'B' }, 'k')
+    : null, '需要导出 _convKeyOf');
+  check('渠道标识变了 → 键就变了', hark._convKeyOf
+    ? hark._convKeyOf({ id: 'c1', apiKey: 'A' }, 'k') !== hark._convKeyOf({ id: 'c2', apiKey: 'A' }, 'k')
+    : null);
+  check('sessionKey 仍然参与（同一渠道的不同会话不互相顶掉）', hark._convKeyOf
+    ? hark._convKeyOf({ id: 'c1', apiKey: 'A' }, 's1') !== hark._convKeyOf({ id: 'c1', apiKey: 'A' }, 's2')
+    : null);
+
+  const twoChans = (port) => [
+    { id: 'harkA', name: 'A', protocol: 'hark', baseUrl: 'http://hark.invalid', apiKey: 'cookie-AAA', proxy: `http://127.0.0.1:${port}`, enabled: true, autoAlias: false, priority: 1, models: { 'hark-agent': 'hark' }, timeoutMs: 20000 },
+    { id: 'harkB', name: 'B', protocol: 'hark', baseUrl: 'http://hark.invalid', apiKey: 'cookie-BBB', proxy: `http://127.0.0.1:${port}`, enabled: true, autoAlias: false, priority: 1, models: { 'hark-agent': 'hark' }, timeoutMs: 20000 },
+  ];
+  const manualTest = async (base, channelId) => {
+    const r = await fetch(base + '/admin/api/test', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AD_KEY}` }, body: JSON.stringify({ channelId, model: 'hark-agent' }) });
+    const j = await r.json().catch(() => ({}));
+    return (j.results || [])[0] || {};
+  };
+  const up6 = await startFakeUpstream({ reply: 'ok', ownerCheck: true });
+  const gw6 = await startGateway(up6.port, { channels: twoChans(up6.port) });
+  try {
+    const a = await manualTest(gw6.base, 'harkA');
+    check('第一条渠道手动测试通过', a.ok === true && a.reply === 'ok', a);
+    const b = await manualTest(gw6.base, 'harkB');
+    check('第二条渠道手动测试也通过', b.ok === true && b.reply === 'ok', b);
+    // ★ 判别性断言：**从来没打到过别人的会话**。只断言"最终通过"是不够的——自愈会把键的错误掩盖掉
+    //   （旧键 + 自愈同样能测过），所以这里盯的是"有没有出现过 404 conversation not found"。
+    const crossHits = up6.seen.filter((s) => s.path === '/api/messages/send' && s.status === 404);
+    check('★ 全程没有任何一发打到过别人的会话（旧键在这里必然出现 404 → 这就是判别点）', crossHits.length === 0, crossHits.map((s) => s.query));
+    check('两条渠道各建了自己的上游会话（2 次 POST /api/conversations）', up6.seen.filter((s) => s.path === '/api/conversations').length === 2, up6.seen.filter((s) => s.path === '/api/conversations').length);
+    const a2 = await manualTest(gw6.base, 'harkA');
+    check('回头再测第一条仍然通过（会话可复用，不互相顶掉）', a2.ok === true && a2.reply === 'ok', a2);
+  } finally { gw6.kill(); await up6.close(); }
+
+  // 对调顺序：先 B 后 A，两条同样都必须过（顺序无关 = 键真的按身份分了）
+  const up6b = await startFakeUpstream({ reply: 'ok', ownerCheck: true });
+  const gw6b = await startGateway(up6b.port, { channels: twoChans(up6b.port) });
+  try {
+    const b1 = await manualTest(gw6b.base, 'harkB');
+    const a1 = await manualTest(gw6b.base, 'harkA');
+    check('★ 对调顺序同样两条都过（旧代码是"谁先谁过、后测必挂"）', b1.ok === true && a1.ok === true, { b: b1.error || b1.reply, a: a1.error || a1.reply });
+    check('★ 对调顺序也一样：全程零"打到别人会话"', up6b.seen.filter((s) => s.path === '/api/messages/send' && s.status === 404).length === 0, up6b.seen.filter((s) => s.path === '/api/messages/send' && s.status === 404).length);
+  } finally { gw6b.kill(); await up6b.close(); }
+
+  // 死缓存自愈：缓存里那条会话已被删（用户在 hark 里删掉 / 上游回收）→ 首发 404，
+  //   网关必须**丢掉缓存重建一条、只重试一次**，而不是把这个渠道钉死到空闲过期。
+  const up6c = await startFakeUpstream({ reply: 'ok', ownerCheck: true, staleFirstConv: true });
+  const gw6c = await startGateway(up6c.port, { channels: twoChans(up6c.port) });
+  try {
+    const c1 = await manualTest(gw6c.base, 'harkA');
+    check('★ 死缓存自愈：首发 404 后重建并成功（不把渠道钉死 30 分钟）', c1.ok === true && c1.reply === 'ok', c1);
+    check('★ 自愈是"一次性"的（恰恰 2 次建会话，不是无限重试）', up6c.seen.filter((s) => s.path === '/api/conversations').length === 2, up6c.seen.filter((s) => s.path === '/api/conversations').length);
+    const c2 = await manualTest(gw6c.base, 'harkA');
+    check('自愈之后再测正常（新会话已进缓存）', c2.ok === true && c2.reply === 'ok', c2);
+  } finally { gw6c.kill(); await up6c.close(); }
+  check('真实失败不触发自愈（只在 404/not found 上）', /if \(!sent\.ok && \/404\|not found\/i\.test/.test(SRC));
 
   console.log(`\n══════ 通过 ${pass} · 失败 ${fail} ══════`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
