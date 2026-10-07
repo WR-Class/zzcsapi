@@ -43,6 +43,7 @@ docker compose up -d --build
 > ⚠️ **改完代码要确认容器真的换了镜像**（v1.18.1 现场踩到过）：`up -d --build` 有时只构建不重建（输出是 `Running` 而不是 `Recreated`），刷新看到的还是旧代码。
 > 判断：`docker inspect zzcsapi --format '{{.Image}}'` 与 `docker images zzcsapi:local --format '{{.ID}}'` 不一致就补 `docker compose up -d --force-recreate`。`/console` 带 `no-store`，不需要强刷浏览器。
 > ⚠️ `config.json` / `usage.json` **必须先在宿主机存在**，否则 Docker 会把挂载点建成目录（服务不崩，但用量统计每次重启归零）。
+> ⚠️ **`Dockerfile` 的 `COPY` 是显式白名单**（v1.18.48 现场踩到过）：新增任何被 `server.js` `require` 的文件（如 v1.18.47 的 `hark.js`）都必须同时加一条 `COPY`，漏了**本机 `node server.js` 一切正常**，但容器会**启动即 crash-loop**（`Cannot find module '/app/xxx.js'`、healthz 连不上，症状离原因很远）。`node test/docker-image-files.test.js` 守这条；改完照旧要 `docker compose build && up -d` 并确认 `docker ps` 里是 `Up (healthy)`。
 > 端口映射 `8787:8787`（局域网可访问）；手工 `docker run` 别忘 `ZZCSAPI_BIND=0.0.0.0`、`TZ=Asia/Shanghai`、`ZZCSAPI_CONFIG=/app/config.json`（compose 已写死，不会踩到）。
 > 想让来源统计看到**每台机器的真实 IP**（而不是一行网桥 IP）走 [方式三](#方式三反代采信模式想让来源统计看到每台机器真实-ip)。
 

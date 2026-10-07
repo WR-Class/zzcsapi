@@ -1811,6 +1811,20 @@ v1.5 让"填权重"变得容易，但**权重仍然要人填**：同一个模型
 
 **教训**：① **"新增渠道协议"的登记清单是 7（后端）+ 4（前端）处，不是 2 处**。只加 `PROTO_META`/`PROTO_ORDER` 时页面**不报错**，只是协议芯片显示裸 `hark`、且没有配色——这类"能用但露馅"的漏项不会自己跳出来，只能靠"加完协议顺手 `grep -n '\.chip\.'` 与 `grep -n protoLabel`"来兜。② **判据要选对**：`/v1/chat/completions` 回 200 但 `Content-Type: text/html`，说明"协议对不上"，此时该做的是**专用报文渠道**，而不是继续调 base_url。③ 反代的失败形态互相长得很像，**必须按层分开打**（凭据 / 代理 / 额度 / 上游护栏），否则会把"没配代理"读成"IP 被封"、把"上游护栏"读成"工具不可用"——两次都差点误判。④ 前端"就地追加一行"是**保偏移的手段**，改 CSS 前先想清楚这一行值不值得让 JS 偏移整体 ±1。
 
+### 8.49 v1.18.48 Dockerfile 的 `COPY` 是白名单：新增被 `require` 的文件没进镜像，容器启动即 crash-loop（2026-10-08，对象 `Dockerfile` + 新增 `test/docker-image-files.test.js` + `README.md` / `AGENTS.md` / `docs/tests.md`）
+
+**现场**：v1.18.47 把 `hark.js` 加进 `server.js` 的 `require` 之后，`docker compose build && up -d` 的每一行输出都是正常的（`Image zzcsapi:local Built` / `Container zzcsapi Recreated` / `Container zzcsapi Started`），但容器**立刻进入 crash-loop**：`Error: Cannot find module '/app/hark.js'`（`requireStack: [ '/app/server.js' ]`），`docker ps` 显示 `Restarting (1)`、healthz 直接连不上。而**同一份代码在本机 `node server.js` 一切正常**——所以本机跑测试、跑真链路，全是绿的。
+
+**根因**：`Dockerfile` 是**显式 COPY 白名单**（`COPY server.js ./`、`COPY notion.js ./` …），不是 `COPY . .`。工作目录里有那个文件，本机 require 当然成功；镜像里没有，于是**启动**就炸。这类漏项的形状永远是最坏的那种：症状（容器反复重启、healthz 连不上）离原因（少一行 COPY）很远，而且**所有"本机跑一遍"的验证都不会碰到它**。
+
+**处置**：
+
+- **① 补清单**：`Dockerfile` 加 `COPY hark.js ./`（并写明"这是白名单，新增被 require 的文件必须同时加"）。
+- **② 补守卫**：新增 `test/docker-image-files.test.js`（**18 项**）把这条纪律机械化——**正向**：从镜像入口 `server.js` 出发跟**本地 require 传递闭包**（`notion.js` → `notion-agent.js` → `hark.js` → `tool-emu.js` → `font-assets.js`）逐条断言在 COPY 清单里，且闭包内不许有解析不到的 require；**反向**：每条 `COPY *.js` 的源文件必须真实存在（删文件忘删行同样会烂）；另加入口/自检（`CMD ["node","server.js"]`、`HEALTHCHECK` 指向 `/healthz`）、镜像必备件（`console.html` / `config.example.json` → `./config.json` / `assets/fonts`——都不是 require，但缺了就是 404 或静默降级）与 §5 **阴性对照**（把清单退回事故当时的文本，守卫必须报出 `hark.js` 缺失——否则这条守卫只是"刚好现在通过"）。
+- **③ 补纪律**：`README.md` 快速开始加一条警告；`AGENTS.md` §1.1 加一行「改 `Dockerfile` → 跑 `test/docker-image-files.test.js` + 确认真 `Up (healthy)`」、§3 登记新测试；`docs/tests.md` 的「改什么 → 必跑什么」加一行。
+
+**教训**：① **"本机能跑"证明不了"镜像里有"**。凡是**显式白名单**（`Dockerfile` 的 COPY、`persistConfig` 的字段清单、协议白名单、前端 `ACTS` 注册表、`PROTO_META`/`PROTO_ORDER`/`protoLabel`/chip 色）都有同一个病：漏一行的表现不在漏的地方——容器起不来 / 配置重启回默认 / 芯片显示裸 id / 按钮点了没反应——所以**每一条都值得配一个守卫**，而不是靠"下次记得"。② **部署验证要真的看容器状态**：`build`/`up` 的输出只说明"构建并启动过"，`Started` 与 `Up (healthy)` 之间隔着一次真启动；本次就是靠 `docker inspect ... {{.State.Health.Status}}` 才当场发现崩溃。③ 这轮同时说明"先上本机、后上云"的价值：同样的漏项若直接推云，云端网关会在无人看的时候一直重启。
+
 ## 9. 后续可做（未实现）
 
 - 密钥明文显示加"仅本次会话"提示或二次确认
