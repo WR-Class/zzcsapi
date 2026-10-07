@@ -2879,13 +2879,13 @@ async function probeUpstream(){
     const r=await api('/admin/api/probe',{method:'POST',body:JSON.stringify({
       baseUrl:base,apiKey:key,protocol:$('#f-proto').value,
       proxy:$('#f-proxy').value.trim()||undefined,
-      headers:$('#f-headers').value,
+      headers:$('#f-headers').value,models:Object.fromEntries(modalModels.filter(r=>r.alias&&r.upstream).map(r=>[r.alias,r.upstream])),   // v1.18.49：把表单当前别名表也发给探测——无模型目录的协议（hark/workbuddy/genspark/codex）靠它决定"回报已配别名"还是"给一条默认建议"。**故意并进这一行**：app.js 每增删 1 行都要重算代码地图 §0.2 的锚点
     })});
     if(!r.ok){setStatus(st,'✗ '+(r.error||'探测失败'),'bad');return}
     probeFound=(r.models||[]).slice().sort();
     probeSel=new Set(); probeQ='';
     const extra=r.agents?`（智能体 ${r.agents.length} 个）`:(r.account&&r.account.spaces?`（空间 ${r.account.spaces.length} 个）`:'');
-    setStatus(st,`✓ ${probeFound.length} 个${extra} · ${r.latencyMs} ms`,'ok');
+    setStatus(st,`✓ ${probeFound.length} 个${extra} · ${r.latencyMs} ms${r.account&&r.account.note?` · ${r.account.note}`:''}`,'ok');   // v1.18.49：把「上游为什么没有模型目录」的说明也显示出来（workbuddy/genspark/codex/hark 都会带 account.note）；否则用户只看到一条建议、不知道依据。就地改一行保行数（避免 console.html 的 JS 偏移重算）
     renderProbeList();
     $('#probePanel')?.scrollIntoView({block:'nearest'});
   }catch(e){

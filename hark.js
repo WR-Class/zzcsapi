@@ -141,9 +141,15 @@ async function harkProbe(def, timeoutMs) {
   if (!harkCookie(def)) return { ok: false, status: 0, error: 'hark: 渠道未填会话 cookie（apiKey 填 __Secure-hark.session_token 的值）' };
   const out = await harkCurl('GET', `${baseOf(def)}/api/auth/get-session`, harkHeaders(def), null, timeoutMs || 15000, def.proxy);
   if (out.error) return { ok: false, status: 0, error: 'hark curl: ' + out.error };
-  const j = safeJson(out.body);
+  const raw = String(out.body || '').trim();
+  // ⚠ 200 + 正文 `null` 是 Better Auth 对**未登录**请求的正常答复（不是 401、也不是 HTML）——
+  //   必须判成"凭据失效"。v1.18.49 现场：旧判据 `!safeJson(body)` 把 `null` 也算成"非 JSON 响应"，
+  //   于是显示成「疑似 CF 拦截页，检查代理出口」，把人引去出口层查（真因是一枚过期的 cookie）。
+  let j, parsed = true;
+  try { j = JSON.parse(raw); } catch { parsed = false; }
   if (out.status === 401 || out.status === 403) return { ok: false, status: out.status, error: `hark: 会话 cookie 失效或出口被拦（HTTP ${out.status}${def.proxy ? '' : '，且未配代理'}）` };
-  if (!j) return { ok: false, status: out.status, error: `hark: 非 JSON 响应（HTTP ${out.status}，疑似 CF 拦截页，检查代理出口）: ` + String(out.body || '').slice(0, 80) };
+  if (!parsed) return { ok: false, status: out.status, error: `hark: 非 JSON 响应（HTTP ${out.status}，疑似 CF 拦截页或代理出口不对）: ` + raw.slice(0, 80) };
+  if (j === null || typeof j !== 'object') return { ok: false, status: out.status || 401, error: `hark: 会话 cookie 已失效（get-session 回 ${out.status} + null = 未登录）——去 hark 重新复制 __Secure-hark.session_token 填进渠道钥匙` };
   if (!j.user) return { ok: false, status: out.status, error: 'hark: 响应里没有 user（cookie 可能只对部分域有效）' };
   return { ok: true, status: out.status, userId: String(j.user.id || ''), hasAppAccess: j.user.hasAppAccess !== false };
 }

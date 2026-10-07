@@ -14,7 +14,13 @@
  *   node hark-probe.js <渠道id>             # 指定渠道
  *   node hark-probe.js <渠道id> --turn      # 额外真发一条（消耗少量额度）并验工具仿真
  *   node hark-probe.js --all                # 体检所有 hark 渠道（只读）
+ *   node hark-probe.js <渠道id> --proxy http://127.0.0.1:7897   # 临时换出口（只影响本次运行）
  *   ZZCSAPI_CONFIG=/path/config.json node hark-probe.js
+ *
+ * ⚠ `--proxy` 的存在理由（v1.18.49 现场）：容器里那条渠道的 proxy 是**给容器**写的
+ *   （`http://host.docker.internal:7897`），在宿主机上跑这个探针时那个地址未必可达 →
+ *   不覆盖就只会得到 `HTTP 0`（连接失败），而它极容易被读成"CF 拦截"（真因是代理不可达；
+ *   换成 `127.0.0.1:7897` 后一眼看出是 **401 = 凭据过期**）。它不改 config.json，只覆盖本次运行。
  *
  * 纪律：**报告绝不回显凭据**（cookie 只出长度），也绝不打印 config.json 的其它字段值。
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -26,7 +32,15 @@ const hark = require('./hark.js');
 const args = process.argv.slice(2);
 const wantTurn = args.includes('--turn');
 const wantAll = args.includes('--all');
-const wantId = args.find((a) => !a.startsWith('--'));
+// --proxy <url> / --proxy=<url>：临时换出口（见文件头）。取值时要把它从"位置参数"里摘掉，
+// 否则 `--proxy http://…` 里的 URL 会被当成渠道 id。
+const proxyIdx = args.indexOf('--proxy');
+const proxyEq = args.find((a) => a.startsWith('--proxy='));
+const proxyArg = (proxyIdx >= 0 && args[proxyIdx + 1] && !args[proxyIdx + 1].startsWith('--'))
+  ? args[proxyIdx + 1]
+  : (proxyEq ? proxyEq.slice('--proxy='.length) : '');
+const consumed = new Set([proxyIdx, proxyIdx + 1].filter((i) => i >= 0));
+const wantId = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
 
 const CFG = process.env.ZZCSAPI_CONFIG || path.join(__dirname, 'config.json');
 let cfg;
@@ -44,10 +58,12 @@ const mask = (s) => {
 
 (async () => {
   let bad = 0;
-  for (const def of picked) {
+  for (const raw of picked) {
+    // --proxy 只覆盖本次运行的出口（不改 config.json）：宿主机上跑容器写的那个 proxy 地址常常不可达
+    const def = proxyArg ? Object.assign({}, raw, { proxy: proxyArg }) : raw;
     console.log('\n══ 渠道 ' + def.id + '（' + (def.name || '') + '） ══');
     console.log('  baseUrl      : ' + (def.baseUrl || hark.DEFAULT_BASE));
-    console.log('  代理         : ' + (def.proxy || '（未配）') + (def.proxy ? '' : '   ← 本机直连会被 CF 403（Node/curl 不读系统代理）'));
+    console.log('  代理         : ' + (def.proxy || '（未配）') + (def.proxy ? '' : '   ← 本机直连会被 CF 403（Node/curl 不读系统代理）') + (proxyArg && proxyArg !== raw.proxy ? `   ← 本次用 --proxy 覆盖（配置里写的是 ${raw.proxy || '未配'}）` : ''));
     console.log('  凭据         : ' + (def.apiKey ? `已配置（长度 ${String(def.apiKey).length}，不回显）` : '**未配置**'));
     console.log('  模型别名     : ' + JSON.stringify(def.models || {}));
 
@@ -55,7 +71,16 @@ const mask = (s) => {
     const t0 = Date.now();
     const probe = await hark.harkProbe(def, 15000);
     console.log('\n  ① get-session : ' + (probe.ok ? `✓ 凭据有效（${Date.now() - t0}ms）` : `✗ ${mask(probe.error)}`));
-    if (!probe.ok) { bad++; console.log('     → 到此为止：凭据/出口这一层没过，后面都不用测。'); continue; }
+    if (!probe.ok) {
+      bad++;
+      console.log('     → 到此为止：凭据/出口这一层没过，后面都不用测。');
+      // HTTP 0 = curl 连不上出口（不是上游答的），先分清"代理不可达"与"凭据失效"再下结论
+      if (/HTTP 0|curl:/.test(String(probe.error || ''))) {
+        console.log('       ↑ HTTP 0 是**连不上出口**，不是上游答的：容器里那条渠道的 proxy 是给容器写的');
+        console.log('         （host.docker.internal:7897），宿主机上未必可达 → 加 --proxy http://127.0.0.1:7897 再跑一次。');
+      }
+      continue;
+    }
 
     // ② 会话清单（只读）——顺便看有没有残留的网关会话（成功即删，理论上不该有）
     const base = String(def.baseUrl || hark.DEFAULT_BASE).replace(/\/+$/, '');

@@ -350,7 +350,7 @@ http://127.0.0.1:8787/console
 | `workbuddy` | 自检 `chat/completions` | `Authorization: Bearer ...` | WorkBuddy 逆向（必须走 curl 子进程；token 是 JWT，新版已加密） |
 | `codex` | 一次令牌刷新 | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效） |
 | `genspark` | `GET /api/is_login` | `Cookie: session_id=...` | Genspark 网页会话反代（**必须配代理**；工具调用靠文本仿真） |
-| `hark` | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；伪流式、工具靠文本仿真） |
+| `hark` | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；伪流式、工具靠文本仿真）。**别名至少要配一条**（上游没有 `/v1/models`，推荐 `hark-agent`）——控制台点「获取模型」会拿到这条默认建议；别名表空 = 这个渠道永远不会被请求命中 |
 
 `arena` 协议已撤（[留档](docs/arena-protocol.md)）。
 

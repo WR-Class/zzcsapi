@@ -1,6 +1,6 @@
-# 测试清单（53 个文件 · 2505 项断言，零依赖）
+# 测试清单（54 个文件 · 2532 项断言，零依赖）
 
-> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 53 条命令与每条守的是什么。
+> 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 54 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
 > **动态空闲端口；配置/用量在系统临时目录，绝不动仓库 `config.json` / `usage.json`**，不出网、不烧额度。
 > 退出码非 0 = 有回归。跑单个：`node test/<名字>.test.js`。
@@ -40,6 +40,7 @@
 | 字体资产 / `head.html` 字体入口 / `font-assets.js` 投递 / CSP 的 `font-src` / Dockerfile 字体 `COPY` | `font-assets-e2e`（授权与改名断言在内，改前先读 `docs/fonts.md`） |
 | 渠道级**自定义请求头**（`headers`：解析真值表 / 探测真带上 / 保存不许抹掉 / 清空语义 / 表单回填 / 构建产物） | `channel-headers-roundtrip-e2e` |
 | **`Dockerfile` 的 COPY 白名单 / 镜像清单 / 新增被 `require` 的文件** | `docker-image-files`（★ 正反双向：`server.js` 的本地 require 传递闭包必须逐条在 COPY 里、COPY 的 `.js` 必须真实存在，含阴性对照）+ `font-assets-e2e`（字体那两条 COPY）。**改完必须真 `docker compose build && up -d` 并确认容器 `healthy`**——本机 `node server.js` 正常**不代表**镜像里有那个文件（v1.18.48 现场：容器启动即 crash-loop） |
+| **上游没有模型目录的协议**（`hark` / `workbuddy` / `genspark` / `codex`：探测的默认别名建议、空别名保存拦截、别名表透传、`account.note` 说明） | `channel-default-alias-e2e`（★ 相邻守卫：加第五家这种协议漏了默认建议就报错）+ 该协议自己的 `*-channel` / `*-tools` / `workbuddy-quota` + `console-state`（探测面板与可一键加入的别名行） |
 
 ## 全量清单
 
@@ -84,6 +85,7 @@ node test/same-protocol-passthrough.test.js # 52 项断言：同协议直通（A
 node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）
 node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路；v1.18.38 起流式分支的源码断言改为 `specialStreamLine(opts, candidate, chunk(…))`——纯文本分支的行为一字未变，只是出口改走收口钩子）
 node test/hark-channel.test.js            # 57 项断言（v1.18.47）：**hark.com 网页会话反代渠道**（`protocol:"hark"`）——上游**没有 OpenAI 兼容面**（带有效 cookie 打 `POST /v1/chat/completions` 回的是 200 text/html 的 SPA 壳），真协议是「建会话 → REST 发消息 → SSE 收 patch」，回复**整段一次**下发（伪流式），工具**全在服务端执行**（流里零 `tool_add`/`tool_update`）⇒ 客户端工具走文本仿真。§1 纯函数真值表（`flattenForHark` 带角色标注/保留 `tool_calls` 历史/空白段落跳过/产物必是字符串；`harkCookie` 三形态归一：裸值补前缀、已带前缀原样、整段 cookie 串原样、空值**不伪造** cookie；请求头 Origin/Referer 去尾斜杠；会话映射有界）；§2–§4 **真链路**（真网关 + 真 curl + 假「hark 上游兼 HTTP 代理」——照 genspark 的招：`baseUrl=http://hark.invalid` + `proxy=127.0.0.1:PORT`，于是 curl 必然把请求交给假代理，**零外网零额度零凭据**）：★ 纯文本回合（客户端拿到正文、渠道头是 `hark1`、上游真收到建会话 + `POST /api/messages/send?cid=` + SSE 同步流、★ 建会话必带 `title`+`autoTitle:false`（`{}` 会命中**用户主会话**，绝不能用）、成功之后**真删会话**、发给上游的是**拍平后的单条字符串**、报文带 `idempotencyKey`/`responseMessageId`）；★ 工具回合（`finish_reason:"tool_calls"` + 名字/参数正确 + 正文清空 + **工具协议真注进了上游报文** + 尾部提醒在）；★ **失败不删会话**（上游 500 → 网关不假装成功、会话留证）；★ 流式（role 帧 → 整段正文 → finish → `[DONE]`，不伪造逐字增量）；§5 装配守卫（server.js 七处登记：require / 两处协议白名单 / `aliasedProto` / `probeChannel` / `probeDef` / `tryChannel` 分发 / OpenAI 类候选链 / 手动测试分支与独立会话键 / ★ 工具仿真两侧真接上 / ★ 删除调用在成功分支之后 / hark.js 不把 apiKey 写进日志；前端两处 `PROTO_META`/`PROTO_ORDER` **含构建产物** `console.html` 也已重建；前端没为 hark 新增字段）
+node test/channel-default-alias-e2e.test.js # 27 项断言（v1.18.49）：**「上游没有模型目录的协议」必须仍然可用**——现场（用户报）：hark 渠道点「获取模型」拿到**空列表** → 顺手保存 → 渠道是启用的但任何请求都命中不了它（别名是唯一能把请求路由到某个渠道的东西）= "渠道加上了却用不了"。根因不是协议问题：`probeDef` 的 hark 分支直接 `return def.models`，而探测时表单**还没有**别名配置 → 必然空；同类协议（workbuddy / genspark / codex）早有"别名表为空时给默认建议 + `account.note` 说明为什么没有目录"的约定，**只有 hark 漏了**。§1 装配守卫（★ 默认别名单一真源 `HARK_DEFAULT_ALIAS`；★ **相邻**正则守四个站点"取配置别名的下一行必有默认建议"——只数个数时加第五家漏了照样蒙过去；★ 探测端点真把 `models` 传进 `def`——那四处 `def.models` 此前是**死代码**；★ 保存校验拦 hark 空别名且只 scoped 到 hark；既有三家 workbuddy/genspark/codex 的说明没被改坏；前端状态行显示 `account.note` 且产物已重建）；§2/§3 **真链路**（临时网关 + 假「hark 上游兼 HTTP 代理」，零外网零额度零凭据）：★ 探测（无别名）真回 `hark-agent` + note；对照（带别名）回报**上游模型名**、不再推默认建议；★ 过期凭据被判成「cookie 已失效」（Better Auth 回 **200 + `null`**，旧判据 `!safeJson()` 会误报成"疑似 CF 拦截页，检查代理出口"——真因是一枚过期 cookie）；★ 空别名保存 **400** 且文案给出可照抄的例子与控制台下一步；按建议保存后 ★ `/v1/models` 真出现该别名、★ 端到端真能打通；对照 openai 空别名仍可保存（不误伤"先存渠道后补别名"）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 node test/outbound-http-client.test.js    # 33 项断言：出站长连接客户端（fetch 形状真值表 + 20 次请求 0 条新连接、对照 agent:false 建 20 条）+ 直通流式逐字节一致（含 CRLF 与跨片帧）；装配守卫 **v1.18.42 更新**：`await zzFetch(` 由 6 → **4**（探测 2 + 常规聊天 1 + 原生/直通 1）——notion 推理的两处（主推理、管理面手动测试）**刻意**改走 `notion.notionFetch` 的通道链，留在 `zzFetch`（HTTP/1.1）上就是留在被墙的通道上；同一条守卫另断言 `notion.notionFetch(` 恰好 3 处
 node test/session-affinity-e2e.test.js    # 67 项断言：会话粘性（键推导真值表 + 过期/淘汰 + 冷却/down 不硬塞 + 同会话 8 次落同一家 + 上游挂了重新粘 + 关闭时零状态）

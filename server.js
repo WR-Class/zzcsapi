@@ -22,6 +22,9 @@ const fontAssets = require('./font-assets.js');
 const crypto = require('crypto');
 const GENSPARK_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 const GENSPARK_REFERER = 'https://www.genspark.ai/agents?type=ai_chat';
+// hark 渠道的默认别名（v1.18.49）：hark 上游**没有模型目录**（会话式反代，一个账号一个 agent），
+// 别名只能手配。这个名字被两处共用——探测建议（probeDef）与保存校验（validateChannelDef）——改名只改这一处。
+const HARK_DEFAULT_ALIAS = 'hark-agent';
 
 // ── 出站 HTTP 客户端（v1.16：零依赖替代全局 fetch）────────────────────────────
 // 为什么换：Node 的全局 fetch 走 undici。同一台机器对同一回环目标实测——
@@ -1549,12 +1552,24 @@ async function probeDef(def, timeoutMs) {
       return { ok: false, status: err.status || 0, error: 'notion-agent: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
   }
-  // hark.com 网页会话反代（v1.18.47）：同上，get-session 验凭据；模型列表取 def.models
+  // hark.com 网页会话反代（v1.18.47）：get-session 验凭据；**上游没有模型目录**，
+  //   所以与 workbuddy/genspark/codex 同款——别名表为空时给一条默认建议。
+  //   v1.18.49 现场：这里原本直接返回 `def.models`（表单此刻还没有别名 → **空列表**），
+  //   于是「获取模型」什么也填不进去，用户顺手保存了一个没有别名的渠道；而别名正是唯一能把请求
+  //   路由到该渠道的东西 → 渠道 enabled 却永远不会被命中 = "加上了但用不了"。
   if ((def.protocol || 'openai') === 'hark') {
     const t0 = Date.now();
     const probe = await hark.harkProbe(def, timeoutMs || 15000);
     if (!probe.ok) return { ok: false, status: probe.status || 0, error: probe.error || 'probe failed', latencyMs: Date.now() - t0 };
-    return { ok: true, latencyMs: Date.now() - t0, status: probe.status || 200, models: Object.values(def.models || {}).filter(Boolean) };
+    let models = Object.values(def.models || {}).filter(Boolean);
+    if (!models.length) models = [HARK_DEFAULT_ALIAS];   // 探测时表单尚无别名配置，给出可一键加入的默认建议
+    return {
+      ok: true,
+      status: probe.status || 200,
+      models,
+      latencyMs: Date.now() - t0,
+      account: { note: `hark 没有 /v1/models 端点（会话式反代，上游只有一个 agent），模型列表来自别名配置（默认建议 ${HARK_DEFAULT_ALIAS}）` },
+    };
   }
   // Notion 协议：getSpaces（POST）验证 token_v2，模型列表用内置映射；顺带查 AI 额度
   if ((def.protocol || 'openai') === 'notion') {
@@ -4066,6 +4081,18 @@ function validateChannelDef(def, opts) {
   if ((!def.apiKey || typeof def.apiKey !== 'string') && !(opts && opts.allowMissingApiKey)) return 'apiKey is required';
   if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark|hark';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
+  // v1.18.49：**没有模型目录的协议**（hark）别名表不许空——别名是唯一能把请求路由到该渠道的东西，
+  //   空别名 = 存得下、但网关永远不暴露它的任何模型 = 「加上了却用不了」。现场（用户报）：
+  //   点「获取模型」拿到空列表（probeDef 的 hark 分支漏了默认建议，同一版一起修），顺手保存，
+  //   于是渠道在列表里是启用的却从不被命中。**只 scoped 到 hark**：openai 等有 /v1/models 或
+  //   autoAlias 的协议允许"先存渠道、再让探测自动补别名"，不能一刀切。
+  if (def.protocol === 'hark') {
+    const aliases = Object.keys(def.models || {}).filter((k) => String(k || '').trim() && String((def.models || {})[k] || '').trim());
+    if (!aliases.length) {
+      return `hark 渠道至少要有一个模型别名（hark 没有 /v1/models 端点、也没有自动别名，别名表空 = 这个渠道不会被任何请求命中）。`
+        + `例：{"${HARK_DEFAULT_ALIAS}": "${HARK_DEFAULT_ALIAS}"}——控制台里点「获取模型」就能拿到这条默认建议，再点「加入别名表」即可`;
+    }
+  }
   // v1.18.33 渠道级「不发这些参数」：只收白名单内的名字。**写错一个名字就 400，不静默忽略**——
   //   静默忽略会让人以为"已经生效了"，然后继续对着一个 100% 失败的渠道排查半天（正是本次的现场）。
   //   合法清单随错误文案一起回去，前端直接显示原文即可，不必自己维护一份会漂移的副本。
@@ -4627,6 +4654,11 @@ async function handleAdminApi(req, res, url) {
       apiKey: String(body.apiKey),
       protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(body.protocol) ? body.protocol : 'openai',
       proxy: body.proxy ? String(body.proxy) : undefined,
+      // v1.18.49：**把表单当前的别名表也传进来**。四条「上游没有模型目录」的协议分支早就写着
+      //   `Object.values(def.models || {})`（workbuddy/genspark/codex 还各带一句"模型列表来自别名配置"），
+      //   可这里的 def 从来没带过 models → 那段代码一直是死的，探测永远只能回默认建议。
+      //   现在：别名表为空（新渠道）→ 给默认建议；已有别名（编辑渠道）→ 原样回报，探测面板会标成"已在表里"。
+      models: (body.models && typeof body.models === 'object') ? body.models : undefined,
       // 渠道级自定义请求头（对象或 "Name: value" 多行文本）——AgentRouter 这类查客户端
       // 指纹的上游，探测必须带同款 UA，否则 401 unauthorized client detected
       headers: body.headers ? body.headers : undefined,

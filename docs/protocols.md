@@ -409,7 +409,13 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
 - **代理**：本机**必须**配（如 `http://127.0.0.1:7897`，容器内 `http://host.docker.internal:7897`），
   云端可留空。⚠️ 本机直连会 **403**（Cloudflare），而**这不是 IP 声誉问题**：Node/curl **不读 Windows 系统代理**，
   同一台机器上 PowerShell 走系统代理就是 200。失败形态要分清：**403/HTML = 没配代理**，**401 = 凭据过期**。
-- **探活**：`GET /api/auth/get-session`，免费、不消耗额度。
+- **探活**：`GET /api/auth/get-session`，免费、不消耗额度。⚠️ 未登录时 Better Auth 回的是 **200 + 正文 `null`**
+  （不是 401）——这必须读成"cookie 已失效"；v1.18.49 之前它被错判成"非 JSON 响应/疑似 CF 拦截页"，把人引去查代理出口
+  （真因只是一枚过期的 cookie）。
+- **模型别名（v1.18.49 起必填）**：hark 上游**没有模型目录**（一个账号一个 agent，没有 `/v1/models`），
+  所以别名只能手配，而且**别名正是唯一能把请求路由到这条渠道的东西**——别名表空 = 渠道启用却永远不被命中（"加上了却用不了"）。
+  控制台「获取模型」会返回默认建议 **`hark-agent`**（与 `workbuddy`/`genspark`/`codex` 同款约定：无目录 → 给默认建议 + 说明），
+  点「加入别名表」后保存即可；**空别名的保存会被 400 拦下**并给出可照抄的例子。探测状态行会同时显示服务端的说明文案。
 - **为什么不能当 `openai` 渠道填 base_url**：`POST /v1/chat/completions` 带有效 cookie 与标准报文时回的是
   **200 `text/html`**（Vite SPA 的壳）——`/v1/*` 只是前端路由兜底，上游**没有** OpenAI 兼容面。
   真正的协议是网页客户端那套：**建会话**（`POST /api/conversations {title, autoTitle:false}`）→
@@ -433,7 +439,11 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
   只当兜底；上游不给 token 计量，账本按估算记 `in/out`（与 genspark/workbuddy 同口径）。
 - **不支持图片**（不在 `IMAGE_CAPABLE_PROTOCOLS` 里，含图请求会被候选裁剪挡掉）。
 - **探针**：`node hark-probe.js <渠道id>`（只读体检三层：凭据/会话/额度）；加 `--turn` 再真发一条并验工具仿真。
-- **回归**：`node test/hark-channel.test.js`（真网关 + 真 curl + 假上游兼 HTTP 代理，零外网零额度）。
+  ⚠️ 渠道里那条 `proxy` 是**给容器**写的（`host.docker.internal:7897`），在宿主机上跑探针时那个地址未必可达 →
+  会得到 `HTTP 0`（连接失败，极容易被误读成"CF 拦截"），此时用 **`--proxy http://127.0.0.1:7897` 临时覆盖出口**
+  （只影响本次运行，不改 `config.json`）。
+- **回归**：`node test/hark-channel.test.js`（真网关 + 真 curl + 假上游兼 HTTP 代理，零外网零额度）+
+  `node test/channel-default-alias-e2e.test.js`（无模型目录协议的默认别名与空别名拦截）。
 
 ## 图片（多模态）的统一转换
 
