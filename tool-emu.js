@@ -254,6 +254,40 @@ function parseEmulatedToolCalls(text) {
   return { calls: deduped, text: content.trim() };
 }
 
+// ─────────────────────── hark 的 canned 道歉识别（v1.18.55）───────────────────────
+//
+// 现场（v1.18.52 上线后用户仍报「真实调用不回工具调用」，账本 in=212,453 out=106 / out=98 / out=121）：
+//   同一发 211k token 载荷连打 8 次，**6 次正常回 [TOOL_CALL]、2 次回同一句**
+//   `I wasn't able to answer this message.`（out=10）/ `I couldn't complete your request. Please try again.`（out=13）。
+//   这两句是 **hark 基础设施层的固定道歉**（不是模型在拒绝，也不是我们的协议没注进去——
+//   同尺寸同报文 A/B/C 三臂都能出 tool_calls），**约 25% 的偶发率**。用户连撞三次，看到的就是"渠道坏了"。
+//
+// 处置：判成**可重试的上游失败** → recordFailure → 同渠道重试（PER_CHANNEL_RETRIES）/ 切下家。
+//   与 v1.18.21 流内错误帧、v1.18.26 零正文流、v1.18.32 空回复同一档：**上游 200 不等于成功**。
+//
+// 边界（防误判，宁可漏也不误伤）：
+//   ① 只认"明确自称没有工具能力 / hark 固定道歉"的句式，普通短答（"OK"/"42"/"巴黎"）不命中；
+//   ② 长正文（>800 字符）一律放过——那是真回答，不是道歉；
+//   ③ 只用于**自带服务端工具、客户端工具靠文本仿真**的渠道（hark / genspark / notion-agent），
+//      原生工具渠道不该走这里。
+function looksLikeHarkCannedFailure(text) {
+  if (!text || typeof text !== 'string') return false;
+  const t = text.trim();
+  if (!t) return false;
+  if (t.length > 800) return false;
+  // ① hark 基础设施层固定道歉（实测原文，逐字）
+  if (/I\s+wasn'?t\s+able\s+to\s+answer\s+this\s+message/i.test(t)) return true;
+  if (/I\s+couldn'?t\s+complete\s+your\s+request/i.test(t)) return true;
+  if (/Please\s+try\s+again\.?$/i.test(t) && t.length < 120) return true;
+  // ② 模型自称没有工具 / 执行不了工具（英文）
+  if (/\b(?:i\s+)?(?:don'?t|do\s+not)\s+have\s+(?:a\s+|any\s+|access\s+to\s+)?(?:tool|tools|function|functions)\b/i.test(t)) return true;
+  if (/\b(?:i\s+)?(?:cannot|can'?t|am\s+not\s+able\s+to|unable\s+to)\s+(?:actually\s+)?(?:execute|run|call|invoke|use)\b[^.]{0,40}\b(?:tool|tools|function|functions|these|commands?|that)\b/i.test(t)) return true;
+  if (/\b(?:tool|function)\s*call(?:ing)?\s+(?:format|syntax|protocol)\b[^.]{0,40}\b(?:not\s+work|doesn'?t\s+work|unsupported|can'?t)\b/i.test(t)) return true;
+  // ③ 模型自称没有工具 / 执行不了工具（中文，用户转来的 hark 原话）
+  if (/(执行不了|不能执行|无法执行|不能调用|无法调用|没有工具|没工具|不带工具|我不会调用|我不会执行|跑不了|我不能用|我无法用|我不能在你的电脑上执行|我不能.*执行命令|我没有.*工具|不能.*工具|无法.*工具|工具.*跑不了|工具.*用不了|不能.*(?:执行|调用|运行|用|跑))/.test(t)) return true;
+  return false;
+}
+
 // ─────────────────────────── 流式扫描器 ───────────────────────────
 // 边流边检测捕获区段（[TOOL_CALL] 标记优先 / ``` 围栏兜底）：
 // 区段前的内容正常转发（content），区段闭合且解析为工具调用 → 一次性产出 tool_calls；
@@ -392,6 +426,7 @@ function openaiToolCallsPayload(respId, model, calls, content) {
 module.exports = {
   emulateRequest,
   parseEmulatedToolCalls,
+  looksLikeHarkCannedFailure,
   createToolStreamScanner,
   openaiToolCallsPayload,
   toolCallId,

@@ -41,6 +41,19 @@
   · **判据为什么必须排除原生流（`!nativeStream`）**：原生渠道走翻译器，`handleLine` 在 `nativeStream` 分支**直接 return**，`noteStreamLine` 压根不跑，`sawStreamContent` 在原生流上恒为 `false`——只按它会把**每一条正常原生流**都判成空（实测误伤：`mock-anthropic` 翻译后已有 **23 字符正文**仍被记失败 → 渠道进冷却 → `native-channels-e2e` **6 条级联 503**；加上 `!nativeStream` 后该文件 **34 项全过**）。
   · **也不要再加 `streamOutText.length === 0` 之类的"保险"**：直通路径的 `streamOutText` 在 `sseDeltaText` 取不到文本时会**回落累计原始行**（`passthroughWrite` 里 `|| line`），所以空流的它照样非空——加了这条等于把直通场景整条判死（写的时候真踩过，靠 `!nativeStream` 已足够排掉误伤源）。
   · 回归：`test/stream-error-frame-e2e.test.js`（**场景 F**：非流式 200 + 空回复 → 判失败、切下一候选、失败行带模型名；含"正常非流式仍 `ok:true` 且 `out > 0`"对照）+ `test/same-protocol-passthrough.test.js`（**§3b**：直通路径只发 `message_start` + `message_stop` → 客户端仍拿 200 + 上游原始 SSE、用量 `ok:false`、渠道 `lastError` 写明 `stream empty`；另含判据条件的结构守卫）。
+- **hark 的"固定道歉"也是 200 ≠ 成功（v1.18.55）**：
+  · **现场**：v1.18.52 把工具定义形状归一之后，用户仍报「真实调用了两次还是有问题」——agent 客户端拿到的还是散文，账本三行分别是 `in=212,453 out=106 / out=98 / out=121`。
+  · **根因（用同尺寸载荷做对照实验才看清）**：把同一发 211k token 请求**连打 8 次**，**6 次正常回 `[TOOL_CALL]`、2 次回同一句**
+    `I wasn't able to answer this message.`（out=10）/ `I couldn't complete your request. Please try again.`（out=13）。
+    这是 **hark 基础设施层的固定道歉，约 25% 偶发**——**不是**模型在拒绝、**也不是**协议没注进去（同尺寸同报文的 A/B/C 三臂都能出工具调用）。
+    旧行为把它记成 `ok:true` 并原样回给客户端，于是"25% 的偶发"在用户眼里就是"这个渠道坏了"。
+  · **处置**：`tool-emu.js` 的 `looksLikeHarkCannedFailure()` 一处识别（hark 固定道歉原文 / 模型自称没有工具能力（英/中）），
+    命中就在 `tryHarkChannel` **就地同渠道重试最多两发**（**不依赖 `PER_CHANNEL_RETRIES`**，那个配置键默认 0 = 等于没有）；
+    两发都还是道歉才如实报失败并交调度层切下家。**判据刻意窄**：长正文（>800 字符）放过、普通短答不命中。
+  · **活体验证**：同一发载荷连打 8 发（**只统计真落在 hark 的**，按响应头 `X-ZZCSAPI-Channel` 判别——
+    `gpt-6-astra` 是十几个渠道共用的别名，不判别会把 notion 等的回复当成 hark 的结论，这一轮真的误判过一次），
+    改前基线 **6/8 = 75%** → 改后 **8/8 = 100%**。
+  · 回归：`test/hark-channel.test.js` **§9**（16 条真值表 + ★ 真网关"第一发 canned、第二发正常 → 客户端必须拿到 `tool_calls`" + ★ 上游真收到两发 + 对照"一直回道歉则如实失败"）。
 - **账本的「天 / 小时」一律按北京时间切（v1.18.36）**：
   · **现场**：查「yu1 渠道最近 24 小时用了多少 token」时，账本答不了——`recent` 明细只留 800 行（当前流量下仅覆盖 **1.7 小时**）、`byChannel` 是累计值没有时间维度、`byDay` 有日期维度却不带渠道维度（两者交集"某渠道某天"根本没记）。追这条线时又撞上更硬的一处：**日桶与小时桶对不上**。
   · **根因**：`recordUsage` 里 `const day = new Date(ts).toISOString().slice(0,10)` 取的是 **UTC 日**，而 `/admin/api/usage` 的 24 小时分布用 `new Date(r.ts).getHours()`（**本地小时**）——同一个账本里两套钟，日界落在**北京时间早上 8 点**：凌晨 0~8 点的流量被算进前一天。`ipStatsBumpHour` 更自相矛盾：注释写着「本地时区，跨天清零」，代码却是 UTC 日 + 本地小时（桶在北京时间 8 点清零，与桶内索引的"本地小时"错位）。

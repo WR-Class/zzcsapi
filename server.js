@@ -7211,14 +7211,47 @@ async function tryHarkChannel(opts) {
     return `hark send: ${String(sent.error || '').slice(0, 120)}`;
   }
 
-  const rep = await hark.harkAwaitReply(ch.def, conv.cid, sent.messageId, timeoutMs, null);
+  let rep = await hark.harkAwaitReply(ch.def, conv.cid, sent.messageId, timeoutMs, null);
   if (!rep.ok || !String(rep.text || '').trim()) {
     recordFailure(ch, 'hark: ' + String(rep.error || '空回复').slice(0, 150));
     return 'hark: ' + String(rep.error || 'empty reply').slice(0, 120);
   }
-  const replyText = String(rep.text).trim();
+  let replyText = String(rep.text).trim();
   // 成功即清（失败留证）；删不掉不影响本轮结果
   hark.harkDeleteConversation(ch.def, conv.cid, 10000).catch(() => {});
+
+  // v1.18.55：**上游 200 不等于成功**——hark 基础设施层会偶发回一句固定道歉
+  //   （实测约 25%：「I wasn't able to answer this message.」/「I couldn't complete your request. Please try again.」，
+  //   同尺寸同报文的其他发都能正常出工具调用）。这类回复此前被记成 ok:true 并原样回给客户端，
+  //   用户看到的就是"渠道坏了/不回工具调用"。处置：**就地同渠道重试**最多两发（不走调度层 PER_CHANNEL_RETRIES，
+  //   那个默认是 0），失败才算这一发的真正失败——与 v1.18.21 流内错误帧、v1.18.26 零正文流、v1.18.32 空回复同档。
+  if (toolEmu.looksLikeHarkCannedFailure(replyText)) {
+    const HARK_CANNED_RETRY_MAX = 2;
+    let recovered = false;
+    for (let retry = 1; retry <= HARK_CANNED_RETRY_MAX; retry++) {
+      recordFailure(ch, 'hark: 第 1 发是固定道歉（第 ' + retry + '/' + HARK_CANNED_RETRY_MAX + ' 次重试）');
+      const conv2 = await hark.harkCreateConversation(ch.def, 20000);
+      if (!conv2.ok) { recordFailure(ch, 'hark 重试建会话: ' + String(conv2.error || '').slice(0, 150)); break; }
+      const sent2 = await hark.harkSend(ch.def, conv2.cid, flat, timeoutMs);
+      if (!sent2.ok) {
+        recordFailure(ch, 'hark 重试 send' + (sent2.status ? ' HTTP ' + sent2.status : '') + ': ' + String(sent2.error || '').slice(0, 150));
+        hark.harkDeleteConversation(ch.def, conv2.cid, 10000).catch(() => {});
+        break;
+      }
+      const rep2 = await hark.harkAwaitReply(ch.def, conv2.cid, sent2.messageId, timeoutMs, null);
+      hark.harkDeleteConversation(ch.def, conv2.cid, 10000).catch(() => {});
+      if (!rep2.ok || !String(rep2.text || '').trim()) { recordFailure(ch, 'hark 重试 reply 失败'); break; }
+      const replyText2 = String(rep2.text).trim();
+      if (!toolEmu.looksLikeHarkCannedFailure(replyText2)) {
+        rep = rep2; replyText = replyText2; recovered = true; break;
+      }
+      // 还是 canned → 下一次循环
+    }
+    if (!recovered) {
+      recordFailure(ch, 'hark: 连续 ' + (HARK_CANNED_RETRY_MAX + 1) + ' 发都是固定道歉——放弃');
+      return 'hark: canned apology (retryable)';
+    }
+  }
 
   // 工具仿真（响应侧）：模型按注入协议回了 [TOOL_CALL] 标记 → 解析回真 tool_calls。
   // 解析不出就照旧当纯文本（绝不因为"有 tools"就把普通回复吃掉）。

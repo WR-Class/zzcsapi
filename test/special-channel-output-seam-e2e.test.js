@@ -68,7 +68,7 @@ function sliceFn(name) {
 }
 const countOf = (hay, needle) => hay.split(needle).length - 1;
 /* 五条专用报文路径（现场出问题的那条排第一） */
-const SPECIAL = ['tryNotionChannel', 'tryNotionAgentChannel', 'tryWorkbuddyChannel', 'tryGensparkChannel', 'tryCodexChannel'];
+const SPECIAL = ['tryNotionChannel', 'tryNotionAgentChannel', 'tryWorkbuddyChannel', 'tryGensparkChannel', 'tryCodexChannel', 'tryHarkChannel'];
 /* SSE 解析小工具：把响应体拆成 [{event, data}]（OpenAI 面没有 event 行，event 为 null） */
 function parseSSE(text) {
   const out = [];
@@ -154,27 +154,30 @@ function makeNotionFake() {
     check('★ tryChannel 的 specialOpts 转发 onStreamChunk', /onStreamChunk:\s*opts\.onStreamChunk/.test(disp));
     check('★ tryChannel 的 specialOpts 转发 streamPrelude / streamEpilogue',
       /streamPrelude:\s*opts\.streamPrelude/.test(disp) && /streamEpilogue:\s*opts\.streamEpilogue/.test(disp));
-    check('五条路径都拿同一个 specialOpts（不再各自拼字面量）',
+    check('六条路径都拿同一个 specialOpts（不再各自拼字面量）',
       SPECIAL.every((f) => SRC.includes(f + '(specialOpts)')),
       SPECIAL.filter((f) => !SRC.includes(f + '(specialOpts)')));
 
-    // ② 五条路径里不许再出现"自写响应"
+    // ② 六条路径里不许再出现"自写响应"
     const bodies = SPECIAL.map((f) => sliceFn(f));
     const selfJson = bodies.map((b, i) => ({ f: SPECIAL[i], n: countOf(b, "res.writeHead(200, { 'Content-Type': 'application/json'") }));
-    check('★ 五条路径里不再有"自写 200 JSON 响应"（非流式一律走 specialNonStreamOut）',
+    check('★ 六条路径里不再有"自写 200 JSON 响应"（非流式一律走 specialNonStreamOut）',
       selfJson.every((x) => x.n === 0), selfJson.filter((x) => x.n));
     const selfSse = bodies.map((b, i) => ({ f: SPECIAL[i], n: countOf(b, "'Content-Type': 'text/event-stream'") }));
-    check('★ 五条路径里不再有"自写 SSE 响应头"（流式一律走 specialStreamHead）',
+    check('★ 六条路径里不再有"自写 SSE 响应头"（流式一律走 specialStreamHead）',
       selfSse.every((x) => x.n === 0), selfSse.filter((x) => x.n));
     const selfRaw = bodies.map((b, i) => ({ f: SPECIAL[i], n: countOf(b, 'res.write(') }));
-    check('★ 五条路径里不再有裸 res.write（流式逐行一律走 specialStreamLine）',
+    check('★ 六条路径里不再有裸 res.write（流式逐行一律走 specialStreamLine）',
       selfRaw.every((x) => x.n === 0), selfRaw.filter((x) => x.n));
 
     // ③ 调用点计数（改了任何一条路径却忘了收口，这里当场报错）
-    check('specialNonStreamOut 调用 8 处（workbuddy 1 / genspark 2 / codex 1 / notion 2 / notion-agent 2）',
-      countOf(SRC, 'await specialNonStreamOut(opts, candidate,') === 8, countOf(SRC, 'await specialNonStreamOut(opts, candidate,'));
-    check('specialStreamHead 调用 5 处（每条路径恰好一次开场）', countOf(SRC, 'specialStreamHead(opts, candidate);') === 5, countOf(SRC, 'specialStreamHead(opts, candidate);'));
-    check('specialStreamEnd 调用 5 处（每条路径恰好一次收尾）', countOf(SRC, 'specialStreamEnd(opts);') === 5, countOf(SRC, 'specialStreamEnd(opts);'));
+    //    v1.18.55 校正：本守卫写于**五条**路径时代，v1.18.47 加 hark 后没同步 → 一直是红的
+    //    （hark 有自己的 `specialNonStreamOut` ×2 / `specialStreamHead` ×1 / `specialStreamEnd` ×1）。
+    //    数出来的真实分布：1+2+2+1+2+2 = 10 / 1×6 / 1×6，六条路径完全对称。
+    check('specialNonStreamOut 调用 10 处（workbuddy 1 / genspark 2 / hark 2 / codex 1 / notion 2 / notion-agent 2）',
+      countOf(SRC, 'await specialNonStreamOut(opts, candidate,') === 10, countOf(SRC, 'await specialNonStreamOut(opts, candidate,'));
+    check('specialStreamHead 调用 6 处（六条路径各恰好一次开场）', countOf(SRC, 'specialStreamHead(opts, candidate);') === 6, countOf(SRC, 'specialStreamHead(opts, candidate);'));
+    check('specialStreamEnd 调用 6 处（六条路径各恰好一次收尾）', countOf(SRC, 'specialStreamEnd(opts);') === 6, countOf(SRC, 'specialStreamEnd(opts);'));
     check('specialStreamLine 调用点 ≥ 20（逐行都过钩子）', countOf(SRC, 'specialStreamLine(opts, candidate,') >= 20, countOf(SRC, 'specialStreamLine(opts, candidate,'));
 
     // ④ 语义守卫：钩子在 = 钩子说了算（空串不许回退成原始 OpenAI 报文）

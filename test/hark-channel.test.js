@@ -51,6 +51,12 @@ function startFakeUpstream(opts) {
   //   默认关，§2–§4 的行为一字不变。
   const convOwner = new Map();   // convId -> cookie
   const dead = new Set();        // 已"被删"的会话（模拟用户在 hark 里删掉了缓存里那条）
+  // §9 专用：replies = [第1发正文, 第2发正文, ...] —— 验"上游偶发 canned 道歉时，网关必须重试"。
+  //   真机实测约 25% 偶发（同一发载荷 8 次里 2 次回固定道歉），所以这里按**发次**给不同正文。
+  let replySeq = 0;
+  const nextReply = () => (Array.isArray(o.replies) && o.replies.length
+    ? o.replies[Math.min(replySeq++, o.replies.length - 1)]
+    : (o.reply || '渠道正常'));
   const srv = http.createServer((req, res) => {
     const full = req.url || '';
     const u = new URL(full.startsWith('http') ? full : 'http://hark.invalid' + full);
@@ -89,8 +95,9 @@ function startFakeUpstream(opts) {
         res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'snapshot', data: { messages: {}, log: [] }, seq: 1 } })}\n\n`);
         res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'patches', data: [{ op: 'entry_add', entry: 'message', value: { id: 'a-1', role: 'assistant', content: '', isStreaming: true, jobStatus: 'running', triggeredByMessageId: o.msgId || 'msg-1' } }], patchSeq: 2 } })}\n\n`);
         res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'patches', data: [{ op: 'narration_update', fields: { narration: { line: 'Checking the time', lineKey: 'narration.time.current_time' } } }], patchSeq: 3 } })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'patches', data: [{ op: 'entry_add', entry: 'message', value: { id: 'a-1', role: 'assistant', content: o.reply || '渠道正常', isStreaming: true, jobStatus: 'running', triggeredByMessageId: o.msgId || 'msg-1' } }], patchSeq: 4 } })}\n\n`);
-        res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'patches', data: [{ op: 'message_update', id: 'a-1', fields: { content: o.reply || '渠道正常', isStreaming: false, jobStatus: 'completed' } }], patchSeq: 5 } })}\n\n`);
+        const REPLY = nextReply();
+        res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'patches', data: [{ op: 'entry_add', entry: 'message', value: { id: 'a-1', role: 'assistant', content: REPLY, isStreaming: true, jobStatus: 'running', triggeredByMessageId: o.msgId || 'msg-1' } }], patchSeq: 4 } })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'sync', conversationId: convId, event: { type: 'patches', data: [{ op: 'message_update', id: 'a-1', fields: { content: REPLY, isStreaming: false, jobStatus: 'completed' } }], patchSeq: 5 } })}\n\n`);
         return;   // 不收流：模块拿到完成帧会自己杀 curl（这正是要验的行为）
       }
       send(404, { error: 'not found: ' + u.pathname });
@@ -357,6 +364,56 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
       && emu.emulateRequest({ messages: [{ role: 'user', content: 'hi' }], tools: FLAT, tool_choice: 'none' }) === null
       && emu.emulateRequest({ messages: [{ role: 'user', content: 'hi' }], tools: [{ type: 'function' }] }) === null;
   })());
+
+  console.log('\n══ §9 上游偶发固定道歉（约 25%）：必须判成可重试失败，不许当成功回给客户端（v1.18.55） ══');
+  // 真机现场：同一发 211k 载荷连打 8 次，6 次正常回 [TOOL_CALL]、2 次回
+  //   「I wasn't able to answer this message.」（out=10）/「I couldn't complete your request. Please try again.」（out=13）。
+  //   用户连撞三次 → 看到的是"渠道坏了/不回工具调用"。旧行为把它记成 ok:true 并原样回给客户端。
+  const CANNED = "I wasn't able to answer this message.";
+  {
+    // ① 纯函数真值表：只认"自称没工具 / hark 固定道歉"，普通短答一律不误伤
+    const emu = require(path.join(ROOT, 'tool-emu.js'));
+    const MUST_HIT = [
+      "I wasn't able to answer this message.",
+      "I couldn't complete your request. Please try again.",
+      "I don't have a tool that can read files from your local machine (like `D:\\x`), and I can't execute these tool calls.",
+      '我在这里替你执行不了这些工具调用',
+      '那种工具调用格式我这边跑不了',
+      '我连不上你的服务器，也不能在你的电脑上执行命令',
+    ];
+    const MUST_MISS = ['OK', '42', '巴黎', 'Done.', '# zzcsapi', '我读到了 README 的第一行：版本 v1.18.55。',
+      'I read the file successfully. The first line is # zzcsapi.', '工具 read_local_file 的参数是 path。',
+      'The tool_calls array is empty.', 'x'.repeat(1200) + " I couldn't complete your request"];
+    check('★ 真值表：6 条真道歉全部命中（含用户转来的中文原文）', MUST_HIT.every((s) => emu.looksLikeHarkCannedFailure(s)), MUST_HIT.filter((s) => !emu.looksLikeHarkCannedFailure(s)));
+    check('★ 真值表：10 条正常回答一条都不误伤（含"长正文里带道歉字样"）', MUST_MISS.every((s) => !emu.looksLikeHarkCannedFailure(s)), MUST_MISS.filter((s) => emu.looksLikeHarkCannedFailure(s)));
+    check('★ 结构守卫：canned 判据真的接在 hark 渠道里、且返回可重试失败', /looksLikeHarkCannedFailure\(replyText\)/.test(SRC) && /hark: canned apology \(retryable\)/.test(SRC));
+
+    // ② 真网关：第 1 发回固定道歉、第 2 发回正常 tool_calls → 客户端**必须**拿到 tool_calls
+    const up9 = await startFakeUpstream({ replies: [CANNED, TOOL_CALL_REPLY] });
+    const gw9 = await startGateway(up9.port);
+    try {
+      const r = await chat(gw9.base, { model: 'hark-agent', messages: [{ role: 'user', content: '读 D:\\x\\a.txt' }], tools: TOOLS });
+      const j = await r.json();
+      const ch0 = (j.choices && j.choices[0]) || {};
+      const m = ch0.message || {};
+      check('★ 第一发是固定道歉时，客户端拿到的仍是 tool_calls（不是那句道歉）', r.status === 200 && ch0.finish_reason === 'tool_calls' && !!(m.tool_calls && m.tool_calls[0].function.name === 'read_local_file'), { status: r.status, fr: ch0.finish_reason, body: JSON.stringify(j).slice(0, 200) });
+      check('★ 道歉没有漏进正文（不许既回 tool_calls 又把道歉当 content 塞回去）', !String(m.content || '').includes("wasn't able"), String(m.content || '').slice(0, 80));
+      await new Promise((r2) => setTimeout(r2, 400));
+      const sends = up9.seen.filter((s) => s.path === '/api/messages/send').length;
+      check('★ 上游真收到了**两发**（第一发道歉被判失败 → 同渠道重试）', sends >= 2, sends);
+    } finally { gw9.kill(); await up9.close(); }
+  }
+  {
+    // ③ 对照：上游一直回道歉 → 不能假装成功，必须如实失败（502/错误体）
+    const up9b = await startFakeUpstream({ replies: [CANNED] });
+    const gw9b = await startGateway(up9b.port);
+    try {
+      const r = await chat(gw9b.base, { model: 'hark-agent', messages: [{ role: 'user', content: '读 D:\\x\\a.txt' }], tools: TOOLS });
+      const j = await r.json();
+      const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
+      check('对照：一直回道歉 → 如实报失败（不把道歉当成功回给客户端）', r.status >= 400 && !String(msg.content || '').includes("wasn't able"), { status: r.status, content: String(msg.content || '').slice(0, 80) });
+    } finally { gw9b.kill(); await up9b.close(); }
+  }
 
   console.log(`\n══════ 通过 ${pass} · 失败 ${fail} ══════`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
