@@ -68,6 +68,7 @@ function startFakeCodebuff(opts) {
           return;
         }
         const reply = o.reply || 'ok';
+        if (o.alwaysChatFail) { res.writeHead(402, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ message: 'Out of credits' })); return; }
         if (o.failOn === 'chat') { res.writeHead(402, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ message: 'Out of credits' })); return; }
         const want = `Bearer ${CB_TOKEN}`;
         if (auth !== want) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'bad token' })); return; }
@@ -145,7 +146,7 @@ const stopGw = (p) => new Promise((r) => { if (!p || p.exitCode != null) return 
   check('codebuffChatProbe 探针存在（真两步 run）', /async function codebuffChatProbe\(/.test(SRC));
   check('CODEBUFF_DEFAULT_ALIAS / CODEBUFF_DEFAULT_MODEL 两个常量都被探测建议引用', /CODEBUFF_DEFAULT_ALIAS/.test(SRC) && /CODEBUFF_DEFAULT_MODEL/.test(SRC));
   check('validateChannelDef 拦 codebuff 空别名（与 hark 同款硬约束）', /def\.protocol === 'codebuff'\)[\s\S]{0,400}alias/.test(SRC));
-  check('probeUpstream 路径给 codebuff 走 codebuffChatProbe', /\(def\.protocol \|\| 'openai'\) === 'codebuff'\)[\s\S]{0,300}codebuffChatProbe/.test(SRC));
+  check('probeUpstream 路径给 codebuff 走 codebuffChatProbe', /\(def\.protocol \|\| 'openai'\) === 'codebuff'\)[\s\S]{0,800}codebuffChatProbe/.test(SRC));
   check('health probe 路径给 codebuff 走 codebuffChatProbe', /\(ch\.def\.protocol \|\| 'openai'\) === 'codebuff'\)[\s\S]{0,300}codebuffChatProbe/.test(SRC));
   check('/admin/api/test 路径含 codebuff 真两步调用', /ch\.def\.protocol === 'codebuff'\)[\s\S]{0,300}agent-runs/.test(SRC));
   check('候选链兜底含 codebuff（hark 之后）', /channelsServing\(model, 'codebuff'\)/.test(SRC));
@@ -249,6 +250,78 @@ const stopGw = (p) => new Promise((r) => { if (!p || p.exitCode != null) return 
       check('零别名 POST /admin/api/channels → 400（含可照抄的例子）', upd.status === 400, { s: upd.status, b: j });
       check('错误文案里出现 CODEBUFF_DEFAULT_ALIAS（codebuff-base）作示例', /codebuff-base/.test(j.error || ''), j.error);
     } finally { await stopGw(gw2); }
+
+  // ───────────── §4 探测失败也给默认建议（v1.18.59）─────────────
+  // 现场动机：账号无 API credits 是合法常见状态——「获取模型」按当前实现会 ok:false，控制台列不出建议。
+  //   用户加不了别名 → 就算充了值渠道也永远不会被命中（AGENTS §1.1 要防的正是这个）。
+  // 期望：探测失败时仍把 [CODEBUFF_DEFAULT_MODEL] 放进 models，并把 account.note 说明铺出来。
+  console.log('\n4. 探测失败也照样给默认建议 + account.note（v1.18.59）');
+  {
+    const fakeFail = await startFakeCodebuff({ alwaysChatFail: true });
+    const gwPort3 = await freePort();
+    const cfgPath3 = path.join(TMP, `cfg3-${gwPort3}.json`);
+    const usagePath3 = path.join(TMP, `usage3-${gwPort3}.json`);
+    fs.writeFileSync(cfgPath3, JSON.stringify({
+      port: gwPort3, health: { intervalSec: 3600, timeoutMs: 3000 }, retries: { perChannel: 0, maxModelFallbacks: 99 },
+      channels: [{
+        id: 'cb-fail', name: 'cb fail', protocol: 'codebuff',
+        baseUrl: `http://127.0.0.1:${fakeFail.port}/api/v1`, apiKey: 'x', priority: 0, enabled: true, autoAlias: false, models: {},
+      }],
+    }, null, 2));
+    const gw3 = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+      cwd: ROOT,
+      env: { ...process.env, ZZCSAPI_CONFIG: cfgPath3, ZZCSAPI_USAGE: usagePath3, GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    const t3 = Date.now();
+    while (Date.now() - t3 < 20000) {
+      try { if ((await fetch(`http://127.0.0.1:${gwPort3}/healthz`)).ok) break; } catch { }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    try {
+      const r = await fetch(`http://127.0.0.1:${gwPort3}/admin/api/probe`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AD_KEY}` },
+        body: JSON.stringify({ baseUrl: `http://127.0.0.1:${fakeFail.port}/api/v1`, protocol: 'codebuff', apiKey: 'x' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      check('探测失败响应里 models 含默认建议 codebuff-base', Array.isArray(j.models) && j.models.includes('codebuff/base@latest'), { status: r.status, j });
+      check('探测失败响应里 account.note 说明「无 /v1/models 端点」+「探测失败但建议可以先配好」',
+        /codebuff 无 \/v1\/models/.test(String(j.account?.note || '')) && /本次探测失败/.test(String(j.account?.note || '')), j.account);
+      check('探测失败 ok 仍然是 false（诚实地告诉用户上游没通）', j.ok === false, j);
+    } finally { await stopGw(gw3); try { await fakeFail.close(); } catch { } }
+
+    // 对照：探测成功时建议也照样给出（这条 v1.18.58 已实现）
+    const fakeOk = await startFakeCodebuff({});
+    const gwPort4 = await freePort();
+    const cfgPath4 = path.join(TMP, `cfg4-${gwPort4}.json`);
+    const usagePath4 = path.join(TMP, `usage4-${gwPort4}.json`);
+    fs.writeFileSync(cfgPath4, JSON.stringify({
+      port: gwPort4, health: { intervalSec: 3600, timeoutMs: 3000 }, retries: { perChannel: 0, maxModelFallbacks: 99 },
+      channels: [{
+        id: 'cb-ok', name: 'cb ok', protocol: 'codebuff',
+        baseUrl: `http://127.0.0.1:${fakeOk.port}/api/v1`, apiKey: 'x', priority: 0, enabled: true, autoAlias: false, models: {},
+      }],
+    }, null, 2));
+    const gw4 = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+      cwd: ROOT,
+      env: { ...process.env, ZZCSAPI_CONFIG: cfgPath4, ZZCSAPI_USAGE: usagePath4, GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    const t4 = Date.now();
+    while (Date.now() - t4 < 20000) {
+      try { if ((await fetch(`http://127.0.0.1:${gwPort4}/healthz`)).ok) break; } catch { }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    try {
+      const r = await fetch(`http://127.0.0.1:${gwPort4}/admin/api/probe`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AD_KEY}` },
+        body: JSON.stringify({ baseUrl: `http://127.0.0.1:${fakeOk.port}/api/v1`, protocol: 'codebuff', apiKey: 'x' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      check('探测成功响应里 models 含默认建议 codebuff-base', Array.isArray(j.models) && j.models.includes('codebuff/base@latest'), { status: r.status, j });
+      check('探测成功响应里 account.note 给出无目录说明（不影响）', /codebuff 无 \/v1\/models/.test(String(j.account?.note || '')), j.account);
+    } finally { await stopGw(gw4); try { await fakeOk.close(); } catch { } }
+  }
   } finally {
     await stopGw(gw);
     upstream.srv.close();

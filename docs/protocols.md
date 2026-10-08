@@ -503,8 +503,21 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
 - **限速**：上游目前不限速（实测），但单账号并发高了会被服务端 429。
 - **工具调用**：本项目 v1.18.58 **不**改报文里的 `tools` 字段——按 client 透传；codebuff 服务端按 model 决定能不能用工具（v1.18.58 暂未验证"哪些 model 走 codebuff 自有工具 vs 透传到 OpenRouter 风格工具"）。
 - **探针**：`node codebuff-probe.js [渠道id] [--no-chat|--chat-only] [--proxy <url>]`（按层打：① agent-runs 验凭据 + 拿 runId ② chat/completions 真聊 ③ 模型建议——`codebuff/base@latest` 走默认值）。
-- **回归**：`node test/codebuff-e2e.test.js`（34 项断言：装配守卫 15 + 真两步非流链路 11 + 流式链路 6 + 零别名硬约束 2）+
-  `node test/channel-default-alias-e2e.test.js`（30 项断言：5 个无目录协议相邻守卫 + codebuff 默认建议常量 + 空别名 400）+ `test/built-in-protocols.test.js` 守的"PROTO_META/PROTO_ORDER/候选链 7 处"与 `test/hark-channel.test.js` 守的"console 三处产物同步"。
+- **回归**：`node test/codebuff-e2e.test.js`（**v1.18.59 扩 34 → 39**：装配守卫 15 + 真两步非流链路 11 + 流式链路 6 + 零别名硬约束 2 + **§4 探测失败也给默认建议 5**）+
+  `node test/channel-default-alias-e2e.test.js`（**v1.18.58 扩 30** 项：5 个无目录协议相邻守卫 + codebuff 默认建议常量 + 空别名 400）+ `test/built-in-protocols.test.js` 守的"PROTO_META/PROTO_ORDER/候选链 7 处"与 `test/hark-channel.test.js` 守的"console 三处产物同步"。
+
+#### v1.18.59 修订：探测失败也照样给默认别名
+
+**现场**：账号无 API credits（**402 Out of credits**）是合法常见态——加 channel → 立即点「获取模型」→ 上游回 402 → v1.18.58 实现下 `ok:false` → 控制台拿不到建议 → 加不了别名 → **充了值渠道也永远不会被命中**（这正是 AGENTS §1.1 要防的形态）。
+
+**根因**：v1.18.58 的 codebuff 探测分支要求 `codebuffChatProbe` 必须 `r.ok` 才往下走返回建议——失败时建议就丢了。但 codebuff 的"无目录"是**静态事实**，与这次探测成不成无关。
+
+**处置**：
+1. **服务端**（`probeUpstream` 的 codebuff 分支）：先无条件算出 `models = Object.values(def.models||{}).filter(Boolean)` + 兜底 `models = [CODEBUFF_DEFAULT_MODEL]`；失败时返回 `ok:false` **但仍带上 models 与 account.note**（note 文案追加"——本次探测失败（见上方原因），但别名可以先按这条建议配好"）。
+2. **前端**（`build/app.js` L2176 `probeUpstream` 的 `!r.ok` 分支）：就地**单行**展开——status 显示错误 + account.note、同时把 `r.models` 灌进 `probeFound`、调用 `renderProbeList()`。
+3. **守卫**：`test/codebuff-e2e.test.js` §4（5 项）+ `test/channel-default-alias-e2e.test.js` 的"5 无目录协议相邻守卫"仍然成立。
+
+**为什么单行改前端**：保持 `console.html` 的 JS 偏移与 `docs/frontend-code-map.md` 行号锚点不动，避免连带重算（gene 策略明示）。
 
 ## 图片（多模态）的统一转换
 

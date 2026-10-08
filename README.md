@@ -25,7 +25,7 @@
 - 🩺 **手动测试的流式模式 + 真实流量单独一条欠账（v1.18.40）**：控制台「测试模型」默认按**流式**打（真实客户端走的就是流式，只测非流式等于只测了一半，`stream:true` 可选）；且**只有真实客户端请求成功才算"这家对话能用"**——手动测试与 `/models` 探测成功只放开冷却、还清探测侧的账，**不再清零真实流量的连败计数**，熔断因此真的会跳开"测试过、真实挂"的死家（[调度详解](docs/scheduling.md)）
 - 📎 **notion 渠道的内联附件（v1.18.41，渠道级 `notionAttachments`，默认关）**：客户端发 OpenAI `{type:"file",file:{filename,file_data:"data:…;base64,…"}}`（或 Anthropic `document` 块）时，网关把文件**内联进提示词**并打开 `enableCsvAttachmentSupport`——这是参照实现 notion2api 实发报文的形状，**CSV 不上 S3、不建任务**（[机制与诚实边界](docs/notion-attachment-upload-research.md)）。✅ **「模型真读到了」已活体验证（v1.18.42）**：对照那一发模型答"没找到你上传的 CSV"，带附件那一发答出**只存在于 CSV 里**的串，并经本地容器网关 `/v1/chat/completions` 复验（见研究文档 §8）
 - 🪪 **渠道级「自定义请求头」（v1.18.44）**：有些上游不只看密钥、还**看客户端指纹**——`agentrouter` 实测只带 `Authorization` 一律 **401 `unauthorized client detected`**，带上 `User-Agent: claude-cli/2.0.0 (external, cli)` 才 **200**（**浏览器 UA 一样被拒**：它认的是 Claude CLI 指纹本身）。现在渠道编辑弹窗的「自定义请求头」可填（每行一条 `Name: value`，`Authorization` 不可覆盖），探测/测试/聊天都带上它。**这轮的真凶其实是我们自己**：那个输入框此前**从不回填**，于是「获取模型」发出去的探测不带该 UA、必吃 401；而保存渠道还会**静默删掉**已配的值（[协议详解](docs/protocols.md)）
-- 🧩 **Codebuff/Freebuff 反代渠道（v1.18.58）**：Codebuff（codebuff.com）/ Freebuff 客户端背后的**两步 run** 协议——先 `POST /api/v1/agent-rruns {action:"START", agentId, ancestorRunIds:[]}` 拿 `runId`，再 `POST /api/v1/chat/completions` 顶层带 `codebuff_metadata:{run_id, client_id}`。**上游无 `/v1/models` 端点**、autoAlias 也会 404，所以**别名至少要配一条**（控制台点「获取模型」给默认建议 `codebuff/base@latest`）。每请求一个 `runId`（不缓存），配 `proxy` 走 curl 子进程；流式 / 非流都接；**已知限制**：账号无 API credits 时 chat/completions 直返 **402 Out of credits**（Freebuff 客户端里 15h/天的 freebucks 是另一条路径，裸调 API 不会自动用）。完整协议与抓法见 [codebuff 反代研究](docs/codebuff-reverse-proxy-research.md)
+- 🧩 **Codebuff/Freebuff 反代渠道（v1.18.58，v1.18.59 修「探测失败也给默认别名」）**：Codebuff（codebuff.com）/ Freebuff 客户端背后的**两步 run** 协议——先 `POST /api/v1/agent-rruns {action:"START", agentId, ancestorRunIds:[]}` 拿 `runId`，再 `POST /api/v1/chat/completions` 顶层带 `codebuff_metadata:{run_id, client_id}`。**上游无 `/v1/models` 端点**、autoAlias 也会 404，所以**别名至少要配一条**（控制台点「获取模型」给默认建议 `codebuff/base@latest`，**v1.18.59 起：探测失败也照样给建议**——账号无 API credits（402 Out of credits）是最常见的合法状态，若失败时不给建议、加不了别名 → 充了值渠道也永远不会被命中）。每请求一个 `runId`（不缓存），配 `proxy` 走 curl 子进程；流式 / 非流都接；**已知限制**：账号无 API credits 时 chat/completions 直返 **402 Out of credits**（Freebuff 客户端里 15h/天的 freebucks 是另一条路径，裸调 API 不会自动用）。完整协议与抓法见 [codebuff 反代研究](docs/codebuff-reverse-proxy-research.md)
 - 🚦 **notion 出站通道链（v1.18.42，根因于 v1.18.43 修正为两个维度）**：Notion 推理接口会回一道软墙（HTTP 200 + `temporarily-unavailable`，反爬式静默拒绝）。**软墙有两个独立维度**：① **账号状态**（主导，与传输无关、随时间变——`notion7` 在本地与云端、五种传输一起软墙，且在云端曾有短暂开口）；② **客户端指纹**（只在账号可过时才看得见——同一秒交替打：curl 3/3 真答、fetch 0/3 软墙）。出站因此做成 **curl 主 → HTTP/2 兜底 → fetch 最后**，且**软墙会在通道内自动换**（墙内那一发不消耗真实推理）；**这一修法治 ②，治不了 ①**（那时网关如实报 `ok:false / notion: temporarily-unavailable`，不伪装成"200 空回复"）。这是 ③ 的活体判据之所以能取得的前提（[协议详解](docs/protocols.md) §notion 出站通道链 · 复现仪器 `notion-wall-probe.js`）
 
 ## 快速开始
@@ -221,7 +221,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 55 个测试文件 · 2627 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 55 个测试文件 · 2631 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -247,7 +247,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**55 个文件 · 2627 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**55 个文件 · 2631 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
 ## 配置示例 (`config.example.json`)

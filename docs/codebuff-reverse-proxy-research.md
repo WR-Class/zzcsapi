@@ -233,6 +233,26 @@ function getWebsiteUrl() {
 - **暂不支持多轮 run 缓存**——客户端需要把历史 messages 整条带进 body（OpenAI 风格），gateway 不在 run 层做续接
 - **暂不处理 codebuff_metadata.provider 字段**——SDK 透传它用来强制路由；本项目用 model 字段决定路由，**若服务端哪天强制要求 provider 字段，需小改 `tryCodebuffChannel`**
 
+### 5.5 v1.18.59 修订：探测失败也照样给默认别名
+
+**症状**（v1.18.58 上线后立刻冒出来的现场）：账号无 API credits 是**合法常见**状态——加 channel → 立即点「获取模型」→ 上游回 402 → `ok:false` → 控制台「获取模型」整条是死路：拿不到建议 → 加不了别名 → 充了值渠道也永远不会被命中。这正是 AGENTS §1.1 那条硬约束要防的形态（v1.18.49 hark 接入时定的："**上游没有模型目录的协议**，探测必须给默认建议 + 拦空别名"）。
+
+**根因**：v1.18.58 的 codebuff 探测分支要求 `codebuffChatProbe` 必须 `r.ok` 才往下走返回建议——这意味着**探测失败时建议就丢了**。但 codebuff 的"无目录"是**静态事实**（上游根本没这个端点），与这次探测成不成无关。
+
+**处置**（v1.18.59，commit 见 §5.6）：
+1. 服务端 `probeUpstream` 的 codebuff 分支改写为：先无条件算出默认建议 + `cbNote`，再用 `tryCodebuffChannel` 风格的判据：失败时返回 `ok:false` **但仍带上 models 与 account.note**。
+2. 前端 `build/app.js` L2176 `probeUpstream` 的 `!r.ok` 分支就地**单行**改：仍然渲染建议列表（仅当 `r.models` 非空），status 行同时显示错误与 `account.note`。
+3. 测试 `test/codebuff-e2e.test.js` 加 §4（5 项断言）：探测失败响应里 models 含默认建议、account.note 说明无目录 + 探测失败、ok 仍是 false；对照探测成功时也照样给建议。
+
+**为什么单行改前端**（gene 策略明示："**确需动前端：就地改单行保持行数不变**"）：保持 `console.html` 的 JS 偏移与 `docs/frontend-code-map.md` 的行号锚点不动，避免连带重算。
+
+### 5.6 v1.18.59 提交锚点
+
+- 服务端：`server.js` 的 codebuff 探测分支（`probeUpstream` 中 `if ((def.protocol || 'openai') === 'codebuff')` 那块）
+- 前端：`build/app.js` L2176（`probeUpstream` 的 `!r.ok` 分支，单行展开）
+- 重建产物：`node build/build.js` → `console.html`（JS 偏移 +709 不变）
+- 守卫：`test/codebuff-e2e.test.js` §4（5 项）+ `test/channel-default-alias-e2e.test.js` 的"5 无目录协议相邻守卫"
+
 ---
 
 ## 6. 复现命令

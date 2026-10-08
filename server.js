@@ -1625,14 +1625,21 @@ async function probeDef(def, timeoutMs) {
   // Codebuff/Freebuff 反代（v1.18.58）：无 /models 端点，探测走真两步 run（agent-runs + chat）
   if ((def.protocol || 'openai') === 'codebuff') {
     const t0 = Date.now();
+    // v1.18.59：「上游没有模型目录」是**静态事实**，与这次探测成不成无关——所以建议无条件给出。
+    //   最常见的失败恰是 402 Out of credits（凭据是好的、账号没 API 额度）：若只在 ok:true 时才给建议，
+    //   用户在控制台就卡在死路上——「获取模型」报 402、加不了别名 → 以后充了值渠道也永远不会被命中
+    //   （这正是 AGENTS §1.1 那条硬约束要防的形态）。失败时建议照样下发，前端的 renderProbeList 会把它列出来。
+    let models = Object.values(def.models || {}).filter(Boolean);
+    if (!models.length) models = [CODEBUFF_DEFAULT_MODEL]; // v1.18.59：探测失败也照样给默认建议（上游无目录是静态事实，与成败无关——402 Out of credits 是合法常见态）
+    const cbNote = `codebuff 无 /v1/models 端点，模型列表来自别名配置（默认建议 ${CODEBUFF_DEFAULT_MODEL}；agent-runs 用 base；chat/completions 用别名映射的 upstream 值）`;
     try {
       const r = await codebuffChatProbe(def, timeoutMs || 15000);
-      if (!r.ok) throw new Error(r.error || 'probe failed');
-      let models = Object.values(def.models || {}).filter(Boolean);
-      if (!models.length) models = [CODEBUFF_DEFAULT_MODEL]; // 探测时表单尚无别名配置，给出 codebuff 风格默认建议
-      return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { note: `codebuff 无 /v1/models 端点，模型列表来自别名配置（默认建议 ${CODEBUFF_DEFAULT_MODEL}；agent-runs 用 base；chat/completions 用别名映射的 upstream 值）` } };
+      if (!r.ok) {
+        return { ok: false, status: r.status || 0, error: 'codebuff: ' + (r.error || 'probe failed'), models, latencyMs: Date.now() - t0, account: { note: cbNote + '——本次探测失败（见上方原因），但别名可以先按这条建议配好' } };
+      }
+      return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { note: cbNote } };
     } catch (err) {
-      return { ok: false, status: err.status || 0, error: 'codebuff: ' + (err.message || err), latencyMs: Date.now() - t0 };
+      return { ok: false, status: err.status || 0, error: 'codebuff: ' + (err.message || err), models, latencyMs: Date.now() - t0, account: { note: cbNote + '——本次探测失败（见上方原因），但别名可以先按这条建议配好' } };
     }
   }
   // WorkBuddy 国际版反代：无 /models 端点，探测走真实轻量聊天

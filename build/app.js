@@ -2173,7 +2173,7 @@ async function probeUpstream(){
       proxy:$('#f-proxy').value.trim()||undefined,
       headers:$('#f-headers').value,models:Object.fromEntries(modalModels.filter(r=>r.alias&&r.upstream).map(r=>[r.alias,r.upstream])),   // v1.18.49：把表单当前别名表也发给探测——无模型目录的协议（hark/workbuddy/genspark/codex）靠它决定"回报已配别名"还是"给一条默认建议"。**故意并进这一行**：app.js 每增删 1 行都要重算代码地图 §0.2 的锚点
     })});
-    if(!r.ok){setStatus(st,'✗ '+(r.error||'探测失败'),'bad');return}
+    if(!r.ok){setStatus(st,'✗ '+(r.error||'探测失败')+(r.account&&r.account.note?` · ${r.account.note}`:''),'bad');probeFound=(r.models||[]).slice().sort();probeSel=new Set();probeQ='';if(probeFound.length)renderProbeList();return}   // v1.18.59：探测失败也把上游给的**静态**建议列出来（无模型目录的协议：建议与成败无关）——否则「获取模型」是条死路：加不了别名、充了值也永远命不中。就地并成一行**保行数**（避免 console.html 的 JS 偏移与代码地图 §0.2 锚点整体重算）
     probeFound=(r.models||[]).slice().sort();
     probeSel=new Set(); probeQ='';
     const extra=r.agents?`（智能体 ${r.agents.length} 个）`:(r.account&&r.account.spaces?`（空间 ${r.account.spaces.length} 个）`:'');
