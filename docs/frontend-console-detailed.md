@@ -1928,6 +1928,37 @@ hark send: curl: curl spawn: spawn E2BIG
 
 **教训**：① **"上游 200"是我们踩了四次的同一个坑**（流内错误帧 v1.18.21 / 零正文流 v1.18.26 / 空回复 v1.18.32 / 现在的固定道歉 v1.18.55）——每加一类，都要问一句"这个 200 里的东西，用户真的能用吗"。② **"能过"与"稳定过"是两件事**：v1.18.52 的验证全部通过（三种形状各打一发都成），但生产上 25% 的偶发照样把用户打挂；**验证要按"概率"设计**（同一发多打几发看分布），不是"每个分支打一发都成就收工"。③ **别名指向多个渠道时，实验必须先确认落点**——这次是靠用户一句提醒才发现的，别等下一次。
 
+### 8.56 v1.18.56 hark 工具目录里工具名有了、参数 schema 却是空的：schema 字段名有两种拼法 × 两种嵌套位（2026-10-08，对象 `tool-emu.js`（`normTool` 取值链）+ `test/hark-channel.test.js` §8（扩）+ `docs/tests.md` / `docs/protocols.md` / `README.md` / `AGENTS.md`）
+
+**现场**：v1.18.55 修完"固定道歉"之后，我把 v1.18.52 那条形状归一的取值链又看了一遍——**它是残缺的**，只是当时那批用例没覆盖到。
+
+**根因**（两层，都在同一个取值表达式里）：`normTool` 原来写的是
+
+```js
+const params = (f && f.parameters) || o.parameters || o.input_schema || null;
+```
+
+- **① 键名只有 snake，没有 camel**：`input_schema`（Anthropic 原生）写了，`inputSchema`（多个 JS SDK / 中间层会把键转成驼峰）**没写**。
+- **② snake 那一层只看顶层，不看 `function` 里**：`f` 分支只在 `parameters` 之后短路，`input_schema` 落到了 `o.`（顶层）那一段 → `{type:'function',function:{name,input_schema}}` **读不到**。
+
+两种漏法的症状**完全一样**：工具名读到了（目录里 `### read_local_file` 正常），**参数 schema 是空 `{}`** ——模型知道有这个工具却不知道要传什么参数，于是回散文、或者编一个参数名去调。这比 v1.18.52 的"目录渲染成 `### function`"更隐蔽，因为它**看起来是对的**。
+
+**处置**：`parameters` ‖ `input_schema` ‖ `inputSchema` × **顶层 / `function` 内**共六种组合一并收下：
+
+```js
+const params = (f && (f.parameters || f.input_schema || f.inputSchema))
+  || o.parameters || o.input_schema || o.inputSchema || null;
+```
+
+**验证**：
+- **六种组合真值表**（纯函数）：全部把真 schema 注进提示。
+- **真链路**：新增**驼峰形状**一发经真网关（目录真工具名 + 真 schema + 客户端拿到 `tool_calls`）。
+- **优先级与边界**：`parameters` 压过驼峰（OpenAI 原生优先）；schema 是数组 → 退成空对象，**目录里工具仍在、不崩**。
+- **结构守卫**：取值链在源码里必须是完整的一段（`f.parameters || f.input_schema || f.inputSchema`），别被后人删回两处。
+- ★ **阴性对照实测**：把 `git show HEAD:tool-emu.js` 抠出来对同一批形状跑，四条里**三条为 `false`**（顶层 `inputSchema`、`function` 内 `inputSchema`、`function` 内 `input_schema`），只有 `parameters` 那条新旧都过 = **没误伤**。这一步是本次唯一能证明"用例真能抓住回归"的证据——**光看新用例全绿说明不了任何事**。
+
+**教训**：① **"归一"是个需要被穷举的动作，不是"我见过的形状"**。v1.18.52 我以为三种形状覆盖齐了，实际维度是**两个**（承载键名 × 嵌套位），漏的那一格症状还更轻、更难发现。写归一函数时把维度**列成表**再逐格填。② **断言要能证明自己会红**：新加的用例全绿是"无信息"的，必须拿旧实现跑一遍看它真的红（本轮就是这么发现"连 `function` 内 `input_schema` 也漏"这第二层的——我原本只打算修驼峰）。③ 这类"看起来是对的"的残缺会被用户以完全不同的语言报上来（"还是有问题"），所以**归一路径值得定期对着维度表复查**，而不是等下一次报障。
+
 ## 9. 后续可做（未实现）
 
 - 密钥明文显示加"仅本次会话"提示或二次确认

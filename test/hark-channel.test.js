@@ -336,12 +336,15 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
   check('★ 结构守卫：harkCurl 的正文走文件（`@` + bodyFile），不再直接进 argv', /args\.push\('--data-binary', bodyFile \? '@' \+ bodyFile : String\(bodyStr\)\)/.test(HARK_SRC));
   check('★ 结构守卫：通用 CF 回退路径也不再把正文塞 argv（`--data-raw` 已清零）', !/args\.push\('--data-raw'/.test(SRC) && /args\.push\('--data', bodyFile \? '@' \+ bodyFile : String\(body\)\)/.test(SRC));
 
-  console.log('\n══ §8 工具定义形状归一：扁平 / input_schema 也必须注入真目录（v1.18.52） ══');
+  console.log('\n══ §8 工具定义形状归一：扁平 / input_schema / inputSchema 也必须注入真目录（v1.18.52 / v1.18.56） ══');
   // 现场：调用方（agent 客户端）发的不是 OpenAI 嵌套形状 → 旧代码把目录渲染成 `### function` + 空 schema `{}`，
   //   或者直接返回 null（连协议都不注入）→ 上游拿不到真工具名，只能回散文（"我执行不了这些工具调用"）。
+  // v1.18.56：**schema 字段名本身也有两种拼法**——snake `input_schema` 与 camel `inputSchema`，
+  //   且两种都可能出现在顶层或 `function` 里。只认 snake 时工具名读得到、schema 却是空 `{}`。
   const FLAT = [{ type: 'function', name: 'read_local_file', description: '读取本机文件', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }];
   const ANTH = [{ name: 'read_local_file', description: '读取本机文件', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }];
-  for (const [label, tools] of [['扁平 type:function', FLAT], ['Anthropic 式 input_schema', ANTH]]) {
+  const CAMEL = [{ name: 'read_local_file', description: '读取本机文件', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }];
+  for (const [label, tools] of [['扁平 type:function', FLAT], ['Anthropic 式 input_schema', ANTH], ['驼峰 inputSchema', CAMEL]]) {
     const up8 = await startFakeUpstream({ reply: TOOL_CALL_REPLY });
     const gw8 = await startGateway(up8.port);
     try {
@@ -358,6 +361,27 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
   check('★ 结构守卫：仿真器有形状归一函数 normTool，且入口先归一后过滤', /function normTool\(t\)/.test(EMU_SRC) && /\.map\(normTool\)\.filter\(\(t\) => t\.name\)/.test(EMU_SRC));
   check('★ 结构守卫：不再只认 t.function.name 当目录名', !/f\.name \|\| t\.type \|\| 'tool'/.test(EMU_SRC));
   check('★ 结构守卫：尾部提醒带工具名清单（抗稀释，能独立成立）', /本次可用工具：/.test(EMU_SRC) && /buildTailReminder\(toolNames\)/.test(EMU_SRC));
+  // v1.18.56：归一必须同时收下 snake / camel 两种拼法，**且两种都可能嵌在 `function` 里**（纯函数，零额度）
+  check('★ [v1.18.56] normTool 真值表：parameters / input_schema / inputSchema × 顶层 / function 内', (() => {
+    const emu = require(path.join(ROOT, 'tool-emu.js'));
+    const S = { type: 'object', properties: { path: { type: 'string' } } };
+    const render = (t) => { const txt = emu.buildToolSystemPrompt([t], 'auto'); return /"path"/.test(txt); };
+    return render({ type: 'function', function: { name: 'a', parameters: S } }) === true
+      && render({ type: 'function', function: { name: 'a', input_schema: S } }) === true
+      && render({ type: 'function', function: { name: 'a', inputSchema: S } }) === true
+      && render({ name: 'a', parameters: S }) === true
+      && render({ name: 'a', input_schema: S }) === true
+      && render({ name: 'a', inputSchema: S }) === true;
+  })());
+  check('★ [v1.18.56] 优先级与边界：parameters 压过驼峰／数组 schema 退成空对象（目录里工具仍在）', (() => {
+    const emu = require(path.join(ROOT, 'tool-emu.js'));
+    const A = { type: 'object', properties: { a: { type: 'string' } } };
+    const B = { type: 'object', properties: { b: { type: 'string' } } };
+    const txt = emu.buildToolSystemPrompt([{ name: 'x', parameters: A, inputSchema: B }], 'auto');
+    const arr = emu.buildToolSystemPrompt([{ name: 'x', inputSchema: ['nope'] }], 'auto');
+    return /"a"/.test(txt) && !/"b"/.test(txt) && /### x/.test(arr) && !/"properties"/.test(arr);
+  })());
+  check('★ [v1.18.56] 结构守卫：schema 取值的四处链在源码里是完整的一段（别被后人删回两处）', /f\.parameters \|\| f\.input_schema \|\| f\.inputSchema/.test(EMU_SRC) && /o\.parameters \|\| o\.input_schema \|\| o\.inputSchema/.test(EMU_SRC));
   check('对照：纯文本回合不注入、tool_choice=none 不注入、无工具定义返回 null', (() => {
     const emu = require(path.join(ROOT, 'tool-emu.js'));
     return emu.emulateRequest({ messages: [{ role: 'user', content: 'hi' }] }) === null

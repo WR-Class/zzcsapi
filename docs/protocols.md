@@ -455,6 +455,11 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
   结果是上游**只会回散文**（现场："我在这里替你执行不了这些工具调用…"）。② **尾部提醒要自包含**（带可用工具名 + 明说
   "你没有执行能力、不要回答无法执行工具"）：真实 agent 请求前半段十几万字符，顶部那段协议会被稀释。
   ③ **仿真不是保证**：上游的 agent 人格仍可能压过协议——要 100% 可靠的工具调用，别把带工具的 agent 客户端指到这类渠道上。
+  **v1.18.56 补充**：schema 字段名本身也有两种拼法——snake `input_schema`（Anthropic 原生）与 camel `inputSchema`
+  （多个 JS SDK / 中间层会转成驼峰），而且**两种都可能出现在顶层或 `function` 里**。旧链在 `function` 那层只读 `parameters`、
+  snake 那层只看**顶层** → `{type:'function',function:{name,input_schema}}` 与顶层 `inputSchema` 双双落到空 `{}`：
+  工具名读到了、**参数 schema 是空的**，症状与①一模一样（模型知道有这个工具却不知道传什么，于是回散文或调错参数）。
+  现在 `parameters` ‖ `input_schema` ‖ `inputSchema` × 顶层 / `function` 内**六种组合**一并收下（阴性对照实测：HEAD 旧版四条里三条为 false）。
 - **上游偶发"固定道歉"必须判成可重试失败（v1.18.55）**：即使协议注得好好的，hark **基础设施层**仍会偶发回一句
   **固定道歉**——实测同一发 211k token 载荷连打 8 次，6 次正常回 `[TOOL_CALL]`、2 次回
   `I wasn't able to answer this message.`（out=10）或 `I couldn't complete your request. Please try again.`（out=13），

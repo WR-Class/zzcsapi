@@ -23,13 +23,19 @@ function toolCallId() {
 //   （"我执行不了这些工具调用"）。三种形状折成同一个内部结构：
 //   nested `{type:'function',function:{name,description,parameters}}`
 //   flat   `{type:'function',name,description,parameters}`（OpenAI Responses / 部分客户端）
-//   anthropic `{name,description,input_schema}`
+//   anthropic `{name,description,input_schema}` ／ camelCase `inputSchema`（v1.18.56 补）
+// v1.18.56：**schema 字段名本身也有两种拼法**——snake `input_schema`（Anthropic 原生）与 camel
+//   `inputSchema`（多个 JS SDK / 中间层会转成驼峰），且两种都可能出现在**顶层或 `function` 里**。
+//   只认 snake 时的症状与 v1.18.52 的"只认嵌套"完全一样：工具名读到了、**参数 schema 却是空 `{}`**
+//   → 模型知道有这个工具却不知道要传什么参数，于是回散文或调错参数。四处一并收：
+//   `parameters`（OpenAI 原生）‖ `input_schema`（Anthropic）‖ `inputSchema`（驼峰）。
 function normTool(t) {
   const o = (t && typeof t === 'object') ? t : {};
   const f = (o.function && typeof o.function === 'object') ? o.function : null;
   const name = String((f && f.name) || o.name || (o.type && o.type !== 'function' ? o.type : '') || '').trim();
   const description = String((f && f.description) || o.description || '').trim();
-  const params = (f && f.parameters) || o.parameters || o.input_schema || null;
+  const params = (f && (f.parameters || f.input_schema || f.inputSchema))
+    || o.parameters || o.input_schema || o.inputSchema || null;
   return { name, description, parameters: (params && typeof params === 'object' && !Array.isArray(params)) ? params : {} };
 }
 
