@@ -27,7 +27,7 @@ const { spawn } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'zzcsapi-codebuff-'));
 const GW_KEY = 'cb-gw', AD_KEY = 'cb-admin';
-const CB_TOKEN = 'a397e09b-aa51-4b74-8be7-1956958b187c';   // 形态对齐 Freebuff session token（36 char UUID）
+const CB_TOKEN = '00000000-0000-4000-8000-000000000000';   // 占位：形态对齐 Freebuff session token（36 char UUID v4 形状）。**绝不写真 token**（AGENTS §2）
 
 let pass = 0, fail = 0;
 const check = (label, cond, extra) => {

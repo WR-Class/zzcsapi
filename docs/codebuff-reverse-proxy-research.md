@@ -95,7 +95,7 @@ Content-Type: application/json
 
 ### 2.4 鉴权
 
-`Authorization: Bearer <apiKey>`。`apiKey` 的真实来源是 Freebuff 客户端本地 `state.json` 的 `authSessions["https://www.codebuff.com"].token`——**36 位 UUID 形式**（不是 JWT），示例：`a397e09b-aa51-4b74-8be7-1956958b187c`。
+`Authorization: Bearer <apiKey>`。`apiKey` 的真实来源是 Freebuff 客户端本地 `state.json` 的 `authSessions["https://www.codebuff.com"].token`——**36 位 UUID 形式**（不是 JWT）。⚠️ **真值绝不允许写进本仓库**（AGENTS §2）；取用时从 `state.json` 现读，只报长度与形状，不写示例值。
 
 **不要复制** CodeBuddy 那种 envelope（`$wbEncrypted / ciphertext`）——codebuff 这条永远是明文 UUID。
 

@@ -484,7 +484,7 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
 把 Freebuff 桌面客户端（`codebuff.com` 后端）当 OpenAI 兼容渠道用。**详细逆向与逐条证据见 [docs/codebuff-reverse-proxy-research.md](codebuff-reverse-proxy-research.md)**，这里只讲落地姿势。
 
 - **Base URL**：`https://www.codebuff.com/api/v1`（默认值，不用改）
-- **API Key**：Freebuff 客户端本地 `state.json` 的 `authSessions["https://www.codebuff.com"].token`——**36 字符 UUID 形式**（不是 JWT；不是 envelope），示例：`a397e09b-aa51-4b74-8be7-1956958b187c`。**不要**复制 CodeBuddy 那种 `$wbEncrypted` envelope——codebuff 这条永远是明文 UUID。
+- **API Key**：Freebuff 客户端本地 `state.json` 的 `authSessions["https://www.codebuff.com"].token`——**36 字符 UUID 形式**（不是 JWT；不是 envelope）。**不要**复制 CodeBuddy 那种 `$wbEncrypted` envelope——codebuff 这条永远是明文 UUID。⚠️ **真值绝不允许写进本仓库**（AGENTS §2）：要核对形状就在本机现读，只报长度与 UUID 正则是否命中，**不写示例值**（v1.18.58 曾把一枚真 token 当"示例"写进本节与 `codebuff-reverse-proxy-research.md`，已撤并轮换）。
 - **模型别名（v1.18.58 起必填，与 hark 同款硬约束）**：codebuff 上游**没有 `/v1/models` 端点**、autoAlias 也会 404。
   控制台「获取模型」会返回默认建议 **`codebuff-base` → `codebuff/base@latest`**（与 `workbuddy` / `genspark` / `codex` / `hark` 同款约定：无目录 → 给默认建议 + 说明 `account.note`）。
   别名表空 = 这个渠道永远不会被请求命中（保存时 `validateChannelDef` 400 拦下，给出可照抄的例子）。
