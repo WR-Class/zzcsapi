@@ -26,6 +26,14 @@ const GENSPARK_REFERER = 'https://www.genspark.ai/agents?type=ai_chat';
 // 别名只能手配。这个名字被两处共用——探测建议（probeDef）与保存校验（validateChannelDef）——改名只改这一处。
 const HARK_DEFAULT_ALIAS = 'hark-agent';
 
+// codebuff/Freebuff 渠道的默认别名（v1.18.58）：codebuff 上游**没有 /v1/models 端点**（两步 run 协议，
+// 模型名由 channel.aliases 配置；SDK 里叫 `codebuff/<agent>@<version>` 形式，例如 `codebuff/base@latest`）。
+// 与 hark 同款：探测建议（probeDef）与保存校验（validateChannelDef）共用这个值——改名只改这一处。
+//   CODEBUFF_DEFAULT_ALIAS  = 用户在前端表单里看到的「别名」名（也是保存时举例的 key）
+//   CODEBUFF_DEFAULT_MODEL  = 实际发给 codebuff chat/completions 的 model 字段（也是探测默认建议）
+const CODEBUFF_DEFAULT_ALIAS = 'codebuff-base';
+const CODEBUFF_DEFAULT_MODEL = 'codebuff/base@latest';
+
 // ── 出站 HTTP 客户端（v1.16：零依赖替代全局 fetch）────────────────────────────
 // 为什么换：Node 的全局 fetch 走 undici。同一台机器对同一回环目标实测——
 //   容器内(Linux)  每跳 1.28ms vs keep-alive http.request 0.54ms（2.4×）；
@@ -1368,7 +1376,7 @@ function aggregateModels(protocol) {
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
-    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'];
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark', 'codebuff'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
@@ -1416,10 +1424,12 @@ async function probeChannel(ch) {
     return;
   }
   // WorkBuddy 国际版反代：无 /models 端点，探测走一次真实轻量聊天（免费 deepseek-v4.1-flash）
-  if ((ch.def.protocol || 'openai') === 'workbuddy' || ch.def.protocol === 'genspark') {
+  if ((ch.def.protocol || 'openai') === 'workbuddy' || ch.def.protocol === 'genspark' || (ch.def.protocol || 'openai') === 'codebuff') {
     const t0 = Date.now();
     try {
-      const probe = ch.def.protocol === 'genspark' ? await gensparkIsLogin(ch.def, HEALTH.timeoutMs || 15000) : await workbuddyChatProbe(ch.def, HEALTH.timeoutMs || 15000);
+      const probe = ch.def.protocol === 'genspark' ? await gensparkIsLogin(ch.def, HEALTH.timeoutMs || 15000)
+        : ((ch.def.protocol || 'openai') === 'codebuff') ? await codebuffChatProbe(ch.def, HEALTH.timeoutMs || 15000)
+        : await workbuddyChatProbe(ch.def, HEALTH.timeoutMs || 15000);
       if (!probe.ok) {
         // 把探测的分类带出来：额度/频率用尽要走 rate_limit（并按上游给的重置时刻定冷却），
         // 不能当作"渠道故障"记一笔瞬时失败
@@ -1433,8 +1443,18 @@ async function probeChannel(ch) {
       // 这一支里 workbuddy 的探测本身就是一次真实对话（真凭实据 → 可满血）；genspark 只是验登录态（半愈合）
       healAfterProbe(ch, true, ch.def.protocol !== 'genspark');
     } catch (err) {
-      if (err.rateLimited || err.retryAfterMs) recordFailure(ch, 'workbuddy: ' + (err.message || err), 'rate_limit', { source: 'probe', ...(err.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) });
-      else recordFailure(ch, 'workbuddy: ' + (err.message || err), undefined, { source: 'probe' });
+      // 错误前缀按协议显示（v1.18.58 之前是硬编码 "workbuddy: "，加入 codebuff 后三种协议共用这一支——前缀必须跟协议走）
+      if (ch.def.protocol === 'genspark') {
+        if (err.rateLimited || err.retryAfterMs) recordFailure(ch, 'genspark: ' + (err.message || err), 'rate_limit', { source: 'probe', ...(err.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) });
+        else recordFailure(ch, 'genspark: ' + (err.message || err), undefined, { source: 'probe' });
+      } else if ((ch.def.protocol || '').startsWith('codebuff')) {
+        if (err.rateLimited || err.retryAfterMs) recordFailure(ch, 'codebuff: ' + (err.message || err), 'rate_limit', { source: 'probe', ...(err.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) });
+        else recordFailure(ch, 'codebuff: ' + (err.message || err), undefined, { source: 'probe' });
+      } else {
+        // workbuddy（字面量保留）—— test/workbuddy-quota.test.js 守着这一行的字符串字面量
+        if (err.rateLimited || err.retryAfterMs) recordFailure(ch, 'workbuddy: ' + (err.message || err), 'rate_limit', { source: 'probe', ...(err.retryAfterMs ? { retryAfterMs: err.retryAfterMs } : {}) });
+        else recordFailure(ch, 'workbuddy: ' + (err.message || err), undefined, { source: 'probe' });
+      }
     }
     return;
   }
@@ -1600,6 +1620,19 @@ async function probeDef(def, timeoutMs) {
       return { ok: true, models: notion.notionListModels(), latencyMs: Date.now() - t0, status: 200, account: { userId: acct.userId, spaces: acct.spaces.map((s) => s.name || s.spaceId) }, usage };
     } catch (err) {
       return { ok: false, status: err.status || 0, error: 'notion: ' + (err.message || err), latencyMs: Date.now() - t0 };
+    }
+  }
+  // Codebuff/Freebuff 反代（v1.18.58）：无 /models 端点，探测走真两步 run（agent-runs + chat）
+  if ((def.protocol || 'openai') === 'codebuff') {
+    const t0 = Date.now();
+    try {
+      const r = await codebuffChatProbe(def, timeoutMs || 15000);
+      if (!r.ok) throw new Error(r.error || 'probe failed');
+      let models = Object.values(def.models || {}).filter(Boolean);
+      if (!models.length) models = [CODEBUFF_DEFAULT_MODEL]; // 探测时表单尚无别名配置，给出 codebuff 风格默认建议
+      return { ok: true, models, latencyMs: Date.now() - t0, status: 200, account: { note: `codebuff 无 /v1/models 端点，模型列表来自别名配置（默认建议 ${CODEBUFF_DEFAULT_MODEL}；agent-runs 用 base；chat/completions 用别名映射的 upstream 值）` } };
+    } catch (err) {
+      return { ok: false, status: err.status || 0, error: 'codebuff: ' + (err.message || err), latencyMs: Date.now() - t0 };
     }
   }
   // WorkBuddy 国际版反代：无 /models 端点，探测走真实轻量聊天
@@ -4091,7 +4124,7 @@ function validateChannelDef(def, opts) {
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   // 更新已有渠道时允许不带 apiKey：控制台现在只拿到掩码，留空即"保持原密钥"（见 POST 分支）
   if ((!def.apiKey || typeof def.apiKey !== 'string') && !(opts && opts.allowMissingApiKey)) return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark|hark';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark', 'codebuff'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark|hark|codebuff';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   // v1.18.49：**没有模型目录的协议**（hark）别名表不许空——别名是唯一能把请求路由到该渠道的东西，
   //   空别名 = 存得下、但网关永远不暴露它的任何模型 = 「加上了却用不了」。现场（用户报）：
@@ -4103,6 +4136,15 @@ function validateChannelDef(def, opts) {
     if (!aliases.length) {
       return `hark 渠道至少要有一个模型别名（hark 没有 /v1/models 端点、也没有自动别名，别名表空 = 这个渠道不会被任何请求命中）。`
         + `例：{"${HARK_DEFAULT_ALIAS}": "${HARK_DEFAULT_ALIAS}"}——控制台里点「获取模型」就能拿到这条默认建议，再点「加入别名表」即可`;
+    }
+  }
+  // v1.18.58：codebuff/Freebuff 与 hark 同款——没有 /v1/models 端点、autoAlias 在它身上永远 404；
+  //   别名表空 = 存得下、但网关永远不暴露它的任何模型 = 「加上了却用不了」。
+  if (def.protocol === 'codebuff') {
+    const aliases = Object.keys(def.models || {}).filter((k) => String(k || '').trim() && String((def.models || {})[k] || '').trim());
+    if (!aliases.length) {
+      return `codebuff 渠道至少要有一个模型别名（codebuff 没有 /v1/models 端点、autoAlias 也会 404，别名表空 = 这个渠道不会被任何请求命中）。`
+        + `例：{"${CODEBUFF_DEFAULT_ALIAS}": "${CODEBUFF_DEFAULT_MODEL}"}——控制台里点「获取模型」就能拿到这条默认建议，再点「加入别名表」即可`;
     }
   }
   // v1.18.33 渠道级「不发这些参数」：只收白名单内的名字。**写错一个名字就 400，不静默忽略**——
@@ -4669,7 +4711,7 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark', 'codebuff'].includes(body.protocol) ? body.protocol : 'openai',
       proxy: body.proxy ? String(body.proxy) : undefined,
       // v1.18.49：**把表单当前的别名表也传进来**。四条「上游没有模型目录」的协议分支早就写着
       //   `Object.values(def.models || {})`（workbuddy/genspark/codex 还各带一句"模型列表来自别名配置"），
@@ -4703,7 +4745,7 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : (channelsServing(model, 'genspark').length ? channelsServing(model, 'genspark') : (channelsServing(model, 'codex').length ? channelsServing(model, 'codex') : channelsServing(model, 'hark'))))))); // openai 优先，notion→notion-agent→workbuddy→genspark→codex→hark 逐级兜底
+      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : (channelsServing(model, 'genspark').length ? channelsServing(model, 'genspark') : (channelsServing(model, 'codex').length ? channelsServing(model, 'codex') : (channelsServing(model, 'hark').length ? channelsServing(model, 'hark') : channelsServing(model, 'codebuff')))))))); // openai 优先，notion→notion-agent→workbuddy→genspark→codex→hark→codebuff 逐级兜底
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -4867,6 +4909,56 @@ async function handleAdminApi(req, res, url) {
             recordFailure(ch, 'workbuddy: ' + String(wbErr || 'empty reply').slice(0, 150), undefined, { source: 'test' });
           }
           results.push({ channelId: c.channelId, ok: wbOk, status: wbStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: wbOk ? undefined : (wbErr || 'empty reply') });
+          continue;
+        }
+        // codebuff/Freebuff 渠道：真两步 run（agent-runs + chat/completions），curl 聚合全文
+        if (ch.def.protocol === 'codebuff') {
+          const tmo = Math.min(60000, Number(body.timeoutMs) || 30000);
+          const hdr = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` };
+          const startOut = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'agent-runs'), hdr,
+            JSON.stringify({ action: 'START', agentId: 'base', ancestorRunIds: [] }), tmo, ch.def.proxy);
+          let reply = '', cbErr = '', cbStatus = startOut.status || 0;
+          if (startOut.error || startOut.status >= 400) {
+            cbErr = 'agent-runs: ' + (startOut.error || `HTTP ${startOut.status}` + ': ' + (startOut.body || '').slice(0, 150));
+          } else {
+            let runId;
+            try { runId = JSON.parse(startOut.body).runId; } catch { }
+            if (!runId) cbErr = 'agent-runs: 响应里没有 runId';
+            else {
+              const clientId = (crypto.randomUUID && crypto.randomUUID()) || ('zz-test-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+              const chatBody = JSON.stringify({
+                model: c.upstream,
+                messages: [{ role: 'user', content: prompt }],
+                max_tokens: 16,
+                stream: false,
+                codebuff_metadata: { run_id: runId, client_id: clientId },
+              });
+              const chatOut = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'chat/completions'), hdr, chatBody, tmo, ch.def.proxy);
+              cbStatus = chatOut.status || 0;
+              if (chatOut.error) cbErr = 'chat: ' + chatOut.error;
+              else if (chatOut.status >= 400) {
+                const j = safeJson(chatOut.body);
+                cbErr = (j && (j.message || (j.error && (j.error.message || j.error)))) || chatOut.body.slice(0, 150) || ('HTTP ' + chatOut.status);
+              } else {
+                for (const ln of chatOut.body.split('\n')) {
+                  const s = ln.trim(); if (!s.startsWith('data:')) continue;
+                  const d = s.slice(5).trim(); if (d === '[DONE]') continue;
+                  try { const j = JSON.parse(d); const dl = j.choices?.[0]?.delta?.content || j.choices?.[0]?.message?.content || ''; if (dl) reply += dl; } catch {}
+                }
+              }
+            }
+          }
+          ttfb = Date.now() - t0;
+          const cbOk = !cbErr && !!reply.trim();
+          if (cbOk) {
+            // v1.18.40：测试成功**不清零真实流量的欠账**（只放开冷却 + 还探测侧的账）
+            healAfterProbe(ch, true, false);
+            ch.latencyMs = ttfb; ch.lastCheck = Date.now();
+            recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(reply), ok: true, latencyMs: ttfb });
+          } else {
+            recordFailure(ch, 'codebuff: ' + String(cbErr || 'empty reply').slice(0, 150), undefined, { source: 'test' });
+          }
+          results.push({ channelId: c.channelId, ok: cbOk, status: cbStatus || 200, latencyMs: ttfb, reply: reply.slice(0, 200) || undefined, error: cbOk ? undefined : (cbErr || 'empty reply') });
           continue;
         }
         // Genspark 渠道：网页会话 ask_proxy 最小聊天（消耗 1 credit），curl+proxy 聚合全文
@@ -5209,6 +5301,9 @@ function openAICandidateChain(requested) {
   // hark（hark.com 网页会话反代，v1.18.47）兜底：只有显式配了模型别名才可能命中（上游只有一个 agent，
   //   模型名不透传）；放链尾——它消耗的是用户自己的 hark 额度（harkTokens）
   for (const hc of channelsServing(requested, 'hark')) if (!out.some((c) => c.channelId === hc.channelId)) out.push(hc);
+  // codebuff/Freebuff 反代（v1.18.58）兜底：两步 run（agent-runs + chat/completions 带 codebuff_metadata.run_id）；
+  //   放链尾——消耗用户自己的 codebuff credits；上游无 /v1/models 端点，所以**必须**显式配了别名才可能命中
+  for (const cc of channelsServing(requested, 'codebuff')) if (!out.some((c) => c.channelId === cc.channelId)) out.push(cc);
   return out;
 }
 
@@ -6003,6 +6098,10 @@ async function tryChannel(opts) {
     if ((ch.def.protocol || 'openai') === 'hark') {
       return await tryHarkChannel(specialOpts);
     }
+    // codebuff/Freebuff 反代（v1.18.58）：两步 run（agent-runs 拿 runId → chat/completions 顶层带 codebuff_metadata.run_id），curl+代理传输
+    if ((ch.def.protocol || 'openai') === 'codebuff') {
+      return await tryCodebuffChannel(specialOpts);
+    }
   const outgoing = encodeOutgoing(dropParamsFrom(body, ch), candidate);
   const passthrough = opts.passthrough || null;   // 同协议直通时由扩展注入（'anthropic' / 'gemini'）
   const target = buildOutgoingUrl(ch, candidate, isStream);
@@ -6730,7 +6829,7 @@ function compactMessagesForNotion(messages, charLimit) {
 //   3) 无 /models 端点（探测走真实轻量调用）
 // 处理策略：上游永远流式；客户端要非流则网关在内存里聚合后再一次性回包。
 /* ═════════════ 专用报文渠道的输出收口（v1.18.38） ═════════════
-   notion / notion-agent / workbuddy / genspark / codex / hark 这六条路径**自己构造上游报文**（不走
+   notion / notion-agent / workbuddy / genspark / codex / hark / codebuff 这七条路径**自己构造上游报文**（不走
    encodeOutgoing / 原生出站），也因此历史上**自己写响应**：非流式 `res.end(JSON.stringify(chat 报文))`、
    流式 `res.write(chat SSE 行)`。对 OpenAI 客户端面（chat/completions）这没问题——那本来就是要的形态；
    但对**其它客户端面**（Anthropic / Gemini / OpenAI Responses）等于把翻译层整个绕过去了：
@@ -6898,6 +6997,236 @@ async function tryWorkbuddyChannel(opts) {
   // 非流式：拼成 OpenAI chat.completion 一次性回包
   if (!fullText.trim()) {
     recordFailure(ch, 'workbuddy stream: empty content');
+    return 'stream empty content';
+  }
+  const assembled = {
+    id: respId,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: displayModel,
+    choices: [{ index: 0, message: { role: 'assistant', content: fullText }, finish_reason: lastFinish || 'stop' }],
+    usage: usageOut || { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(fullText), total_tokens: 0 },
+  };
+  if (!usageOut) assembled.usage.total_tokens = assembled.usage.prompt_tokens + assembled.usage.completion_tokens;
+  await specialNonStreamOut(opts, candidate, assembled);
+  recordUsage({
+    model: displayModel, channelId: candidate.channelId, kind: opts.kind,
+    inputTokens: assembled.usage.prompt_tokens,
+    outputTokens: assembled.usage.completion_tokens, ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+    statsCtx: opts.statsCtx,
+  });
+  return 'success';
+}
+
+// ─────────────────────────── Codebuff/Freebuff 反代（v1.18.58）───────────────────────────
+// codebuff.com / Freebuff 客户端（@codebuff/freebuff-desktop）背后的同一套 OpenAI 兼容反代。
+// 协议不是单步 /v1/chat/completions，而是**两步 run**（SDK 源码 llm.ts:81-140 / database.ts:409-474）：
+//   1) POST {baseUrl}/agent-runs  body {action:"START", agentId, ancestorRunIds:[]}
+//      → { runId }   （agentId 在 SDK 里是 `publisher/name@version`，实测 `base` 这种简写也 200）
+//   2) POST {baseUrl}/chat/completions  body {model, messages, stream, max_tokens, tools?, codebuff_metadata:{run_id, client_id}}
+//      codebuff_metadata 是**顶层**字段（llm.ts:124 "All values here get appended to the request body"），
+//      `client_id` 是一次会话的 clientSessionId（SDK 每次重启生成一个），我们按"每请求一 UUID"分配；
+//      `model` 在 SDK 里走 providerOrder 唯一键（openrouter_claude_sonnet_4_5），值形如 OpenRouter 风格
+//      `provider/model` 或 `codebuff/<agent>@<version>`，由用户在渠道 aliases 里指定。
+// 鉴权：Authorization: Bearer <apiKey>（apiKey 是 Freebuff state.json 里 36-char UUID session token）。
+// 出网：走 wbCurlRequest（通用 curl 子进程，与 workbuddy/codex/genspark 同套；缓冲后分发，不流式）。
+// 局限：① 无 /models 端点 → autoAlias 拿不到清单，探测分支给默认 `codebuff/base@latest` + account.note。
+//       ② 每次请求新建 run（不缓存 runId；多轮对话场景每发一条 chat 都开新 run）—— 上游按 run 计费。
+//       ③ 账号无 credits 时 chat/completions 直返 402 Out of credits（不是模型/格式错）。
+async function codebuffChatProbe(def, timeoutMs) {
+  if (!def.apiKey) return { ok: false, status: 0, error: '缺少 apiKey' };
+  const hdr = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${def.apiKey}` };
+  // 1) 建 run
+  const startOut = await wbCurlRequest('POST', joinUrl(def.baseUrl, 'agent-runs'), hdr,
+    JSON.stringify({ action: 'START', agentId: 'base', ancestorRunIds: [] }),
+    timeoutMs, def.proxy);
+  if (startOut.error) return { ok: false, status: 0, error: 'agent-runs: ' + startOut.error };
+  if (startOut.status >= 400) {
+    const j = safeJson(startOut.body);
+    const msg = (j && (j.message || (j.error && (j.error.message || j.error)))) || startOut.body.slice(0, 160);
+    return { ok: false, status: startOut.status, error: 'agent-runs: ' + msg };
+  }
+  let runId;
+  try { runId = JSON.parse(startOut.body).runId; } catch { }
+  if (!runId) return { ok: false, status: startOut.status, error: 'agent-runs: 响应里没有 runId' };
+  // 2) 真聊一发（model 用默认建议；流关闭；max_tokens 小；接受 200 或 402 之外都算失败）
+  const chatOut = await wbCurlRequest('POST', joinUrl(def.baseUrl, 'chat/completions'), hdr,
+    JSON.stringify({
+      model: CODEBUFF_DEFAULT_MODEL,
+      messages: [{ role: 'user', content: 'ping' }],
+      max_tokens: 8,
+      stream: false,
+      codebuff_metadata: { run_id: runId, client_id: 'zz-probe-' + Date.now().toString(36) },
+    }),
+    timeoutMs, def.proxy);
+  if (chatOut.error) return { ok: false, status: 0, error: 'chat: ' + chatOut.error };
+  if (chatOut.status >= 400) {
+    const j = safeJson(chatOut.body);
+    const msg = (j && (j.message || (j.error && (j.error.message || j.error)))) || chatOut.body.slice(0, 160);
+    return { ok: false, status: chatOut.status, error: 'chat: ' + msg };
+  }
+  return { ok: true, status: 200 };
+}
+async function tryCodebuffChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel, hasMoreCandidates } = opts;
+  const t0 = Date.now();
+  const timeoutMs = ch.def.timeoutMs || 120_000;
+  const displayModel = requestedModel || candidate.upstream;
+  if (!ch.def.apiKey) {
+    recordFailure(ch, 'codebuff: 缺少 apiKey', 'credential');
+    return 'codebuff: 缺少 apiKey';
+  }
+  const hdr = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` };
+  // 第一步：建 run 拿 runId
+  const startOut = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'agent-runs'), hdr,
+    JSON.stringify({ action: 'START', agentId: 'base', ancestorRunIds: [] }),
+    timeoutMs, ch.def.proxy);
+  if (startOut.error) {
+    recordFailure(ch, 'codebuff start: ' + startOut.error);
+    return 'codebuff start: ' + startOut.error;
+  }
+  if (startOut.status >= 400) {
+    const j = safeJson(startOut.body);
+    const msg = (j && (j.message || (j.error && (j.error.message || j.error)))) || startOut.body.slice(0, 160);
+    // 401/403 = 凭据失效（credential 分类），其他 4xx = 上游校验失败（按 status 分类）
+    const kind = (startOut.status === 401 || startOut.status === 403) ? 'credential' : failureKindFromStatus(startOut.status);
+    recordFailure(ch, `codebuff start ${startOut.status}: ` + msg, kind);
+    if (shouldPassThrough4xx(startOut.status, opts.hasMoreCandidates)) {
+      res.writeHead(startOut.status, { 'Content-Type': 'application/json' });
+      res.end(startOut.body);
+      return 'fatal_client';
+    }
+    if (startOut.status >= 400 && startOut.status < 500) return 'channel_error';
+    return `codebuff start ${startOut.status}: ${msg}`;
+  }
+  let runId;
+  try { runId = JSON.parse(startOut.body).runId; } catch { }
+  if (!runId) {
+    recordFailure(ch, 'codebuff start: 响应里没有 runId');
+    return 'codebuff start: 响应里没有 runId';
+  }
+  // 第二步：构造 chat/completions 报文（OpenAI 形态 + 顶层 codebuff_metadata）
+  const clientId = (crypto.randomUUID && crypto.randomUUID()) || ('zz-cb-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10));
+  const outMsgs = Array.isArray(body.messages) ? body.messages : [];
+  const upstreamBody = {
+    ...body,
+    model: candidate.upstream,
+    messages: outMsgs,
+    // codebuff 上游流/非流都接：让客户端决定的 stream 透传过去
+    codebuff_metadata: { run_id: runId, client_id: clientId },
+  };
+  const bodyStr = JSON.stringify(upstreamBody);
+  const target = joinUrl(ch.def.baseUrl, 'chat/completions');
+  const out = await wbCurlRequest('POST', target, hdr, bodyStr, timeoutMs, ch.def.proxy);
+  if (out.error || !out.body) {
+    recordFailure(ch, 'codebuff chat: ' + (out.error || 'empty body'));
+    return 'codebuff chat: ' + (out.error || 'empty body');
+  }
+  // 上游 4xx/5xx → 错误体（按 status 分类）→ 决定是否直通
+  if (out.status && out.status >= 400) {
+    const j = safeJson(out.body);
+    const msg = (j && (j.message || (j.error && (j.error.message || j.error)))) || out.body.slice(0, 200);
+    // 402 = 账号无 credits（credential 分类；不要按 rate_limit 走冷却曲线）
+    // 401/403 = 凭据失效
+    let kind = failureKindFromStatus(out.status);
+    if (out.status === 401 || out.status === 403) kind = 'credential';
+    else if (out.status === 402) kind = 'credential';
+    recordFailure(ch, `codebuff ${out.status}: ` + msg, kind);
+    if (shouldPassThrough4xx(out.status, opts.hasMoreCandidates)) {
+      res.writeHead(out.status, { 'Content-Type': 'application/json' });
+      res.end(out.body);
+      return 'fatal_client';
+    }
+    if (out.status >= 400 && out.status < 500) return 'channel_error';
+    return `codebuff ${out.status}: ${msg}`;
+  }
+  // 2xx：分三种——SSE 流（data: 行） / 非流 JSON 一次性 / 都不是则失败
+  // 注意：codebuff 也支持 `stream:false`（回**非流** JSON 形态，OpenAI 兼容），必须分支。
+  const isSSE = /^data:/m.test(out.body);
+  const isJSON = !isSSE && out.body.trim().startsWith('{');
+  if (!isSSE && !isJSON) {
+    recordFailure(ch, 'codebuff: 不像 SSE 也不像 JSON 的响应: ' + out.body.slice(0, 150));
+    return 'codebuff: 不像 SSE 也不像 JSON 的响应';
+  }
+  // 成功
+  markTrafficOk(ch);   // v1.18.40：真实流量成功 → 唯一的清零入口
+  ch.latencyMs = Date.now() - t0;
+  const respId = 'chatcmpl-cb-' + Date.now().toString(36);
+
+  // ─── 分支 A：非流 JSON 一次性（OpenAI 兼容报文，原样转发 + 修正 model 字段）───
+  if (isJSON) {
+    const j = safeJson(out.body);
+    if (!j || !Array.isArray(j.choices) || j.choices.length === 0) {
+      recordFailure(ch, 'codebuff: JSON 响应没有 choices: ' + out.body.slice(0, 200));
+      return 'codebuff: JSON 响应没有 choices';
+    }
+    // 上游可能回 error: { message } 而 status 仍是 200（流式那边遇过，理论上非流也偶发）→ 视为错误
+    if (j.error) {
+      const kind = j.error.type === 'insufficient_credits' || /credits?/i.test(j.error.message || '') ? 'credential' : 'upstream_4xx';
+      recordFailure(ch, 'codebuff 200+error: ' + (j.error.message || j.error.code || 'unknown'), kind);
+      if (shouldPassThrough4xx(402, opts.hasMoreCandidates)) {
+        res.writeHead(402, { 'Content-Type': 'application/json' });
+        res.end(out.body);
+        return 'fatal_client';
+      }
+      return 'codebuff 200+error: ' + (j.error.message || '');
+    }
+    // 强制把 model 字段覆盖为客户端视角的 displayModel（避免上游回奇怪的内部 model 名）
+    j.model = displayModel;
+    if (!j.id) j.id = respId;
+    if (!j.object) j.object = 'chat.completion';
+    if (!j.created) j.created = Math.floor(Date.now() / 1000);
+    if (!j.usage) j.usage = { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(j.choices?.[0]?.message?.content || ''), total_tokens: 0 };
+    j.usage.total_tokens = j.usage.prompt_tokens + j.usage.completion_tokens;
+    await specialNonStreamOut(opts, candidate, j);
+    recordUsage({
+      model: displayModel, channelId: candidate.channelId, kind: opts.kind,
+      inputTokens: j.usage.prompt_tokens, outputTokens: j.usage.completion_tokens, ok: true,
+      latencyMs: Date.now() - t0, realUsage: j.usage, statsCtx: opts.statsCtx,
+    });
+    return 'success';
+  }
+
+  // ─── 分支 B：SSE 流（codebuff 自身就是 OpenAI SSE 格式）───
+  let fullText = '';
+  let usageOut = null;
+  let lastFinish = 'stop';
+  const sseLines = [];
+  for (const ln of out.body.split('\n')) {
+    const s = ln.trim();
+    if (!s.startsWith('data:')) continue;
+    sseLines.push(s);
+    const d = s.slice(5).trim();
+    if (d === '[DONE]') continue;
+    try {
+      const j = JSON.parse(d);
+      const delta = j.choices?.[0]?.delta?.content || '';
+      if (delta) fullText += delta;
+      if (j.usage) usageOut = j.usage;
+      const fr = j.choices?.[0]?.finish_reason;
+      if (fr) lastFinish = fr;
+    } catch { }
+  }
+  if (!sseLines.length) {
+    recordFailure(ch, 'codebuff stream: empty');
+    return 'stream empty';
+  }
+  if (isStream) {
+    // codebuff 自身就是 OpenAI SSE 格式：逐行走收口钩子（Anthropic / Gemini / Responses 面各自翻译）
+    specialStreamHead(opts, candidate);
+    for (const s of sseLines) specialStreamLine(opts, candidate, s + '\n', s + '\n\n');
+    specialStreamEnd(opts);
+    recordUsage({
+      model: displayModel, channelId: candidate.channelId, kind: opts.kind,
+      inputTokens: estimateTokens(messagesText(body && body.messages)),
+      outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+      statsCtx: opts.statsCtx,
+    });
+    return 'success';
+  }
+  // 非流但上游回了 SSE（极少见；codebuff 真有 `stream:true` 默认）：把 SSE 拼成 chat 报文再下发
+  if (!fullText.trim()) {
+    recordFailure(ch, 'codebuff stream: empty content');
     return 'stream empty content';
   }
   const assembled = {

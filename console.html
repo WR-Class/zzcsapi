@@ -243,6 +243,7 @@ textarea.input{resize:vertical;line-height:1.6;font-family:var(--f-mono);font-si
 .chip.notion{color:var(--tx-2);border-color:var(--line-2);background:var(--panel-3)}
 .chip.notion-agent{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 30%,transparent);background:var(--ok-soft)}
 .chip.workbuddy{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+.chip.codebuff{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 .chip.genspark{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 30%,transparent);background:var(--violet-soft)} .chip.hark{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 32%,transparent);background:var(--warn-soft)}
 .chip.accent{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
 
@@ -946,7 +947,7 @@ const pct=(a,b)=>b?((a/b)*100):0;
 const fTok=n=>n>=1e8?(n/1e8).toFixed(2)+' 亿':n>=1e4?(n/1e4).toFixed(1)+' 万':nf(n);
 const fMs=ms=>ms<0?'—':ms<1000?ms+' ms':(ms/1000).toFixed(ms<10000?2:1)+' s';
 const stTxt={ok:'正常',degraded:'降级',down:'不可用',unknown:'未探测'};
-const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark',hark:'hark 网页会话'};
+const protoLabel={openai:'OpenAI',anthropic:'Anthropic',gemini:'Gemini',notion:'Notion 逆向','notion-agent':'Notion Agent',workbuddy:'WorkBuddy',codex:'Codex',genspark:'Genspark',hark:'hark 网页会话',codebuff:'Codebuff/Freebuff'};
 
 /* ═══════════════════════════ 生产：API 客户端 ═══════════════════════════
    控制台唯一网络出口。鉴权走会话 cookie（v1.18.6：登录门把管理密钥交给 /admin/api/session 一次，
@@ -2737,9 +2738,10 @@ const PROTO_META={
   workbuddy:{label:'WorkBuddy',base:'https://www.workbuddy.ai/v2',key:'CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头、三段点分，勿填 refreshToken）。注：新版 CodeBuddy 已把该字段加密成 envelope（$wbEncrypted / ciphertext）——那不是 JWT、填了会被当场拒，需从客户端实际请求里取明文 token'},
   codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
   genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'},
-  hark:{label:'hark 网页会话',base:'https://hark.com',key:'F12 → Application → Cookies → hark.com → 复制 __Secure-hark.session_token 的完整值（含 %2F/%3D 转义，**别解码**）。本机直连会被 CF 403 → 代理填 http://127.0.0.1:7897（Node/curl 不读系统代理）。上游只有一个 agent，模型别名随便起（如 hark-agent）；工具走文本仿真，可调客户端工具'}
+  hark:{label:'hark 网页会话',base:'https://hark.com',key:'F12 → Application → Cookies → hark.com → 复制 __Secure-hark.session_token 的完整值（含 %2F/%3D 转义，**别解码**）。本机直连会被 CF 403 → 代理填 http://127.0.0.1:7897（Node/curl 不读系统代理）。上游只有一个 agent，模型别名随便起（如 hark-agent）；工具走文本仿真，可调客户端工具'},
+  codebuff:{label:'Codebuff/Freebuff',base:'https://www.codebuff.com/api/v1',key:'Freebuff 客户端 state.json → authSessions["https://www.codebuff.com"] → token（36 位 UUID 形式）。上游无 /v1/models 端点、autoAlias 也不通——别名只能手配（控制台点「获取模型」给默认建议 codebuff/base@latest）；两步 run（agent-runs 拿 runId → chat/completions 顶层带 codebuff_metadata.run_id）'}
 };
-const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark','hark'];
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark','hark','codebuff'];
 
 /* 密钥来自 /admin/api/status 下发的渠道明文 key，控制台默认掩码、按需明文显示 */
 function chKey(id){const c=DATA.channels.find(x=>x.id===id);return (c&&c.apiKey)||''}

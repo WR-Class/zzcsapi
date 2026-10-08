@@ -309,8 +309,9 @@ function makeNotionFake(mode) {
       check('★ 默认值就是 0：配置里没有这个键时退回"不重试"（接线不偷改老配置的行为）',
         /const RETRIES = config\.retries \|\| \{ perChannel: 0,/.test(src));
 
-      check('装配守卫：6 处 4xx 判据都标注了 channel_error（原生 4 家 + hark + OpenAI 主路径）',
-        (src.match(/return 'channel_error'/g) || []).length === 6, (src.match(/return 'channel_error'/g) || []).length);
+      // v1.18.58：codebuff 接入后从 6 处变 8 处（原生 4 家 + hark + workbuddy + genspark + codex + codebuff 2 + OpenAI 主路径 = 8）
+      check('装配守卫：8 处 4xx 判据都标注了 channel_error（原生 4 + hark + workbuddy + genspark + codex + codebuff + OpenAI 主路径）',
+        (src.match(/return 'channel_error'/g) || []).length === 8, (src.match(/return 'channel_error'/g) || []).length);
       /* 只数**代码**里的读取：注释里提一句 RETRIES.perChannel 是说明，不算散落的第二份实现。
          （按"整行以 // 开头"过滤，比正则去行尾注释稳——这行里就有 `**` 和方括号，别再玩正则了） */
       const code = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');

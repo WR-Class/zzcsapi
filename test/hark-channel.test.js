@@ -229,9 +229,12 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
 
   console.log('\n══ §5 装配守卫（server.js 六处登记 + 前端两处字典 + 产物） ══');
   check('server.js 引入模块', /const hark = require\('\.\/hark\.js'\)/.test(SRC));
-  check('协议白名单（validateChannelDef）含 hark', /\|genspark\|hark'/.test(SRC));
-  check('协议白名单（渠道 POST）含 hark', /'genspark', 'hark'\]\.includes\(body\.protocol\)/.test(SRC));
-  check('aggregateModels 的 aliasedProto 含 hark', /'genspark', 'hark'\]/.test(SRC));
+  check('协议白名单（validateChannelDef）含 hark', /\|genspark\|hark\|/.test(SRC));
+  check('协议白名单（validateChannelDef）含 codebuff（v1.18.58 接入）', /\|hark\|codebuff/.test(SRC));
+  check('协议白名单（渠道 POST）含 hark', /'genspark',\s*'hark'/.test(SRC));
+  check('协议白名单（渠道 POST）含 codebuff', /'hark',\s*'codebuff'/.test(SRC));
+  check('aggregateModels 的 aliasedProto 含 hark', /'genspark',\s*'hark'/.test(SRC));
+  check('aggregateModels 的 aliasedProto 含 codebuff', /'hark',\s*'codebuff'/.test(SRC));
   check('probeChannel 有 hark 分支', /=== 'hark'\) \{\n\s+const t0 = Date\.now\(\);[\s\S]{0,400}hark\.harkProbe/.test(SRC));
   check('probeDef 有 hark 分支（控制台"从上游探测"）', /hark\.harkProbe\(def, timeoutMs/.test(SRC));
   check('tryChannel 分发到 tryHarkChannel', /=== 'hark'\) \{\n\s+return await tryHarkChannel\(specialOpts\);/.test(SRC));
@@ -246,7 +249,9 @@ const chat = (base, body) => fetch(base + '/v1/chat/completions', { method: 'POS
   const BUILT = fs.readFileSync(path.join(ROOT, 'console.html'), 'utf8');
   for (const [name, txt] of [['console-redesign.html', CONSOLE_SRC], ['build/app.js', APP_SRC], ['console.html（产物，须已重建）', BUILT]]) {
     check(`${name} 的 PROTO_META 有 hark 条目`, /hark:\{label:'hark[^']*'/.test(txt), name);
-    check(`${name} 的 PROTO_ORDER 含 hark`, /'genspark','hark'\]/.test(txt), name);
+    check(`${name} 的 PROTO_ORDER 含 hark`, /'genspark',\s*'hark'/.test(txt), name);
+    check(`${name} 的 PROTO_ORDER 含 codebuff（v1.18.58 接入）`, /'hark','codebuff'\]/.test(txt), name);
+    check(`${name} 的 PROTO_META 有 codebuff 条目`, /codebuff:\{label:'Codebuff\/Freebuff'/.test(txt), name);
   }
   check('前端没有为 hark 新增字段（复用 proxy/apiKey → 无三态负担）', !/harkFreshConversation|harkConvMax/.test(APP_SRC));
 
