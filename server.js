@@ -4421,6 +4421,11 @@ async function handleAdminApi(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/channels') {
     const body = await safeReadJson(req);
+    // v1.18.57：畸形 JSON 会把 safeReadJson 变成 null，此处曾直接取 body.id →
+    // TypeError 抛在 async handler 里没人接 → **整个网关进程退出**（容器靠 restart 自愈，
+    // 但期间全部请求失败）。同文件其它 9 处 safeReadJson 调用都有 `body &&` 或 `if (!body)`，
+    // 只有这里漏了。措辞对齐 /admin/api/settings 与 /admin/api/keys 两处。
+    if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'invalid json body' });
     const err = validateChannelDef(body, { allowMissingApiKey: channels.has(body.id) });
     if (err) return sendJson(res, 400, { error: err });
     // v1.18.20 数据损失闸门：把管理/网关密钥填进渠道 apiKey 一律 400 拒收。现场报告（2026-10-05）：

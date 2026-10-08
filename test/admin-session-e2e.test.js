@@ -164,6 +164,13 @@ function extract(name) {
       [...SESSIONS.keys()]);
   } catch (e) { fail++; console.log('  ✗ newSessionToken 逐出真值表跑不起来: ' + e.message); }
 
+  /* v1.18.57 装配守卫：畸形 JSON 不许把进程打挂。
+     现场：POST /admin/api/channels 曾直接 `channels.has(body.id)`，而 safeReadJson 解析失败返回 null
+     → TypeError 抛在 async handler 里没人接 → 整个网关进程退出（容器靠 restart:unless-stopped 自愈，
+     期间全部请求失败）。同文件其它 9 处 safeReadJson 调用都有 `body &&` 或 `if (!body)`，只此一处漏。 */
+  check('v1.18.57 装配守卫：/admin/api/channels 的 body 判空必须紧邻 validateChannelDef（此前只此一处漏守卫）',
+    /if \(!body \|\| typeof body !== 'object'\) return sendJson\(res, 400, \{ error: 'invalid json body' \}\);\s*\n\s*const err = validateChannelDef\(body,/.test(SRC));
+
   /* ─────────────────── 2. 真链路（登录 → cookie 鉴权 → 退出 → 换锁 → 重启） ─────────────────── */
   console.log('\n2. 真链路（临时网关：登录换 cookie → 会话单独鉴权 → 退出 → 轮换换锁 → 重启掉线）');
   const GW = await freePort();
@@ -224,6 +231,21 @@ function extract(name) {
     check('错密钥登录 → 401 且带错误文案（登录失败照常计入 admin 失败限流）',
       bad.status === 401 && !!(bad.body && bad.body.error), { s: bad.status, e: bad.body && bad.body.error });
     check('错密钥登录不下发 cookie', !tokenFrom(bad));
+
+    /* ①b v1.18.57 真链路回归：畸形 JSON 到 /admin/api/channels 必须 400 且进程存活 */
+    const malformed = await fetch(`http://127.0.0.1:${GW}/admin/api/channels`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + ENV_AD },
+      body: '{not json',
+    });
+    const malformedBody = await malformed.json().catch(() => null);
+    check('★ v1.18.57 畸形 JSON → 400 invalid json body（此前 body=null 直接取 .id → TypeError 打挂整个网关）',
+      malformed.status === 400 && !!(malformedBody && malformedBody.error === 'invalid json body'),
+      { s: malformed.status, b: malformedBody });
+    const aliveAfterMalformed = await fetch(`http://127.0.0.1:${GW}/healthz`);
+    await aliveAfterMalformed.text();
+    check('★ v1.18.57 畸形 JSON 之后进程仍存活（/healthz 仍 200，不再靠容器 restart 兜底）',
+      aliveAfterMalformed.status === 200, aliveAfterMalformed.status);
 
     /* ② 登录：换回会话 cookie */
     const ok1 = await login(ENV_AD);

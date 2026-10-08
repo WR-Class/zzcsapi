@@ -41,6 +41,17 @@
   · **判据为什么必须排除原生流（`!nativeStream`）**：原生渠道走翻译器，`handleLine` 在 `nativeStream` 分支**直接 return**，`noteStreamLine` 压根不跑，`sawStreamContent` 在原生流上恒为 `false`——只按它会把**每一条正常原生流**都判成空（实测误伤：`mock-anthropic` 翻译后已有 **23 字符正文**仍被记失败 → 渠道进冷却 → `native-channels-e2e` **6 条级联 503**；加上 `!nativeStream` 后该文件 **34 项全过**）。
   · **也不要再加 `streamOutText.length === 0` 之类的"保险"**：直通路径的 `streamOutText` 在 `sseDeltaText` 取不到文本时会**回落累计原始行**（`passthroughWrite` 里 `|| line`），所以空流的它照样非空——加了这条等于把直通场景整条判死（写的时候真踩过，靠 `!nativeStream` 已足够排掉误伤源）。
   · 回归：`test/stream-error-frame-e2e.test.js`（**场景 F**：非流式 200 + 空回复 → 判失败、切下一候选、失败行带模型名；含"正常非流式仍 `ok:true` 且 `out > 0`"对照）+ `test/same-protocol-passthrough.test.js`（**§3b**：直通路径只发 `message_start` + `message_stop` → 客户端仍拿 200 + 上游原始 SSE、用量 `ok:false`、渠道 `lastError` 写明 `stream empty`；另含判据条件的结构守卫）。
+- **管理面畸形 JSON 不许打挂网关进程（v1.18.57）**：
+  · **现场**：用 PowerShell 内联 JSON 打 `POST /admin/api/channels` 时引号被 shell 吃掉 → `safeReadJson` 解析失败返回 `null`
+    → 该分支紧接着 `channels.has(body.id)` → `TypeError: Cannot read properties of null (reading 'id')`
+    抛在 async handler 里**没人接** → **整个网关进程退出**。容器靠 `restart: unless-stopped` 约 10 秒后自愈，
+    期间全部客户端请求失败；日志里只有一行 TypeError，看不出是谁打进来的。
+  · **根因**：`safeReadJson` 「解析失败返回 `null`」是既定契约，**每个调用点必须自己判空**。
+    全仓 10 处 `safeReadJson(req)` 里 9 处有 `body &&` 或 `if (!body)`，**只有 `/admin/api/channels` 这处漏了**（不是系统性问题，是单点缺陷）。
+  · **处置**：在 `validateChannelDef` 之前补 `if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'invalid json body' })`，
+    措辞与 `/admin/api/settings`、`/admin/api/keys` 两处对齐（同一文案，控制台照原样显示，不静默吞掉）。
+  · 回归：`test/admin-session-e2e.test.js`（v1.18.57 增 3 项：装配守卫「判空必须紧邻 `validateChannelDef`」；
+    ★ 真链路「畸形 JSON → 400 `invalid json body`」；★ 之后 `/healthz` 仍 200——不再靠容器 restart 兜底）。
 - **hark 的"固定道歉"也是 200 ≠ 成功（v1.18.55）**：
   · **现场**：v1.18.52 把工具定义形状归一之后，用户仍报「真实调用了两次还是有问题」——agent 客户端拿到的还是散文，账本三行分别是 `in=212,453 out=106 / out=98 / out=121`。
   · **根因（用同尺寸载荷做对照实验才看清）**：把同一发 211k token 请求**连打 8 次**，**6 次正常回 `[TOOL_CALL]`、2 次回同一句**

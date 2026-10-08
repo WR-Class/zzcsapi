@@ -245,7 +245,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**54 个文件 · 2578 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**54 个文件 · 2581 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
 ## 配置示例 (`config.example.json`)
@@ -394,7 +394,7 @@ thinking 回放修复）。六条**专用报文**渠道（`notion` / `notion-age
 | `/admin/api/recheck` | POST | admin | 立即重探测（body 可传 `{id}`）；**不带 id = 全部重探测，含停用渠道** |
 | `/admin/api/channel` | POST | admin | 改渠道（`{id, priority?, enabled?, weight?}`，立即生效并持久化） |
 | `/admin/api/channels` | GET | admin | 渠道列表（`apiKey` 只下发掩码 + `apiKeySet` 布尔） |
-| `/admin/api/channels` | POST | admin | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥**；`dropParams` 显式空数组 = 清空、不传 = 沿用旧值（v1.18.33）；`headers` 同款语义（显式值含 `""` 优先、`""` 清空、不传 = 沿用旧值，v1.18.44） |
+| `/admin/api/channels` | POST | admin | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥**；`dropParams` 显式空数组 = 清空、不传 = 沿用旧值（v1.18.33）；`headers` 同款语义（显式值含 `""` 优先、`""` 清空、不传 = 沿用旧值，v1.18.44）；请求体不是 JSON 对象 → **400 `invalid json body`**（v1.18.57：此前 `safeReadJson` 返回 `null` 时直接取 `body.id`，畸形报文会把**整个网关进程打退出**，靠容器 restart 自愈） |
 | `/admin/api/channels` | DELETE | admin | 删除渠道（body `{id}`） |
 | `/admin/api/probe` | POST | admin | 临时探测上游模型清单（不落库） |
 | `/admin/api/test` | POST | admin | 真发一次最小 chat 请求；带 `channelId` 时**只打该渠道且不看 `enabled`**；**`stream:true`（v1.18.40）= 按真实客户端姿势发流式请求**并按真实链路同一套判据（`classifyStreamFrame`）判定（流内 error 帧 / 200 零正文流 / 上游无视 `stream` 回整段 JSON 都算失败），结果回带 `stream`、`streamFrames`、`streamIgnored`、`ttfbMs`；**测试成功只"半愈合"**（放开冷却 + 清 `probeFail`），**不清真实流量的连败计数**（见[调度详解](docs/scheduling.md)） |
