@@ -141,9 +141,9 @@ function makeWbFake() {
     check('★ 探测失败时把分类带出去（rateLimited / retryAfterMs 不丢）',
       /e\.rateLimited = probe\.rateLimited; e\.retryAfterMs = probe\.retryAfterMs/.test(SRC));
     check('★ 探测的失败交给记录层时走 rate_limit（额度用尽 ≠ 渠道故障）',
-      // v1.18.58：probe 失败前缀从单一 "workbuddy: " 改成三分支（workbuddy / genspark / codebuff），
-      //   workbuddy 的字面量仍在 recordFailure 调用点，genspark/codebuff 走各自的字符串字面量
-      (/(recordFailure\(ch, 'workbuddy: '|recordFailure\(ch, 'genspark: '|recordFailure\(ch, 'codebuff: ').+'rate_limit'/.test(SRC)));
+      // v1.18.58：probe 失败前缀从单一 "workbuddy: " 改成按协议分支（workbuddy / genspark）；
+      //   v1.18.60 撤掉 codebuff 后回到两支——workbuddy 的字面量仍在 recordFailure 调用点，genspark 走自己的字符串字面量
+      (/(recordFailure\(ch, 'workbuddy: '|recordFailure\(ch, 'genspark: ').+'rate_limit'/.test(SRC)));
     check('★ 聊天侧额度类按 rate_limit 记 + 精确冷却', /limited \? 'rate_limit' : failureKindFromStatus/.test(chat) && /resetMs \? \{ retryAfterMs: resetMs \}/.test(chat));
     check('★ 聊天侧非 SSE 也带上 HTTP 码与响应开头', !/'workbuddy: non-SSE response'/.test(chat) && /wbOpaqueBodyMsg\(out\.status, sseText\)/.test(chat));
     check('★ 密文 token 在发请求前就拦下（两处都拦）',

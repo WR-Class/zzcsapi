@@ -203,6 +203,7 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/frontend-console-detailed.md` | 控制台前端详细设计：设计系统、布局、组件、页面、交互流程、原型→生产映射、变更日志 |
 | `docs/arena-protocol.md` | Arena 协议（已撤渠道，留档） |
 | `docs/prism-reverse-proxy-research.md` | Prism 反代可行性研究（已撤渠道，留档） |
+| `docs/codebuff-reverse-proxy-research.md` | Codebuff/Freebuff 反代可行性研究（v1.18.58 接入 / v1.18.60 撤，**已撤渠道，留档**）：两步 run 协议、SDK 抓法、`codebuff_metadata` 字段表、402 凭据/额度/模型名判别、§5.5 v1.18.59 探测失败也给默认建议的根因与处置 |
 | `docs/genspark-claw-reverse-proxy-research.md` | Genspark Claw 反代研究 |
 | `docs/hark-reverse-proxy-research.md` | hark.com 网页会话反代研究（v1.18.47，**已接入**为 `protocol:"hark"`）：逐条证据 + 复现命令。四条硬结论：① **不能当 openai 渠道填 base_url**（`POST /v1/chat/completions` 带有效 cookie 回的是 200 `text/html` 的 SPA 壳）；② **本机 403 的真因是 Node/curl 不读 Windows 系统代理，不是 IP 声誉**（同一台机器 PowerShell 走系统代理 200、加 `-x` 立刻 200；失败形态要分清 **403/HTML=没配代理** vs **401=凭据过期**）；③ 回复**整段一次**下发（伪流式）+ **新会话快照里本来就有条 assistant 问候**（"取最后一条助手消息"会把问候当回复——已踩过）；④ 上游工具**全在服务端执行**（流里零 `tool_add`/`tool_update`）⇒ 客户端工具只能文本仿真，且有**系统路径护栏**（`C:\Windows\…` 回固定话术不出标记）。另含 **每轮约 11.5 万 harkTokens → 免费日额度约 69 轮**的实测 |
 | `docs/promptql-reverse-proxy-research.md` | PromptQL（prompt.ql.app = Hasura 多人协作 AI bot 工作台）反代可行性研究：**结论是不建议接**（免费只有 Playground 基础额度、其余按 OLU 计量付费 Team $40/人/月起；API 是线程/程序/工件语义而非 chat-completions；鉴权是控制台 PAT → 项目令牌两步；本机实测控制面 `auth.pro.ql.app` 被 DNS 污染，其余主机直连可达）。含逐条证据出处、未找到证据清单与复现命令 |
@@ -215,7 +216,7 @@ Select-String -Path d:\DSHXM\ZZCSAPI\console-redesign.html -Pattern '/\*\s*═+'
 | `docs/scheduling.md` | 调度**详解**（v1.18.8 从 README 拆出）：调度顺序 8 步全量语义、同渠道重试、熔断冷却分级（三曲线 + 半愈合 + `Retry-After` + 503/502 带原因）、加权轮询（smooth WRR）、自动权重（观测版：健康系数/抗振荡三件套/四护栏/后台节拍）、有效优先级、含图请求的候选裁剪。改调度算法时同步本文 |
 | `docs/runtime-settings.md` | 运行期四组开关**详解**（v1.18.8 从 README 拆出）：会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义、旋钮、钳制与 `GET/POST /admin/api/settings` 用法；含 `/metrics` 全量指标清单。改四组开关语义时同步本文 |
 | `docs/behavior.md` | 行为细节**详解**（v1.18.8 从 README 拆出）：上游 4xx 兜底判据、流式失败、协议转换与有损点（含**专用报文渠道的输出收口**，v1.18.38 修正）、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测数字。改网关行为语义时同步本文 |
-| `docs/tests.md` | 测试清单（v1.18.8 从 README 拆出）：54 个测试文件 · 2581 项断言的全量命令与每条守的是什么、「改什么 → 必跑什么」速查表、测试哲学（现抠真实源码 / e2e 姊妹 / 临时目录纪律）。**新增测试时登记进本文**。断言总数 = `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须等于合计**（v1.18.55 校正：该运行器原先认不出 `hark-channel.test.js` 的 `通过 N · 失败 M` 收尾格式，整份文件按 0 计入合计） |
+| `docs/tests.md` | 测试清单（v1.18.8 从 README 拆出）：54 个测试文件 · 2580 项断言的全量命令与每条守的是什么、「改什么 → 必跑什么」速查表、测试哲学（现抠真实源码 / e2e 姊妹 / 临时目录纪律）。**新增测试时登记进本文**。断言总数 = `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须等于合计**（v1.18.55 校正：该运行器原先认不出 `hark-channel.test.js` 的 `通过 N · 失败 M` 收尾格式，整份文件按 0 计入合计） |
 | `docs/fonts.md` | 全站字体 `HCRound`（寒蝉全圆体 ChillRoundF 子集化**改名**版）**资产与授权记录**（v1.18.37）：OFL-1.1 的逐条证据出处、**为什么必须改名**（OFL-FAQ §2.6 子集化属修改版、§2.2.1 纯格式转换例外不适用、《Webfonts and Reserved Font Names》Pre-subsetting 无法保留 FE）、改了哪些 `name` 字段与保留了什么、交付形态（同源路由 / 白名单查表 / 缓存分层 / 惰性压缩）、字重映射表（500→400 与 600→700 逐处理由）、可复现的再生成步骤与两个踩坑（`--renameOutputFont` 空转、工具会丢 `nameID 13/14`）、以及"哪个测试守着哪一条"。**改字体资产 / `head.html` / `font-assets.js` 前必读** |
 | `docs/security-hardening.md` | 安全整改记录（v1.18.8 从 README 拆出）：2026-10-02 本机实测结论、外部渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账（已修/接受/部分成文，含理由）、复查记录（附录 B 脚本复测结果与双实例疑云解除）、公网部署者提示。改鉴权 / 静态文件 / 响应头时配合 `sec-audit.js` 与本文 |
 | `docs/AI工具调用桥接-群友分享版.md` | AI 工具调用桥接说明 |

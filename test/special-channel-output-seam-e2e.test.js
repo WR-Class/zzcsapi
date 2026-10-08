@@ -173,11 +173,11 @@ function makeNotionFake() {
     // ③ 调用点计数（改了任何一条路径却忘了收口，这里当场报错）
     //    v1.18.55 校正：本守卫写于**五条**路径时代，v1.18.47 加 hark 后没同步 → 一直是红的
     //    （hark 有自己的 `specialNonStreamOut` ×2 / `specialStreamHead` ×1 / `specialStreamEnd` ×1）。
-    // v1.18.58：codebuff 接入后从 10/6/6 变 12/7/7（codebuff 加了 non-stream JSON + assembled SSE 两条非流 + 一次流开场收尾）
-    check('specialNonStreamOut 调用 12 处（workbuddy 1 / genspark 2 / hark 2 / codex 1 / codebuff 2 / notion 2 / notion-agent 2）',
-      countOf(SRC, 'await specialNonStreamOut(opts, candidate,') === 12, countOf(SRC, 'await specialNonStreamOut(opts, candidate,'));
-    check('specialStreamHead 调用 7 处（七条路径各恰好一次开场）', countOf(SRC, 'specialStreamHead(opts, candidate);') === 7, countOf(SRC, 'specialStreamHead(opts, candidate);'));
-    check('specialStreamEnd 调用 7 处（七条路径各恰好一次收尾）', countOf(SRC, 'specialStreamEnd(opts);') === 7, countOf(SRC, 'specialStreamEnd(opts);'));
+    // v1.18.60：codebuff 渠道撤掉后从 12/7/7 回到 10/6/6（它曾贡献 non-stream JSON + assembled SSE 两条非流 + 一次流开场收尾）
+    check('specialNonStreamOut 调用 10 处（workbuddy 1 / genspark 2 / hark 2 / codex 1 / notion 2 / notion-agent 2）',
+      countOf(SRC, 'await specialNonStreamOut(opts, candidate,') === 10, countOf(SRC, 'await specialNonStreamOut(opts, candidate,'));
+    check('specialStreamHead 调用 6 处（六条路径各恰好一次开场）', countOf(SRC, 'specialStreamHead(opts, candidate);') === 6, countOf(SRC, 'specialStreamHead(opts, candidate);'));
+    check('specialStreamEnd 调用 6 处（六条路径各恰好一次收尾）', countOf(SRC, 'specialStreamEnd(opts);') === 6, countOf(SRC, 'specialStreamEnd(opts);'));
     check('specialStreamLine 调用点 ≥ 20（逐行都过钩子）', countOf(SRC, 'specialStreamLine(opts, candidate,') >= 20, countOf(SRC, 'specialStreamLine(opts, candidate,'));
 
     // ④ 语义守卫：钩子在 = 钩子说了算（空串不许回退成原始 OpenAI 报文）

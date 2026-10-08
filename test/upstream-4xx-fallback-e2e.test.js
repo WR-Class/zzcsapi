@@ -153,9 +153,9 @@ function makeUpstream(state) {
       check('401/402/403/408/429 一样属于渠道侧 → 必切',
         [401, 402, 403, 408, 429].every((s) => fn(s, false) === false && fn(s, true) === false));
       check('5xx / 2xx 不归它管（照旧走兜底）', fn(500, true) === false && fn(200, true) === false);
-      // v1.18.58：codebuff 接入后从 5 处变 6 处（workbuddy / genspark / codex / hark / codebuff / OpenAI 主路径）
-      check('装配守卫：6 处 4xx 判据都走同一个函数（不再各写一份 includes 名单）',
-        (src.match(/shouldPassThrough4xx\((resp|out|call)\.status/g) || []).length === 6, (src.match(/shouldPassThrough4xx\(/g) || []).length);
+      // v1.18.60：codebuff 渠道撤掉后从 6 处回到 5 处（workbuddy / genspark / codex / hark / OpenAI 主路径）
+      check('装配守卫：5 处 4xx 判据都走同一个函数（不再各写一份 includes 名单）',
+        (src.match(/shouldPassThrough4xx\((resp|out|call)\.status/g) || []).length === 5, (src.match(/shouldPassThrough4xx\(/g) || []).length);
       check('装配守卫：渠道侧状态码名单只出现在这个函数里（1 处）',
         (src.match(/\[401, 402, 403, 404, 408, 429\]/g) || []).length === 1);
       check('★ 装配守卫："还有候选"必须排除冷却中的候选（回归：下标判法会兜出 502）',

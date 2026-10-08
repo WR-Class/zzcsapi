@@ -1,11 +1,6 @@
-# Codebuff/Freebuff 反代可行性研究
+# Codebuff/Freebuff 反代可行性研究（**已撤渠道，留档**）
 
-> **结论（v1.18.58）：已接入为 `protocol:"codebuff"`**——两步 run 协议（agent-runs 拿 runId → chat/completions 顶层带 `codebuff_metadata.run_id`），curl+代理传输，与 hark/codex/genspark 同款 "无 /v1/models 端点 + 别名表不许空" 硬约束。
->
-> **已知限制**：账号无 API credits 时 chat/completions 直返 **402 Out of credits**——Freebuff 客户端里 "15h/天 freebucks" 是 app 内部免费额度，**裸调 API 不会自动用**；去 `https://www.codebuff.com/usage` 充 API credits 才能用。
->
-> 探针：`node codebuff-probe.js [渠道id] [--no-chat] [--chat-only] [--proxy <url>]`（按层打：凭据 → chat 协议 → 模型建议）。
-> 复现本文的所有 cURL 都对真实上游打——已确认过两次形态（先 200 真答，后 402）。
+> **v1.18.58 接入为 `protocol:"codebuff"`，v1.18.60 撤掉**——根因：Codebuff 自身账号无 API credits 时 chat/completions 直返 **402 Out of credits**（Freebuff 客户端里 "15h/天 freebucks" 是 app 内部免费额度，**裸调 API 不会自动用**），充值 API credits 才能用；渠道池对单账号的可用性不可解。按 Arena / Prism 渠道的留档先例，本文档**不删不清**——以下保留为完整方法论，§5.5 记 v1.18.59 探测失败也给默认建议的根因与处置，§5.6 是与上游形态对齐的报文证据。
 
 ---
 

@@ -101,16 +101,15 @@ const jget = (base, path_, key) => fetch(base + path_, { headers: { Authorizatio
   check('默认别名被探测分支与保存校验共用（引用 ≥3 次：定义 + 两处使用）', uses >= 3, uses);
   check('★ hark 探测分支在别名表为空时给默认建议（v1.18.49 修的就是这一处）', /if \(!models\.length\) models = \[HARK_DEFAULT_ALIAS\]/.test(SRC));
   check('hark 探测分支带 account.note 说明「上游没有 /v1/models」', /hark 没有 \/v1\/models 端点/.test(SRC));
-  // 同类协议（workbuddy/genspark/codex）原本就有这条约定——守它别再被"顺手删掉"，也守第五家（v1.18.58 codebuff）别再漏
-  for (const [name, kw] of [['workbuddy', /workbuddy 无 \/models 端点/], ['genspark', /网页端无 models 接口/], ['codex', /codex 无 \/models 端点/], ['codebuff', /codebuff 无 \/v1\/models 端点/]]) {
+  // 同类协议（workbuddy/genspark/codex）原本就有这条约定——守它别再被"顺手删掉"。
+  // （v1.18.58 曾有第五家 codebuff，v1.18.60 随渠道一起撤掉，故本循环回到三家）
+  for (const [name, kw] of [['workbuddy', /workbuddy 无 \/models 端点/], ['genspark', /网页端无 models 接口/], ['codex', /codex 无 \/models 端点/]]) {
     check(`${name} 的探测分支仍带「无目录」说明（既有约定没被改坏）`, kw.test(SRC));
   }
-  // 数量守卫：五个站点（hark/workbuddy/genspark/codex/codebuff）**每一个**的下一行都必须有默认建议。
-  // 用"相邻"正则而不是单纯数个数——只数个数时，加第六家漏了建议照样能蒙过去。
+  // 数量守卫：四个站点（hark/workbuddy/genspark/codex）**每一个**的下一行都必须有默认建议。
+  // 用"相邻"正则而不是单纯数个数——只数个数时，加第五家漏了建议照样能蒙过去。
   const sites = (SRC.match(/let models = Object\.values\(def\.models \|\| \{\}\)\.filter\(Boolean\);\s*\n\s*if \(!models\.length\) models = \[/g) || []).length;
-  check('★ 五个无目录协议「取配置别名」的下一行都有默认建议（相邻守卫：加第六家漏了就报错）', sites === 5, sites);
-  check('★ codebuff 默认建议常量与 hark 同款（CODEBUFF_DEFAULT_ALIAS / CODEBUFF_DEFAULT_MODEL）', /const CODEBUFF_DEFAULT_ALIAS = 'codebuff-base'/.test(SRC) && /const CODEBUFF_DEFAULT_MODEL = 'codebuff\/base@latest'/.test(SRC));
-  check('★ 渠道校验拦下「codebuff 空别名」并给出可照抄的例子（与 hark 同款）', /if \(def\.protocol === 'codebuff'\)[\s\S]{0,400}别名表空 = 这个渠道不会被任何请求命中/.test(SRC) && /\$\{CODEBUFF_DEFAULT_ALIAS\}[\s\S]{0,40}CODEBUFF_DEFAULT_MODEL/.test(SRC));
+  check('★ 四个无目录协议「取配置别名」的下一行都有默认建议（相邻守卫：加第五家漏了就报错）', sites === 4, sites);
   check('★ 探测端点真的把表单别名表传进 def（否则那四处 `def.models` 是死代码，永远只能回默认建议）', /models: \(body\.models && typeof body\.models === 'object'\) \? body\.models : undefined/.test(SRC));
   check('★ 渠道校验拦下「hark 空别名」并给出可照抄的例子', /if \(def\.protocol === 'hark'\)/.test(SRC) && /别名表空 = 这个渠道不会被任何请求命中/.test(SRC));
   check('拦截只 scoped 到 hark（不波及 openai 等可自动补别名的协议）', !/protocol === 'openai'\)\s*\{\s*const aliases/.test(SRC));

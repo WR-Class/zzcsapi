@@ -19,7 +19,6 @@
 | `codex`        | 一次令牌刷新             | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） |
 | `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期；**工具调用靠文本仿真**，上游会忽略原生 `tools`） | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
 | `hark`         | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；**伪流式**；**工具调用靠文本仿真**；免费日额度约 69 轮，放链尾） | hark.com 网页会话反代（同上） |
-| `codebuff`     | 自检 `chat/completions` | `Authorization: Bearer <36-char UUID>` | **Codebuff/Freebuff 客户端反代（v1.18.58）**：两步 run——`POST /agent-runs {action:"START", agentId, ancestorRunIds:[]}` 拿 `runId` → `POST /chat/completions` 顶层带 `codebuff_metadata:{run_id, client_id}`；**别名至少要配一条**（上游无 `/v1/models` 端点、autoAlias 也会 404，探针默认建议 `codebuff/base@latest`）；agent-runs 用 `base`、chat/completions 走 OpenAI 形态 | 同左 |
 
 ## 渠道字段 `proxy`（可选）
 
@@ -36,7 +35,7 @@
   解析走 `parseCustomHeaders`：对象与文本两种形态都认；跳过注释行（`#`）、空行、没有冒号的行；键值两侧 `trim`；
   **`Authorization` / `authorization` 一律被删掉**（UI 上写着"Authorization 不可覆盖"，后端也真删——否则渠道配置就能顶掉网关自己的鉴权头）。
 - 生效范围：**常规链路**（openai / anthropic / gemini 系出站）——探测、测试、聊天都经同一个 `applyCustomHeaders` 挂头。
-  `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` / `hark` / `codebuff` 自带专用报文构造，配了**不生效**（与 `dropParams` 同一类边界）。
+  `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` / `hark` 自带专用报文构造，配了**不生效**（与 `dropParams` 同一类边界）。
 - 没配这个字段的渠道：`applyCustomHeaders` **返回同一个对象引用**（零拷贝），老配置行为一个字节不变。
 - 三态语义与 `dropParams`/`weight` 同款：**显式值（含 `""`）优先、`""` 清空、字段缺省则保留旧值**。
   这条是硬要求：控制台曾用 `body.headers ? body.headers : undefined`，于是"打开渠道 → 顺手保存"会把已配的请求头**静默删掉**。
@@ -66,7 +65,7 @@
 
 - 为什么需要它：有些上游只吃不下**某个参数**，而不是整条链路不通。现场例子——`agentrouter` 每天固定开放额度，但它对「`tools` + `reasoning_effort`」这个组合直接 400（`Function tools with reasoning_effort are not supported for gpt-6-astra`），而客户端（DSH）每次请求都同时带这两样，于是这个渠道对**我们** 100% 失败（19 行 0 成功）。参数是客户端发的、网关原样转发，客户端又不由我们控制 → 开关只能放在**渠道**上。
 - 生效范围：**常规链路**（openai / anthropic / gemini / notion 协议渠道）与**同协议直通**都生效。
-- **不适用**：`workbuddy` / `codex` / `genspark` / `notion-agent` / `hark` / `codebuff` 这六种协议自带专用报文构造（在自己的函数里从零组装报文，不经过常规出站构造）——给它们配 `dropParams` 会**静默不生效**（字段照样保存、照样显示，但报文里那几个参数不会被删）。
+- **不适用**：`workbuddy` / `codex` / `genspark` / `notion-agent` / `hark` 这五种协议自带专用报文构造（在自己的函数里从零组装报文，不经过常规出站构造）——给它们配 `dropParams` 会**静默不生效**（字段照样保存、照样显示，但报文里那几个参数不会被删）。
 - **只接受白名单内的参数名**（`reasoning_effort`、`reasoning`、`verbosity`、`thinking`、`thinkingConfig`、`temperature`、`top_p`、`top_k`、`frequency_penalty`、`presence_penalty`、`logit_bias`、`logprobs`、`top_logprobs`、`n`、`seed`、`stop`、`stop_sequences`、`stream_options`、`tool_choice`、`parallel_tool_calls`、`response_format`、`service_tier`、`store`、`metadata`、`user`、`modalities`、`prediction`、`safetySettings`、`max_tokens`、`max_completion_tokens`、`maxOutputTokens`）。`messages` / `model` / `stream` / `tools` 这类**结构性字段一律不在白名单**——配错一个名字最多是"没生效"，绝不会把请求打残。写白名单外的名字会被 **400** 拒收并回带合法清单（不静默忽略：静默忽略正是"配了却没生效、然后对着一个 100% 失败的渠道排查半天"的成因）。
 - 只删**这几个键**：出站副本上做浅拷贝再删，绝不原地改客户端报文对象（它在候选链里被多个渠道共用，原地删会把 A 家的怪癖串味给 B 家）；没配这个字段的渠道**零拷贝原样返回**，老配置行为一个字节不变。
 - 控制台入口：渠道编辑弹窗的「不发这些参数」输入框（逗号或空格分隔），下方 chips 来自 `GET /admin/api/config` 下发的 `dropParamWhitelist`；框留空 = 提交 `[]` = **清空**（注意与 `weight` 的"留空 = 不动"语义不同）。
@@ -158,7 +157,7 @@ Responses 请求 ──入站转换──▶ OpenAI chat 报文 ──dispatchRe
 
 ## 专用报文渠道的「输出收口」（v1.18.38 修正）
 
-notion / notion-agent / workbuddy / genspark / codex / hark / codebuff 这七条路径**自己构造上游报文**（不走常规出站构造），
+notion / notion-agent / workbuddy / genspark / codex / hark 这六条路径**自己构造上游报文**（不走常规出站构造），
 也因此历史上**自己写响应**：非流式 `res.end(JSON.stringify(chat 报文))`、流式 `res.write(chat SSE 行)`。
 
 对 OpenAI 客户端面（`/v1/chat/completions`）这没问题——那本来就是要的形态；但对**其它客户端面**等于把翻译层整个绕过去了。
@@ -479,45 +478,11 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
 - **回归**：`node test/hark-channel.test.js`（真网关 + 真 curl + 假上游兼 HTTP 代理，零外网零额度）+
   `node test/channel-default-alias-e2e.test.js`（无模型目录协议的默认别名与空别名拦截）。
 
-## codebuff（Codebuff/Freebuff 客户端反代，v1.18.58）
+## codebuff（已撤渠道，留档）
 
-把 Freebuff 桌面客户端（`codebuff.com` 后端）当 OpenAI 兼容渠道用。**详细逆向与逐条证据见 [docs/codebuff-reverse-proxy-research.md](codebuff-reverse-proxy-research.md)**，这里只讲落地姿势。
-
-- **Base URL**：`https://www.codebuff.com/api/v1`（默认值，不用改）
-- **API Key**：Freebuff 客户端本地 `state.json` 的 `authSessions["https://www.codebuff.com"].token`——**36 字符 UUID 形式**（不是 JWT；不是 envelope）。**不要**复制 CodeBuddy 那种 `$wbEncrypted` envelope——codebuff 这条永远是明文 UUID。⚠️ **真值绝不允许写进本仓库**（AGENTS §2）：要核对形状就在本机现读，只报长度与 UUID 正则是否命中，**不写示例值**（v1.18.58 曾把一枚真 token 当"示例"写进本节与 `codebuff-reverse-proxy-research.md`，已撤并轮换）。
-- **模型别名（v1.18.58 起必填，与 hark 同款硬约束）**：codebuff 上游**没有 `/v1/models` 端点**、autoAlias 也会 404。
-  控制台「获取模型」会返回默认建议 **`codebuff-base` → `codebuff/base@latest`**（与 `workbuddy` / `genspark` / `codex` / `hark` 同款约定：无目录 → 给默认建议 + 说明 `account.note`）。
-  别名表空 = 这个渠道永远不会被请求命中（保存时 `validateChannelDef` 400 拦下，给出可照抄的例子）。
-- **协议两步**（v1.18.58 实现）：
-  1. `POST /api/v1/agent-runs` body `{action:"START", agentId:"base", ancestorRunIds:[]}` → `{runId}`
-  2. `POST /api/v1/chat/completions` 顶层带 `codebuff_metadata:{run_id, client_id}`（`client_id` = `crypto.randomUUID()`，每请求一个）
-  客户端只发 OpenAI `/v1/chat/completions`，gateway 内部按 `tryCodebuffChannel` 自动拆两步。
-- **出网**：`wbCurlRequest` 通用 curl 子进程（与 workbuddy/codex/genshark 同套）；走代理填 `proxy: 'http://host.docker.internal:7897'`（容器）/ `'http://127.0.0.1:7897'`（宿主机）；直连也得走 curl——Node/undici 直连 codebuff 偶发 TLS 指纹问题。
-- **失败判据**（实测）：
-  - `401/403` → 凭据失效（`credential` 分类，**不**走 rate_limit 冷却曲线）
-  - `402 Out of credits` → 账号没 API credits，**这是常事**——Freebuff 客户端里"15h/天 freebucks"是 app 内免费额度，**裸调 API 不会自动用**；去 `https://www.codebuff.com/usage` 充 API credits 才行（也归 `credential` 分类）
-  - `400` + `No runId found in request body` → 自己报文漏了 `codebuff_metadata.run_id`（一般不会；这是上游的提示性 400）
-  - `400` + 其它文案 → model 名 / 报文形状错（按文案定位）
-  - 网络失败 → `curl exit N` + stderr 前 200 字符（如 `Couldn't resolve host`、`Connection refused`）
-- **额度**：codebuff 服务端按"run"计费（与 OpenAI 风格的 token 计费不同）；**本项目 v1.18.58 每请求一个新 run**（不缓存 runId，多轮对话场景每发一条 chat 都开新 run，**这是已知限制**）——一次会话若发 3 条消息就是 3 个 run。
-- **限速**：上游目前不限速（实测），但单账号并发高了会被服务端 429。
-- **工具调用**：本项目 v1.18.58 **不**改报文里的 `tools` 字段——按 client 透传；codebuff 服务端按 model 决定能不能用工具（v1.18.58 暂未验证"哪些 model 走 codebuff 自有工具 vs 透传到 OpenRouter 风格工具"）。
-- **探针**：`node codebuff-probe.js [渠道id] [--no-chat|--chat-only] [--proxy <url>]`（按层打：① agent-runs 验凭据 + 拿 runId ② chat/completions 真聊 ③ 模型建议——`codebuff/base@latest` 走默认值）。
-- **回归**：`node test/codebuff-e2e.test.js`（**v1.18.59 扩 34 → 39**：装配守卫 15 + 真两步非流链路 11 + 流式链路 6 + 零别名硬约束 2 + **§4 探测失败也给默认建议 5**）+
-  `node test/channel-default-alias-e2e.test.js`（**v1.18.58 扩 30** 项：5 个无目录协议相邻守卫 + codebuff 默认建议常量 + 空别名 400）+ `test/built-in-protocols.test.js` 守的"PROTO_META/PROTO_ORDER/候选链 7 处"与 `test/hark-channel.test.js` 守的"console 三处产物同步"。
-
-#### v1.18.59 修订：探测失败也照样给默认别名
-
-**现场**：账号无 API credits（**402 Out of credits**）是合法常见态——加 channel → 立即点「获取模型」→ 上游回 402 → v1.18.58 实现下 `ok:false` → 控制台拿不到建议 → 加不了别名 → **充了值渠道也永远不会被命中**（这正是 AGENTS §1.1 要防的形态）。
-
-**根因**：v1.18.58 的 codebuff 探测分支要求 `codebuffChatProbe` 必须 `r.ok` 才往下走返回建议——失败时建议就丢了。但 codebuff 的"无目录"是**静态事实**，与这次探测成不成无关。
-
-**处置**：
-1. **服务端**（`probeUpstream` 的 codebuff 分支）：先无条件算出 `models = Object.values(def.models||{}).filter(Boolean)` + 兜底 `models = [CODEBUFF_DEFAULT_MODEL]`；失败时返回 `ok:false` **但仍带上 models 与 account.note**（note 文案追加"——本次探测失败（见上方原因），但别名可以先按这条建议配好"）。
-2. **前端**（`build/app.js` L2176 `probeUpstream` 的 `!r.ok` 分支）：就地**单行**展开——status 显示错误 + account.note、同时把 `r.models` 灌进 `probeFound`、调用 `renderProbeList()`。
-3. **守卫**：`test/codebuff-e2e.test.js` §4（5 项）+ `test/channel-default-alias-e2e.test.js` 的"5 无目录协议相邻守卫"仍然成立。
-
-**为什么单行改前端**：保持 `console.html` 的 JS 偏移与 `docs/frontend-code-map.md` 行号锚点不动，避免连带重算（gene 策略明示）。
+**v1.18.58 接入，v1.18.60 撤掉（Codebuff 自身账号无 API credits，402 Out of credits 不可解；裸调 API 也不会自动用 Freebuff 客户端的 15h/天 freebucks）**。
+研究文档保留为方法论：[docs/codebuff-reverse-proxy-research.md](codebuff-reverse-proxy-research.md) 记录了完整的 SDK 抓法与两步 run 协议；接入期改动与 v1.18.59 探测失败也给默认建议的根因在研究档 §5.5 / §5.6。
+恢复渠道时：从 research 档反向回到本文件（接 v1.18.58 段落模板），并把 `server.js` / `build/app.js` / `console-redesign.html` / `config.json` / 5 个邻近测试的计数守卫同步回 7+1 + 5 个无目录协议相邻守卫。
 
 ## 图片（多模态）的统一转换
 
