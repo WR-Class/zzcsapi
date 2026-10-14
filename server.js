@@ -5191,15 +5191,15 @@ const DIET_ON = /^(1|true|on|yes)$/i.test(String(process.env.ZZCSAPI_CONTEXT_DIE
    ⚠ 别写成 `Number(env) || 默认` —— 那个 `||` 会把显式的 0 当成"没设"，于是「把图片全摘掉」
    （K=0 / N=0）这个完全合法的配置永远配不出来。这是本项目栽过的老坑（显式值被当缺省）。
    空串要走默认值，是因为 compose 的 `${VAR:-}` 在未设时会传进来一个空串，不是 undefined。 */
-function dietInt(name, dflt, max) {
+function envNonNegInt(name, dflt, max) {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return dflt;
   const n = Number(raw);
   if (!Number.isFinite(n)) return dflt;
   return Math.max(0, Math.min(max, Math.floor(n)));
 }
-const DIET_KEEP_MSGS = dietInt('ZZCSAPI_DIET_KEEP_MSGS', 30, 10000);
-const DIET_KEEP_IMAGES = dietInt('ZZCSAPI_DIET_KEEP_IMAGES', 5, 1000);
+const DIET_KEEP_MSGS = envNonNegInt('ZZCSAPI_DIET_KEEP_MSGS', 30, 10000);
+const DIET_KEEP_IMAGES = envNonNegInt('ZZCSAPI_DIET_KEEP_IMAGES', 5, 1000);
 const DIET_PLACEHOLDER = '[图片已省略：此处原有一张截图，因超出保留窗口不再随请求发送。如需我重新查看该图，请重新发送。]';
 
 /* 就地摘图（返回 null = 一张都没摘，调用方零行为变化）。
@@ -5251,6 +5251,37 @@ function applyContextDiet(body) {
   return r;
 }
 if (DIET_ON) console.log(`[diet] 上下文节食已开启：保留最近 ${DIET_KEEP_MSGS} 条消息内、最多 ${DIET_KEEP_IMAGES} 张图`);
+
+/* ── 首字死线随请求体积缩放（v1.18.61）────────────────────────────────────────────
+   动机（实测，不是估算）：**首字节耗时是随请求体积涨的** —— 同一渠道 hebox1 单变量实验：
+   0KB → 4.8s、39KB → 7.2s、**391KB → >30s（撞死线）**。而死线原本是**写死的 30s/60s**，与体积无关。
+   真实 DSH 流量常带 0.5~1MB 的体（上下文 + 工具目录 + 历史），于是"慢但答得出"的家一律被误判成挂死，
+   用户看到的是"一直在换家、最后报错"。
+
+   现场量到的对照（这条是它存在的直接理由）：上下文节食把报文体从 **4.5MB 砍到 0.85MB（降 82%）**，
+   **失败率却纹丝不动（67% → 65%）** —— 因为 0.85MB 仍然 > 那个已经撞线的 391KB。
+   **光减体积不够，死线也得跟着体积走。**
+
+   做法：`死线 = 基础值 + 体积KB × 每KB毫秒`，钳在 [基础值, 上限]。默认每 KB 加 40ms、上限 120s。
+   40ms/KB 是从上面那组实测反推的（39KB→7s 与 850KB→约 50s，斜率约 53ms/KB，取 40 偏保守）。
+
+   ⚠ **只放大「首字死线」，不放大「流内空闲死线」**：前者等的是 **prefill**（大提示本来就慢，该等）；
+   后者等的是"已经开始出字了却卡住"（上游真挂了，与提示多大无关，放大只会让卡死的流多挂几分钟）。
+   v1.18.30 曾把两者统一成同一个值，此处**刻意拆开**（见 tryChannel 里 FIRST_CHUNK_MS 的注释）。
+
+   渠道级 `firstChunkTimeoutMs` 仍然最高优先：**显式配置压过推导值**，配了的家不参与缩放。
+   关闭：`ZZCSAPI_FIRST_BYTE_SCALING=0` 即退回旧的写死 30s/60s。 */
+const FIRST_BYTE_SCALING = !/^(0|false|off|no)$/i.test(String(process.env.ZZCSAPI_FIRST_BYTE_SCALING || ''));
+const FIRST_BYTE_PER_KB = envNonNegInt('ZZCSAPI_FIRST_BYTE_PER_KB', 40, 1000);
+const FIRST_BYTE_MAX_MS = envNonNegInt('ZZCSAPI_FIRST_BYTE_MAX_MS', 120_000, 600_000);
+/* 纯函数：给定基础死线与报文体字节数，算出这一发真正该等的时长。
+   故意不读全局状态、不碰网络 —— 真值表可以直接在测试里跑。 */
+function firstByteDeadline(baseMs, bodyBytes) {
+  if (!FIRST_BYTE_SCALING) return baseMs;
+  const kb = Math.max(0, Number(bodyBytes) || 0) / 1024;
+  return Math.min(FIRST_BYTE_MAX_MS, Math.round(baseMs + kb * FIRST_BYTE_PER_KB));
+}
+if (FIRST_BYTE_SCALING) console.log(`[firstbyte] 首字死线随体积缩放已开启：基础 30s/60s + 每 KB ${FIRST_BYTE_PER_KB}ms，上限 ${FIRST_BYTE_MAX_MS / 1000}s`);
 
 async function handleOpenAIRequest(req, res, url) {
   const raw = await readBody(req);
@@ -6130,7 +6161,11 @@ async function tryChannel(opts) {
   //   首字超时永远不触发，只能等"每渠道总超时"（旧 120s、收紧后 90s）→ 客户端（DSH 120s）先超时，
   //   用户看到"等两分钟然后失败"，而不是"30 秒内自动换了一家成功"。
   //   现在把 fetch 本身也纳入这条死线：30s（有其它候选）/ 60s（末位），渠道可用 firstChunkTimeoutMs 覆盖。
-  const FIRST_BYTE_MS = ch.def.firstChunkTimeoutMs || (opts.hasMoreCandidates ? 30_000 : 60_000);
+  //   v1.18.61：这条死线**再按报文体大小放大**（首字耗时随 prefill 涨，见 firstByteDeadline 的注释）。
+  //   渠道显式配的 firstChunkTimeoutMs 仍然最高优先——显式配置压过推导值，配了的家不参与缩放。
+  const firstByteExplicit = Number(ch.def.firstChunkTimeoutMs) || 0;
+  const FIRST_BYTE_BASE = firstByteExplicit || (opts.hasMoreCandidates ? 30_000 : 60_000);
+  const FIRST_BYTE_MS = firstByteExplicit || firstByteDeadline(FIRST_BYTE_BASE, bodyStr.length);
 
   if (ch.def.proxy) {
     // PT02：渠道配了代理 → 全程 curl -x（undici fetch 不支持代理）。响应全量缓冲，
@@ -6259,7 +6294,10 @@ async function tryChannel(opts) {
     //   用户看到的是"等两分钟后失败"，而不是"自动换了一家成功"。30 秒足够覆盖正常的慢思考首字节
     //   （实测成功的发次首字节都在 1~6 秒内），真遇到"思考很久才吐第一个字节"的渠道可单独设
     //   `firstChunkTimeoutMs` 放宽（末位候选仍给 60s，因为没下家可换，多等一点更划算）。
-    const FIRST_CHUNK_MS = FIRST_BYTE_MS;   // v1.18.30：与响应头死线共用同一个值，别再各写一份公式
+    // v1.18.61：**刻意不再与首字死线共用同一个值**。首字等的是 prefill（提示越大本来就该等越久，
+    //   故按 bodyStr 体积放大）；流内空闲等的是"已经开始出字却卡住"——上游真挂了，与提示多大无关，
+    //   跟着放大只会让卡死的流多挂几分钟。这里用**未放大的基础值**。
+    const FIRST_CHUNK_MS = FIRST_BYTE_BASE;
     let firstVal = null;
     let firstTimer = null;
     try {

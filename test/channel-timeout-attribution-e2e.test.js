@@ -114,7 +114,39 @@ async function waitUp(port, ms = 20000) {
 
     // 结构性守卫：默认值不许回潮
     const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-    check('默认首字超时 = 30s（有候选）/ 60s（末位）', /firstChunkTimeoutMs \|\| \(opts\.hasMoreCandidates \? 30_000 : 60_000\)/.test(src));
+    check('默认首字死线 = 30s（有候选）/ 60s（末位），**再按报文体大小放大**（v1.18.61）',
+      /firstByteExplicit \|\| \(opts\.hasMoreCandidates \? 30_000 : 60_000\)/.test(src)
+      && /FIRST_BYTE_MS = firstByteExplicit \|\| firstByteDeadline\(FIRST_BYTE_BASE, bodyStr\.length\)/.test(src));
+    check('★ 渠道显式配的 firstChunkTimeoutMs 压过推导值（配了的家不参与缩放）',
+      /const firstByteExplicit = Number\(ch\.def\.firstChunkTimeoutMs\) \|\| 0;/.test(src));
+    check('★ 流内空闲死线**不**跟着放大（上游真挂了与提示多大无关；v1.18.30 曾与首字共用，这里刻意拆开）',
+      /const FIRST_CHUNK_MS = FIRST_BYTE_BASE;/.test(src) && !/const FIRST_CHUNK_MS = FIRST_BYTE_MS;/.test(src));
+    /* ── 缩放公式真值表（纯函数，不碰网络）：把常量与函数整体抠出来、用受控的 process.env 求值 ── */
+    {
+      const m = /const FIRST_BYTE_SCALING[\s\S]*?\nfunction firstByteDeadline[\s\S]*?\n\}/.exec(src);
+      /* ★ 必须把 envNonNegInt 一起抠进来：它被那两个常量调用，漏了就是 ReferenceError。
+         （第一版就漏了，两条命令一起炸——这也说明"抠源码"的守卫本身需要一条装配断言兜底。） */
+      const mNum = /^function envNonNegInt[\s\S]*?\n\}/m.exec(src);
+      check('能从源码抠出 envNonNegInt 与 firstByteDeadline（装配守卫；抠不到下面几条会全炸）', !!m && !!mNum);
+      const mk = (env) => new Function('process', mNum[0] + '\n' + m[0] + '\nreturn firstByteDeadline;')({ env });
+      const f = mk({});
+      const exp = (base, kb) => Math.min(120_000, Math.round(base + kb * 40));
+      check('小请求几乎不放大（空体 = 基础值；1KB 只 +40ms）',
+        f(30_000, 0) === 30_000 && f(30_000, 1024) === 30_040, [f(30_000, 0), f(30_000, 1024)]);
+      check('39KB → 31.6s（对应实测 7.2s，留足余量）', f(30_000, 39 * 1024) === exp(30_000, 39), f(30_000, 39 * 1024));
+      check('★ 850KB → 64.8s（线上那批 0.85MB 的请求正是靠这个值才等得到首字节）', f(30_000, 850 * 1024) === exp(30_000, 850), f(30_000, 850 * 1024));
+      check('★ 超上限钳到 120s（4.5MB 不会无限放大）', f(30_000, 4.5 * 1024 * 1024) === 120_000, f(30_000, 4.5 * 1024 * 1024));
+      check('末位基础 60s 同样放大、且受同一上限约束',
+        f(60_000, 850 * 1024) === exp(60_000, 850) && f(60_000, 4.5 * 1024 * 1024) === 120_000,
+        [f(60_000, 850 * 1024), f(60_000, 4.5 * 1024 * 1024)]);
+      check('非法/缺省输入不炸（null / undefined / 负数 / 非数字都退回基础值）',
+        f(30_000, null) === 30_000 && f(30_000, undefined) === 30_000 && f(30_000, -5) === 30_000 && f(30_000, 'x') === 30_000,
+        [f(30_000, null), f(30_000, -5), f(30_000, 'x')]);
+      check('★ 关闭开关即退回原行为（ZZCSAPI_FIRST_BYTE_SCALING=0）', (() => {
+        const f2 = mk({ ZZCSAPI_FIRST_BYTE_SCALING: '0' });
+        return f2(30_000, 4.5 * 1024 * 1024) === 30_000 && f2(60_000, 850 * 1024) === 60_000;
+      })());
+    }
     check('默认每渠道总超时 = 90s', /const timeoutMs = ch\.def\.timeoutMs \|\| 90_000;/.test(src));
     check('不再有 90_000 : 300_000 的旧默认', !/hasMoreCandidates \? 90_000 : 300_000/.test(src));
 

@@ -55,7 +55,7 @@ function loadDiet(env) {
   }
   try {
     const code = [
-      extractDecl('DIET_ON'), extract('dietInt'), extractDecl('DIET_KEEP_MSGS'), extractDecl('DIET_KEEP_IMAGES'), extractDecl('DIET_PLACEHOLDER'),
+      extractDecl('DIET_ON'), extract('envNonNegInt'), extractDecl('DIET_KEEP_MSGS'), extractDecl('DIET_KEEP_IMAGES'), extractDecl('DIET_PLACEHOLDER'),
       extract('dietContextImages'),
     ].join('\n');
     return new Function(code + '\nreturn { dietContextImages, DIET_ON, DIET_KEEP_MSGS, DIET_KEEP_IMAGES, DIET_PLACEHOLDER };')();
@@ -243,10 +243,10 @@ console.log('\n7. 装配守卫：四套客户端路由都挂上了，且顺序�
 
   check('默认关：DIET_ON 读的是 ZZCSAPI_CONTEXT_DIET，缺省判为关',
     /const DIET_ON = \/\^\(1\|true\|on\|yes\)\$\/i\.test\(String\(process\.env\.ZZCSAPI_CONTEXT_DIET \|\| ''\)\)/.test(SRC));
-  check('参数有钳制（dietInt 内 Math.max/Min 钳到 max），防止配置写错把整个上下文掏空',
-    /Math\.max\(0, Math\.min\(max, Math\.floor\(n\)\)\)/.test(extract('dietInt')));
+  check('参数有钳制（envNonNegInt 内 Math.max/Min 钳到 max），防止配置写错把整个上下文掏空',
+    /Math\.max\(0, Math\.min\(max, Math\.floor\(n\)\)\)/.test(extract('envNonNegInt')));
   check('★ 钳制上限：K ≤ 10000 / N ≤ 1000',
-    /dietInt\('ZZCSAPI_DIET_KEEP_MSGS', 30, 10000\)/.test(SRC) && /dietInt\('ZZCSAPI_DIET_KEEP_IMAGES', 5, 1000\)/.test(SRC));
+    /envNonNegInt\('ZZCSAPI_DIET_KEEP_MSGS', 30, 10000\)/.test(SRC) && /envNonNegInt\('ZZCSAPI_DIET_KEEP_IMAGES', 5, 1000\)/.test(SRC));
   /* ★ 这一条是本节最要紧的：**显式 0 ≠ 没设**。
      第一版实现写成 `Number(env) || 默认`，于是 K=0（把图全摘掉）被静默当成"没设"回落到 30 ——
      配置永远不生效、还不报错。本项目栽过同类的坑（把用户的显式值当缺省）。 */
