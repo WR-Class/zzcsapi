@@ -1729,6 +1729,105 @@ function testSearchClear() {
   testProbeTrim();
   testKeyAutofill();
   testSearchClear();
+
+  /* ── §Z 每一页都要真的渲染一次（v1.18.65 的教训）──────────────────────────────
+     `vAutoWeight` 引用了只存在于 `autoWeightCard()` 内部的 `a` → ReferenceError →
+     **整页空白**，而 57 个文件 / 2685 项断言**全绿也没拦住** —— 因为**从来没有任何用例
+     渲染过这个页面**。"改了没被覆盖过的页面"就是这么下场的。
+
+     这条守卫把它变成机械动作：从 `build/app.js` 抠出**每一页** `vXxx()`，配上助手池与桩依赖
+     逐个真调用，断言 ①不抛 ②innerHTML 非空 ③解析得出页面标题。
+     助手池 = **全部 `function` 声明**（含传递依赖）—— 刻意不手工维护依赖闭包：
+     漏一个助手会误报成"页面坏了"，那种噪声会让人开始忽略这条守卫。 */
+  G('Z. 每一页都要真的渲染一次（v1.18.65：一个从未被渲染的页面坏了，全绿也拦不住）');
+  {
+    const SRC_ALL = fs.readFileSync(require('path').join(__dirname, '..', 'build', 'app.js'), 'utf8');
+    /* 环境参数清单要**先声明**：下面建池子时要用它排除同名成员（`svg`/`nf` 这些既作依赖传入、
+       又在 app.js 里有顶层声明，同时出现在形参与函数体里就是重复声明语法错误）。 */
+    const DEP = ['$', '$$', 'DATA', 'RAW', 'esc', 'svg', 'nf', 'toast', 'api', 'copyText', 'render', 'location',
+      'document', 'window', 'PROTO_META', 'PROTO_ORDER', 'fmtTs', 'protoLabel', 'protoOfChannel', 'fMs', 'stTxt',
+      'pct', 'sparkline', 'areaChart', 'modal', 'closeModal', 'drawer', 'go', 'loadAll', 'openLog', 'openIpStats',
+      'stFilter', 'stClients', 'setStatus', 'reqIdOf', 'metricsUrl', 'sum', 'bytes', 'durText', 'msTextOf', 'num'];
+    const uniq = [...new Set([...SRC_ALL.matchAll(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map((m) => m[1]))];
+    const pool = [];
+    const dropped = [];
+    for (const n of uniq) {
+      let src1 = '';
+      try { src1 = extract(n); } catch { dropped.push(n + '(抠不出)'); continue; }
+      /* 逐个**先单独校验**再入池：一个抠坏的成员（花括号匹配撞上字符串/注释里的括号）
+         会让整池语法错误，于是**每一页**都报同一个错、真问题被埋掉。
+         坏成员剔掉且**点名**——静默剔除等于把守卫变成一个不会红的摆设。 */
+      if (DEP.includes(n)) continue;
+      try { new Function(src1); pool.push(src1); } catch (e) { dropped.push(n + '(' + String(e.message).slice(0, 40) + ')'); }
+    }
+    const pages = uniq.filter((n) => /^v[A-Z]/.test(n)).sort();
+    check('抠出了助手池与页面清单（页面 ≥ 8；抠法失效时这条先红，别让后面几条给出假信号）',
+      pool.length > 50 && pages.length >= 8, { helpers: pool.length, pages: pages.length, dropped: dropped.slice(0, 6) });
+    const POOL = pool.join('\n');
+    /* 页面还依赖**模块级状态变量**（`let setDraft=...` / `const CFG=...` 这类），它们不是函数。
+       同样逐个校验再入池：单行抓取撞上多行对象字面量时会截断，那种成员一律剔除并点名。 */
+    /* 与环境参数**同名的成员必须排除**：`svg`/`nf`/`esc` 这些既作为依赖传入、
+       又在 app.js 里有顶层声明 —— 同时出现在形参和函数体里就是"重复声明"语法错误，
+       而且它会让**每一页**都报同一个错（真问题又被埋掉）。 */
+    const stateLines = [...SRC_ALL.matchAll(/^(?:let|const)\s+([A-Za-z_$][\w$]*)\s*=[^\n]*$/gm)];
+    const state = [];
+    const stateDropped = [];
+    for (const m of stateLines) {
+      if (DEP.includes(m[1])) continue;
+      try { new Function(m[0]); state.push(m[0]); } catch { stateDropped.push(m[0].slice(0, 40)); }
+    }
+    const POOL_ALL = POOL + '\n' + state.join('\n');
+
+    check('模块级状态变量也抠进来了（页面依赖它们；剔掉的多行声明会点名，不静默）',
+      state.length > 10, { state: state.length, dropped: stateDropped.slice(0, 5) });
+    /* ── 逐页真渲染 ── */
+    const RAWstub = { settings: { config: {}, effective: {}, status: {} }, meta: {}, recent: [] };
+    const bad = [];
+    let rendered = 0;
+    for (const p of pages) {
+      const dom = makeDom();
+      const el = mkEl(p);
+      const noop = () => {};
+      const raw = (d) => {
+        if (d === '$') return (sel, root) => (sel === '#viewport' ? dom.root : dom.$(sel, root || dom.root));
+        if (d === '$$') return dom.$$;
+        if (d === 'DATA') return DATA;
+        if (d === 'RAW') return RAWstub;
+        if (d === 'esc') return esc;
+        if (d === 'svg') return svg;
+        if (d === 'nf') return nf;
+        if (d === 'location') return { origin: 'http://127.0.0.1:8787', hash: '' };
+        if (d === 'document') return { querySelector: () => null, querySelectorAll: () => [], addEventListener: noop, body: mkEl('body') };
+        if (d === 'window') return { addEventListener: noop, location: { origin: '' } };
+        if (d === 'PROTO_META' || d === 'PROTO_ORDER') return {};
+        return noop;
+      };
+      try {
+        const fn = new Function(...DEP, POOL_ALL + '\nreturn ' + p + ';')(...DEP.map(raw));
+        fn(el);
+        const title = (el.innerHTML.match(/class="page-title">([^<]*)/) || [])[1] || '';
+        if (!el.innerHTML || !title) bad.push(p + ' → 渲染为空或缺页标题');
+        else rendered++;
+      } catch (e) {
+        bad.push(p + ' → ' + String(e && e.message).slice(0, 90));
+      }
+    }
+    if (bad.length) bad.forEach((b) => console.log('      · ' + b));
+    const badNames = bad.map((b) => b.split(' ')[0]);
+    /* 分两档断言，**刻意不假装完整**：
+       ① 渲染得出来的页面必须真的出来（这是本守卫的核心价值 —— v1.18.65 那个整页空白
+          就是被这一档抓住的：vAutoWeight 必须在成功名单里）；
+       ② 渲染不出来的**点名列出并钉住条数**，它们要么缺多行 const（`SET_META` / `SNIP`），
+          要么桩 DATA 不够（vChannels / vLogs / vOverview 要 DATA.meta.*、DATA.logs…）。
+          钉住条数是刻意的：**这个名单只许变短** —— 悄悄变多时这一条会红。
+          （把 ①②合成一句"全都要过"会更漂亮，但那要求先补完多行 const 抓取与桩数据；
+           在补齐之前，如实分档比一个会误报的漂亮断言有用。） */
+    check('★ 渲染得出来的页面必须真的出来（抛异常 / 空白 / 缺标题都会被点名到具体页面）',
+      !badNames.includes('vAutoWeight'), bad);
+    check('★ 渲染成功的页面数不低于已知水位（v1.18.65 时 = 5：vAutoWeight/vKeys/vModels/vPlayground/vStats）',
+      rendered >= 5, { rendered, total: pages.length, couldNotRender: badNames });
+  }
+
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
   process.exit(fail ? 1 : 0);
