@@ -710,7 +710,7 @@ function testAutoWeight() {
   /* 4.3 抽屉里那一块：结构守卫（渲染要一整套 stub，这里只保证文案与字段还在） */
   {
     const oc = extract('openChannel');
-    check('★ 抽屉里有「自动权重（观测 · 只算不生效）」这一节', oc.includes('自动权重（观测 · 只算不生效）'));
+    check('★ 抽屉里有「自动权重（观测）」这一节（v1.18.63 起标题不再自称"只算不生效"——那要看开关）', oc.includes('自动权重（观测）'));
     check('★ 抽屉里把判断依据摊开（健康系数 / 样本 / 失败率 / 延迟）',
       oc.includes('健康系数') && oc.includes('样本 ') && oc.includes('失败率 ') && oc.includes('延迟 '));
     check('抽屉里也写明"系数不会被执行"', oc.includes('上面的系数不会被执行'));

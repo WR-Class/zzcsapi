@@ -683,7 +683,7 @@ function vAutoWeight(v){
   v.innerHTML=`
   <div class="page-hd">
     <div><h1 class="page-title">自动权重</h1>
-      <div class="page-sub">按失败率 / 延迟 / 样本量预测各候选的分流份额 · 只算不生效，真实路由仍按手工权重与优先级</div></div>
+      <div class="page-sub">按失败率 / 延迟 / 样本量预测各候选的分流份额 · ${a.effective?'<b>已生效</b>：这份预测正在影响真实路由':'只算不生效，真实路由仍按手工权重与优先级'}</div></div>
   </div>
   ${autoWeightCard()}`;
 }
@@ -745,7 +745,7 @@ function autoWeightCard(){
   }).join('');
   return `<div class="card aw-card">${hd}
     <div class="aw-meta">
-      <div class="aw-note">下面是「若启用自动权重会怎么分」的预测：<b>当前分流一字未动</b>——真实路由仍按你填的权重，没填就按优先级兜底。</div>
+      <div class="aw-note">下面是各候选的预测分流份额：${a.effective?'<b>已生效</b>——它就是真实路由在用的分配（关掉「运行期设置 → 自动权重」即退回手工权重与优先级）':'<b>当前分流一字未动</b>——真实路由仍按你填的权重，没填就按优先级兜底。到「运行期设置 → 自动权重」打开开关才会生效。'}</div>
       ${knobs?`<div class="aw-knobs"><span class="lbl">旋钮</span>${knobs}</div>`:''}
     </div>
     ${rows}
@@ -759,7 +759,7 @@ function autoWeightCard(){
    （ttlSec 填 5 → 生效 30）。只显示一个就会变成"我明明填了 5，怎么没生效"的悬案。
    草稿 setDraft 与 config 分离：没改动时跟随服务端刷新，一旦改动（setDirty）就不被 8 秒轮询覆盖。 */
 let setDraft=null, setDirty=false, setSaving=false, setError='';
-const SET_GROUPS=['sessionAffinity','rateLimit','metrics','thinkingReplay'];
+const SET_GROUPS=['sessionAffinity','rateLimit','metrics','thinkingReplay','autoWeight'];
 const SET_META={
   sessionAffinity:{title:'会话粘性',icon:'cookie',
     desc:'同一会话尽量落到同一家渠道。只改「谁是第一位」——粘住的渠道不在候选 / 冷却 / 已 down 时一动不动；命中也不影响加权份额统计。'},
@@ -769,6 +769,8 @@ const SET_META={
     desc:'Prometheus 文本格式的 /metrics。默认开、需 admin key；public 打开后匿名可抓。'},
   thinkingReplay:{title:'thinking 回放',icon:'clock',
     desc:'Anthropic 同协议直通上，客户端把上一轮 thinking 块丢了 signature 再送回来时（部分框架重序列化会丢不认识的字段），按缓存补回上游自己签的那枚。只回放缓存里真有的签名——从不生成、从不跨渠道；取不到会话键就不回放；默认关。'},
+  autoWeight:{title:'自动权重',icon:'sliders',
+    desc:'把观测算出的「健康系数」乘进候选权重，进而影响"谁排第一"的分配。只降份额、不除名：失败的家掉到地板，一旦成功立刻回升——没有任何永久状态。关掉即逐字节回旧行为（一个 weight 都不填时加权池为空，路由一行不动）。观测永远开着，关掉也看得见"如果开着会怎么分"。'},
 };
 const SET_FIELDS={
   sessionAffinity:[
@@ -790,6 +792,14 @@ const SET_FIELDS={
     {k:'ttlSec',label:'缓存时长',unit:'秒',ph:'3600',range:'范围 30 – 604800 秒'},
     {k:'maxEntries',label:'最多缓存条数',unit:'条',ph:'2048',range:'范围 16 – 100000'},
   ],
+  /* 只放三个"看一眼就懂、调错也不至于出事"的旋钮。maxShare / ewma / deadband / updateMs
+     刻意不放进控制台：它们要么在本项目的权重语义下基本不会触发（maxShare），要么属于防振荡的
+     内部常数（ewma / deadband），放出来只会让人误以为"不调就不对"。 */
+  autoWeight:[
+    {k:'minSamples',label:'样本门槛',unit:'次',ph:'10',range:'范围 1 – 1000；样本不足时不动它（新渠道不被噪声打死）'},
+    {k:'floor',label:'健康系数地板',unit:'',ph:'0.2',range:'范围 0 – 1；失败到家也只压到这个比值，留出恢复路径'},
+    {k:'latencyPenalty',label:'速度惩罚强度',unit:'',ph:'0.5',range:'范围 0 – 1；0 = 完全不看速度，只看成功率'},
+  ],
 };
 function setGroupCfg(g){const s=RAW.settings||{};return {cfg:((s.config||{})[g])||{},eff:((s.effective||{})[g])||{}};}
 function metricsUrl(){return (typeof location!=='undefined'&&location.origin?location.origin:'')+'/metrics';}
@@ -807,10 +817,10 @@ function setHint(g,f){
 function setPayload(){
   const s=RAW.settings||{}, cfg=s.config||{}, out={};
   for(const g of SET_GROUPS){
-    const c=cfg[g]||{}, grp={};
-    if(setDraft[g].enabled!==c.enabled) grp.enabled=setDraft[g].enabled===true;
+    const c=cfg[g]||{}, dd=setDraft[g]||{}, grp={};
+    if(dd.enabled!==c.enabled) grp.enabled=dd.enabled===true;
     for(const f of SET_FIELDS[g]){
-      let v=setDraft[g][f.k];
+      let v=dd[f.k];
       if(v===''||v==null) continue;
       if(!f.bool) v=Number(v);
       if(v!==c[f.k]) grp[f.k]=v;
@@ -824,13 +834,16 @@ function setStat(g,on,d,stt){
   if(g==='sessionAffinity') return `记忆 <b>${nf(stt.entries||0)}</b> 条 · 命中 <b>${nf(stt.hits||0)}</b> · 未命中 <b>${nf(stt.misses||0)}</b> · 学习 <b>${nf(stt.learned||0)}</b>`;
   if(g==='rateLimit') return `在飞 <b>${nf(stt.inflight||0)}</b> · 峰值 <b>${nf(stt.peakInflight||0)}</b> · 限速拒绝 <b>${nf(stt.limitedRate||0)}</b> · 并发拒绝 <b>${nf(stt.limitedConcurrent||0)}</b>`;
   if(g==='thinkingReplay') return `缓存 <b>${nf(stt.entries||0)}</b> 条 · 学习 <b>${nf(stt.learned||0)}</b> · 修复命中 <b>${nf(stt.hits||0)}</b> · 未命中 <b>${nf(stt.misses||0)}</b> · 作废 <b>${nf(stt.stale||0)}</b>`;
+  if(g==='autoWeight') return `节拍 <b>${nf(stt.ticks||0)}</b> 拍 · 在观测 <b>${nf(stt.watched||0)}</b> 家`;
   return `已启用（${d.public?'<b>匿名可抓</b>':'需 admin key'}）
     <button class="btn ghost sm" id="setCopyMetrics" data-t="${esc(metricsUrl())}">${svg('copy',12)}复制抓取地址</button>`;
 }
 function setCard(g){
   const M=SET_META[g], c=setGroupCfg(g), s=RAW.settings||{};
   const stt=((s.status||{})[g==='sessionAffinity'?'affinity':g])||{};
-  const d=setDraft[g], on=d.enabled===true;
+  /* ★ 缺组不能崩（v1.18.64）：服务端没下发这一组时（旧版本、或将来新增的组先上线了前端），
+     整页设置不该整块白掉 —— 默认成空对象就是"开关关、输入框空、提示走 range"，页面照常可用。 */
+  const d=setDraft[g]||{}, on=d.enabled===true;
   const rows=SET_FIELDS[g].map(f=>{
     if(f.bool) return `<div class="set-row"><label>${f.label}</label>
       <button class="switch${d[f.k]?' on':''}" id="set_${g}_${f.k}" ${on?'':'disabled'} title="${d[f.k]?'关闭':'开启'}"></button>
@@ -1028,7 +1041,7 @@ function openChannel(id){
           : `<span class="tag muted" title="权重为 0（或不填）= 不参与加权轮询，只按优先级 / 健康度做兜底">未参与加权轮询<span class="muted" style="margin-left:4px">· 点「编辑」可设权重</span></span>`}
       </div>
 
-      <div class="sec-title">自动权重（观测 · 只算不生效）</div>
+      <div class="sec-title">自动权重（观测）</div>
       <div class="row wrap" style="gap:9px;margin-bottom:8px">
         <span class="tag" title="健康系数 0~1：若启用自动权重，这家会按它打折分流；现在只用于展示">健康系数 ${c.ah==null?'—':c.ah.toFixed(2)}</span>
         <span class="tag" title="滚动窗口里的请求数（成功 + 失败）">样本 ${c.aN}</span>
