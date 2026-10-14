@@ -144,7 +144,18 @@ ZZCSAPI_BIND=0.0.0.0 node server.js  # 绑定地址，缺省 127.0.0.1（裸跑�
 ZZCSAPI_ALLOWED_HOSTS=a.com,b.com node server.js  # Host 门白名单域名（逗号分隔）。默认放行 localhost 与回环/私网 IP 字面量；反代/公网域名必须在此登记，否则 421（v1.18.10 渗透整改 V-07：拦 DNS 重绑定）
 ZZCSAPI_DUMP_BODIES=/app/dump node server.js  # 【排查用，默认关】把客户端会话类请求体原样落盘到该目录，用于留证"上游异常"的真实请求形态（v1.18.27）
 ZZCSAPI_DUMP_MAX=30 node server.js            # 落盘最多保留几个（默认 30，钳到 1–500）
+ZZCSAPI_CONTEXT_DIET=1 node server.js         # 【默认关】上下文节食：摘掉几十轮前的旧截图（v1.18.61）
+ZZCSAPI_DIET_KEEP_MSGS=30 node server.js      # 节食窗口：只保留最近 K 条消息里出现的图（默认 30）
+ZZCSAPI_DIET_KEEP_IMAGES=5 node server.js     # 节食上限：最多保留最近 N 张图（默认 5）。显式写 0 = 全部摘掉
 ```
+
+**上下文节食（v1.18.61，默认关闭）**：设 `ZZCSAPI_CONTEXT_DIET` 后，**几十轮之前的旧截图**不再随每一轮请求重发，改成一行占位符。
+动机来自对真实落盘报文的实测（不是估算）：一份 **4.52MB** 的请求里 **8 张图占 3.96MB（85%）**，其中 **7 张距今 88~189 条消息**——它们早就被分析完、结论写在后面的 assistant 消息里，字节却每轮原样重发。**每张旧截图会让之后每一轮的请求体永久 +500KB。** 摘掉之后：4.52MB → 约 0.62MB。
+规则：**两条同时满足才保留** —— 在最近 `ZZCSAPI_DIET_KEEP_MSGS` 条消息内，**且**在最近 `ZZCSAPI_DIET_KEEP_IMAGES` 张之内；其余换成 `[图片已省略：…如需我重新查看该图，请重新发送。]`。
+纪律：**默认不设 = 零行为变化**（字节级原样透传）；**只摘图**，文本 / 工具结果 / 工具调用参数一律不碰；任何异常都吞掉并原样发送（节食绝不搞坏请求）；每条受影响的请求打一行 `[diet]` 日志（摘了几张、省了多少字节）便于事后核账。
+**有意为之的连带效应**：摘完若请求里已无图，含图渠道裁剪不再生效，**候选链会变宽**——这是正确的，我们真的不再发图了。
+覆盖四套客户端入口：`/v1/chat/completions`、`/v1/responses`、`/anthropic/v1/messages`、Gemini `:generateContent`（openai 形 `image_url` / anthropic 形 `image` 块 / gemini 形 `inlineData`；gemini 的 `fileData` 是外链引用，不动）。回归：`test/context-diet.test.js`。
+配套工具：`node payload-report.js [dump目录]` 只读分析请求体构成（尺寸 / 类型 / 内容块去重 / 被取代的旧工具流量），**只打印尺寸与哈希，不打印对话内容**。
 
 **请求体落盘诊断（v1.18.27，默认关闭）**：设 `ZZCSAPI_DUMP_BODIES` 后，客户端会话类请求（`/v1/chat/completions`、`/anthropic/v1/messages`、Gemini `:generateContent`）的**请求体原文**会落到该目录（compose 场景已挂 `./dump:/app/dump`，仓库 `.gitignore` 已忽略 `dump/`）。
 用途：当上游出现「200 + `finish_reason=length` + 输出仅 1 个 token」「200 + 空流」这类**伪装成成功**的失败时，客户端侧只有 token 计数、没有请求形态（系统提示 / 工具目录 / 工具调用历史），无法复现——这个开关就是为留证而设。
@@ -220,7 +231,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 54 个测试文件 · 2580 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 55 个测试文件 · 2634 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -245,7 +256,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**54 个文件 · 2580 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**55 个文件 · 2634 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
 ## 配置示例 (`config.example.json`)

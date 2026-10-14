@@ -34,6 +34,14 @@ services:
       # ⚠ dump 文件含完整对话内容，只在排查时开；公网部署别开（README「方式四」已在 .env 模板标注）。
       ZZCSAPI_DUMP_BODIES: ${ZZCSAPI_DUMP_BODIES:-}
       ZZCSAPI_DUMP_MAX: ${ZZCSAPI_DUMP_MAX:-30}
+      # 上下文节食（v1.18.61，默认关闭）：根目录 .env 写 ZZCSAPI_CONTEXT_DIET=1 即开启 ——
+      # 摘掉几十轮前的旧截图，换成占位符。实测动机：一份 4.52MB 的真实请求里 8 张图占 3.96MB（85%），
+      # 其中 7 张距今 88~189 条消息 —— 早已分析完，结论在后面的 assistant 消息里，字节却每轮重发。
+      # 两条**同时**满足才保留：最近 KEEP_MSGS 条消息内、且最近 KEEP_IMAGES 张之内。
+      # ⚠ 显式写 0 是有意义的（= 全部摘掉），代码里刻意把「未设/空串」与「显式 0」分开处理。
+      ZZCSAPI_CONTEXT_DIET: ${ZZCSAPI_CONTEXT_DIET:-}
+      ZZCSAPI_DIET_KEEP_MSGS: ${ZZCSAPI_DIET_KEEP_MSGS:-}
+      ZZCSAPI_DIET_KEEP_IMAGES: ${ZZCSAPI_DIET_KEEP_IMAGES:-}
     volumes:
       - ./config.json:/app/config.json
       - ./usage.json:/app/usage.json

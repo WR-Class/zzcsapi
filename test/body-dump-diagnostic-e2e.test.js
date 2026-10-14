@@ -187,6 +187,44 @@ const waitFor = async (pred, ms = 6000) => { const t0 = Date.now(); for (;;) { i
     } finally { gw.kill('SIGKILL'); }
   }
 
+  /* ══ 场景 3b：★ 重启后 seq 归零，轮转必须仍淘汰**最旧**的（v1.18.61 现场 bug）══
+     现场：文件名是 `req-<seq>-<时间戳>`，而 seq 是内存计数器、每次重启归零。若按**文件名**排序淘汰，
+     重启后新写的 req-001 在字典序上排在旧的 req-9999 **前面** —— 「删最旧」变成「删最新」，
+     于是落盘看着一直开着、实际写一份删一份：日志里 14693 条 [dump]、目录里只剩 38 个，
+     且最新的一个停在两天前。这里预置一份「上次进程留下的高位文件」，断言被淘汰的是它、不是刚写的。 */
+  {
+    const port = await freePort();
+    const dir3 = path.join(TMP, 'dump3');
+    fs.mkdirSync(dir3, { recursive: true });
+    const stale = path.join(dir3, 'req-9999-2026-01-01T00-00-00-000Z.json');
+    fs.writeFileSync(stale, JSON.stringify({ at: '2026-01-01T00:00:00.000Z', seq: 9999, url: '/v1/chat/completions', body: '{}' }));
+    const oldSec = (Date.now() - 3600_000) / 1000;
+    fs.utimesSync(stale, oldSec, oldSec);   // ★ 必须改成「一小时前」：新建文件的 mtime 天然更新，不改就测不出方向
+    const cfg = path.join(TMP, 'cfg3b.json');
+    fs.writeFileSync(cfg, JSON.stringify({
+      port, health: { intervalSec: 3600, timeoutMs: 3000 },
+      channels: [{ id: 'mockch', name: 'mockch', protocol: 'openai', baseUrl: `http://127.0.0.1:${upPort}/v1`, apiKey: 'sk-mock', enabled: true, priority: 10, models: { mock: 'mock' } }],
+    }));
+    const gw = startGateway(cfg, port, { ZZCSAPI_DUMP_BODIES: dir3, ZZCSAPI_DUMP_MAX: '2' });
+    try {
+      check('3b 网关启动（预置高位旧文件，上限 2）', await waitUp(port));
+      for (let i = 0; i < 2; i++) {
+        await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + GW_KEY },
+          body: JSON.stringify({ model: 'mock', messages: [{ role: 'user', content: 'r' + i }] }),
+        }).then((x) => x.text());
+        await sleep(150);
+      }
+      await waitFor(() => dumpFiles(dir3).length >= 2);
+      await sleep(250);   // 让轮转落定
+      const files = dumpFiles(dir3);
+      check('★ 场景 3b：被淘汰的是旧的高位文件（req-9999），不是刚写进来的',
+        !files.some((f) => f.startsWith('req-9999-')), { files });
+      check('★ 场景 3b：本轮新写的两份都还在',
+        files.filter((f) => /^req-00[12]-/.test(f)).length === 2, { files });
+    } finally { gw.kill('SIGKILL'); }
+  }
+
   /* ══ 场景 4：落盘目标不可写 → 请求照常成功（诊断绝不搞坏请求）══ */
   {
     const port = await freePort();

@@ -1,4 +1,4 @@
-# 测试清单（55 个文件 · 2631 项断言，零依赖）
+# 测试清单（55 个文件 · 2634 项断言，零依赖）
 
 > **断言总数怎么来的（v1.18.55 校正）**：等于 `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须与合计相等**。
 > 该运行器原先认不出 `hark-channel.test.js` 的收尾格式（`通过 97 · 失败 0`，中点分隔），把它记成
@@ -33,6 +33,7 @@
 | 静态文件 / 鉴权面 / 控制台版本 | `node sec-audit.js`（仓库根，只读体检，见 README「安全体检」） |
 | **怀疑某家上游在查客户端指纹**（"模型不回答"到底是被挑客户端还是上游故障）/ 渠道请求头保存被静默删掉 | `node channel-fingerprint-probe.js <渠道id> [--save-check]`（仓库根，见 README「渠道指纹判决探针」）；notion 软墙另用 `node notion-wall-probe.js` |
 | 请求体落盘诊断（`ZZCSAPI_DUMP_BODIES` 与 compose 的 dump 挂载；v1.18.38 起含 `/v1/responses` 且只落 POST） | `body-dump-diagnostic-e2e` |
+| **上下文节食**（`ZZCSAPI_CONTEXT_DIET`：几十轮前的旧截图摘除、窗口 K 与上限 N **两条同时满足**才保留、默认关零改动、只摘图不碰工具流量、四入口装配且必须在含图渠道裁剪之前、显式 0 ≠ 没设） | `context-diet` |
 | notion 渠道的流断取回兜底（触发判据 = 权威全文没到 / 复用同一 threadId / 次数与预算上限 / 取不回仍如实失败） | `notion-refetch-fallback-e2e` |
 | **notion 内联附件**（`notionAttachments`：字节与参照实现抓包逐字相同 / 默认关时一个字节不改 / 渠道字段落库往返 / 非布尔 400） | `notion-attachment-inline-e2e` |
 | **notion 出站通道链**（curl 主 / 软墙换 h2 / 三处推理调用点必须走 `notionFetch` / 超时与取消） | `notion-transport` + `notion-attachment-inline-e2e` + `notion-refetch-fallback-e2e` |
@@ -72,7 +73,8 @@ node test/channel-timeout-attribution-e2e.test.js # 28 项断言（v1.18.30 + v1
 node test/channel-test-stream-and-streak-e2e.test.js # 50 项断言（v1.18.40）：**手动测试的流式模式 + 真实流量单独一条欠账**（用户点出的两处真问题）。①`/admin/api/test` 一律发非流式、而真实客户端一律走流式 → "非流式答得好、流式那条路是坏的"渠道永远测不出来；②探测成功把欠账**减半**、手动测试成功把欠账**清零** → 熔断的唯一跳开机制（cooldownUntil，指数退避）被反复抹掉，"测试过、真实挂"的死家**永远熔断不掉**。§1 `classifyStreamFrame` 真值表（role-only 开场帧不算正文、usage 末帧、原生三形态、垃圾输入不炸）；§2 装配守卫（帧分类只有一份实现、真实链路与手动测试**共用**它、测试分支里 `markTrafficOk` 一次都不许出现、真实清零入口唯一、`probeFail` 已下发）；§3 **★ 同一个渠道「非流式测试通过、流式测试失败」必须被抓出来**（①的核心断言，上游真的收到 `stream:true`）+ 流式其余四形态（正常拼正文 / 流内 error 帧 / 上游无视 stream 回整段 JSON → `streamIgnored` / 思考吃光预算 `finish=length`）；§4 对照：同一家的**非流式**测试仍判可用（v1.18.29 的宽容只留给非流式模式）；§5 **★ 真实流量欠 2 笔 → 手动测试成功**不清零**（仍 2，`probeFail` 回 0、冷却放开、进观察期）→ `GET /models` 探测成功**也不清零** → 只有真实成功才清零**；§6 测试失败只记 `probeFail`（真实 streak 纹丝不动）
 node test/channel-test-reasoning-e2e.test.js # 8 项断言（v1.18.29）：手动测试必须为推理型模型兜底——测试请求预算 ≥256（原来只有 16，token 全被思考吃光 → 200+正文空 → 控制台判不过）；只有思考的家仍判可用并标 reasoningOnly；真·空回复仍如实显示；上游 5xx 带回原文
 node test/channel-drop-params-e2e.test.js # 85 项断言（v1.18.33）：★渠道级「不发这些参数」（dropParams）——现场 agentrouter 每天固定开放额度，却对「tools + reasoning_effort」组合直接 400（Function tools with reasoning_effort are not supported for gpt-6-astra），而 DSH 每次请求都同时带这两样 → 该渠道 19 行 0 成功。真起「假上游 + 临时网关」：主用例断言上游**真收不到** reasoning_effort 而 tools 仍在、对照组（没配的渠道）照样收到、**不串味**（第一家失败切到第二家后，第二家仍收到该参数——剔除只作用于出站副本、不污染共用报文对象）、同协议直通也生效、白名单外的名字 400 并回带合法清单、落库往返 + 保存别的渠道后仍在（persistConfig 显式字段清单）、显式空数组 = 清空、GET /admin/api/config 下发 dropParamWhitelist；边界：workbuddy/codex/genspark/notion-agent 配了**不生效**（自带专用报文构造）
-node test/body-dump-diagnostic-e2e.test.js # 14 项断言（v1.18.27）：请求体落盘诊断——开启后真落盘且内容一致、?key= 打码（密钥绝不进 dump）、/admin/ 不落盘、默认关闭零副作用、轮转只留最近 N 个、落盘失败不影响请求
+node test/body-dump-diagnostic-e2e.test.js # 17 项断言（v1.18.27 + v1.18.61）：请求体落盘诊断——开启后真落盘且内容一致、?key= 打码（密钥绝不进 dump）、/admin/ 不落盘、默认关闭零副作用、轮转只留最近 N 个、落盘失败不影响请求。**v1.18.61 增场景 3b：重启后 seq 归零时轮转必须仍淘汰最旧的**——现场：文件名 `req-<seq>-<时间戳>` 而 seq 是内存计数器、重启归零，按**文件名**排序时新写的 `req-001` 排在旧的 `req-9999` 前面，于是「删最旧」变成「删最新」：日志里 **14693 条 `[dump]`、目录里只剩 38 个**且最新一个停在两天前（落盘看着一直开着，其实写一份删一份）。改为**按 mtime 排序**；用例预置一份高位旧文件并把它的 mtime 改成一小时前，**在旧逻辑下 A/B 验证过这两条断言必失败**
+node test/context-diet.test.js             # 50 项断言（v1.18.61）：**上下文节食**——默认关**零行为变化（字节级，不是"结果一样"）**；保留条件是窗口 K 与上限 N **两条同时满足**（窗口外有上限也救不回、上限外的最近若干张仍会被窗口否决）；三种报文形态都覆盖（openai `image_url` / anthropic `image` 块 / gemini `inlineData`）且 gemini 的 `fileData`（外链引用，几十字节）**不动**；**只摘图**——system 提示 / user 文本 / assistant 文本 / 工具调用参数 / tool 结果逐条断言一字未改；六种异常结构一个都不抛；摘光后 `bodyHasImages` 转 false（含图渠道裁剪不再生效、候选链放宽，此连带效应是**有意**的）；四套客户端入口装配守卫 + ★「必须在 `filterCandidatesForImages` **之前**节食」的顺序守卫；以及 ★ **显式 `0` ≠ 没设**——第一版写成 `Number(env) || 默认`，那个 `||` 把显式的 0 当成"没设"，于是「把图片全摘掉」（K=0）这个合法配置**永远配不出来还不报错**（本项目栽过的老坑）。配套只读工具 `node payload-report.js [dump目录]` 分析请求体构成（只打印尺寸与哈希，不打印对话内容）
 node test/weighted-rr.test.js             # 31 项断言：加权轮询算法（3:1→75/25、平滑性、老配置零影响对照）
 node test/weighted-rr-e2e.test.js         # 12 项断言：真 HTTP 数落点，验证实际分流比例与降级行为
 node test/native-channels.test.js         # 78 项断言：原生出站双向转换（请求/响应/流式状态机/URL 鉴权头/错误体不翻译）

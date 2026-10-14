@@ -1773,7 +1773,17 @@ function dumpRequestBody(req, buf) {
     };
     fs.mkdirSync(DUMP_DIR, { recursive: true });
     fs.writeFileSync(path.join(DUMP_DIR, name), JSON.stringify(rec, null, 1));
-    const files = fs.readdirSync(DUMP_DIR).filter((f) => /^req-\d+-.*\.json$/.test(f)).sort();
+    // v1.18.61：**按 mtime 排序淘汰，不能按文件名**。
+    // 文件名是 `req-<seq>-<时间戳>`，而 seq 是内存计数器、每次重启归零 —— 重启后新写的 `req-001`
+    // 在字典序上排在旧的 `req-9999` **前面**，于是「删最旧」实际变成「删最新」：落盘看着一直开着，
+    // 其实写一份删一份。现场：日志里 14693 条 [dump]、目录里只剩 38 个（且最新的一个停在两天前）。
+    // mtime 与命名格式无关，跨重启、跨 seq 回绕恒成立。
+    // 回归守卫：test/body-dump-diagnostic-e2e.test.js 场景 3b（旧逻辑下必失败，已 A/B 验证过）。
+    const files = fs.readdirSync(DUMP_DIR)
+      .filter((f) => /^req-\d+-.*\.json$/.test(f))
+      .map((f) => { try { return { f, t: fs.statSync(path.join(DUMP_DIR, f)).mtimeMs }; } catch { return { f, t: 0 }; } })
+      .sort((a, b) => a.t - b.t)
+      .map((x) => x.f);
     for (const f of files.slice(0, Math.max(0, files.length - DUMP_MAX))) {
       try { fs.unlinkSync(path.join(DUMP_DIR, f)); } catch { /* 删旧失败不影响本次落盘 */ }
     }
@@ -5156,11 +5166,98 @@ function filterCandidatesForImages(candidates, body) {
 // 含图但裁剪后没有候选 → 统一的 400 文案（避免"无渠道"的 404 误导成模型名写错）
 const NO_IMAGE_CHANNEL_MSG = 'this request contains images, but no channel can forward them: only openai / anthropic / gemini protocol channels can carry images (openai 原样转发 image_url；anthropic 转 image 块；gemini 转 inlineData/fileData)';
 
+/* ── 上下文节食：摘掉「几十轮前的截图」（v1.18.61）──────────────────────────────
+   动机（对真实落盘报文实测，不是估算）：**每张旧截图会让之后每一轮**的请求体永久 +500KB。
+   现场一份 4.52MB 的真实报文里，8 张图占 3.96MB（85%），其中 7 张距今 88~189 条消息——
+   它们早就被分析完了，结论写在后面的 assistant 消息里，字节却每轮原样重发。
+   摘掉之后：4.52MB → 约 0.62MB。
+
+   规则（**两条同时满足**才保留，否则换成占位符）：
+     · 窗口：只保留最近 K 条消息里出现的图（`ZZCSAPI_DIET_KEEP_MSGS`，默认 30）
+     · 上限：最多保留最近 N 张（`ZZCSAPI_DIET_KEEP_IMAGES`，默认 5）—— 防短窗口内一口气贴很多张
+
+   纪律（破坏任一条都是事故）：
+     ① **默认关闭**：没设 `ZZCSAPI_CONTEXT_DIET` 时零改动、字节级原样透传；
+     ② **只摘图**：文本 / 工具结果 / 工具参数一律不碰（那几项另有规则，本轮不做）；
+     ③ **失败就原样发**：任何异常都吞掉，节食绝不搞坏请求；
+     ④ 每条受影响的请求打一行 `[diet]` 日志（摘了几张、省了多少字节），便于事后核账；
+     ⑤ **必须在协议转换之前**做——否则 openai/anthropic/gemini 三套转换器都要各改一遍。
+
+   ⚠ 有意为之的副作用（需知晓）：摘完之后若请求里已无图，含图渠道裁剪
+     （`filterCandidatesForImages`）就不再生效，候选链会**变宽**。这是正确的——
+     我们真的不再发图了，没有理由再把自己限制在能转发图片的渠道上。 */
+const DIET_ON = /^(1|true|on|yes)$/i.test(String(process.env.ZZCSAPI_CONTEXT_DIET || ''));
+/* 读一个非负整数环境变量：**只有未设**（undefined / 空串）才用默认值，**显式写 0 就是 0**。
+   ⚠ 别写成 `Number(env) || 默认` —— 那个 `||` 会把显式的 0 当成"没设"，于是「把图片全摘掉」
+   （K=0 / N=0）这个完全合法的配置永远配不出来。这是本项目栽过的老坑（显式值被当缺省）。
+   空串要走默认值，是因为 compose 的 `${VAR:-}` 在未设时会传进来一个空串，不是 undefined。 */
+function dietInt(name, dflt, max) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return dflt;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.max(0, Math.min(max, Math.floor(n)));
+}
+const DIET_KEEP_MSGS = dietInt('ZZCSAPI_DIET_KEEP_MSGS', 30, 10000);
+const DIET_KEEP_IMAGES = dietInt('ZZCSAPI_DIET_KEEP_IMAGES', 5, 1000);
+const DIET_PLACEHOLDER = '[图片已省略：此处原有一张截图，因超出保留窗口不再随请求发送。如需我重新查看该图，请重新发送。]';
+
+/* 就地摘图（返回 null = 一张都没摘，调用方零行为变化）。
+   就地改是对的：节食后的报文**就是**这一轮要发的报文，候选链共用同一份，改一次全场一致。
+   注意 dump 发生在 readBody（本函数之前），所以落盘留证的是**客户端原始报文**，不受节食影响。 */
+function dietContextImages(body) {
+  if (!DIET_ON || !body || typeof body !== 'object') return null;
+  try {
+    let stripped = 0, savedBytes = 0;
+    // 一个「回合数组 → 图片槽位」的通用扫描：openai/anthropic 走 messages[].content[]，
+    // gemini 走 contents[].parts[]（两套形状互不干扰，各自按自己的长度算窗口）。
+    const run = (turns, getParts, pick, placeholder) => {
+      const slots = [];
+      turns.forEach((t, i) => {
+        const parts = getParts(t);
+        if (!Array.isArray(parts)) return;
+        parts.forEach((p, j) => { if (pick(p)) slots.push({ i, j, parts }); });
+      });
+      if (!slots.length) return;
+      const windowStart = Math.max(0, turns.length - DIET_KEEP_MSGS);
+      let rank = 0;
+      for (let s = slots.length - 1; s >= 0; s--) {   // 从最新往回数：rank 1 = 最近一张
+        rank++;
+        const sl = slots[s];
+        if (rank <= DIET_KEEP_IMAGES && sl.i >= windowStart) continue;   // 窗口内且在上限内 → 留
+        savedBytes += JSON.stringify(sl.parts[sl.j]).length;
+        sl.parts[sl.j] = placeholder();
+        stripped++;
+      }
+    };
+    // openai 形 image_url / anthropic 形 image 块（都是「内联图片」，体积大，是节食的主要目标）
+    run(Array.isArray(body.messages) ? body.messages : [], (t) => t && t.content,
+      (p) => !!(p && (p.type === 'image_url' || p.type === 'image')),
+      () => ({ type: 'text', text: DIET_PLACEHOLDER }));
+    // gemini 形 inlineData。注意 fileData 是**外链引用**（几十字节），不动它 —— 摘掉引用是无谓的信息损失。
+    run(Array.isArray(body.contents) ? body.contents : [], (t) => t && t.parts,
+      (p) => !!(p && p.inlineData),
+      () => ({ text: DIET_PLACEHOLDER }));
+    return stripped ? { stripped, savedBytes } : null;
+  } catch { return null; }                            // 诊断/优化绝不外抛
+}
+
+/* 包装：摘了就记一行日志。四个客户端入口解析完 body 后各调一次。 */
+function applyContextDiet(body) {
+  const r = dietContextImages(body);
+  if (r) {
+    console.log(`[diet] 摘掉 ${r.stripped} 张旧图（窗口 最近 ${DIET_KEEP_MSGS} 条消息 / 上限 ${DIET_KEEP_IMAGES} 张），省 ${(r.savedBytes / 1024).toFixed(0)} KB`);
+  }
+  return r;
+}
+if (DIET_ON) console.log(`[diet] 上下文节食已开启：保留最近 ${DIET_KEEP_MSGS} 条消息内、最多 ${DIET_KEEP_IMAGES} 张图`);
+
 async function handleOpenAIRequest(req, res, url) {
   const raw = await readBody(req);
   let body;
   try { body = JSON.parse(raw.toString('utf8') || '{}'); }
   catch { return sendJson(res, 400, upstreamErrorPayload(400, 'invalid JSON body')); }
+  applyContextDiet(body);     // v1.18.61：摘掉几十轮前的旧截图（默认关；必须在含图渠道裁剪之前）
   sanitizeOpenAIToolIds(body); // 清洗工具 id（空/非法字符 → 合法，保持配对）
   const requested = body.model;
   if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
@@ -5499,6 +5596,7 @@ async function handleResponsesRequest(req, res, url) {
   const requested = body.model;
   if (!requested) return sendJson(res, 400, upstreamErrorPayload(400, 'missing model'));
   const oaiBody = responsesToOpenAI(body);
+  applyContextDiet(oaiBody);  // v1.18.61：Responses 形的图片在 input 里，先转成 messages 再节食
   sanitizeOpenAIToolIds(oaiBody);
   if (!Array.isArray(oaiBody.messages) || oaiBody.messages.length === 0) {
     return sendJson(res, 400, upstreamErrorPayload(400, 'empty input: "input" 与 "instructions" 至少要有一条文本内容'));
@@ -5671,6 +5769,7 @@ async function handleAnthropicRequest(req, res, url) {
     catch { return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'invalid JSON' } }); }
     const requested = body.model;
     if (!requested) return sendJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'missing model' } });
+    applyContextDiet(body);   // v1.18.61：摘掉几十轮前的旧截图（anthropic 形 image 块）
     // 优先 anthropic 协议渠道；没有则回落 openai / gemini 协议（网关做双向转换）；notion 始终作为兜底候选
     let candidates = channelsServing(requested, 'anthropic');
     if (candidates.length === 0) candidates = channelsServing(requested, ['openai', 'gemini']);
@@ -5747,6 +5846,7 @@ async function handleGeminiRequest(req, res, url) {
   let body;
   try { body = JSON.parse(raw.toString('utf8') || '{}'); }
   catch { return sendJson(res, 400, { error: { code: 400, message: 'invalid JSON' } }); }
+  applyContextDiet(body);     // v1.18.61：摘掉几十轮前的旧截图（gemini 形 contents[].parts[].inlineData）
 
   // 优先 gemini 协议渠道；没有则回落 openai / anthropic 协议（网关做双向转换）
   let candidates = channelsServing(model, 'gemini');
