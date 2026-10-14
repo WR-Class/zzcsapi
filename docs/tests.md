@@ -1,9 +1,9 @@
-# 测试清单（55 个文件 · 2644 项断言，零依赖）
+# 测试清单（56 个文件 · 2672 项断言，零依赖）
 
 > **断言总数怎么来的（v1.18.55 校正）**：等于 `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须与合计相等**。
 > 该运行器原先认不出 `hark-channel.test.js` 的收尾格式（`通过 97 · 失败 0`，中点分隔），把它记成
 > `?? 收尾格式没认出来` 且**断言数按 0 计入合计** → README/本文件曾据此写出 2430 这种少算一个文件的总数。
-> 已补上该格式的正则（并前置），现在 55 个文件一个不漏。改收尾格式或加新格式时，跑一遍并核对"逐文件行相加 = 合计"。
+> 已补上该格式的正则（并前置），现在 56 个文件一个不漏。改收尾格式或加新格式时，跑一遍并核对"逐文件行相加 = 合计"。
 
 > 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 54 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
@@ -39,6 +39,7 @@
 | **notion 出站通道链**（curl 主 / 软墙换 h2 / 三处推理调用点必须走 `notionFetch` / 超时与取消） | `notion-transport` + `notion-attachment-inline-e2e` + `notion-refetch-fallback-e2e` |
 | 流式提交时机 / 扣帧窗口 / 思考吃光（reasoning-only） | `reasoning-only-fallback-e2e` + `stream-error-frame-e2e` + `streaming-e2e` |
 | 渠道超时（首字/总超时）/ 挂死换家 / 失败行归因 / **两个超时字段的落库往返与三态语义** | `channel-timeout-attribution-e2e` + `cooldown-grading-e2e` + `console-state`（§3c 表单回填与"总是提交"） |
+| **重试链路的前进性**（客户端断开即停链 / 同报文续候选游标而报文变了归零 / 每渠道上限 90s / 失败行记真实 in·out·耗时） | `retry-chain-progress` + `channel-timeout-attribution-e2e` + `per-channel-retry-e2e` + `weighted-rr-e2e`（候选表会被加权轮询重排，游标必须与顺序无关） |
 | **手动测试的判据**（流式模式 / 与非流式刻意不同的"只有思考"判定 / 测试成功只半愈合） | `channel-test-stream-and-streak-e2e` + `channel-test-reasoning-e2e` + `disabled-channel-manual-test-e2e` |
 | **熔断记账与冷却曲线**（两条 streak / `probeFail` / 半愈合不清真实欠账 / `markTrafficOk` 唯一清零入口 / `effFailStreak`） | `channel-test-stream-and-streak-e2e` + `cooldown-grading-e2e` + `weighted-rr`（不进池语义） |
 | 输出预算（max_tokens / max_completion_tokens）跨协议保真 | `budget-passthrough-e2e` + `native-channels` |
@@ -75,6 +76,8 @@ node test/channel-test-reasoning-e2e.test.js # 8 项断言（v1.18.29）：手�
 node test/channel-drop-params-e2e.test.js # 85 项断言（v1.18.33）：★渠道级「不发这些参数」（dropParams）——现场 agentrouter 每天固定开放额度，却对「tools + reasoning_effort」组合直接 400（Function tools with reasoning_effort are not supported for gpt-6-astra），而 DSH 每次请求都同时带这两样 → 该渠道 19 行 0 成功。真起「假上游 + 临时网关」：主用例断言上游**真收不到** reasoning_effort 而 tools 仍在、对照组（没配的渠道）照样收到、**不串味**（第一家失败切到第二家后，第二家仍收到该参数——剔除只作用于出站副本、不污染共用报文对象）、同协议直通也生效、白名单外的名字 400 并回带合法清单、落库往返 + 保存别的渠道后仍在（persistConfig 显式字段清单）、显式空数组 = 清空、GET /admin/api/config 下发 dropParamWhitelist；边界：workbuddy/codex/genspark/notion-agent 配了**不生效**（自带专用报文构造）
 node test/body-dump-diagnostic-e2e.test.js # 17 项断言（v1.18.27 + v1.18.61）：请求体落盘诊断——开启后真落盘且内容一致、?key= 打码（密钥绝不进 dump）、/admin/ 不落盘、默认关闭零副作用、轮转只留最近 N 个、落盘失败不影响请求。**v1.18.61 增场景 3b：重启后 seq 归零时轮转必须仍淘汰最旧的**——现场：文件名 `req-<seq>-<时间戳>` 而 seq 是内存计数器、重启归零，按**文件名**排序时新写的 `req-001` 排在旧的 `req-9999` 前面，于是「删最旧」变成「删最新」：日志里 **14693 条 `[dump]`、目录里只剩 38 个**且最新一个停在两天前（落盘看着一直开着，其实写一份删一份）。改为**按 mtime 排序**；用例预置一份高位旧文件并把它的 mtime 改成一小时前，**在旧逻辑下 A/B 验证过这两条断言必失败**
 node test/context-diet.test.js             # 50 项断言（v1.18.61）：**上下文节食**——默认关**零行为变化（字节级，不是"结果一样"）**；保留条件是窗口 K 与上限 N **两条同时满足**（窗口外有上限也救不回、上限外的最近若干张仍会被窗口否决）；三种报文形态都覆盖（openai `image_url` / anthropic `image` 块 / gemini `inlineData`）且 gemini 的 `fileData`（外链引用，几十字节）**不动**；**只摘图**——system 提示 / user 文本 / assistant 文本 / 工具调用参数 / tool 结果逐条断言一字未改；六种异常结构一个都不抛；摘光后 `bodyHasImages` 转 false（含图渠道裁剪不再生效、候选链放宽，此连带效应是**有意**的）；四套客户端入口装配守卫 + ★「必须在 `filterCandidatesForImages` **之前**节食」的顺序守卫；以及 ★ **显式 `0` ≠ 没设**——第一版写成 `Number(env) || 默认`，那个 `||` 把显式的 0 当成"没设"，于是「把图片全摘掉」（K=0）这个合法配置**永远配不出来还不报错**（本项目栽过的老坑）。配套只读工具 `node payload-report.js [dump目录]` 分析请求体构成（只打印尺寸与哈希，不打印对话内容）
+node test/retry-chain-progress.test.js     # 27 项断言（v1.18.62）：**让重试真正前进**。现场是三层时钟撞在一起——客户端单次尝试 120s、一轮（含自动重试）720s、而网关一条候选链**没有任何总时长上限**（13 家 × 30~120s）。首字超时的冷却只有 **5 秒**，而重试间隔是 **120 秒起步** → 冷却早过期，**每一次重试都从第 1 家重新开始**，5 次重试全砸在同一家上；同时 6 条链并跑，排在前面的坏家被反复吸住，排在后面的好家要 8×65s≈520s 才轮到。四件事：① **客户端断开 → 立刻停链**（`res.on('close')` 置标志，每次尝试之前先查）；② **候选游标**——同一会话 + **逐字节相同**的报文（= 自动重试）从上次停下的**下一家**继续，报文一变（用户新一轮）**归零**；③ 每渠道上限 120s → **90s**（必须小于客户端单次超时，否则那一家永远得不到一次完整的尝试）；④ **失败行记真实的入参规模与耗时**（此前写死 `inputTokens: 0, latencyMs: 0`，账本里失败行永远是 `in=0 out=0`，"那发到底多大、等了多久"完全看不见——本会话多次误判的根因就在这里）。用 `AsyncLocalStorage` 做请求作用域（**不能用模块级变量**：await 会让并发请求互相覆盖，那会把 A 的耗时记到 B 的失败行上）。§1 游标决策真值表（纯函数 `cursorStartFor`）；§2 装配守卫；§3 **真 HTTP 链路**——假上游 + 真网关 + 主动断开，★ 断言"断开后不再换到另一家""同报文重试先被碰的不是上一发那一家""报文变了→归零"。
+   ⚠ 两条**踩过的坑**已写进用例：① 游标第一版存的是**序号**，而候选表每一发都被**加权轮询重排**，序号在下一发已指向别的家 → 改用**渠道 id** 定位，并配一条"与顺序无关"的真值表断言；② 用例自己第一版**假设了候选顺序**（`priority:10` 一定先试），5 条断言因此全废——**那是测试的错，不是产品的错**，改成断言"是不是换了另一家"。另：假上游必须**放行 `/models` 探测**（第一版对它也回 500，于是启动探测把两家一起打进冷却，后两发全被"全部候选都在冷却"挡掉，看着像游标没生效）。
 node test/weighted-rr.test.js             # 31 项断言：加权轮询算法（3:1→75/25、平滑性、老配置零影响对照）
 node test/weighted-rr-e2e.test.js         # 12 项断言：真 HTTP 数落点，验证实际分流比例与降级行为
 node test/native-channels.test.js         # 78 项断言：原生出站双向转换（请求/响应/流式状态机/URL 鉴权头/错误体不翻译）

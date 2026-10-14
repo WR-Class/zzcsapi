@@ -42,6 +42,14 @@ services:
       ZZCSAPI_CONTEXT_DIET: ${ZZCSAPI_CONTEXT_DIET:-}
       ZZCSAPI_DIET_KEEP_MSGS: ${ZZCSAPI_DIET_KEEP_MSGS:-}
       ZZCSAPI_DIET_KEEP_IMAGES: ${ZZCSAPI_DIET_KEEP_IMAGES:-}
+      # 首字死线随请求体积缩放（v1.18.61 默认开；v1.18.62 上限 120s → **90s**，用户选定）。
+      # 上限必须**小于客户端单次超时**，否则那一家永远得不到一次完整的尝试。
+      ZZCSAPI_FIRST_BYTE_SCALING: ${ZZCSAPI_FIRST_BYTE_SCALING:-}
+      ZZCSAPI_FIRST_BYTE_PER_KB: ${ZZCSAPI_FIRST_BYTE_PER_KB:-}
+      ZZCSAPI_FIRST_BYTE_MAX_MS: ${ZZCSAPI_FIRST_BYTE_MAX_MS:-}
+      # 候选游标（v1.18.62）：同一会话 + **逐字节相同**的报文（= 客户端自动重试）从上次停下的
+      # 下一家继续；报文一变（用户新一轮）就归零。留空 = 默认 15 分钟。
+      ZZCSAPI_CHAIN_CURSOR_TTL_MS: ${ZZCSAPI_CHAIN_CURSOR_TTL_MS:-}
     volumes:
       - ./config.json:/app/config.json
       - ./usage.json:/app/usage.json

@@ -149,7 +149,7 @@ ZZCSAPI_DIET_KEEP_MSGS=30 node server.js      # 节食窗口：只保留最近 K
 ZZCSAPI_DIET_KEEP_IMAGES=5 node server.js     # 节食上限：最多保留最近 N 张图（默认 5）。显式写 0 = 全部摘掉
 ZZCSAPI_FIRST_BYTE_SCALING=0 node server.js   # 【默认开】写成 0 即关掉"首字死线随体积缩放"，退回写死的 30s/60s
 ZZCSAPI_FIRST_BYTE_PER_KB=40 node server.js   # 缩放斜率：报文体每 1KB 多加多少毫秒（默认 40）
-ZZCSAPI_FIRST_BYTE_MAX_MS=120000 node server.js # 缩放上限（默认 120000，钳到 600000）
+ZZCSAPI_FIRST_BYTE_MAX_MS=90000 node server.js # 缩放上限（默认 90000 = 90s，钳到 600000）
 ```
 
 **上下文节食（v1.18.61，默认关闭）**：设 `ZZCSAPI_CONTEXT_DIET` 后，**几十轮之前的旧截图**不再随每一轮请求重发，改成一行占位符。
@@ -160,10 +160,16 @@ ZZCSAPI_FIRST_BYTE_MAX_MS=120000 node server.js # 缩放上限（默认 120000�
 覆盖四套客户端入口：`/v1/chat/completions`、`/v1/responses`、`/anthropic/v1/messages`、Gemini `:generateContent`（openai 形 `image_url` / anthropic 形 `image` 块 / gemini 形 `inlineData`；gemini 的 `fileData` 是外链引用，不动）。回归：`test/context-diet.test.js`。
 配套工具：`node payload-report.js [dump目录]` 只读分析请求体构成（尺寸 / 类型 / 内容块去重 / 被取代的旧工具流量），**只打印尺寸与哈希，不打印对话内容**。
 
-**首字死线随请求体积缩放（v1.18.61，默认开启）**：等"第一个字节"的时长不再写死 30s/60s，而是 `基础值 + 报文体KB × 40ms`，钳在 120s 以内（`ZZCSAPI_FIRST_BYTE_PER_KB` / `ZZCSAPI_FIRST_BYTE_MAX_MS` 可调，`ZZCSAPI_FIRST_BYTE_SCALING=0` 可关）。
+**首字死线随请求体积缩放（v1.18.61，默认开启）**：等"第一个字节"的时长不再写死 30s/60s，而是 `基础值 + 报文体KB × 40ms`，钳在 **90s** 以内（v1.18.62 上限由 120s 降为 90s，`ZZCSAPI_FIRST_BYTE_PER_KB` / `ZZCSAPI_FIRST_BYTE_MAX_MS` 可调，`ZZCSAPI_FIRST_BYTE_SCALING=0` 可关）。**上限必须小于客户端单次超时**——否则那一家永远得不到一次完整的尝试（客户端在它跑完之前就走了）。
 动机是实测：同一渠道 hebox1 单变量实验 —— **0KB → 4.8s、39KB → 7.2s、391KB → >30s（撞死线）**；而真实流量常带 0.5~1MB 的体（上下文 + 工具目录 + 历史），于是"慢但答得出"的家一律被误判成挂死，用户看到的是"一直在换家、最后报错"。
 **决定性对照**：上下文节食把报文体从 **4.5MB 砍到 0.85MB（降 82%）**，**失败率却纹丝不动（67% → 65%）** —— 因为 0.85MB 仍然大于那个已经撞线的 391KB。**光减体积不够，死线也得跟着体积走。**
 纪律：① **只放大首字死线，不放大流内空闲死线** —— 后者等的是"已经开始出字却卡住"，上游真挂了与提示多大无关，跟着放大只会让卡死的流多挂几分钟（v1.18.30 曾把两者统一成同一个值，此处刻意拆开）；② 渠道级 `firstChunkTimeoutMs` 仍然最高优先，**显式配置压过推导值**，配了的家不参与缩放；③ 关掉即退回旧的写死值。回归：`test/channel-timeout-attribution-e2e.test.js`。
+
+**让重试真正前进（v1.18.62）**：把**三层时钟**摆在一起看才发现问题——客户端**单次尝试** 120s、用户**整轮**（1 次 + 最多 5 次重试）约 720s，而网关**一条候选链没有任何总时长上限**（最多 13 家 × 每渠道死线）。而首字超时的冷却只有 **5 秒**，重试间隔却是 **120 秒起步**：冷却早过期，**每次重试都从第 1 家重新开始，5 次重试全砸在同一家上**；同时最多 **6 条链**并跑，排在前面的坏家被反复吸住，排在后面的好家要 8×65s ≈ 520s 才轮到。四件事：
+① **客户端断开 → 立刻停链**（`res.on('close')` 置标志，每次尝试前先查）——「没人等的工」不再做；
+② **候选游标**：同一会话 + **逐字节相同**的报文（= 客户端自动重试）从上次停下的**下一家**继续；报文一变（用户新一轮）**归零**，绝不把上一轮的失败算到这一轮头上。**只前移、不除名**（越过的家仍在链里，回绕后照样被试到），过期（`ZZCSAPI_CHAIN_CURSOR_TTL_MS`，默认 15 分钟）也归零。**游标存的是渠道 id 而非序号**——候选表每一发都被加权轮询重排，序号会指向别的家；
+③ 每渠道死线上限 120s → **90s**；
+④ **失败行记真实的入参规模与耗时**——此前写死 `inputTokens: 0, latencyMs: 0`，账本里失败行永远是 `in=0 out=0`，"那发到底多大、等了多久"完全看不见（多次误判的根因）。用 `AsyncLocalStorage` 做请求作用域（**不能用模块级变量**：await 会让并发请求互相覆盖，把 A 的耗时记到 B 的失败行上）。回归：`test/retry-chain-progress.test.js`。
 
 **请求体落盘诊断（v1.18.27，默认关闭）**：设 `ZZCSAPI_DUMP_BODIES` 后，客户端会话类请求（`/v1/chat/completions`、`/anthropic/v1/messages`、Gemini `:generateContent`）的**请求体原文**会落到该目录（compose 场景已挂 `./dump:/app/dump`，仓库 `.gitignore` 已忽略 `dump/`）。
 用途：当上游出现「200 + `finish_reason=length` + 输出仅 1 个 token」「200 + 空流」这类**伪装成成功**的失败时，客户端侧只有 token 计数、没有请求形态（系统提示 / 工具目录 / 工具调用历史），无法复现——这个开关就是为留证而设。
@@ -239,7 +245,7 @@ http://127.0.0.1:8787/console
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 55 个测试文件 · 2644 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 56 个测试文件 · 2672 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -264,7 +270,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**55 个文件 · 2644 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**56 个文件 · 2672 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
 ## 配置示例 (`config.example.json`)

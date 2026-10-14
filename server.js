@@ -5273,7 +5273,7 @@ if (DIET_ON) console.log(`[diet] 上下文节食已开启：保留最近 ${DIET_
    关闭：`ZZCSAPI_FIRST_BYTE_SCALING=0` 即退回旧的写死 30s/60s。 */
 const FIRST_BYTE_SCALING = !/^(0|false|off|no)$/i.test(String(process.env.ZZCSAPI_FIRST_BYTE_SCALING || ''));
 const FIRST_BYTE_PER_KB = envNonNegInt('ZZCSAPI_FIRST_BYTE_PER_KB', 40, 1000);
-const FIRST_BYTE_MAX_MS = envNonNegInt('ZZCSAPI_FIRST_BYTE_MAX_MS', 120_000, 600_000);
+const FIRST_BYTE_MAX_MS = envNonNegInt('ZZCSAPI_FIRST_BYTE_MAX_MS', 90_000, 600_000);
 /* 纯函数：给定基础死线与报文体字节数，算出这一发真正该等的时长。
    故意不读全局状态、不碰网络 —— 真值表可以直接在测试里跑。 */
 function firstByteDeadline(baseMs, bodyBytes) {
@@ -5996,7 +5996,72 @@ function attemptErr(err, channelId) {
 }
 
 // ─────────────────────────── 调度核心（统一） ───────────────────────────
+/* ── 请求作用域（v1.18.62）────────────────────────────────────────────────────
+   为什么需要：`recordFailure` 有 **67 个调用点**，而失败行**从不记入参规模与耗时**
+   （写死 `inputTokens: 0, latencyMs: 0`）——于是账本里失败行永远是 `in=0 out=0`，
+   任何"失败那发到底多大、等了多久"的推断都不成立。（本项目因此误判过多次。）
+   逐个改 67 个调用点不现实，所以用 `AsyncLocalStorage` 做**并发安全**的请求作用域：
+   `dispatchRequest` 进来时把「起始时刻 + 入参估算」放进去，`recordFailure` 自己取。
+   ⚠ **绝不能用模块级变量**替代：Node 虽单线程，但 await 会让并发请求互相覆盖，
+   那会把 A 请求的耗时记到 B 请求的失败行上——比不记更坏。
+   语义：**有作用域 = 真实流量，写真实数字；无作用域 = 探测/测试，留 0**（0 现在只表示"本就没有"）。 */
+const { AsyncLocalStorage } = require('async_hooks');
+const reqScope = new AsyncLocalStorage();
+
+/* ── 候选游标（v1.18.62）：让**自动重试前进**，而不是从头再来 ─────────────────────
+   现场（三层时钟撞在一起）：客户端 120s 超时 → 重发；而首字超时的冷却只有 **5 秒**，
+   重试间隔是 **120 秒起步** —— 冷却早过期，于是**每一次重试都从第 1 家重新开始**，
+   5 次重试全砸在同一家上。更糟的是 6 条链同时在跑，排在前面的坏家被反复吸住，
+   排在后面的好家只有最老那条链能爬到（要 8×65s ≈ 520 秒，那时所有人都走了）。
+
+   判据（**不需要客户端配合**）：看报文与"这一会话的上一条"是否完全相同。
+     · 相同 = 自动重试 → 从上次停下的**下一家**继续（游标只前移，越过的不除名）
+     · 变了 = 用户新一轮 → **归零**，从第 1 家开始（绝不把上一轮的失败算到这一轮头上）
+   过期（TTL）也归零。成功后由"下一轮报文必然不同"自然归零。
+   ⚠ 会话键**刻意不用 IP**：本机多窗口/多 agent 全是同一个 IP，按 IP 会把它们搅在一起。
+   取不到显式会话头时退化成"**前两条消息**的哈希"——那是会话不可变的开头（系统提示 +
+   第一条消息），实测足以把并发窗口分开（30 份报文里 3 个窗口各得其所）。 */
+const CHAIN_CURSOR_TTL_MS = envNonNegInt('ZZCSAPI_CHAIN_CURSOR_TTL_MS', 15 * 60_000, 3600_000);
+const CHAIN_CURSOR_MAX = 512;
+const chainCursors = new Map();
+const sha16 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex').slice(0, 16);
+function chainCursorKey(body) {
+  const ms = body && Array.isArray(body.messages) ? body.messages : null;
+  if (!ms || !ms.length) return null;                 // 没有会话历史就不做游标（不猜）
+  return sha16(JSON.stringify(ms.slice(0, 2)));
+}
+function chainCursorBodyHash(body) {
+  const ms = body && Array.isArray(body.messages) ? body.messages : null;
+  return ms ? sha16(JSON.stringify(ms)) : null;
+}
+
+/* 纯决策函数：这一发该从第几家开始。
+   抽成纯函数是为了能被真值表直接验（不碰网络、不读全局），也是这条纪律的可执行版本。
+
+   ★ 存的是**渠道 id**，不是序号 —— 这是第一版踩过的坑（由 `retry-chain-progress` 抓出来）：
+   候选表每一发都被**加权轮询重排**，序号在下一发已经指向别的家。存序号时，重试会从一个
+   与上一发毫无关系的家开始（实测：起点落在冷却中的那家上，于是整发一个上游都没碰到）。
+   按 id 定位则与顺序无关：那家不在这一轮的候选里（冷却被裁掉）就**老老实实从第 1 家开始**。 */
+function cursorStartFor(prev, curHash, nowMs, candidateIds) {
+  if (!prev || !curHash || prev.bodyHash !== curHash) return 0;          // 报文变了 / 没有历史 → 归零
+  if (nowMs - prev.at >= CHAIN_CURSOR_TTL_MS) return 0;                  // 过期 → 归零
+  const ids = Array.isArray(candidateIds) ? candidateIds : [];
+  if (!ids.length) return 0;
+  const at = ids.indexOf(prev.lastChannelId);                            // 上一发真正试过的最后一家
+  if (at < 0) return 0;                                                  // 它这轮不在候选里 → 归零
+  return (at + 1) % ids.length;
+}
+
 async function dispatchRequest(opts) {
+  const b = opts && opts.body;
+  const scope = {
+    startedAt: Date.now(),
+    inputTokens: (b && Array.isArray(b.messages)) ? estimateTokens(messagesText(b.messages)) : null,
+  };
+  return reqScope.run(scope, () => dispatchRequestInner(opts));
+}
+
+async function dispatchRequestInner(opts) {
   const { res, url, body, candidates, isStream, encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind } = opts;
   const errors = [];
   let attemptedAny = false;
@@ -6006,7 +6071,38 @@ async function dispatchRequest(opts) {
   // 只动顺序、不硬塞渠道——冷却/down/不在候选表里时一切照旧，也不会去清冷却。
   applyAffinity(candidates, opts.affinityKey);
 
-  for (let i = 0; i < maxCand; i++) {
+  // 候选游标：算出这一发该从第几家开始（同报文续、报文变了归零）
+  const curKey = chainCursorKey(body);
+  const curHash = chainCursorBodyHash(body);
+  let startAt = 0;
+  if (curKey) {
+    const prev = chainCursors.get(curKey);
+    const ids = candidates.slice(0, maxCand).map((x) => x.channelId);
+    startAt = cursorStartFor(prev, curHash, Date.now(), ids);
+    // ★ 判据是"上一发那家**还在这一轮的候选里**"，不是"startAt > 0"：
+    //   只有 2 家候选时，"它的下一家"正好回绕成第 1 家（startAt=0），此时它**确实**在续试，
+    //   按 startAt>0 判会漏报（第一版就是这样，日志缺失把一次成功的行为显示成没生效）。
+    const resumedFrom = (prev && prev.bodyHash === curHash && Date.now() - prev.at < CHAIN_CURSOR_TTL_MS)
+      ? ids.indexOf(prev.lastChannelId) : -1;
+    if (resumedFrom >= 0) {
+      console.log(`[cursor] 同报文续试：从第 ${startAt + 1}/${maxCand} 家（${ids[startAt]}）开始，上一发停在第 ${resumedFrom + 1} 家（${prev.lastChannelId}）`);
+    } else if (prev) {
+      chainCursors.delete(curKey);                    // 报文变了 / 过期 / 上一发那家已不在候选里 → 归零
+    }
+  }
+  let stoppedAt = -1;                                 // 这一轮真正尝试到第几家（供游标前移）
+
+  // 客户端断开 → 立刻停链：继续做的工必须有人等（否则废弃的链会和重试链抢同一批渠道）
+  const clientGone = { v: false };
+  if (res && typeof res.on === 'function') res.on('close', () => { clientGone.v = true; });
+
+  for (let k = 0; k < maxCand; k++) {
+    const i = (startAt + k) % maxCand;                 // 游标起点 + 回绕（走到队尾回绕，不空转）
+    if (clientGone.v) {
+      errors.push({ ch: '—', err: 'client disconnected：客户端已断开，停止继续换家（没人等的工不做）' });
+      console.log(`[chain] 客户端已断开，在第 ${k + 1}/${maxCand} 次尝试前停止`);
+      break;
+    }
     const c = candidates[i];
     if (c.cooldownUntil > Date.now()) {
       // 冷却跳过也要说明"为什么 + 还有多久"：只说一句 'in cooldown'，用户拿到的 502 里
@@ -6023,6 +6119,7 @@ async function dispatchRequest(opts) {
       continue;
     }
     attemptedAny = true;
+    stoppedAt = i;                                    // 真正尝试过这一家 → 游标前移的锚点
     // 还有后续候选 → 守门可以掐得早（快速切兜底）；已是最后候选 → 守门放宽到 300s（对齐
     // 客户端 idle 超时：上游"慢但能成"的请求留给客户端自身的重试机制，而不是被网关提前掐死）
     // ★ 必须只看**还能上场的**候选：冷却中的那家这一轮根本不会被 attempt，若把它算成"还有后手"，
@@ -6069,6 +6166,15 @@ async function dispatchRequest(opts) {
       errors.push({ ch: c.channelId, err: attemptErr(result, c.channelId), ...(attempt ? { attempt } : {}) });
       if (!isRetryableFailure(result) || attempt >= PER_CHANNEL_RETRIES) break;
     }
+  }
+  // 游标前移：只在这一轮**没成功**时执行（成功路径在上面直接 `return` 了）。
+  // 记「最后真正试过的那一家是**谁**」（渠道 id，不是序号——序号会被下一发的加权轮询重排打乱）。
+  // 只前移、不除名：越过的家仍在链里，回绕之后照样会被试到。
+  if (curKey && stoppedAt >= 0) {
+    const lastChannelId = candidates[stoppedAt] && candidates[stoppedAt].channelId;
+    chainCursors.set(curKey, { bodyHash: curHash, lastChannelId, at: Date.now() });
+    while (chainCursors.size > CHAIN_CURSOR_MAX) chainCursors.delete(chainCursors.keys().next().value);
+    console.log(`[cursor] 本轮停在第 ${stoppedAt + 1}/${maxCand} 家（${lastChannelId}），同报文再来时从它之后开始`);
   }
   if (!attemptedAny) {
     // 全部候选都在冷却：不能只回一句 "all channels in cooldown"——用户没法判断是额度用完、
@@ -8234,8 +8340,23 @@ function recordFailure(ch, msg, kind, opts) {
   // v1.18.30：再带上 `statsCtx`（客户端标签）——此前失败行永远没有 `client` 字段，导致"某客户端的失败"
   // 无法与"别的客户端/测试脚本的失败"区分（我自己就因此把测试脚本的失败误当成用户 DSH 的失败）。
   // 探测/后台等**没有请求上下文**的调用仍落 '—' / 无 client：那是"本就没有"，不是"我们没记"。
+  // v1.18.62：**失败行记真实的入参规模与耗时**。此前写死 0，导致账本里失败行永远是
+  // `in=0 out=0`——"失败那发到底多大、在哪一家等了多久"完全看不见（本书第 N 次诊断
+  // 之所以反复误判，根因就在这里）。有请求作用域（真实流量）就写真实值；
+  // 没有作用域（探测/后台/测试）留 0，**0 只表示"本就没有"，不冒充测到的值**。
+  const sc = reqScope.getStore();
   try {
-    recordUsage({ model: (o.model && String(o.model)) || '—', channelId: ch.def.id, kind: 'error', inputTokens: 0, outputTokens: 0, ok: false, latencyMs: 0, note: String(msg).slice(0, 200), statsCtx: o.statsCtx });
+    recordUsage({
+      model: (o.model && String(o.model)) || '—',
+      channelId: ch.def.id,
+      kind: 'error',
+      inputTokens: sc && Number.isFinite(sc.inputTokens) ? sc.inputTokens : 0,
+      outputTokens: 0,
+      ok: false,
+      latencyMs: sc ? Math.max(0, Date.now() - sc.startedAt) : 0,
+      note: String(msg).slice(0, 200),
+      statsCtx: o.statsCtx,
+    });
   } catch { /* ignore */ }
 }
 
