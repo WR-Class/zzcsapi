@@ -711,6 +711,13 @@ function testAutoWeight() {
   {
     const oc = extract('openChannel');
     check('★ 抽屉里有「自动权重（观测）」这一节（v1.18.63 起标题不再自称"只算不生效"——那要看开关）', oc.includes('自动权重（观测）'));
+    /* ★ v1.18.64 的真实教训：`vAutoWeight` 里引用了只存在于 `autoWeightCard()` 内部的 `a`
+       （它自己的 `const a=DATA.auto`）→ ReferenceError → **整页空白**，而本用例从来没渲染过
+       这个页面，所以全绿也没拦住。这条守不住"别的自由变量"，但至少钉死这个具体回归；
+       更强的做法是在 DOM 桩里真跑一遍每个 `vXxx()`（见 docs/frontend-code-map.md 的已知欠账）。 */
+    const vaw = extract('vAutoWeight');
+    check('★ vAutoWeight 自己解析 DATA.auto（不能引用只在 autoWeightCard 内部存在的 a —— 那会让整页空白）',
+      /const\s+a\s*=\s*DATA\.auto/.test(vaw));
     check('★ 抽屉里把判断依据摊开（健康系数 / 样本 / 失败率 / 延迟）',
       oc.includes('健康系数') && oc.includes('样本 ') && oc.includes('失败率 ') && oc.includes('延迟 '));
     check('抽屉里也写明"系数不会被执行"', oc.includes('上面的系数不会被执行'));

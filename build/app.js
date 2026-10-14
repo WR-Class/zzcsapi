@@ -680,6 +680,12 @@ function vChannels(v){
    标记只产结构，样式全在 build/extra.css 的 .aw-*（生产独有组件，设计稿不含）；
    本函数只允许依赖 DATA / esc / nf——回归测试按这个签名注入（test/console-state.test.js §4）。 */
 function vAutoWeight(v){
+  /* ★ v1.18.64 修：这里原来直接写 `${a.effective?...}`，而 **`a` 只定义在 autoWeightCard() 内部**
+     （它自己的 `const a=DATA.auto`），本函数作用域里没有 —— 一访问就 ReferenceError，
+     整个 innerHTML 赋值中断，**页面整块空白**。而 console-state 从来没渲染过 vAutoWeight，
+     所以用例全绿也没拦住。教训：**改一个页面之前，先确认它真的被渲染过一次**（或补一条渲染守卫），
+     别靠"看着差不多"推断作用域。 */
+  const a=DATA.auto||{};
   v.innerHTML=`
   <div class="page-hd">
     <div><h1 class="page-title">自动权重</h1>
