@@ -67,8 +67,8 @@ function makeNorms() {
     apiFnIdx > 0 && getIdx > apiFnIdx && (apiFnEnd < 0 || getIdx < apiFnEnd), { apiFnIdx, getIdx, apiFnEnd });
   check('管理面统一鉴权：/admin/api/ 前缀先 checkAuth(admin) 再进 handleAdminApi',
     /url\.pathname\.startsWith\('\/admin\/api\/'\)[\s\S]{0,140}authGate\(req, res, 'admin'\)[\s\S]{0,40}handleAdminApi\(req, res, url\)/.test(SRC) && gateIdx > 0);
-  check('只认四组开关（白名单写死，不做通用 config 写入）',
-    /const groups = \['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay'\];/.test(SRC));
+  check('只认五组开关（白名单写死，不做通用 config 写入）',
+    /const groups = \['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay', 'autoWeight'\];/.test(SRC));
   check('未知字段一律 400（不静默忽略）', /unknown field \$\{g\}\.\$\{k\}/.test(SRC));
   check('布尔字段类型不对 → 400', /must be a boolean/.test(SRC));
   check('数字字段负数/非数字 → 400', /must be a finite number >= 0/.test(SRC));
@@ -76,8 +76,9 @@ function makeNorms() {
   check('PATCH 语义：只合并带到的字段（没带的不会归零）', /\.\.\.\(\(config && config\[g\]\) \|\| \{\}\), \.\.\.v \}/.test(SRC));
   check('启动路径与控制台路径共用同一份 norm*（各函数至少被调用 2 次：初始化 + apply）',
     (SRC.match(/normAffinityCfg\(/g) || []).length >= 3 && (SRC.match(/normRateCfg\(/g) || []).length >= 3 && (SRC.match(/normMetricsCfg\(/g) || []).length >= 3 && (SRC.match(/normReplayCfg\(/g) || []).length >= 3);
-  check('保存后立即生效（applyRuntimeSettings 在同一个分支里被调用）',
-    /applyRuntimeSettings\(\);[\s\S]{0,80}persistConfig\(\);/.test(SRC));
+  check('保存后立即生效（applyRuntimeSettings 在同一个分支里被调用；自动权重那组随后单独重读，避开 TDZ）',
+    /applyRuntimeSettings\(\);[\s\S]{0,400}persistConfig\(\);/.test(SRC)
+    && /Object\.assign\(AUTO_W, normAutoWeight\(/.test(SRC));
   check('保存后立即落库（不靠"下次保存渠道时顺手带上"）', /return sendJson\(res, 200, \{ ok: true, updated: touched/.test(SRC));
   check('四组开关仍在 persistConfig 白名单里（否则存了也会被别的保存动作抹掉）',
     /sessionAffinity: \(config && config\.sessionAffinity\) \|\| undefined/.test(SRC) &&

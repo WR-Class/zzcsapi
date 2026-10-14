@@ -1,9 +1,9 @@
-# 测试清单（56 个文件 · 2672 项断言，零依赖）
+# 测试清单（57 个文件 · 2684 项断言，零依赖）
 
 > **断言总数怎么来的（v1.18.55 校正）**：等于 `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须与合计相等**。
 > 该运行器原先认不出 `hark-channel.test.js` 的收尾格式（`通过 97 · 失败 0`，中点分隔），把它记成
 > `?? 收尾格式没认出来` 且**断言数按 0 计入合计** → README/本文件曾据此写出 2430 这种少算一个文件的总数。
-> 已补上该格式的正则（并前置），现在 56 个文件一个不漏。改收尾格式或加新格式时，跑一遍并核对"逐文件行相加 = 合计"。
+> 已补上该格式的正则（并前置），现在 57 个文件一个不漏。改收尾格式或加新格式时，跑一遍并核对"逐文件行相加 = 合计"。
 
 > 本文从 README 拆出（v1.18.8）：README 只留摘要与「改什么必跑什么」，本文收全部 54 条命令与每条守的是什么。
 > 全部测试**零依赖**（只用 Node 内置模块）；e2e 用例**真起进程**（假上游 + 临时网关），
@@ -40,6 +40,7 @@
 | 流式提交时机 / 扣帧窗口 / 思考吃光（reasoning-only） | `reasoning-only-fallback-e2e` + `stream-error-frame-e2e` + `streaming-e2e` |
 | 渠道超时（首字/总超时）/ 挂死换家 / 失败行归因 / **两个超时字段的落库往返与三态语义** | `channel-timeout-attribution-e2e` + `cooldown-grading-e2e` + `console-state`（§3c 表单回填与"总是提交"） |
 | **重试链路的前进性**（客户端断开即停链 / 同报文续候选游标而报文变了归零 / 每渠道上限 90s / 失败行记真实 in·out·耗时） | `retry-chain-progress` + `channel-timeout-attribution-e2e` + `per-channel-retry-e2e` + `weighted-rr-e2e`（候选表会被加权轮询重排，游标必须与顺序无关） |
+| **自动权重生效**（`enabled:true` 时健康系数乘进权重、真影响分流；关闭时逐字节回旧行为；运行期可开关 + 落库） | `auto-weight-apply-e2e` + `auto-weight-e2e` + `auto-weight` + `weighted-rr*` + `settings-api-e2e` |
 | **手动测试的判据**（流式模式 / 与非流式刻意不同的"只有思考"判定 / 测试成功只半愈合） | `channel-test-stream-and-streak-e2e` + `channel-test-reasoning-e2e` + `disabled-channel-manual-test-e2e` |
 | **熔断记账与冷却曲线**（两条 streak / `probeFail` / 半愈合不清真实欠账 / `markTrafficOk` 唯一清零入口 / `effFailStreak`） | `channel-test-stream-and-streak-e2e` + `cooldown-grading-e2e` + `weighted-rr`（不进池语义） |
 | 输出预算（max_tokens / max_completion_tokens）跨协议保真 | `budget-passthrough-e2e` + `native-channels` |

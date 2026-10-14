@@ -852,17 +852,23 @@ function runtimeSettingsView() {
         ttlSec: Number.isFinite(Number(raw.thinkingReplay?.ttlSec)) ? Number(raw.thinkingReplay.ttlSec) : REPLAY_CFG.ttlMs / 1000,
         maxEntries: Number.isFinite(Number(raw.thinkingReplay?.maxEntries)) ? Number(raw.thinkingReplay.maxEntries) : REPLAY_CFG.maxEntries,
       },
+      // v1.18.63 第五组：自动权重。`config` 是用户原值（回填用），`effective` 是钳制后真正生效的值。
+      autoWeight: { ...AUTO_W },
     },
     effective: {
       sessionAffinity: { enabled: AFFINITY_CFG.enabled, ttlSec: Math.round(AFFINITY_CFG.ttlMs / 1000), maxEntries: AFFINITY_CFG.maxEntries, deriveFromBody: AFFINITY_CFG.deriveFromBody },
       rateLimit: { enabled: RATE_CFG.enabled, rpm: RATE_CFG.rpm, burst: RATE_CFG.burst, maxConcurrent: RATE_CFG.maxConcurrent },
       metrics: { enabled: METRICS_CFG.enabled, public: METRICS_CFG.public },
       thinkingReplay: { enabled: REPLAY_CFG.enabled, ttlSec: Math.round(REPLAY_CFG.ttlMs / 1000), maxEntries: REPLAY_CFG.maxEntries },
+      autoWeight: { ...AUTO_W },
     },
     status: {
       affinity: affinityStatus(),
       rateLimit: rateStatus(),
       thinkingReplay: replayStatus(),
+      // 自动权重没有独立 status 段：观测数据（h / failRate / samples / 预测份额）本来就在
+      // `/admin/api/status` 的 `autoWeight.candidates` 里，这里只重复「跑了几拍」方便确认节拍活着。
+      autoWeight: { ticks: AUTO_TICKS, watched: AUTO_STATE.size },
     },
   };
 }
@@ -1291,7 +1297,7 @@ function channelsServing(model, protocol) {
         channelId: ch.def.id,
         upstream: ch.aliasMap.get(want),
         priority: effPriority(ch),
-        weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
+        weight: effWeight(ch),
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -1306,7 +1312,7 @@ function channelsServing(model, protocol) {
         channelId: ch.def.id,
         upstream: want,
         priority: effPriority(ch) - 0.5,
-        weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
+        weight: effWeight(ch),
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -1331,7 +1337,7 @@ function channelsServing(model, protocol) {
         channelId: ch.def.id,
         upstream: want,
         priority: -1e9,
-        weight: Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0,
+        weight: effWeight(ch),
         status: ch.status,
         latencyMs: ch.latencyMs,
         cooldownUntil: ch.cooldownUntil,
@@ -3449,7 +3455,7 @@ const server = http.createServer(async (req, res) => {
 
 function channelStatusAll() {
   const wstats = weightedStats(); // 轮询命中统计（算一次，避免每个渠道重算）
-  const autoObs = autoWeightObserve(); // 自动权重观测（只算不生效，v1.6）
+  const autoObs = autoWeightObserve(); // 自动权重观测（v1.18.63：观测永远跑；是否**生效**由 AUTO_W.enabled 决定，见 effWeight）
   return {
     channels: Array.from(channels.values()).map((ch) => {
       const ast = AUTO_STATE.get(ch.def.id);
@@ -3498,7 +3504,7 @@ function channelStatusAll() {
     // 自动权重观测总览：旋钮现值 + 每个"多候选模型"的预测份额（静默版的核心产出）
     autoWeight: {
       enabled: AUTO_W.enabled,
-      effective: false, // 观测版恒为 false：只算不生效，见 docs/scheduling.md「自动权重」
+      effective: AUTO_W.enabled, // v1.18.63：是否**真的在影响分流**（= enabled）。关闭态才是"只算不生效"，见 docs/scheduling.md「自动权重」
       knobs: { ...AUTO_W },
       at: AUTO_LAST_AT || null,
       // 后台节拍计数：观测的 EWMA/死区是"一拍一算"的，而触发点原来只有"有人拉 /admin/api/status"，
@@ -3685,6 +3691,28 @@ function effPriority(ch) {
   return fr === null ? p : Math.round((p - fr * 3) * 100) / 100;
 }
 
+/* 自动权重**生效**（v1.18.63）：把观测算出的健康系数 h 乘进候选的权重。
+ *
+ * ★ 「关掉就是原来的样子」在这里是**逐字节**成立的，不是"结果差不多"：关闭时本函数
+ *   **原样返回 `ch.def.weight`**（没填就是 0），于是 `pickWeighted` 的池子为空、直接返回 -1、
+ *   `applyWeightedPick` 什么都不做 —— 复用现成的那条空转路径，旧配置零影响照旧。
+ *
+ * 为什么是"乘"而不是"替代"：手工 `weight` 是**意图**，健康系数是**现实**。两者相乘语义最自然，
+ * 而且下游（平滑轮询 SWRR、冷却过滤、probation 排除、链首提升）一行都不用改。
+ *
+ * 为什么基底取 1：手工权重为 0 时用 1 作基底，这样"一个 weight 都不填"的家也全部进池 ——
+ * 这正是"不配置也能自动分流"的关键。反过来，只要开关关着，它们就全部是 0、一个都不进池。
+ *
+ * 恢复路径天然存在：h 是滚动值（地板 `floor`），失败家份额掉到地板、**一旦成功立刻回升**。
+ * 没有任何永久状态，也没有任何一家被除名。 */
+function effWeight(ch) {
+  const manual = Number(ch.def.weight) > 0 ? Number(ch.def.weight) : 0;
+  if (!AUTO_W.enabled) return manual;                  // ← 关闭态：完全不产生这个量
+  const st = AUTO_STATE.get(ch.def.id);
+  const h = st && typeof st.h === 'number' && Number.isFinite(st.h) ? st.h : 1;   // 还没算过 = 中性，不动它
+  return Math.round((manual > 0 ? manual : 1) * h * 1000) / 1000;
+}
+
 /* ══════════════════ 自动权重（静默观测版，v1.6）══════════════════
  *
  * 想要的效果：不手填 weight，也让"同一个模型的多个候选"按**实测表现**自动分配份额
@@ -3714,7 +3742,7 @@ function normAutoWeight(raw) {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
   };
   return {
-    enabled: o.enabled === true,                              // 打开观测（含后台节拍）；仍然一行不碰分流
+    enabled: o.enabled === true,                              // v1.18.63：**生效**开关。开着 = 健康系数乘进权重、真影响分流；关着 = 一行不碰。观测与它**解耦**，永远开着（见 autoWeightTick）
     minSamples: Math.round(num(o.minSamples, 10, 1, 1000)),    // 样本不足不动
     floor: num(o.floor, 0.2, 0, 1),                            // 健康系数地板
     latencyPenalty: num(o.latencyPenalty, 0.5, 0, 1),          // 速度惩罚强度（0 = 不看速度）
@@ -3730,20 +3758,19 @@ Object.assign(AUTO_W, normAutoWeight(config.autoWeight));
 // 为什么必须有它：观测里的健康系数是"一拍一算"的（指数平滑 + 死区），而触发点原来只有
 // /admin/api/status —— 也就是**没人开着控制台就没有观测数据**。想拿它跑几天看趋势，
 // 必须让节拍自己走，否则你看到的 h 永远停留在"上次打开控制台那一刻"的值。
-// 关掉时（enabled:false）不建定时器：不观测、不算、不占 CPU，静默不变式照旧。
-// 注：AUTO_W 只在启动时从 config 读一次，改 autoWeight 需要重启（与其它旋钮一致）。
+// v1.18.63：**观测永远开着**，`enabled` 只管「用不用」（生效在 effWeight 那一层）。
+// 为什么解耦：关掉生效之后仍然要看得见"如果开着会怎么分"——那份预测正是判断该不该开它的依据。
+// 而 `enabled` 现在是**运行期**可改的（设置接口），所以节拍不能再由它决定建不建。
 function autoWeightTick() {
-  if (!AUTO_W.enabled) return;      // 运行时兜底：即便定时器还在，关了就不再观测
   try {
     autoWeightObserve();
     AUTO_TICKS++;
   } catch (e) { /* 观测绝不允许影响服务：宁可这一拍不记，也不能把请求路径搞挂 */ }
 }
-if (AUTO_W.enabled) {
-  // 节拍 = updateMs 本人（normAutoWeight 已把它钳在 ≥1s）。不再另加隐藏下限：
-  // 配置说多少就跑多少，否则"我设了 5s 怎么还是 30s"这种事又会变成下一个坑。
-  setInterval(autoWeightTick, AUTO_W.updateMs).unref();
-}
+// 节拍 = updateMs 本人（normAutoWeight 已把它钳在 ≥1s）。不再另加隐藏下限：
+// 配置说多少就跑多少，否则"我设了 5s 怎么还是 30s"这种事又会变成下一个坑。
+// ⚠ 节拍的**间隔**仍是启动时读一次（改它要重启）；**开关**是运行期即时的。
+setInterval(autoWeightTick, AUTO_W.updateMs).unref();
 
 // 同模型候选的**纯枚举**：与 channelsServing 的别名规则一致，但绝不调用它
 // —— channelsServing 末尾会走 applyWeightedPick，动 SWRR_CUR/SWRR_HITS（有副作用）。
@@ -4314,9 +4341,9 @@ async function handleAdminApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/admin/api/settings') {
     const body = await safeReadJson(req);
     if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'invalid json body' });
-    const groups = ['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay'];
+    const groups = ['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay', 'autoWeight'];
     const touched = groups.filter((g) => body[g] !== undefined);
-    if (!touched.length) return sendJson(res, 400, { error: 'nothing to update: expected one of sessionAffinity / rateLimit / metrics / thinkingReplay' });
+    if (!touched.length) return sendJson(res, 400, { error: 'nothing to update: expected one of sessionAffinity / rateLimit / metrics / thinkingReplay / autoWeight' });
     for (const g of touched) {
       const v = body[g];
       if (v === null || typeof v !== 'object' || Array.isArray(v)) return sendJson(res, 400, { error: g + ' must be an object' });
@@ -4324,7 +4351,10 @@ async function handleAdminApi(req, res, url) {
       const allowed = g === 'sessionAffinity' ? ['enabled', 'ttlSec', 'maxEntries', 'deriveFromBody']
         : g === 'rateLimit' ? ['enabled', 'rpm', 'burst', 'maxConcurrent']
           : g === 'thinkingReplay' ? ['enabled', 'ttlSec', 'maxEntries']
-            : ['enabled', 'public'];
+            // v1.18.63 第五组：自动权重。`enabled` 是**生效**开关（开着健康系数才乘进权重）；
+            // 其余是本来就在 config.autoWeight 里、控制台早就能显示的旋钮，一并开放为可运行期调。
+            : g === 'autoWeight' ? ['enabled', 'minSamples', 'floor', 'latencyPenalty', 'maxShare', 'updateMs', 'ewma', 'deadband']
+              : ['enabled', 'public'];
       for (const k of Object.keys(v)) {
         if (!allowed.includes(k)) return sendJson(res, 400, { error: `unknown field ${g}.${k}` });
         if (k === 'enabled' || k === 'deriveFromBody' || k === 'public') {
@@ -4338,6 +4368,10 @@ async function handleAdminApi(req, res, url) {
       for (const k of Object.keys(config[g])) if (config[g][k] === undefined) delete config[g][k];
     }
     applyRuntimeSettings();          // 立即生效（不重启）
+    // v1.18.63 第五组：自动权重**不**放进 applyRuntimeSettings 里重算 —— `AUTO_W` 声明在文件后段，
+    // 而 applyRuntimeSettings 可能在模块初始化早期就被调用，放进去会踩 const 的 TDZ（`typeof` 也救不了）。
+    // 放在这里（请求期）是安全的：模块早就初始化完了。
+    Object.assign(AUTO_W, normAutoWeight((config && config.autoWeight) || {}));
     persistConfig();                 // 立即落库（重启后仍是这个值）
     console.log(`[settings] 控制台更新了 ${touched.join(' / ')}: ` + JSON.stringify(runtimeSettingsView()));
     return sendJson(res, 200, { ok: true, updated: touched, ...runtimeSettingsView() });
@@ -6039,9 +6073,11 @@ function chainCursorBodyHash(body) {
    抽成纯函数是为了能被真值表直接验（不碰网络、不读全局），也是这条纪律的可执行版本。
 
    ★ 存的是**渠道 id**，不是序号 —— 这是第一版踩过的坑（由 `retry-chain-progress` 抓出来）：
-   候选表每一发都被**加权轮询重排**，序号在下一发已经指向别的家。存序号时，重试会从一个
-   与上一发毫无关系的家开始（实测：起点落在冷却中的那家上，于是整发一个上游都没碰到）。
-   按 id 定位则与顺序无关：那家不在这一轮的候选里（冷却被裁掉）就**老老实实从第 1 家开始**。 */
+   **候选表不是稳定序列**：冷却中的家会被裁出去，同一个序号在下一发可能指向完全不同的家。
+   实测：按序号续试时，起点落在一个与上一发毫无关系的家上，整发一个上游都没碰到。
+   按 id 定位则与顺序无关：那家这一轮不在候选里（被冷却裁掉）就**老老实实从第 1 家开始**。
+   ⚠ 本仓最初把原因写成"候选表每一发都被加权轮询重排"——**那是错的**：一个 weight 都不填时
+     `pickWeighted` 的池子为空、完全空转，根本不会重排。真因是上面这条**列表进出**。 */
 function cursorStartFor(prev, curHash, nowMs, candidateIds) {
   if (!prev || !curHash || prev.bodyHash !== curHash) return 0;          // 报文变了 / 没有历史 → 归零
   if (nowMs - prev.at >= CHAIN_CURSOR_TTL_MS) return 0;                  // 过期 → 归零

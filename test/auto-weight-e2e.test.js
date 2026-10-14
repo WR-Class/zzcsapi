@@ -59,7 +59,10 @@ const upstream = http.createServer((req, res) => {
   await new Promise((r) => upstream.listen(PU, '127.0.0.1', r));
 
   const cfgPath = path.join(TMP, 'c.json');
-  const KNOBS = { enabled: true, minSamples: 10, floor: 0.2, latencyPenalty: 0.6, maxShare: 70, updateMs: 1000, ewma: 0.5, deadband: 0.1 };
+  // ⚠ v1.18.63 起这份用例验的是**关闭态那一臂**：`enabled:false` = 只观测、分流逐字节不变。
+  //   开启态（健康系数真的乘进权重）由 `auto-weight-apply-e2e.test.js` 单独守。
+  //   观测**永远跑**，所以下面所有"观测有数据"的断言在 enabled:false 下照样成立。
+  const KNOBS = { enabled: false, minSamples: 10, floor: 0.2, latencyPenalty: 0.6, maxShare: 70, updateMs: 1000, ewma: 0.5, deadband: 0.1 };
   fs.writeFileSync(cfgPath, JSON.stringify({
     port: GW, health: { intervalSec: 3600, timeoutMs: 2000 }, retries: { perChannel: 1, maxModelFallbacks: 99 },
     autoWeight: KNOBS,
@@ -125,8 +128,8 @@ const upstream = http.createServer((req, res) => {
     {
       const aw = boot.autoWeight;
       check('status 里有 autoWeight 观测块', !!aw, Object.keys(boot));
-      check('★ effective === false（即使 config 里 enabled: true，本版也不改分流）',
-        aw.enabled === true && aw.effective === false, { enabled: aw.enabled, effective: aw.effective });
+      check('★ enabled:false → effective === false（关闭态只算不生效，分流逐字节回旧行为）',
+        aw.enabled === false && aw.effective === false, { enabled: aw.enabled, effective: aw.effective });
       check('旋钮按配置回显（latencyPenalty/maxShare/minSamples 等）',
         aw.knobs.latencyPenalty === 0.6 && aw.knobs.maxShare === 70 && aw.knobs.minSamples === 10, aw.knobs);
       check('观测时间戳有值（说明真的跑过一次）', typeof aw.at === 'number' && aw.at > 0, aw.at);
@@ -291,7 +294,7 @@ const upstream = http.createServer((req, res) => {
       check('enabled:false 的实例起来了', off.ok);
       await sleep(3400);                                  // 足够跑 3 拍（updateMs 1s），但它不该跑
       const awOff = await readTicks(off.P);
-      check('★ enabled:false → 后台拍了 0 次（不开就一行都不动）', awOff.ticks === 0, { ticks: awOff.ticks });
+      check('★ enabled:false → 后台**照样**跑了 ≥2 拍（v1.18.63 把观测与生效解耦：关了生效仍要看得见"如果开着会怎么分"）', awOff.ticks >= 2, { ticks: awOff.ticks });
       await off.stop();
 
       // ② 开着：全程不碰 status，只靠后台节拍（最后这一次读也算在因果之外：ticks 只数定时器那一路）
@@ -300,8 +303,8 @@ const upstream = http.createServer((req, res) => {
       await sleep(3400);
       const awOn = await readTicks(on.P);
       check('★ enabled:true → 后台自己拍了 ≥2 次（没人开控制台也在观测）', awOn.ticks >= 2, { ticks: awOn.ticks });
-      check('★ 而且这一路仍然只算不生效（effective 恒 false、旋钮照配置回显）',
-        awOn.effective === false && awOn.enabled === true && awOn.knobs.updateMs === 1000,
+      check('★ 而开启态这一路 effective 为 true（v1.18.63：健康系数真的乘进权重、真的影响分流）',
+        awOn.effective === true && awOn.enabled === true && awOn.knobs.updateMs === 1000,
         { effective: awOn.effective, enabled: awOn.enabled, updateMs: awOn.knobs.updateMs });
       check('节拍真的产出了观测数据（时间戳有值）', typeof awOn.at === 'number' && awOn.at > 0, awOn.at);
       await on.stop();

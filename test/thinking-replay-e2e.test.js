@@ -93,8 +93,8 @@ function makeReplay(cfg) {
     (SRC.match(/replayStale\(/g) || []).length === 2 && /replayStale\(opts\.replayKey, candidate\.channelId/.test(SRC));
   check('persistConfig 白名单含 thinkingReplay（否则控制台保存渠道会把它抹掉）',
     /thinkingReplay: \(config && config\.thinkingReplay\) \|\| undefined/.test(SRC));
-  check('settings 端点认第四组（groups 数组含 thinkingReplay）',
-    /\['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay'\]/.test(SRC));
+  check('settings 端点认第四组（groups 数组含 thinkingReplay —— v1.18.63 起后面还有 autoWeight，故只要求"含"）',
+    /const groups = \[[^\]]*'thinkingReplay'[^\]]*\];/.test(SRC));
   check('runtimeSettingsView / applyRuntimeSettings / status / metrics 四处都接了回放',
     /thinkingReplay: \{ enabled: REPLAY_CFG\.enabled/.test(SRC) &&
     /Object\.assign\(REPLAY_CFG, normReplayCfg/.test(SRC) &&
