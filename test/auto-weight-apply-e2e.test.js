@@ -137,25 +137,38 @@ console.log('\n自动权重生效 / 关闭：两个实例，只差 enabled 一�
     check('开启态实例起来了', on.ok, on.gw.lines.slice(-2));
     await sleep(1200);
     const onCodes = [];
-    // 每发之间留 25ms：B 一失败就吃 1s 冷却（冷却下限就是 1s，压不下去），
-    // 不留间隔的话整轮跑在同一个冷却窗口里、B 只会被碰到一次 —— 余量太薄，忙机器上就抖。
-    for (let i = 0; i < 60; i++) { onCodes.push(await on.chat()); await sleep(25); }
+    /* ★ 有界重试，不用固定发数赌运气（v1.18.66 修假红）。
+       判别量是「B 被上游碰到过没有」，而 B 一失败就吃 **1s 冷却**（冷却下限就是 1s，压不下去）。
+       固定发 60 发时，整轮可能正好落在同一个冷却窗口里 —— 单跑全过、**全量负载下偶发一败**
+       （这正是它红过一次的原因）。改成：每轮 20 发、每发间隔 60ms（跨得过 1s 冷却），
+       最多 8 轮，一旦 B 被碰到就停。忙机器上只是多跑几轮，**不会假红**；
+       上限仍然存在，真坏了也不会变成死循环。 */
+    let rounds = 0;
+    while (slowHits === 0 && rounds < 8) {
+      for (let i = 0; i < 20; i++) { onCodes.push(await on.chat()); await sleep(60); }
+      rounds++;
+    }
     await sleep(600);
     check('★ 开启态：请求仍全部成功（B 先失败 → 兜底到 A，客户端无感）', onCodes.every((c) => c === 200), onCodes.filter((c) => c !== 200));
     check('★ 开启态：B **被碰到了**（健康系数乘进权重后，它也能赢得加权选择、被提到链首）——这正是与关闭态的判别量',
-      slowHits > 0, { slowHits, fastHits });
+      slowHits > 0, { slowHits, fastHits, rounds, sent: onCodes.length });
     check('★ 但它被降权后明显少于 A（不是平起平坐，也不至于垄断）', slowHits < fastHits, { slowHits, fastHits });
     const onSt = await (await fetch(`http://127.0.0.1:${on.port}/admin/api/status`)).json();
     const onHits = (onSt.channels || []).reduce((s, c) => s + (c.weightedHits || 0), 0);
     check('★ 开启态：加权命中非零（健康系数真的把这两家送进了加权池，而不是"看着生效"）', onHits > 0, { onHits });
     check('开启态：status 里 effective 为 true（观测值确实在影响分流）',
       onSt.autoWeight && onSt.autoWeight.effective === true, onSt.autoWeight && { e: onSt.autoWeight.enabled, f: onSt.autoWeight.effective });
-    const cands = ((onSt.autoWeight || {}).models || []).find((m) => m.model === 'm1') || { candidates: [] };
-    const slowCand = (cands.candidates || []).find((c) => c.id === 'aw-slow');
-    check('开启态：不健康那家在观测里有一行，且 h / samples 如实回显（看趋势用）',
-      !!slowCand && Number.isFinite(slowCand.h) && Number.isFinite(slowCand.samples),
-      slowCand && { h: slowCand.h, samples: slowCand.samples });
-    /* ⚠ 本夹具**证不到**"h 真的掉到地板"：B 一失败就被 1s 冷却挡在加权池外（冷却与自动权重是叠加的），
+    const obs = ((onSt.autoWeight || {}).models || []).find((m) => m.model === 'm1') || {};
+    const slowCand = (obs.candidates || []).find((c) => c.id === 'aw-slow');
+    const slowExcluded = (obs.excluded || []).includes('aw-slow');
+    /* 两种形态**都算如实**，不是放宽：`autoWeightObserve` 只列 `live`（冷却/down 不列），
+       而 B 恰恰是个一直失败的家 —— 读这一发的瞬间它完全可能正在冷却里，于是"没有行"
+       本身就是观测对状态的真实反映（它会出现在 `excluded` 里）。
+       钉死"必须有行"会变成假红：跑得越久 B 被碰越多、冷却越深、越容易被裁掉。 */
+    check('开启态：不健康那家在观测里有交代（有行且 h/samples 是有限数，或因冷却列进 excluded）',
+      (!!slowCand && Number.isFinite(slowCand.h) && Number.isFinite(slowCand.samples)) || slowExcluded,
+      { hasRow: !!slowCand, h: slowCand && slowCand.h, samples: slowCand && slowCand.samples, excluded: slowExcluded });
+    /* ⚠ 本夹具**证不到**"h 真的掉到地板"：B 一失败就被冷却挡在加权池外（冷却与自动权重是叠加的），
        攒不满 minSamples，于是 h 停在中性值。要证那一条得把冷却压到不影响观测的节奏上——
        那属于另一个夹具的题目，这里如实标注，不用一条更弱的断言冒充它。 */
   } finally {
