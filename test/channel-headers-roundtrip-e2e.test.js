@@ -153,7 +153,20 @@ const chById = async (port, id) => ((await adminGet(port, '/admin/api/channels')
   fs.writeFileSync(CFG_PATH, JSON.stringify({ port: PORT, health: { intervalSec: 3600, timeoutMs: 3000 }, channels: [] }));
   const gw = startGateway(PORT);
   const up = await waitUp(PORT);
-  if (!up) { console.log('  ✗ 临时网关没起来'); process.exitCode = 1; }
+  if (!up) {
+    /* ★ v1.18.67 修一处真 bug（就是它的存在让全量抖动看起来像"这个文件自己坏了"）：
+       原来这里只设 `process.exitCode = 1` 就**继续往下跑**，于是后面每一个请求都打在
+       一个没人听的端口上 → 未捕获异常 → 进程带着栈死掉、**打不出任何收尾行** →
+       运行器解析不到汇总，只能记成「0 通过 / 0 失败」，而断言数凭空少掉整整一个文件（38 项）。
+       实测复现过：把 waitUp 超时压到 1ms，症状与全量里那次抖动**逐字一致**。
+       处置：**到此为止**，并且仍然打一行**可被运行器解析**的收尾——否则真因会继续被埋掉。 */
+    console.log('  ✗ 临时网关没起来（waitUp 超时）：用例中止，不进入断言（否则会崩在未捕获异常上、连收尾行都没有）');
+    try { gw.kill('SIGKILL'); } catch { /* 可能已退出 */ }
+    try { upstream.close(); } catch { /* 可能未起 */ }
+    console.log('✗ 0 通过 / 1 失败');
+    process.exitCode = 1;
+    return;
+  }
   check('临时网关已就绪', up);
 
   console.log('\n2. ★ 真链路：「获取模型」必须带上渠道配的 UA（否则 AgentRouter 一律 401）');
