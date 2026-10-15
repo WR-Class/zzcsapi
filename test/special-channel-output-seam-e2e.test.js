@@ -233,7 +233,14 @@ function makeNotionFake() {
     return { code: r.status, ct: r.headers.get('content-type') || '', text: await r.text() };
   };
   const jparse = (t) => { try { return JSON.parse(t); } catch { return null; } };
-  const waitUp = async () => { for (let i = 0; i < 60; i++) { try { if ((await fetch(base + '/healthz')).ok) return true; } catch { } await sleep(150); } return false; };
+  const waitUp = async () => { for (let i = 0; i < 60; i++) { try { if ((await fetch(base + '/healthz')).ok) return true; } catch { } await sleep(150); }   /* ★ v1.18.68：超时**不再返回 false 让人继续跑**。
+     现场：网关没能按时起来时，调用方多半不看返回值，于是后面每个请求都打在没人听的端口上
+     → 未捕获异常 → 进程带着栈死掉、**打不出收尾行** → 运行器解析不到汇总只能记 0，
+     断言数凭空少掉一整个文件。处置：就地**先打一行可被运行器解析的收尾再退出**。 */
+  console.log('  ✗ waitUp 超时：临时网关没起来 —— 用例中止，不进入断言');
+  console.log('      （继续跑只会崩在未捕获异常上，连收尾行都没有，看起来像用例自己坏了）');
+  console.log('✗ 0 通过 / 1 失败');
+  process.exit(1); };
 
   try {
     check('临时网关起来了（workbuddy + notion 两条专用协议渠道）', await waitUp());

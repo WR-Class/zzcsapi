@@ -111,7 +111,18 @@ async function waitUp(port, ms = 20000) {
     try { if ((await fetch(`http://127.0.0.1:${port}/healthz`)).ok) return true; } catch { }
     await sleep(200);
   }
-  return false;
+  /* ★ v1.18.68：超时**不再返回 false 让人继续跑**。
+     现场（全量偶发把某个 e2e 记成「0 通过 / 0 失败」）：网关 20s 没起来时，
+     调用方多半不看返回值（16 个文件里 10 个没检查），于是后面每个请求都打在
+     没人听的端口上 → 未捕获异常 → 进程带着栈死掉、**打不出收尾行** → 运行器
+     解析不到汇总，只能记 0，断言数凭空少掉整整一个文件。
+     处置：就地**先打一行可被运行器解析的收尾再退出** —— 真因必须留在输出里。
+     ⚠ 退出前不强杀子进程（这里拿不到那个句柄）：超时本身已极罕见
+     （实测 waitUp 预算 20s 而对应用例整个只跑 1.4s，14 倍余量），且真发生时这一轮已不可信。 */
+  console.log('  ✗ waitUp(' + port + ') 超时 ' + ms + 'ms：临时网关没起来 —— 用例中止，不进入断言');
+  console.log('      （继续跑只会崩在未捕获异常上，连收尾行都没有，看起来像用例自己坏了）');
+  console.log('✗ 0 通过 / 1 失败');
+  process.exit(1);
 }
 const readRows = () => { try { return JSON.parse(fs.readFileSync(USAGE, 'utf8')).recent || []; } catch { return []; } };
 async function waitRows(n, ms = 9000) {
