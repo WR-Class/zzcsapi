@@ -1769,19 +1769,57 @@ function testSearchClear() {
     /* 与环境参数**同名的成员必须排除**：`svg`/`nf`/`esc` 这些既作为依赖传入、
        又在 app.js 里有顶层声明 —— 同时出现在形参和函数体里就是"重复声明"语法错误，
        而且它会让**每一页**都报同一个错（真问题又被埋掉）。 */
-    const stateLines = [...SRC_ALL.matchAll(/^(?:let|const)\s+([A-Za-z_$][\w$]*)\s*=[^\n]*$/gm)];
+    /* ★ 多行声明要整段抓（v1.18.69）：`SET_META={...}` / `SNIP=[...]` 都跨行，按单行抓会在第一个
+       换行处截断，那些成员只好被剔除 —— 而页面正是靠它们才渲染得出来（`vSettings` 要 `SET_META`、
+       `vAccess` 要 `SNIP`）。做法：从这个名字起扫到**深度 0 的第一个 `;`**，跳过字符串/模板/注释里的括号。
+       ⚠ 只认**第 0 列**的声明（顶层就是第 0 列）：函数体内那些缩进的局部 `const` 被抠上来会变成
+       顶层重复声明，反而把每一页都弄红。 */
     const state = [];
     const stateDropped = [];
-    for (const m of stateLines) {
-      if (DEP.includes(m[1])) continue;
-      try { new Function(m[0]); state.push(m[0]); } catch { stateDropped.push(m[0].slice(0, 40)); }
+    const declRe = /^(?:let|const)\s+([A-Za-z_$][\w$]*)\s*=/gm;
+    let dm;
+    while ((dm = declRe.exec(SRC_ALL))) {
+      const name = dm[1];
+      if (DEP.includes(name)) continue;
+      let i = dm.index + dm[0].length, depth = 0, end = -1, q = '';
+      for (; i < SRC_ALL.length; i++) {
+        const c = SRC_ALL[i], nx = SRC_ALL[i + 1];
+        if (q) { if (c === '\\') { i++; continue; } if (c === q) q = ''; continue; }
+        if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+        if (c === '/' && nx === '/') { const nl = SRC_ALL.indexOf('\n', i); i = nl < 0 ? SRC_ALL.length : nl; continue; }
+        if (c === '/' && nx === '*') { const ce = SRC_ALL.indexOf('*/', i); i = ce < 0 ? SRC_ALL.length : ce + 1; continue; }
+        if (c === '(' || c === '[' || c === '{') depth++;
+        else if (c === ')' || c === ']' || c === '}') depth--;
+        else if (c === ';' && depth === 0) { end = i; break; }
+      }
+      if (end < 0) { stateDropped.push(name + '(找不到结尾)'); continue; }
+      const src1 = SRC_ALL.slice(dm.index, end + 1);
+      try { new Function(src1); state.push(src1); } catch (e) { stateDropped.push(name + '(' + String(e.message).slice(0, 28) + ')'); }
     }
     const POOL_ALL = POOL + '\n' + state.join('\n');
 
     check('模块级状态变量也抠进来了（页面依赖它们；剔掉的多行声明会点名，不静默）',
       state.length > 10, { state: state.length, dropped: stateDropped.slice(0, 5) });
-    /* ── 逐页真渲染 ── */
-    const RAWstub = { settings: { config: {}, effective: {}, status: {} }, meta: {}, recent: [] };
+    /* ── 逐页真渲染 ──
+       数据用**宽容替身（黑洞）**而不是真实 DATA：任何属性访问/调用/索引都返回它自己，
+       数值化成 0、字符串化成 ''。理由与**边界**都要说清：
+         · 它证的是「**渲染路径不抛异常**」—— v1.18.65 那个整页空白就是 ReferenceError，正好被它抓；
+         · 它**不证**"数据形状对"——那由既有的「零数据（全新部署）」一节负责（那节真跑 `openChannel`）；
+         · 用真实 DATA 反而会让几个页面因为**桩缺字段**而红，而那种红会训练人开始忽略这条守卫。 */
+    const hole = () => new Proxy(function () { }, {
+      get(t, k) {
+        if (k === Symbol.toPrimitive || k === 'valueOf') return () => 0;
+        if (k === 'toString') return () => '';
+        if (k === Symbol.iterator) return function* () { };
+        if (k === 'then') return undefined;          // 别让 await 把它当 thenable
+        /* ★ JSON.stringify 对**函数**一律给 undefined（黑洞的 target 是函数，否则它就不能被调用），
+           于是 `JSON.parse(JSON.stringify(RAW))` 会拿到 'undefined' 而抛 —— `vSettings` 正是这么用的。
+           给个 toJSON 就顺了（返回空对象 = 最保守的"没有配置"）。 */
+        if (k === 'toJSON') return () => ({});
+        return hole();
+      },
+      apply() { return hole(); },
+    });
     const bad = [];
     let rendered = 0;
     for (const p of pages) {
@@ -1791,8 +1829,7 @@ function testSearchClear() {
       const raw = (d) => {
         if (d === '$') return (sel, root) => (sel === '#viewport' ? dom.root : dom.$(sel, root || dom.root));
         if (d === '$$') return dom.$$;
-        if (d === 'DATA') return DATA;
-        if (d === 'RAW') return RAWstub;
+        if (d === 'DATA' || d === 'RAW') return hole();
         if (d === 'esc') return esc;
         if (d === 'svg') return svg;
         if (d === 'nf') return nf;
@@ -1813,19 +1850,14 @@ function testSearchClear() {
       }
     }
     if (bad.length) bad.forEach((b) => console.log('      · ' + b));
-    const badNames = bad.map((b) => b.split(' ')[0]);
-    /* 分两档断言，**刻意不假装完整**：
-       ① 渲染得出来的页面必须真的出来（这是本守卫的核心价值 —— v1.18.65 那个整页空白
-          就是被这一档抓住的：vAutoWeight 必须在成功名单里）；
-       ② 渲染不出来的**点名列出并钉住条数**，它们要么缺多行 const（`SET_META` / `SNIP`），
-          要么桩 DATA 不够（vChannels / vLogs / vOverview 要 DATA.meta.*、DATA.logs…）。
-          钉住条数是刻意的：**这个名单只许变短** —— 悄悄变多时这一条会红。
-          （把 ①②合成一句"全都要过"会更漂亮，但那要求先补完多行 const 抓取与桩数据；
-           在补齐之前，如实分档比一个会误报的漂亮断言有用。） */
-    check('★ 渲染得出来的页面必须真的出来（抛异常 / 空白 / 缺标题都会被点名到具体页面）',
-      !badNames.includes('vAutoWeight'), bad);
-    check('★ 渲染成功的页面数不低于已知水位（v1.18.65 时 = 5：vAutoWeight/vKeys/vModels/vPlayground/vStats）',
-      rendered >= 5, { rendered, total: pages.length, couldNotRender: badNames });
+    /* ★ v1.18.69 起**要求全部渲染**（原来分两档、放行 5 页渲染不出来）。
+       放行的代价是"这个名单只许变短"得靠人记；而那一档当初之所以存在，只是因为
+       ① 多行 `const` 抓不全、② 桩数据缺字段 —— **两样现在都补齐了**（多行声明整段抓 +
+       宽容替身），于是没有继续放行的理由：任何一页抛异常 / 空白 / 缺标题都当场点名。
+       （当年那一档的由来仍值得记：v1.18.65 的整页空白是 `vAutoWeight` 引用了
+       只存在于 `autoWeightCard()` 内部的 `a`，而当时没有任何用例渲染过这个页面。） */
+    check('★ 每一页都渲染得出内容与页标题（抛异常 / 空白 / 缺标题都会被点名到具体页面）',
+      bad.length === 0 && rendered === pages.length, { rendered, total: pages.length, bad });
   }
 
   console.log('\n' + '─'.repeat(58));
