@@ -198,7 +198,14 @@ function makeGensparkFake(tag) {
     for (let i = 0; i < 40 && !up; i++) { try { up = (await fetch(`http://127.0.0.1:${GW}/healthz`)).ok; } catch { await sleep(150); } }
     check('临时网关起来了', up);
     if (!up) throw new Error('网关未启动');
-    check('启动探测也走了假代理（genspark is_login）', fake.logins >= 1, fake.logins);
+    /* ★ v1.18.74：启动探测是**异步**的，别在 /healthz 一应答就断言它已经打完。
+       server.js:1773 在**模块加载期**顶层就 `probeAll().catch(()=>{})`，而 HTTP 监听走的是
+       另一条路 —— 所以 /healthz 能应答 ≠ 启动探测已经落地。原先这里立刻断言
+       fake.logins >= 1，机器被压满时探测还没打到这里就记 0，现象是"全量偶发单条红、
+       单跑又全绿"（本机 11/12 核饱和下稳定复现）。改成**有界等待**，保留原有判据。 */
+    let logins = 0;
+    for (let i = 0; i < 100 && !logins; i++) { logins = fake.logins; if (!logins) await sleep(100); }
+    check('启动探测也走了假代理（genspark is_login）', logins >= 1, logins);
 
     console.log('\n3. 非流式：带 tools 的请求 → 客户端拿到 tool_calls');
     {
