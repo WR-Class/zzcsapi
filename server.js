@@ -1258,8 +1258,12 @@ function pickWeighted(candidates) {
     if ((SWRR_CUR.get(c.channelId) || 0) > (SWRR_CUR.get(best.channelId) || 0)) best = c;
   }
   SWRR_CUR.set(best.channelId, (SWRR_CUR.get(best.channelId) || 0) - total);
-  SWRR_HITS.set(best.channelId, (SWRR_HITS.get(best.channelId) || 0) + 1);
-  SWRR_TOTAL++;
+  // ★ v1.18.76：这里**不再**记命中与 SWRR_TOTAL ——「轮询选中了谁」和「这次派发真的用了那个池」
+  //   是两件事，而本函数会被**纯枚举**调到（管理面手动测试、把各协议候选拼成一条链时的探查）。
+  //   记在"选中那一刻"的代价是实测过的：一次客户端请求会调 channelsServing **9 次**，于是
+  //   只有一个渠道的兜底协议（workbuddy / opencode）**每请求白得 1 次命中**、份额恒为 ~1/3 ——
+  //   而它其实一次都没被派发过（控制台那一列 33.7% 就是这么来的，与流量无关）。
+  //   现在改由 countWeightedHit() 在「链组装完、确定这次竞争的是哪个池」之后记一次。
   return candidates.indexOf(best);
 }
 
@@ -1267,8 +1271,27 @@ function pickWeighted(candidates) {
 // 没有任何渠道填 weight 时这里什么都不做 —— 这是"老配置零影响"的关键。
 function applyWeightedPick(list) {
   const idx = pickWeighted(list);
+  if (idx < 0) return list;
   if (idx > 0) list.unshift(list.splice(idx, 1)[0]);
+  // ★ 打标而不是记账：记号跟着候选对象走，由候选链的组装者决定"这次算不算一次命中"。
+  list[0].weightedPicked = true;
   return list;
+}
+
+// ★ v1.18.76：一次**真实派发**只记一次命中，而且只记在「这次请求真正竞争的那个池」上
+//   （= 拼好的候选链里**第一个有候选的池**的赢家；由链的组装者调用，见 openAICandidateChain
+//   与两条内联的 anthropic / gemini 链）。
+//   为什么不是"每个池都记"：兜底层的池（notion / workbuddy / opencode…）只有在前面的层全挂时
+//   才会被走到，把它们算进份额就等于把「轮询想给谁」当成「分流给了谁」——那正是用户看到的
+//   「份额 33.7% 却一次没被调用」。
+//   为什么不是"被尝试时才记"：会话粘性会把轮询选出的链首顶掉（文档「与会话粘性的关系」），
+//   那时链首根本没被试过、可轮询**确实**分了它一次 —— 份额要回答的是「轮询怎么分的」，
+//   不是「谁最终服务了」，这两个数字故意允许不同。
+function countWeightedHit(cand) {
+  if (!cand || cand.weightedPicked !== true) return false;
+  SWRR_HITS.set(cand.channelId, (SWRR_HITS.get(cand.channelId) || 0) + 1);
+  SWRR_TOTAL++;
+  return true;
 }
 
 function weightedStats() {
@@ -1277,7 +1300,7 @@ function weightedStats() {
   return { total: SWRR_TOTAL, channels: out };
 }
 
-function channelsServing(model, protocol) {
+function channelsServing(model, protocol, opts) {
   const want = String(model || '').toLowerCase().trim();
   if (!want) return [];
   const out = [];
@@ -1364,6 +1387,11 @@ function channelsServing(model, protocol) {
     return la - lb;
   });
   // ★ 加权轮询：只有填了 weight 的渠道才改变"谁是第一位"；没填则原样返回（老配置零影响）
+  // ★ v1.18.76：`opts.pure` = **纯枚举** —— 只想知道"有哪些候选、按健康度/优先级/延迟怎么排"，
+  //   那就一个字节都别推进：不推 SWRR 相位、不选链首、更不记命中。管理面「手动测试」以及一切
+  //   "只看有没有候选"的调用必须走这条路（此前它们每调一次就白记一次命中，
+  //   连我自己跑回归都在污染本机那台网关的份额统计）。
+  if (opts && opts.pure) return out;
   return applyWeightedPick(out);
 }
 
@@ -4797,7 +4825,10 @@ async function handleAdminApi(req, res, url) {
         // v1.18.72：这里原本是一串嵌套三元（六个 `))))`），加第七家就得再套一层；改成显式循环——
         //   顺序一眼可见，加协议只加一个数组元素。**语义与原写法逐字等价**：取第一个有候选的协议族。
         for (const p of ['openai', 'notion', 'notion-agent', 'workbuddy', 'genspark', 'codex', 'hark', 'opencode']) {
-          const cs = channelsServing(model, p);
+          // ★ v1.18.76：`{ pure: true }` —— 这里只是"挑一个能服务的协议族去发一发测试请求"，
+          //   不是真实分流决策：纯枚举，不推 SWRR、不选链首、不记命中（此前每点一次「测试」
+          //   就把本机那台网关的份额统计污染一轮）。
+          const cs = channelsServing(model, p, { pure: true });
           if (cs.length) return cs;
         }
         return [];
@@ -5449,6 +5480,11 @@ function openAICandidateChain(requested) {
   // opencode 免费模型（v1.18.72）兜底：走的是**本机边车**（宿主机上那个已登录的 `opencode serve`），
   //   放链尾——它消耗的是部署者自己账号的免费额度，且有合规/封号风险（见 opencode.js 文件头）
   for (const oc of channelsServing(requested, 'opencode')) if (!out.some((c) => c.channelId === oc.channelId)) out.push(oc);
+  // ★ v1.18.76：整条链拼完后**只记一次**命中，记在"第一个有候选的池"的赢家身上 —— 那才是这次
+  //   请求真正竞争的池（openai 有货就是 openai 池；openai 空、靠 notion 接住时才是 notion 池）。
+  //   兜底层的池一概不记：它们只有在前面的层全挂时才走得到，算进份额就等于把"轮询想给谁"
+  //   当成"分流给了谁"（正是"33.7% 却一次没调用"那个错觉的来源）。
+  countWeightedHit(out[0]);
   return out;
 }
 
@@ -5907,11 +5943,16 @@ async function handleAnthropicRequest(req, res, url) {
     applyContextDiet(body);   // v1.18.61：摘掉几十轮前的旧截图（anthropic 形 image 块）
     // 优先 anthropic 协议渠道；没有则回落 openai / gemini 协议（网关做双向转换）；notion 始终作为兜底候选
     let candidates = channelsServing(requested, 'anthropic');
-    if (candidates.length === 0) candidates = channelsServing(requested, ['openai', 'gemini']);
-    for (const gc of channelsServing(requested, ['openai', 'gemini'])) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
+    // ★ v1.18.76：这个池**只查一次**。原写法是"空则赋值 + 无条件再 for 一遍"，于是 anthropic 池为空时
+    //   openai/gemini 池会被**连着 pick 两次**（SWRR 相位多推一格、命中多记一次）。改成查一次、
+    //   赋值与追加共用同一份结果 —— 语义逐字等价，副作用不再重复。
+    const nativePool = channelsServing(requested, ['openai', 'gemini']);
+    if (candidates.length === 0) candidates = nativePool;
+    for (const gc of nativePool) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
     for (const nc of channelsServing(requested, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
     for (const gc of channelsServing(requested, 'notion-agent')) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
     for (const xc of channelsServing(requested, 'codex')) if (!candidates.some((c) => c.channelId === xc.channelId)) candidates.push(xc);
+    countWeightedHit(candidates[0]);   // ★ v1.18.76：同上，只记"第一个有候选的池"一次
     if (candidates.length === 0) {
       return sendJson(res, 404, { type: 'error', error: { type: 'not_found_error', message: `no channel for model "${requested}"` } });
     }
@@ -5985,10 +6026,13 @@ async function handleGeminiRequest(req, res, url) {
 
   // 优先 gemini 协议渠道；没有则回落 openai / anthropic 协议（网关做双向转换）
   let candidates = channelsServing(model, 'gemini');
-  if (candidates.length === 0) candidates = channelsServing(model, ['openai', 'anthropic']);
-  for (const gc of channelsServing(model, ['openai', 'anthropic'])) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
+  // ★ v1.18.76：同 anthropic 链 —— 这个池只查一次，避免"空则赋值 + 无条件再 for 一遍"把它 pick 两次
+  const nativePool = channelsServing(model, ['openai', 'anthropic']);
+  if (candidates.length === 0) candidates = nativePool;
+  for (const gc of nativePool) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
   for (const nc of channelsServing(model, 'notion')) if (!candidates.some((c) => c.channelId === nc.channelId)) candidates.push(nc);
   for (const gc of channelsServing(model, 'notion-agent')) if (!candidates.some((c) => c.channelId === gc.channelId)) candidates.push(gc);
+  countWeightedHit(candidates[0]);   // ★ v1.18.76：同上，只记"第一个有候选的池"一次
   if (candidates.length === 0) {
     return sendJson(res, 404, { error: { code: 404, message: `no channel for model "${model}"`, status: 'NOT_FOUND' } });
   }

@@ -3,13 +3,19 @@
  * test/weighted-rr.test.js — 真正的加权轮询（SWRR）单元回归（零依赖）
  *
  * 从 server.js 现抠真实实现跑断言（不复制粘贴逻辑，改坏了这里就会红）：
- *   SWRR_CUR / SWRR_HITS / SWRR_TOTAL / pickWeighted / applyWeightedPick / weightedStats
+ *   SWRR_CUR / SWRR_HITS / SWRR_TOTAL / pickWeighted / applyWeightedPick / countWeightedHit / weightedStats
  *
  * 语义约定（要改先改这里）：
  *   · `priority`/`effPriority` = 候选链**顺序**（谁先试、谁兜底）；
- *   · `weight` = 同组内**按比例分流**（真正的加权轮询）；
- *   · 只有**明确填了正数 weight** 的渠道进轮询池，缺省 0 与老行为逐字节一致（老配置零影响）；
+ *   · `weight` = 同组内**按比例分流**（真正的加权轮询）—— 池子的门槛是候选对象的 `weight > 0`，
+ *     而那个字段来自 `effWeight(ch)`：关闭自动权重时 = 手工 weight（缺省 0 = 不进池，老配置零影响）；
+ *     开启后每家都是 `(手工 weight ‖ 1) × h > 0` ⇒ **全都进池**（详见 docs/scheduling.md「自动权重」）。
  *   · 选中者被提到候选链第一位，其余保持原有顺序作兜底。
+ *   · ★ v1.18.76：**「选中」与「记账」是两步** —— `applyWeightedPick` 只在赢家身上打标
+ *     （`weightedPicked = true`），`countWeightedHit` 才记一笔命中。拆开之前，一次真实客户端请求
+ *     会调 `channelsServing` **9 次**（把各协议候选拼成一条链），于是**只有单条渠道的兜底协议
+ *     （workbuddy / opencode）每请求白得 1 次命中**、份额恒 ~1/3 —— 而它一次都没被派发过
+ *     （控制台「权重 / 分流」列那个 33.7% 就是这么来的）。
  *
  * 跑法：node test/weighted-rr.test.js      （退出码非 0 表示有回归）
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -41,10 +47,10 @@ function extractDecl(decl) {
 
 const code = [
   extractDecl('SWRR_CUR'), extractDecl('SWRR_HITS'), extractDecl('SWRR_TOTAL'),
-  extract('pickWeighted'), extract('applyWeightedPick'), extract('weightedStats'),
+  extract('pickWeighted'), extract('applyWeightedPick'), extract('countWeightedHit'), extract('weightedStats'),
 ].join('\n');
-const { pickWeighted, applyWeightedPick, weightedStats, SWRR_CUR, SWRR_HITS } =
-  new Function(code + '\nreturn { pickWeighted, applyWeightedPick, weightedStats, SWRR_CUR, SWRR_HITS };')();
+const { pickWeighted, applyWeightedPick, countWeightedHit, weightedStats, SWRR_CUR, SWRR_HITS } =
+  new Function(code + '\nreturn { pickWeighted, applyWeightedPick, countWeightedHit, weightedStats, SWRR_CUR, SWRR_HITS };')();
 
 let pass = 0, fail = 0;
 const check = (label, cond, extra) => {
@@ -155,17 +161,35 @@ reset();
   check('所有候选都保留（不丢兜底渠道）', l.length === 3, l.length);
 }
 
-console.log('\n8. 统计可观测（/admin/api/status 的 weightedShare 来源）');
+console.log('\n8. 统计可观测（/admin/api/status 的 weightedShare 来源）+ 记账只发生在真实派发');
 reset();
 {
-  // SWRR_TOTAL 是模块级 let，抽出来后跨用例累加（真实进程里也是累加），所以断言用增量
+  // ★ v1.18.76：第 1 段先证明"只选中不派发 = 一次都不记" —— 这是本次修复的核心判别量。
+  const beforeMark = weightedStats().total;
+  run([cand('a', 3), cand('b', 1)], 40);            // run 内部只调 applyWeightedPick
+  check('★ 只"选中"不"派发"时一次都不记账（选中与记账已拆开）',
+    weightedStats().total - beforeMark === 0, { total: weightedStats().total, beforeMark });
+
+  // 第 2 段：模拟"真实派发"—— 每条候选链只给链首记一次（= server.js 三个链构造处的做法）
   const before = weightedStats().total;
-  run([cand('a', 3), cand('b', 1)], 40);
+  const marks = { picked: 0, unpicked: 0 };
+  for (let i = 0; i < 40; i++) {
+    const l = [cand('a', 3), cand('b', 1)].map((c) => ({ ...c }));
+    applyWeightedPick(l);
+    if (l[0].weightedPicked === true) marks.picked++;
+    if (countWeightedHit(l[0])) marks.unpicked += 0; else marks.unpicked++;
+  }
   const s = weightedStats();
-  check('总命中数按增量累加正确', s.total - before === 40, s.total - before);
-  check('每渠道命中数正确', (s.channels.a.hits || 0) + (s.channels.b.hits || 0) === 40, s.channels);
-  check('两渠道命中比 ≈ 3:1', s.channels.a.hits === 30 && s.channels.b.hits === 10, s.channels);
-  check('share = 该渠道命中 ÷ 全部命中（跨模型合计），字段是数字', typeof s.channels.a.share === 'number', s.channels.a);
+  check('40 次派发 = 40 次命中（不多不少）', s.total - before === 40, { delta: s.total - before });
+  check('每个链首都带着打标（weightedPicked），一次都没漏', marks.picked === 40, marks);
+  check('★ 打标的必被记账、没打标的必被拒', marks.unpicked === 0, marks);
+  check('每渠道命中数正确', s.channels.a.hits === 30 && s.channels.b.hits === 10, s.channels);
+  check('两渠道命中比 ≈ 3:1', s.channels.a.hits / s.channels.b.hits === 3, s.channels);
+  check('share = 该渠道命中 ÷ 全部命中（跨模型合计），字段是数字',
+    s.channels.a.share === 75 && s.channels.b.share === 25, s.channels);
+  check('★ 没打标的候选单独送进去也不记（兜底层那种"被枚举到"的候选污染不了份额）',
+    countWeightedHit({ channelId: 'never' }) === false && !weightedStats().channels.never, weightedStats().channels);
+  check('传 undefined / null 不炸也不记', countWeightedHit(undefined) === false && countWeightedHit(null) === false);
 }
 
 console.log('\n9. 装配守卫（改 server.js 时这些必须一起改）');
@@ -186,6 +210,23 @@ console.log('\n9. 装配守卫（改 server.js 时这些必须一起改）');
   check('upsert 未传 weight 时保留旧值', /prevDef[\s\S]{0,400}?body\.weight !== undefined/.test(SRC));
   check('validateChannelDef 校验 weight', /weight must be a finite number/.test(SRC));
   check('status 暴露 weightedHits / weightedShare', /weightedHits: wstats\.channels/.test(SRC) && /weightedShare: wstats\.channels/.test(SRC));
+  /* ★ v1.18.76：三条纪律的结构性守卫（行为回归在 e2e，这里防"哪天又改回去"） */
+  check('pickWeighted 自己不再写命中统计（记账已挪出该函数）',
+    !/SWRR_HITS\.set\(/.test(extract('pickWeighted')) && !/SWRR_TOTAL\+\+/.test(extract('pickWeighted')));
+  check('applyWeightedPick 打标而不是记账',
+    /list\[0\]\.weightedPicked = true;/.test(extract('applyWeightedPick'))
+    && !/SWRR_HITS\.set\(/.test(extract('applyWeightedPick')));
+  check('countWeightedHit 只认真打了标的候选（没打标一律拒）',
+    /cand\.weightedPicked !== true\) return false;/.test(extract('countWeightedHit')));
+  check('channelsServing 有纯枚举分支（pure 时直接 return out：不推 SWRR、不选链首、不记账）',
+    /if \(opts && opts\.pure\) return out;/.test(csBody));
+  check('★ 三条客户端候选链各记一次命中（只给"第一个有候选的池"）',
+    (SRC.match(/\n\s*countWeightedHit\(/g) || []).length === 3,
+    (SRC.match(/\n\s*countWeightedHit\(/g) || []).length);
+  check('管理面「手动测试」走纯枚举（点一次测试不再污染份额统计）',
+    /channelsServing\(model, p, \{ pure: true \}\)/.test(SRC));
+  check('anthropic / gemini 链不再把同一协议池查两遍（原写法空池分支会 pick 两次 → SWRR 多推一格）',
+    (SRC.match(/const nativePool = channelsServing\(/g) || []).length === 2);
 }
 
 console.log('\n' + '─'.repeat(58));

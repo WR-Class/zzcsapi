@@ -10,7 +10,11 @@
  *   · ★ 对照：两个渠道都不填 weight → 仍然 100% 走原来的第一个（老配置零影响）；
  *   · 冷却/降级渠道不进池，份额归健康成员；
  *   · 未填 weight 的渠道仍留在兜底链（第一个挂了能顶上）;
- *   · /admin/api/status 暴露 weight / weightedHits / weightedShare。
+ *   · /admin/api/status 暴露 weight / weightedHits / weightedShare;
+ *   · ★ v1.18.76：**兜底层的渠道不再"白得命中"** —— 用"anthropic 协议 + 填了 weight"的 C 复刻现场：
+ *     一次请求会把各协议候选拼成一条链（为此要调 channelsServing 9 次），旧实现把命中记在
+ *     pickWeighted 里，于是只有一条渠道的兜底协议**每请求白得 1 次命中**、份额恒 ~1/3（而它一次
+ *     都没被派发过）。现在：合计命中 = 请求数，兜底渠道恒 0；管理面「手动测试」走纯枚举也不许动统计。
  *
  * 安全约束：动态空闲端口；配置/用量在系统临时目录（绝不动仓库 config.json/usage.json）。
  * 跑法：node test/weighted-rr-e2e.test.js      （退出码非 0 表示有回归）
@@ -55,11 +59,13 @@ function makeUpstream(state) {
 }
 
 (async () => {
-  const UA = { tag: 'A', down: false }, UB = { tag: 'B', down: false };
-  const upA = makeUpstream(UA), upB = makeUpstream(UB);
-  const PA = await freePort(), PB = await freePort(), GW = await freePort();
+  const UA = { tag: 'A', down: false }, UB = { tag: 'B', down: false }, UC = { tag: 'C', down: false };
+  const upA = makeUpstream(UA), upB = makeUpstream(UB), upC = makeUpstream(UC);
+  const PA = await freePort(), PB = await freePort(), PC = await freePort();
+  let GW = await freePort();   // let：第 5 节给新实例换一枚空闲端口，避开"上一个还没放开端口"的竞态
   await new Promise((r) => upA.listen(PA, '127.0.0.1', r));
   await new Promise((r) => upB.listen(PB, '127.0.0.1', r));
+  await new Promise((r) => upC.listen(PC, '127.0.0.1', r));
 
   const cfgPath = path.join(TMP, 'wr.json');
   const writeCfg = (weighted) => fs.writeFileSync(cfgPath, JSON.stringify({
@@ -70,6 +76,16 @@ function makeUpstream(state) {
     ],
   }));
   writeCfg(true);
+  /* ★ v1.18.76 第 5 节用：主池 A(3)/B(1) + 兜底层的 C（anthropic 协议、**填了 weight**）。
+     C 必须 weight>0 —— 否则它根本进不了轮询池，那条"兜底渠道不该有命中"的断言就会**白过**。 */
+  const writeCfg3 = () => fs.writeFileSync(cfgPath, JSON.stringify({
+    port: GW, health: { intervalSec: 3600, timeoutMs: 3000 }, retries: { perChannel: 1, maxModelFallbacks: 99 },
+    channels: [
+      { id: 'mock-wA', name: 'A', protocol: 'openai', baseUrl: `http://127.0.0.1:${PA}/v1`, apiKey: 'sk-a', priority: 10, enabled: true, weight: 3, models: { 'mock-w': 'mock-w' } },
+      { id: 'mock-wB', name: 'B', protocol: 'openai', baseUrl: `http://127.0.0.1:${PB}/v1`, apiKey: 'sk-b', priority: 5, enabled: true, weight: 1, models: { 'mock-w': 'mock-w' } },
+      { id: 'mock-wC', name: 'C', protocol: 'anthropic', baseUrl: `http://127.0.0.1:${PC}/v1`, apiKey: 'sk-c', priority: 1, enabled: true, weight: 1, models: { 'mock-w': 'mock-w' } },
+    ],
+  }));
 
   const gw = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     cwd: ROOT,
@@ -86,7 +102,7 @@ const stopChild = (cp) => new Promise((res) => {
 });
 const cleanup = () => {
     try { gw.kill(); } catch { }
-    try { upA.close(); upB.close(); } catch { }
+    try { upA.close(); upB.close(); upC.close(); } catch { }
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { }
   };
   const waitUp = async (ms = 20000) => {
@@ -174,6 +190,45 @@ const cleanup = () => {
     const r1 = await call();
     check('首个渠道 500 时自动切到兜底渠道 B', r1.status === 200 && r1.ch === 'mock-wB', r1);
     try { gw3.kill(); } catch { }
+
+    console.log('\n5. ★ v1.18.76：兜底层的渠道不再"白得命中"（份额只认真正竞争的那个池）');
+    // 现场：一次客户端请求要把各协议候选拼成一条链，为此要调 channelsServing 9 次；
+    // 旧实现把"选中"记在 pickWeighted 里 ⇒ 只有一条渠道的兜底协议**每请求白得 1 次命中**，
+    // 控制台那列份额恒 ~1/3，而它一次都没被派发过（用户看到"33.7% 却一次没调用"）。
+    UA.down = false;   // ★ 第 4 节把它置成挂了，这里必须复位：否则 A 连挂 3 次进 down、池里只剩 B，
+                       //   下面"A 的命中多于 B"就会被上游状态而不是权重决定（第一版就是这么红的）
+    GW = await freePort();
+    writeCfg3();
+    const gw4 = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+      cwd: ROOT,
+      env: { ...process.env, ZZCSAPI_CONFIG: cfgPath, ZZCSAPI_USAGE: path.join(TMP, 'usage4.json'), GATEWAY_KEY: GW_KEY, ADMIN_KEY: AD_KEY, ZZCSAPI_BIND: '127.0.0.1' },
+      stdio: 'ignore',
+    });
+    await sleep(800);
+    if (!await waitUp()) throw new Error('第四个临时网关未起来');
+    const N5 = 20;
+    const hits5 = await distribution(N5);
+    const st5 = await admin('/admin/api/status');
+    const g5 = (id) => st5.channels.find((c) => c.id === id) || {};
+    const sum5 = (s) => s.channels.reduce((a, c) => a + (c.weightedHits || 0), 0);
+    check('兜底协议的 C 一次都没被派发（落点全在主池 A/B）', (hits5['mock-wC'] || 0) === 0, hits5);
+    check('C 确实在池里（不是 down 且 weight>0）—— 否则这条断言会"白过"',
+      g5('mock-wC').status !== 'down' && g5('mock-wC').weight > 0, { status: g5('mock-wC').status, weight: g5('mock-wC').weight });
+    check('★ C 的 weightedHits 恒为 0（修复前 = 每请求 +1，份额虚高到 ~50%）', (g5('mock-wC').weightedHits || 0) === 0, g5('mock-wC').weightedHits);
+    check('★ 全部渠道命中合计 = 请求数（每请求恰好记一次，不是每池各一次）', sum5(st5) === N5, { sum: sum5(st5), N: N5 });
+    check('主池仍按 3:1 分（A 的命中多于 B）', (g5('mock-wA').weightedHits || 0) > (g5('mock-wB').weightedHits || 0), { a: g5('mock-wA').weightedHits, b: g5('mock-wB').weightedHits });
+    // 管理面「手动测试」也走纯枚举：点几次不该动份额统计
+    for (let i = 0; i < 3; i++) {
+      try {
+        await fetch(`http://127.0.0.1:${GW}/admin/api/test`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + AD_KEY },
+          body: JSON.stringify({ model: 'mock-w', prompt: 'hi' }),
+        }).then((r) => r.text());
+      } catch { }
+    }
+    const st5b = await admin('/admin/api/status');
+    check('★ 管理面「手动测试」跑 3 次后份额统计一字未动（pure 枚举）', sum5(st5b) === N5, { before: N5, after: sum5(st5b) });
+    try { gw4.kill(); } catch { }
   } catch (e) {
     fail++;
     console.log('  ✗ 运行异常: ' + (e && e.message));
