@@ -596,11 +596,12 @@ async function testChannelTimeoutFields() {
 }
 
 
-/* ═══════ 4. 自动权重观测（v1.6 静默版）：adapt() 接字段 + 观测卡渲染 ═══════
+/* ═══════ 4. 自动权重观测：adapt() 接字段 + 观测卡渲染 ═══════
    这一节守住"看得见"那一半：后端算出来的观测字段真被接进 DATA、观测卡真把
-   「若启用会怎么分」画出来，并且**卡面上写明只算不生效**（不许让用户以为已经生效了）。 */
+   预测份额画出来，并且**卡面必须如实自证生没生效**（v1.18.63 起由 effective 决定；
+   4.2 用的是关闭态数据，所以这里断言的是关闭态该显的那句"只算不生效"）。 */
 function testAutoWeight() {
-  G('4. 自动权重观测：adapt() 接字段 → 观测卡画出预测份额 + 明示"只算不生效"');
+  G('4. 自动权重观测：adapt() 接字段 → 观测卡画出预测份额 + （关闭态）明示"只算不生效"');
 
   /* 4.1 adapt()：观测字段与 DATA.auto 都要接进来 */
   {
@@ -720,7 +721,8 @@ function testAutoWeight() {
       /const\s+a\s*=\s*DATA\.auto/.test(vaw));
     check('★ 抽屉里把判断依据摊开（健康系数 / 样本 / 失败率 / 延迟）',
       oc.includes('健康系数') && oc.includes('样本 ') && oc.includes('失败率 ') && oc.includes('延迟 '));
-    check('抽屉里也写明"系数不会被执行"', oc.includes('上面的系数不会被执行'));
+    check('抽屉里也写明"系数不会被执行"（关着时——不许让用户以为已经生效）', oc.includes('上面的系数不会被执行'));
+    check('★ 反过来，生效时抽屉必须说"已生效"（同一段的两个分支都要在，删掉任一句都会红）', oc.includes('自动权重已生效'));
     check('★ 观测页真的挂上了观测卡（否则写了没人用）', extract('vAutoWeight').includes('autoWeightCard()'));
     check('★ 观测卡不再挤在渠道管理页（渠道页只剩页签 + 表格）', !extract('vChannels').includes('autoWeightCard()'));
     check('★ 自动权重是「资源」下的独立页（NAV 有入口、go() 有路由）',

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /* ═══════════════════════════════════════════════════════════════════════════
- * test/auto-weight.test.js — 自动权重（静默观测版）单元回归（零依赖）
+ * test/auto-weight.test.js — 自动权重单元回归（零依赖）
  *
  * 从 server.js 现抠真实实现跑断言（不复制粘贴逻辑，改坏了这里就会红）：
  *   AUTO_W / AUTO_STATE / normAutoWeight / pureCandidatesFor / capShares /
  *   autoRawFor / autoWeightObserve
  *
- * 这一版**只算不生效**，所以本文件守两类东西：
+ * **v1.18.63 起 `enabled` 是真的生效开关**（观测与它解耦、永远跑），所以本文件守两类东西：
  *   1) 算法本身：样本不足不动、失败率是主力信号、速度只温和惩罚且给地板、
  *      低频 + 指数平滑 + 死区抗振荡、份额归一化与单渠道封顶；
  *   2) **静默不变式**（最重要）：观测跑一百遍也不许动 SWRR_* 状态、不许改 ch.def.weight、

@@ -80,7 +80,7 @@ function adapt() {
       toMs:c.timeoutMs==null?'':c.timeoutMs,
       /* 渠道级「不发这些参数」（v1.18.33）：没配的渠道后端不下发该字段 → 统一成数组，模板可直接 join */
       dp:Array.isArray(c.dropParams)?c.dropParams.map(String):[],
-      /* 自动权重观测（v1.6 静默版，**只算不生效**）：ah = 健康系数 0~1；
+      /* 自动权重观测（v1.18.63 起观测与生效解耦：观测永远算，用不用看 enabled）：ah = 健康系数 0~1；
          aFail/aN/aLat/aSpd = 这个系数是凭什么算出来的（失败率 / 样本数 / 延迟 / 相对最快者的倍数） */
       ah:c.autoH == null ? null : Number(c.autoH),
       aFail:c.autoFailRate == null ? null : Number(c.autoFailRate),
@@ -128,7 +128,7 @@ function adapt() {
     trend, days, channels:chans, models, logs,
     /* 来源 IP 态势统计（v1.18.11）：内存态，重启清零——零数据时给空态而不是抛错 */
     stats: RAW.stats || null,
-    /* 自动权重观测（v1.6 静默版）：后端算好的"若启用会怎么分"，只用于展示 */
+    /* 自动权重观测（v1.18.63）：后端算好的分配；effective=true 时它就是真实路由在用的那份 */
     auto: RAW.auto ? {
       enabled: RAW.auto.enabled === true,
       effective: RAW.auto.effective === true,
@@ -676,7 +676,7 @@ function vChannels(v){
 }
 /* 自动权重页（v1.9）：回答"如果开了自动权重，同一个模型的候选会怎么分"。
    独立页（资源 → 自动权重），不再挤在渠道管理顶部——那里是本页的入口，不是它的家。
-   只读展示——后端这一版也只算不生效，所以页面上用 .aw-note 自证"没生效"，不靠用户猜。
+   只读展示——生没生效由 DATA.auto.effective 决定，页面用页头与 .aw-note 自证，不靠用户猜。
    标记只产结构，样式全在 build/extra.css 的 .aw-*（生产独有组件，设计稿不含）；
    本函数只允许依赖 DATA / esc / nf——回归测试按这个签名注入（test/console-state.test.js §4）。 */
 function vAutoWeight(v){
@@ -1049,12 +1049,12 @@ function openChannel(id){
 
       <div class="sec-title">自动权重（观测）</div>
       <div class="row wrap" style="gap:9px;margin-bottom:8px">
-        <span class="tag" title="健康系数 0~1：若启用自动权重，这家会按它打折分流；现在只用于展示">健康系数 ${c.ah==null?'—':c.ah.toFixed(2)}</span>
+        <span class="tag" title="健康系数 0~1：这家按它打折分流；生效时它就是份额的依据">健康系数 ${c.ah==null?'—':c.ah.toFixed(2)}</span>
         <span class="tag" title="滚动窗口里的请求数（成功 + 失败）">样本 ${c.aN}</span>
         <span class="tag" title="滚动窗口失败率：健康系数的主力信号；样本少于门槛时该项不参与，速度项仍独立生效">失败率 ${c.aFail==null?`<span class="muted">样本不足，不扣分</span>`:Math.round(c.aFail*100)+'%'}</span>
         <span class="tag" title="该渠道最近成功请求的延迟指数平均，与其相对最快渠道的倍数">延迟 ${c.aLat==null?`<span class="muted">没有数据</span>`:`${c.aLat}ms${c.aSpd?'（'+c.aSpd+'× 最快）':''}`}</span>
       </div>
-      <div class="help" style="display:block;margin-bottom:16px">这一版只**计算并展示**：真实分流仍完全按你填的权重（没填就按优先级兜底），上面的系数不会被执行。信道页顶部的观测卡能看到「同一个模型的多个候选会怎么分」。</div>
+      <div class="help" style="display:block;margin-bottom:16px">${DATA.auto&&DATA.auto.effective?'<b>自动权重已生效</b>：这些系数就是分流的依据，这家按健康系数打折分配份额（关掉「运行期设置 → 自动权重」即退回手工权重与优先级）。':'<b>自动权重当前关着</b>：上面的系数不会被执行，真实分流仍完全按你填的权重（没填就按优先级兜底）——到「运行期设置 → 自动权重」打开开关才生效。'}</div>
 
       <div class="sec-title">接入配置</div>
       <dl class="kv">
@@ -2047,9 +2047,9 @@ const PROTO_META={
   workbuddy:{label:'WorkBuddy',base:'https://www.workbuddy.ai/v2',key:'CodeBuddyExtension auth 文件里 auth.accessToken 的 JWT（ey 开头、三段点分，勿填 refreshToken）。注：新版 CodeBuddy 已把该字段加密成 envelope（$wbEncrypted / ciphertext）——那不是 JWT、填了会被当场拒，需从客户端实际请求里取明文 token'},
   codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
   genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'},
-  hark:{label:'hark 网页会话',base:'https://hark.com',key:'F12 → Application → Cookies → hark.com → 复制 __Secure-hark.session_token 的完整值（含 %2F/%3D 转义，**别解码**）。本机直连会被 CF 403 → 代理填 http://127.0.0.1:7897（Node/curl 不读系统代理）。上游只有一个 agent，模型别名随便起（如 hark-agent）；工具走文本仿真，可调客户端工具'}
+  hark:{label:'hark 网页会话',base:'https://hark.com',key:'F12 → Application → Cookies → hark.com → 复制 __Secure-hark.session_token 的完整值（含 %2F/%3D 转义，**别解码**）。本机直连会被 CF 403 → 代理填 http://127.0.0.1:7897（Node/curl 不读系统代理）。上游只有一个 agent，模型别名随便起（如 hark-agent）；工具走文本仿真，可调客户端工具'}, opencode:{label:'opencode 免费模型',base:'http://host.docker.internal:49551',key:'本机 `opencode serve` 边车的 OPENCODE_SERVER_PASSWORD 值（用户名默认 opencode，改过才写 user:密码）。baseUrl 填容器能访问到的边车地址——边车跑在宿主机上时必须用 host.docker.internal。⚠️ 免费层条款只允许 OpenCode 客户端使用，中继第三方流量有封号风险'} /* v1.18.72：opencode 与 hark 挤同一行是**刻意**的——本文件每增删一行，docs/frontend-code-map.md §0.2 与 console.html 的 JS 行号锚点（= app.js + 709）全体失效；此处不加行以免锚点漂移。console-redesign.html 侧同理，用的是 codebuff 那条占位行 */
 };
-const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark','hark'];
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark','hark','opencode'];
 
 /* 密钥来自 /admin/api/status 下发的渠道明文 key，控制台默认掩码、按需明文显示 */
 function chKey(id){const c=DATA.channels.find(x=>x.id===id);return (c&&c.apiKey)||''}

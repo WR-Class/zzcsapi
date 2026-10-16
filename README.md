@@ -242,10 +242,10 @@ http://127.0.0.1:8787/console
 | 文档 | 用途 |
 | --- | --- |
 | [协议与渠道详解](docs/protocols.md) | 协议速查表之外的**全量细节**：原生出站与同协议直通、三条客户端路由的工具调用方向、notion-agent / workbuddy / genspark / codex / hark 配置要点、`proxy` 字段、图片转换 |
-| [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（观测版）、有效优先级、含图请求的候选裁剪 |
+| [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（v1.18.63 起可选生效）、有效优先级、含图请求的候选裁剪 |
 | [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 57 个测试文件 · 2684 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 60 个测试文件 · 2810 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -259,6 +259,7 @@ http://127.0.0.1:8787/console
 | [PromptQL（prompt.ql.app）反代研究](docs/promptql-reverse-proxy-research.md) | 结论：不建议接（多人协作 bot 工作台、按 OLU 计量付费，不是可蹭的模型额度；控制面 `auth.pro.ql.app` 本机被 DNS 污染） |
 | [Arena 协议](docs/arena-protocol.md) / [Prism 反代研究](docs/prism-reverse-proxy-research.md) | 已撤渠道留档 |
 | [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **机制查明 + 活体验证 + 软墙根因**：**★ 最有价值的是抓法**——notion2api 的 `upstream.base_url` 可配，指向记录代理就抓到它发给 Notion 的原始报文（含三个必踩的坑：`origin`/`referer` 由 base_url 推出来、账号要按完整 probe JSON 导入、失败会把账号打成 `error`）。据此查明：CSV **不上 S3**，而是 `enableCsvAttachmentSupport:true` + 把 `{"file":{"file_data":"data:…","filename":"…"},"type":"file"}` 内联进 user step 正文（已按此实现为 opt-in 渠道字段，字节逐字对齐，见 `test/notion-attachment-inline-e2e.test.js`）；另白捡到 `getInferenceTranscriptsForUser` 的正确形状。**✅「模型真读到了」v1.18.42 已活体验证**（§8：对照答"没找到文件"、带附件答出只存在于 CSV 里的 `K7Q2M9`）——仍默认关，但那是**稳妥默认**不是"没验证过"。**§7/§7.7 = 软墙的两个维度**（账号状态主导、与传输无关且随时间变；客户端指纹只在账号可过时才看得见——同一秒交替打 curl 3/3 真答、fetch 0/3 软墙）；**§5/§6 是被推翻的旧结论、§7.4 是三次误判的留档，别重犯**。含上传链留档（取目标 → S3 桶根 204 → 公开 URL）、**软墙 ≠ 形状错的判别纪律**、判决实验与复现命令 |
+| [OpenCode Zen 免费模型反代研究](docs/opencode-reverse-proxy-research.md) | **结论：可反代，两条路都通**（v1.18.72 第二次更正）——**① 正路 = 本机 `opencode serve` 边车**（**已接入**为 `protocol:"opencode"`）：跑的是真客户端、**不伪造任何东西**，建会话 + `generate` 即可拿到免费模型答复（实测口径与数字见 §5）。**② 直连面其实也是通的**，但必须同时伪造三样：UA 写成 `opencode/<渠道>/<版本>/<名字>`、`x-session-id` 铸一个 `descending()` 形状的 `ses_…`、system 以 OpenCode 标题生成器提示词的**前 ≥965 字符**开头并强制 `stream:true`（v1.18.71 写的"直连是死的、判据在报文之外、没有收敛点"**已被推翻**，§3 改写、§9 补第五/六条误判）。两种 403 仍要分开读（`RegionError` = 换出口有用 / `FreeTierError` = 换出口没用）。工程约束：**无 `stream` 参数**（只能伪流式）、不下发 token/费用、**同一会话不保留多轮记忆** ⇒ 必须把 `messages` 拍平成一个 prompt；工具只能文本仿真（**实测可用**）。合规：免费层条款写的是 "can only be used from within OpenCode"，**两条路都有封号风险**，直连那条更重（明确伪造客户端身份）。**付费面反而标准可用**（无密钥回 401 `AuthError`）⇒ 用现有 `openai` 渠道 + `baseUrl: https://opencode.ai/zen/v1` 即可。另查明：你已有五条中继渠道在供 opencode 系免费模型（`20110318` 等），链路瓶颈在中继自己的分组容量（§8） |
 | [AI 工具调用桥接](docs/AI工具调用桥接-群友分享版.md) | 群友分享版说明 |
 
 ### 前端构建管线（一句话版）
@@ -270,7 +271,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**57 个文件 · 2684 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**60 个文件 · 2810 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
 ## 配置示例 (`config.example.json`)
@@ -376,21 +377,22 @@ http://127.0.0.1:8787/console
 | `codex` | 一次令牌刷新 | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效） |
 | `genspark` | `GET /api/is_login` | `Cookie: session_id=...` | Genspark 网页会话反代（**必须配代理**；工具调用靠文本仿真） |
 | `hark` | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；伪流式、工具靠文本仿真）。**别名至少要配一条**（上游没有 `/v1/models`，推荐 `hark-agent`）——控制台点「获取模型」会拿到这条默认建议；别名表空 = 这个渠道永远不会被请求命中 |
+| `opencode` | `GET /api/model` | `Authorization: Basic`（用户名 `opencode`，密码=边车口令） | **本机 `opencode serve` 边车的免费模型**（v1.18.72，[研究](docs/opencode-reverse-proxy-research.md)）。上游是**宿主机上那个已登录的边车**，不是 `opencode.ai`——直连面永远 403（判据是客户端身份）。建会话 + `generate` + **用完即删**；伪流式、估算 token、**没有多轮记忆**（每请求把 messages 拍平成一段）⇒ 工具靠文本仿真。baseUrl 填容器能访问的边车地址（宿主机上用 `host.docker.internal:<port>`），**不要给它配代理**（本地跳，不是出公网）。⚠️ 免费层条款是「can only be used from within OpenCode」，中继第三方流量**有封号风险** |
 
 `arena` 协议已撤（[留档](docs/arena-protocol.md)）。
 
 **客户端说哪套协议、渠道讲哪套协议，互不绑定**：任一客户端路由都能打到任一协议的渠道（出站自动转原生格式）；
 **同协议的那格直通不翻译**（v1.15——`thinking` / `cache_control` / `seed` 等原样到达，响应逐字节一致；v1.18.8 起还带
-thinking 回放修复）。**六条**专用报文渠道（`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex` / `hark`）的响应输出也走各客户端面的
+thinking 回放修复）。**七条**专用报文渠道（`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex` / `hark` / `opencode`）的响应输出也走各客户端面的
 收口钩子（v1.18.38 修正：此前它们自己写 OpenAI 报文，Responses / Anthropic / Gemini 面会拿到错形态）；
-**候选链分层**——Anthropic / Gemini 两条链只兜底到 `notion` / `notion-agent` / `codex`，`workbuddy` / `genspark` / `hark` 只挂在 OpenAI 类链上。
+**候选链分层**——Anthropic / Gemini 两条链只兜底到 `notion` / `notion-agent` / `codex`，`workbuddy` / `genspark` / `hark` / `opencode` 只挂在 OpenAI 类链上。
 `notion` 渠道另有**流断取回兜底**（v1.18.39：上游流断/带错误/零内容时，用同一 `threadId` 把同一份 transcript 再发一次取回成品答案；
 触发判据只看"权威全文到没到"，正常请求零额外延迟与额度，取不回仍如实判失败）。
 矩阵表、工具调用四方向、各渠道配置要点、有损点诚实清单：[协议与渠道详解](docs/protocols.md)。
 
 ## 调度顺序（摘要）
 
-1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias——**同协议优先，跨协议兜底**（现有 `openai` 渠道先后顺序不受影响），最后才是 notion → notion-agent → workbuddy → genspark → hark → codex 文本链
+1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias——**同协议优先，跨协议兜底**（现有 `openai` 渠道先后顺序不受影响），最后才是 notion → notion-agent → workbuddy → genspark → hark → codex → opencode 文本链
 2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
 3. 排序：冷却中 → 末位；`down` → 倒数第二；`probation`（半愈合观察期）→ 健康渠道之后；同状态按**有效优先级**降序，再看 latency
 4. **加权轮询**（填了 `weight` 的渠道按比例决定谁排第一）；**会话粘性**（开着时）把这条会话上次成功的那家提到第一位
@@ -523,6 +525,107 @@ Notion 的软墙（同一秒交替打，curl 3/3 真答、fetch 0/3 软墙）与
 **它只发探测、不发对话，不消耗推理额度**；报告绝不回显凭据（`apiKey` 只出长度，错误文案也过 mask）。
 ⚠️ `--all` 会对每一家已启用渠道各敲两发，渠道多时既慢又唐突，**别当例行体检跑**；
 notion 的软墙问题请优先用 `notion-wall-probe.js`（它是同一时间窗内交错打的，更省更准）。
+
+## opencode 判决探针（只读脚本，低额度）
+
+opencode 的免费层有**两个面**，**两条路都能通、但代价完全不同**，两个探针分开测——
+分不清就会像 v1.18.70 / v1.18.71 那两版一样把结论写反（一版说"都不可反代"，一版说"直连是死的"）。
+
+### 直连面：`node opencode-probe.js`
+
+回答一个问题：**opencode 那 11 个 `-free` 模型，直连时到底哪一道门在拦我们？**
+
+opencode 的失败体有**两种 403**，含义完全不同、处置也完全不同，而控制台里都只是一句"渠道故障"：
+
+| 失败体 | 含义 | 处置 |
+| --- | --- | --- |
+| `RegionError` | 出口 IP 的地区不开放该模型 | 换出口**有用** |
+| `FreeTierError` | 客户端身份不是 OpenCode | 换出口**没用** |
+
+所以它**按层分开打**（目录 / 凭据门 / 付费门 / 地区门 / go 面），末尾给一行机器可读判词：
+
+```powershell
+node opencode-probe.js                              # 直连
+node opencode-probe.js --proxy http://127.0.0.1:7897  # 走代理（★ Node/curl 不读系统代理）
+```
+
+**它给出的结论（v1.18.72 第二次更正）**：直连这一面**其实是通的**，v1.18.71 说的"判据在报文之外、没有收敛点"**是错的**——
+门禁是**报文里三样可自造的东西**：① `User-Agent` 必须是 `opencode/<渠道>/<版本>/<名字>` 形状
+（`opencode/foo` 与任何普通 UA 都是 403）；② `x-session-id` 铸一个 `descending()` 形状的 `ses_…`
+（**不是服务端签发的凭证**，新铸的 ID 首次使用即通过）；③ system 必须以 OpenCode **标题生成器提示词的
+前 ≥965 字符**开头（边界实测 `964`→403 / `965`→200），且强制 `stream:true`、不带 `tools`。
+三条齐了就是 **200 + 真 SSE 正文**（已独立复核，见研究文档 §3）。**但这条路要伪造客户端身份**，
+且能力被限成单轮纯文本，所以**网关接入走的是边车那条正路**（`protocol:"opencode"`）。
+另外**付费面反而是可用的**（无密钥回 401 `AuthError`，不是 403）⇒
+要接付费模型就用现有 `openai` 渠道 + `baseUrl: https://opencode.ai/zen/v1`，**不需要新协议**。
+完整证据与**六次**误判留档见 [OpenCode Zen 免费模型反代研究](docs/opencode-reverse-proxy-research.md)。
+
+读法：**撞 `RegionError` 时本项记「未作判定」而不是失败**——那不是探针没干活，是这一发根本没走到客户端门，
+必须换出口重跑，否则会把"地区问题"当成"客户端问题"，在两个不同的层上排查半天。
+**不消耗真实推理额度**（全部 `max_tokens=16`）；不需要也不回显任何凭据。
+⚠️ **克制使用**：它测的是"直连面能不能被伪造通行"，**不是**接入建议——要接就接边车（下面那个）。
+
+### 边车面：`node opencode-sidecar-probe.js` —— ★ **这条路是通的**
+
+```powershell
+node opencode-sidecar-probe.js                      # 自己起一个临时 opencode serve 来测
+node opencode-sidecar-probe.js --bin <opencode.exe> # 指定可执行文件
+node opencode-sidecar-probe.js --base http://127.0.0.1:49551 --password-env ZZ_OC_PW  # 测已在跑的边车
+```
+
+**它给出的结论**：`opencode serve`（那个自带 HTTP 服务）**就是被上游认可的那个客户端**——
+它用你的登录态 + 真客户端身份发请求，`POST /api/session` 建会话、`POST /api/session/{id}/generate` 发一句，
+就能拿到 `deepseek-v4.1-flash-free` 等免费模型的答复（实测 `17*23`→`391`、随机口令逐字命中、
+4 路并发全中、8 连发 0 个 429、冷启动 0.64 秒）。
+
+它按层打：起边车 → 目录 → 凭据库（**只报大小，不读内容**）→ **生成**（随机口令**逐字命中**才算通）
+→ **付费对照**（付费模型必须如实失败，证明免费那发不是"什么都答"的空壳）。
+判词：`判决：边车=<passed|blocked|undecided> 目录=… 生成=…`。
+
+- **连不上/起不来记 `undecided`，不是 `blocked`**——"测不到"≠"这条路不通"，别把两者混为一谈。
+- **密码只从环境变量读**（`--base` 必须配 `--password-env`），绝不进命令行、绝不打印。
+- ⚠️ **合规/封号风险**：免费层条款写的是 "can only be used from within OpenCode"。跑真客户端本身没有伪造，
+  但把第三方流量中继进免费层**不是该层的设计用途**，官方也明说免费是 limited time。要不要上生产由你决定。
+
+工程现状（**接之前先读**）：边车 API **不是 chat-completions** ⇒ 网关侧要写**新协议**；
+**没有 `stream` 参数**（只能伪流式）、**不下发 token/费用**、**同一会话不保留多轮记忆**
+（每请求要把 `messages` 拍平成一个 prompt）；边车必须跑在**那台已登录的机器上**，容器经
+`host.docker.internal:<port>` 访问（同现有 `proxy` 字段的用法）。详见研究文档 §5/§10。
+
+### 已经接好了：`protocol:"opencode"`（v1.18.72）
+
+上面那些工程约束**已经落进代码**，不用自己写：
+
+**① 在宿主机上起一个边车**（要有登录态；自带的管理服务不接受自选密码，所以必须自己起一个）：
+**口令是你自己定的 —— 先定它，然后在两处写同一个值（这里 + 控制台的钥匙框）。**
+
+```powershell
+$env:OPENCODE_SERVER_PASSWORD = 'REPLACE_WITH_YOUR_OWN_PASSWORD'      # ← 口令在这里"定"下来；内容随你，记住它
+opencode serve --port 49551 --hostname 127.0.0.1
+```
+
+> ★ **「不设口令」不等于「不用口令」**（v1.18.72 实测）：`serve` 没有 `--password` 参数，
+> **环境变量是设口令的唯一入口**；而**不设它，边车会自己随机生成一个口令并打进 stdout 日志**
+> （`server password <随机串>`）——你**仍然**得把它抄进钥匙框，只是更难抄、且它躺在日志里（日志即泄露面）。
+> 所以自己设更省事也更干净。四条对照实测：不带 `Authorization` **401** / 口令对 **200** /
+> 随便填 **401** / 口令对但用户名错 **401**。另：`$env:` 只活在当前窗口，跨重启用
+> `setx OPENCODE_SERVER_PASSWORD "<值>"`。⚠️ 口令里**别带冒号**（`user:密码` 是语法，冒号前会被当用户名）。
+> 详见 [研究文档 §5.2.1](docs/opencode-reverse-proxy-research.md)。
+
+**② 控制台 → 渠道 → 新建**：协议选 `opencode 免费模型`，`baseUrl` 填 `http://host.docker.internal:49551`
+（容器里的写法；本机 `node server.js` 直跑就填 `http://127.0.0.1:49551`），
+**钥匙填 ① 里那个一模一样的口令**（不是用户名、不是另想一个），点「获取模型」——
+只会列出**免费**模型（付费模型在这台机器上必定 `503 Insufficient account funds`，列出来就是给你塞一批永远失败的渠道），
+随手保存即可（它有真目录，别名会自动补，**不需要**手配）。
+
+**③ 就这么用**：请求 `deepseek-v4.1-flash-free` 等免费模型即可。工具调用走**文本仿真**
+（与 hark 同一套路：注入工具协议 → 解析 `[TOOL_CALL]` 标记 → 还原成真 `tool_calls`），**实测可用**。
+
+三条它会替你守住、值得知道的纪律：**每个请求都会建会话并在用完后删掉**（边车里的会话落在你账号下，
+不删就会无限堆积）；**每次请求都把 `messages` 拍平成一段文本再发**（边车不保留多轮记忆，
+"复用会话省一次建会话"看起来聪明，实际会把上下文丢掉）；**边车回 200 但正文是空的算失败**，
+不会被记成"成功"。
+⚠️ 仍**不要**给这个渠道配 `proxy`——边车是本地上游，不是出公网。
 
 ## 安全体检（只读脚本）
 

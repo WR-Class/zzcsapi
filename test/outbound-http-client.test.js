@@ -164,7 +164,14 @@ function makeAnthropicUpstream() {
       notionOut === 3, notionOut);
 
     const modArgs = (SRC.match(/, zzFetch, /g) || []).length;
-    check('★ notion / notion-agent 模块拿到的也是 zzFetch（11 处实参）', modArgs === 11, modArgs);
+    // v1.18.72：11 → 15 —— opencode 边车渠道（`opencode.js`）新增 4 处**刻意**把 zzFetch 当实参传进模块：
+    //   探测 2 处（probeChannel + probeDef 的 `opencode.opencodeCatalog(…, zzFetch, …)`）、
+    //   常规聊天 1 处（`tryOpencodeChannel` 的 `opencode.opencodeGenerate(…, zzFetch, …)`）、
+    //   管理面手动测试 1 处（同 generate）。
+    //   ⚠️ 边车是**本机/宿主机**地址（host.docker.internal），**不经 Cloudflare** → 与 hark/genspark 不同，
+    //   不需要 curl 子进程、也不该用渠道的 `proxy`（那是给"出公网"用的，边车是本地上游）。
+    //   刻意**不**把这 4 处包成一个二次封装来把数字压回 11——那是拿改测试凑数字，会让"谁在出站"看不见。
+    check('★ notion / notion-agent / opencode 模块拿到的也是 zzFetch（15 处实参）', modArgs === 15, modArgs);
     check('★ 后台任务注入的 fetchFn 也是 zzFetch', /fetchFn: zzFetch,/.test(SRC));
 
     check('★ 客户端自带 keep-alive Agent（没有它，换掉 undici 只是换了个不复用的客户端）',

@@ -2,7 +2,7 @@
 
 > 本文从 README 拆出（v1.18.8）：README 只留协议速查表，本文收全量细节——原生出站、同协议直通、
 > 客户端路由的工具调用方向与 Responses API（第四套报文，v1.18.38）、专用报文渠道的**输出收口**（v1.18.38 修正）、
-> notion 渠道的**流断取回兜底**（v1.18.39）、**内联附件**（v1.18.41）、五条逆向/订阅链（notion-agent / workbuddy / genspark / codex / hark）的配置要点。
+> notion 渠道的**流断取回兜底**（v1.18.39）、**内联附件**（v1.18.41）、六条逆向/订阅链（notion-agent / workbuddy / genspark / codex / hark / opencode）的配置要点。
 > 路由与调度语义见 [docs/scheduling.md](scheduling.md)；鉴权写法与管理面会话见 [docs/behavior.md](behavior.md)。
 
 ## 协议速查表
@@ -19,6 +19,7 @@
 | `codex`        | 一次令牌刷新             | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） | ChatGPT/Codex 订阅反代（AT 约 10 天有效，RT 一次性轮转） |
 | `genspark`     | `GET /api/is_login`      | `Cookie: session_id=...` | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期；**工具调用靠文本仿真**，上游会忽略原生 `tools`） | Genspark 网页会话反代（**渠道必须配代理**；session 约 20 天过期） |
 | `hark`         | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；**伪流式**；**工具调用靠文本仿真**；免费日额度约 69 轮，放链尾） | hark.com 网页会话反代（同上） |
+| `opencode`     | `GET /api/model`          | `Authorization: Basic`（用户名 `opencode`，密码=边车口令） | **本机 `opencode serve` 边车**的免费模型（v1.18.72）：建会话 + `generate` + **用完即删**；**伪流式**；**不下发 token/费用**（按估算记账）；**无多轮记忆** ⇒ 每请求把 `messages` 拍平；**工具调用靠文本仿真（实测可用）**；放链尾；**不要配 `proxy`** | 同上 |
 
 ## 渠道字段 `proxy`（可选）
 
@@ -35,7 +36,7 @@
   解析走 `parseCustomHeaders`：对象与文本两种形态都认；跳过注释行（`#`）、空行、没有冒号的行；键值两侧 `trim`；
   **`Authorization` / `authorization` 一律被删掉**（UI 上写着"Authorization 不可覆盖"，后端也真删——否则渠道配置就能顶掉网关自己的鉴权头）。
 - 生效范围：**常规链路**（openai / anthropic / gemini 系出站）——探测、测试、聊天都经同一个 `applyCustomHeaders` 挂头。
-  `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` / `hark` 自带专用报文构造，配了**不生效**（与 `dropParams` 同一类边界）。
+  `workbuddy` / `codex` / `genspark` / `notion-agent` / `notion` / `hark` / `opencode` 自带专用报文构造，配了**不生效**（与 `dropParams` 同一类边界）。
 - 没配这个字段的渠道：`applyCustomHeaders` **返回同一个对象引用**（零拷贝），老配置行为一个字节不变。
 - 三态语义与 `dropParams`/`weight` 同款：**显式值（含 `""`）优先、`""` 清空、字段缺省则保留旧值**。
   这条是硬要求：控制台曾用 `body.headers ? body.headers : undefined`，于是"打开渠道 → 顺手保存"会把已配的请求头**静默删掉**。
@@ -157,7 +158,7 @@ Responses 请求 ──入站转换──▶ OpenAI chat 报文 ──dispatchRe
 
 ## 专用报文渠道的「输出收口」（v1.18.38 修正）
 
-notion / notion-agent / workbuddy / genspark / codex / hark 这六条路径**自己构造上游报文**（不走常规出站构造），
+notion / notion-agent / workbuddy / genspark / codex / hark / opencode 这**七条**路径**自己构造上游报文**（不走常规出站构造），
 也因此历史上**自己写响应**：非流式 `res.end(JSON.stringify(chat 报文))`、流式 `res.write(chat SSE 行)`。
 
 对 OpenAI 客户端面（`/v1/chat/completions`）这没问题——那本来就是要的形态；但对**其它客户端面**等于把翻译层整个绕过去了。
@@ -166,7 +167,7 @@ notion / notion-agent / workbuddy / genspark / codex / hark 这六条路径**自
 
 根因两层，缺一层都修不好：
 
-1. `tryChannel` 分派这六条路径时只透传了 `res` / `body` / `candidate` / …，把
+1. `tryChannel` 分派这七条路径时只透传了 `res` / `body` / `candidate` / …，把
    `onSuccessNonStream` / `onStreamChunk` / `streamPrelude` / `streamEpilogue` **四个输出钩子全丢了**
    （代码注释写着"anthropic 入口经 onStreamChunk 转换"——意图是对的，转发是漏的）；
 2. 于是它们只能自己写响应，连"开场 / 收尾"都没有。
@@ -183,7 +184,7 @@ notion / notion-agent / workbuddy / genspark / codex / hark 这六条路径**自
 `/v1/chat/completions` 的报文形态与字节一个都没变（回归里有对照组）。
 
 两条边界（诚实说明）：① **上游错误体仍然原样透传**（4xx 的 `shouldPassThrough4xx` 分支照旧不翻译，这是刻意纪律，见 [behavior.md](behavior.md)）；
-② **候选链本身没动**——`workbuddy` / `genspark` / `hark` **不在** Anthropic / Gemini 两条候选链里（那两条只兜底到
+② **候选链本身没动**——`workbuddy` / `genspark` / `hark` / `opencode` **不在** Anthropic / Gemini 两条候选链里（那两条只兜底到
 `notion` / `notion-agent` / `codex`），所以"某个客户端面能不能打到某条专用渠道"是**调度语义**，不是收口能决定的。
 
 守卫：`test/special-channel-output-seam-e2e.test.js`（装配守卫 + 假 workbuddy / notion 上游 × 四套客户端面）。
@@ -477,6 +478,83 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
   （只影响本次运行，不改 `config.json`）。
 - **回归**：`node test/hark-channel.test.js`（真网关 + 真 curl + 假上游兼 HTTP 代理，零外网零额度）+
   `node test/channel-default-alias-e2e.test.js`（无模型目录协议的默认别名与空别名拦截）。
+
+## opencode（本机 `opencode serve` 边车的免费模型，v1.18.72）
+
+把**本机那个已登录的 `opencode serve`** 当上游用（逆向过程、两次更正与逐条证据见
+[docs/opencode-reverse-proxy-research.md](opencode-reverse-proxy-research.md) §3/§5/§13）。
+
+**为什么上游是"边车"而不是 `opencode.ai`**：直连面 `POST https://opencode.ai/zen/v1/chat/completions`
+调免费模型会 `403 FreeTierError`——它判的是**你是不是 OpenCode 客户端**，跟有没有凭据无关
+（真账号 OAuth token 一样 403）。**直连那条路其实能靠伪造 UA + 自铸会话 ID + 借用官方标题提示词
+前缀打通**（v1.18.72 实测），但那要伪造客户端身份、且带 `tools` 一律 403；
+而**跑真客户端（边车）不需要伪造任何东西**就能拿到同样的免费模型 ⇒ 网关走边车这条路。
+
+**怎么配**：
+
+```powershell
+# ① 在跑着 opencode 的机器上起边车（自带的管理服务不接受自选密码，必须自己起一个）
+$env:OPENCODE_SERVER_PASSWORD = 'REPLACE_WITH_YOUR_OWN_PASSWORD'      # ← 口令在这里"定"下来；内容随你，记住它
+opencode serve --port 49551 --hostname 127.0.0.1
+```
+
+- **Base URL**：`http://host.docker.internal:49551`（**容器里**的写法；本机直跑 `node server.js` 就填
+  `http://127.0.0.1:49551`）。⚠️ **不要**给它配 `proxy` —— 边车是**本地上游**，`proxy` 是给"出公网"用的。
+- **API Key**：**边车口令**（即 `OPENCODE_SERVER_PASSWORD` 的值），**与 ① 里那串一字不差**——它不是给
+  网关自己起的名，而是**两处必须同值的共享秘密**。鉴权是 HTTP Basic，用户名默认
+  `opencode`；只有当你给边车设了 `OPENCODE_SERVER_USERNAME` 时才需要写成 `用户名:口令`（所以**口令里别带
+  冒号**——`raw.indexOf(':')` 会把第一个冒号前那段当用户名）。
+  ★ **「不设口令」≠「不用口令」**（v1.18.72 实测）：`serve` **没有** `--password` 参数，
+  **环境变量是唯一入口**；不设它，边车会**自己随机生成一个口令并打进 stdout 日志**，你仍然得把它抄进来，
+  只是更难抄、且它躺在日志里（**日志即泄露面**）。四条对照：不带 `Authorization` 401 / 口令对 200 /
+  随便填 401 / 口令对但用户名错 401。`$env:` 只活在当前窗口，跨重启用 `setx`。详见
+  [研究文档 §5.2.1](opencode-reverse-proxy-research.md)。
+- **模型别名**：**不用手配**。边车**有**目录（`GET /api/model`）⇒ 它**不属于**"无目录协议"那一族
+  （hark/workbuddy/genspark/codex 才需要默认别名建议 + 零别名拦截），点「获取模型」即可，`autoAlias` 照常工作。
+- **只列免费模型**：目录里有 41~42 个（带凭据时，**会随上游漂移**；2026-10-15 实测 41 个 / 9 个免费，
+  建档时是 42 / 10），其中三十来个付费模型在这台机器上必定
+  `503 Insufficient account funds`——列进别名表就是塞一批"存得下、永远失败"的渠道（v1.18.49 那一类现场），
+  所以探测只回 `-free` 那批，并在 `account.note` 里说明。
+
+**四条必须知道的链路纪律**（每条都有 e2e 断言守着）：
+
+| # | 纪律 | 为什么 |
+| --- | --- | --- |
+| 1 | **用完即删会话** | 会话落在**用户自己账号**下；漏删 = 每次网关请求堆一条会话，**而请求照样成功** |
+| 2 | **每请求拍平 `messages`** | 边车**不保留多轮记忆**（实测）；复用会话看着省事，实际丢上下文 |
+| 3 | **不给边车传 `stream`** | 该端点没有 stream 参数；真流式由网关**伪流式**伪造 |
+| 4 | **200 + 空正文 = 失败** | 与 v1.18.26/32 同一条纪律 |
+
+**出站形状**（`opencode.js`）：
+
+```
+POST /api/session      {model:{id:<上游模型>, providerID:"opencode"}}  → 200 {data:{id:"ses_…"}}
+POST /api/session/{id}/generate  {prompt:"<拍平后的整段文本>"}          → 200 {data:{text:"…"}}
+DELETE /api/session/{id}                                               → 204（成功失败都删）
+```
+
+三个形状陷阱（写错都会静默失败或撞 400）：
+
+- 会话 id 在 **`data.id`**，**顶层没有 `id`**。
+- `generate` 的 body **只有 `prompt`**（`additionalProperties:false`，多传一个字段就 400）。
+- 返回正文在 **`data.text`**，不是 OpenAI 形状。
+
+**token/费用**：边车**不下发**（`Session.Info.tokens` 与 `cost` 在 `generate` 之后**恒为 0**，
+`/message` 也是空数组，本机实测）⇒ 账本按 `estimateTokens` 估算，**不假装有上游真值**。
+
+**工具调用**：走**文本仿真**（与 hark 同一套路）——`tool-emu` 注入工具协议 → 模型回 `[TOOL_CALL]` 标记
+→ `parseEmulatedToolCalls` 还原成标准 `tool_calls`。**活体实测可用**（`read_file` 带参数正确还原）。
+
+**探针**：`node opencode-sidecar-probe.js`（自己起临时边车跑一发随机口令判这条路通不通）+
+`node opencode-probe.js`（直连面两道门的判决，**只用于研究留证**）。
+
+**回归**：`node test/opencode-channel-e2e.test.js`（假边车 + 临时网关，零外网、不起真 opencode、不需要凭据）。
+⚠️ 它同时守三条计数守卫：`docs/tests.md`、`test/outbound-http-client.test.js`（`zzFetch` 实参 11→15）、
+`test/special-channel-output-seam-e2e.test.js`（收口调用点 10/6/6→12/7/7）——**加协议时这三个数字都要跟着动**。
+
+⚠️ **合规**：免费层条款是「can only be used from within OpenCode」。边车这条路跑的是真客户端、
+**没有伪造**，但把**第三方流量**中继进免费层**不是该层的设计用途**，官方也明说免费是 limited time
+⇒ **有封号风险**。
 
 ## codebuff（已撤渠道，留档）
 

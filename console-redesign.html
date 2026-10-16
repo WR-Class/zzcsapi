@@ -1778,9 +1778,9 @@ const PROTO_META={
   codex:{label:'Codex 订阅反代',base:'https://chatgpt.com/backend-api/codex',key:'ChatGPT 订阅的 refresh token（rt.1. 开头）。RT 一次性轮转，每次刷新自动写回新值'},
   genspark:{label:'Genspark 网页会话',base:'https://www.genspark.ai',key:'网页会话 session_id 的完整值（uuid:hex，F12 → Cookies → www.genspark.ai → session_id）。代理必填'},
   hark:{label:'hark 网页会话',base:'https://hark.com',key:'F12 → Application → Cookies → hark.com → 复制 __Secure-hark.session_token 的完整值（含 %2F/%3D 转义，**别解码**）。本机直连会被 CF 403 → 代理填 http://127.0.0.1:7897（Node/curl 不读系统代理）。上游只有一个 agent，模型别名随便起（如 hark-agent）；工具走文本仿真，可调客户端工具'},
-  /* codebuff 渠道已撤（v1.18.60）：此处原为 codebuff:{label:'Codebuff/Freebuff',base:'https://www.codebuff.com/api/v1',...}。保留占位行以免设计稿行数变化牵动行号锚点；恢复渠道时原地改回 */
+  opencode:{label:'opencode 免费模型',base:'http://host.docker.internal:49551',key:'本机 `opencode serve` 边车的 OPENCODE_SERVER_PASSWORD 值（用户名默认 opencode，改过才写 user:密码）。baseUrl 填容器能访问到的边车地址——边车跑在宿主机上时必须用 host.docker.internal。⚠️ 免费层条款只允许 OpenCode 客户端使用，中继第三方流量有封号风险'}, /* codebuff 渠道已撤（v1.18.60）：此处原为 codebuff:{label:'Codebuff/Freebuff',base:'https://www.codebuff.com/api/v1',...}。保留占位行以免设计稿行数变化牵动行号锚点；恢复渠道时原地改回 */
 };
-const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark','hark'];
+const PROTO_ORDER=['openai','anthropic','gemini','notion','notion-agent','workbuddy','codex','genspark','hark','opencode'];
 const MODEL_POOL=['gpt-6-astra','claude-opus-5','glm-5.3','kimi-k3','grok-4.6','gpt-5.6-sol','deepseek-v4.1-flash','qwen3.5-max','gemini-3.1-pro','claude-sonnet-4.6'];
 /* 原型：模拟上游 /v1/models 返回的一大批模型（真实中转站动辄上百个），用来演示列表式 + 搜索 */
 const PROBE_POOL=[

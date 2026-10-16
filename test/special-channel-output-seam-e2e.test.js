@@ -67,8 +67,9 @@ function sliceFn(name) {
   return rest.slice(0, m ? m.index : rest.length);
 }
 const countOf = (hay, needle) => hay.split(needle).length - 1;
-/* 五条专用报文路径（现场出问题的那条排第一） */
-const SPECIAL = ['tryNotionChannel', 'tryNotionAgentChannel', 'tryWorkbuddyChannel', 'tryGensparkChannel', 'tryCodexChannel', 'tryHarkChannel'];
+/* 七条专用报文路径（现场出问题的那条排第一）；v1.18.72 加 opencode：
+   它也必须进这个清单，否则"不许自写响应"那三条守卫会**漏掉**它（不在清单里 = 不被检查） */
+const SPECIAL = ['tryNotionChannel', 'tryNotionAgentChannel', 'tryWorkbuddyChannel', 'tryGensparkChannel', 'tryCodexChannel', 'tryHarkChannel', 'tryOpencodeChannel'];
 /* SSE 解析小工具：把响应体拆成 [{event, data}]（OpenAI 面没有 event 行，event 为 null） */
 function parseSSE(text) {
   const out = [];
@@ -174,10 +175,14 @@ function makeNotionFake() {
     //    v1.18.55 校正：本守卫写于**五条**路径时代，v1.18.47 加 hark 后没同步 → 一直是红的
     //    （hark 有自己的 `specialNonStreamOut` ×2 / `specialStreamHead` ×1 / `specialStreamEnd` ×1）。
     // v1.18.60：codebuff 渠道撤掉后从 12/7/7 回到 10/6/6（它曾贡献 non-stream JSON + assembled SSE 两条非流 + 一次流开场收尾）
-    check('specialNonStreamOut 调用 10 处（workbuddy 1 / genspark 2 / hark 2 / codex 1 / notion 2 / notion-agent 2）',
-      countOf(SRC, 'await specialNonStreamOut(opts, candidate,') === 10, countOf(SRC, 'await specialNonStreamOut(opts, candidate,'));
-    check('specialStreamHead 调用 6 处（六条路径各恰好一次开场）', countOf(SRC, 'specialStreamHead(opts, candidate);') === 6, countOf(SRC, 'specialStreamHead(opts, candidate);'));
-    check('specialStreamEnd 调用 6 处（六条路径各恰好一次收尾）', countOf(SRC, 'specialStreamEnd(opts);') === 6, countOf(SRC, 'specialStreamEnd(opts);'));
+    // v1.18.72：opencode 渠道接入 → 10/6/6 → 12/7/7
+    //   （它贡献 `specialNonStreamOut` ×2：工具仿真命中的 tool_calls 分支 + 纯文本分支；
+    //     `specialStreamHead`/`specialStreamEnd` 各 ×1）。**数字变了要在这里写清楚是谁加的**——
+    //     只改数字不写来源，下一个人就分不清"多了一条路径"还是"有人绕开了收口"。
+    check('specialNonStreamOut 调用 12 处（workbuddy 1 / genspark 2 / hark 2 / codex 1 / notion 2 / notion-agent 2 / opencode 2）',
+      countOf(SRC, 'await specialNonStreamOut(opts, candidate,') === 12, countOf(SRC, 'await specialNonStreamOut(opts, candidate,'));
+    check('specialStreamHead 调用 7 处（七条路径各恰好一次开场）', countOf(SRC, 'specialStreamHead(opts, candidate);') === 7, countOf(SRC, 'specialStreamHead(opts, candidate);'));
+    check('specialStreamEnd 调用 7 处（七条路径各恰好一次收尾）', countOf(SRC, 'specialStreamEnd(opts);') === 7, countOf(SRC, 'specialStreamEnd(opts);'));
     check('specialStreamLine 调用点 ≥ 20（逐行都过钩子）', countOf(SRC, 'specialStreamLine(opts, candidate,') >= 20, countOf(SRC, 'specialStreamLine(opts, candidate,'));
 
     // ④ 语义守卫：钩子在 = 钩子说了算（空串不许回退成原始 OpenAI 报文）

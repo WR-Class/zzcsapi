@@ -15,6 +15,7 @@ const { URL } = require('url');
 const notion = require('./notion.js');
 const notionAgent = require('./notion-agent.js');
 const hark = require('./hark.js');   // v1.18.47 hark.com 网页会话反代（专用报文渠道）
+const opencode = require('./opencode.js');   // v1.18.72 opencode 免费模型（本机 opencode serve 边车）
 const toolEmu = require('./tool-emu.js');
 const fontAssets = require('./font-assets.js');
 // Genspark 网页会话渠道常量：必须在启动探测路径（probeAll 在下方模块加载期同步触发）之前初始化，
@@ -1374,7 +1375,7 @@ function aggregateModels(protocol) {
     const chProto = ch.def.protocol || 'openai';
     // 别名跨协议聚合：三个入口都有跨协议候选链兜底（openai 入口同样把
     // notion 兜底候选计入——DSH 等客户端从 /v1/models 选 notion 模型时可见）
-    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'];
+    const aliasedProto = ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark', 'opencode'];
     if (protocol && !aliasedProto.includes(chProto)) continue;
     // 显式 alias 始终可路由
     for (const alias of ch.aliasMap.keys()) all.add(alias);
@@ -1486,6 +1487,21 @@ async function probeChannel(ch) {
     }
     return;
   }
+  // opencode 免费模型（v1.18.72）：探测 = **列边车目录**（`GET /api/model`）。
+  //   与 hark 不同，它**有**目录（42 条 / 带凭据），所以不适用"无目录协议"那两条默认别名硬要求。
+  //   目录只证明凭据活着 → **半愈合**（真对话成功才是满血证据；手动测试那条路会真发一句）。
+  if ((ch.def.protocol || 'openai') === 'opencode') {
+    const t0 = Date.now();
+    const cat = await opencode.opencodeCatalog(ch.def, zzFetch, HEALTH.timeoutMs || 15000);
+    if (!cat.ok) {
+      recordFailure(ch, 'opencode: ' + String(cat.error || 'catalog failed'), cat.status === 401 ? 'credential' : undefined, { source: 'probe' });
+      return;
+    }
+    ch.models = cat.models;
+    ch.latencyMs = Date.now() - t0;
+    healAfterProbe(ch, true, false);
+    return;
+  }
   const t0 = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), HEALTH.timeoutMs || 8000);
@@ -1595,6 +1611,27 @@ async function probeDef(def, timeoutMs) {
       models,
       latencyMs: Date.now() - t0,
       account: { note: `hark 没有 /v1/models 端点（会话式反代，上游只有一个 agent），模型列表来自别名配置（默认建议 ${HARK_DEFAULT_ALIAS}）` },
+    };
+  }
+  // opencode 免费模型（v1.18.72）：边车**有**目录（`GET /api/model`）→ 直接回报真实模型名，
+  //   所以它**不属于**"无目录协议"那一族（hark/workbuddy/genspark/codex），不需要默认别名建议，
+  //   `autoAlias` 也能照常工作。这里只把免费那批挑出来——边车的目录里有 32 个付费模型，
+  //   在这台机器上它们必定 `503 Insufficient account funds`，列进别名表等于给用户塞一批
+  //   "存得下、永远失败"的渠道（正是 v1.18.49「加上了却用不了」那一类现场）。
+  if ((def.protocol || 'openai') === 'opencode') {
+    const t0 = Date.now();
+    const cat = await opencode.opencodeCatalog(def, zzFetch, timeoutMs || 15000);
+    if (!cat.ok) return { ok: false, status: cat.status || 0, error: String(cat.error || 'catalog failed'), latencyMs: Date.now() - t0 };
+    return {
+      ok: true,
+      status: cat.status || 200,
+      models: cat.models,
+      latencyMs: Date.now() - t0,
+      account: {
+        note: `边车目录共 ${cat.all.length} 个模型，这里只列**免费**的 ${cat.free.length} 个（${cat.free.join('、')}）；`
+          + `其余付费模型在没充值的账号上必定 503 Insufficient account funds，故不列出。`
+          + `⚠️ 免费层条款是「can only be used from within OpenCode」，中继第三方流量有封号风险。`,
+      },
     };
   }
   // Notion 协议：getSpaces（POST）验证 token_v2，模型列表用内置映射；顺带查 AI 额度
@@ -3713,15 +3750,15 @@ function effWeight(ch) {
   return Math.round((manual > 0 ? manual : 1) * h * 1000) / 1000;
 }
 
-/* ══════════════════ 自动权重（静默观测版，v1.6）══════════════════
+/* ══════════════════ 自动权重（v1.18.63：`enabled` 决定用不用）══════════════════
  *
  * 想要的效果：不手填 weight，也让"同一个模型的多个候选"按**实测表现**自动分配份额
  * （有的能用有的不能用、有的快有的慢 ⇒ 好的多拿、坏的少拿、坏透的本来就进不了池）。
  *
- * 本版**只算与只显示**：pickWeighted 仍旧只认 ch.def.weight，一行都不碰真实路由。
- * 理由：自动权重天然有反馈回路（份额改流量 → 流量改统计 → 统计改份额），
- * 先让人对着真实数据看它算得对不对，确认无误再打开开关让它生效。
- * 因此 `enabled` 目前是**预留字段**——就算置 true，本版也不改分流（docs/scheduling.md 里写明了）。
+ * **v1.18.63 起不再是"只算不生效"**：`enabled: true` 时健康系数被乘进候选权重（见上面的 `effWeight`），
+ * 真的影响"谁排第一"；关闭时 `effWeight` 原样返回 `ch.def.weight`（没填 = 0）→ 加权池为空 → 空转。
+ * 当年推迟的理由仍然成立、也仍然是打开它的代价：自动权重天然有反馈回路（份额改流量 → 流量改统计 →
+ * 统计改份额），所以那四条护栏（`ewma` / `deadband` / `minSamples` / `updateMs`）不是装饰。
  *
  * 健康系数 h（0 到 1，地板 AUTO_FLOOR）由两个已有信号合成，不引入新统计：
  *   1) 成功率：复用滚动窗口 ch.roll（bumpRoll 已在每次请求里维护，120 样本自动减半）
@@ -4136,7 +4173,7 @@ function validateChannelDef(def, opts) {
   if (!def.baseUrl || typeof def.baseUrl !== 'string') return 'baseUrl is required';
   // 更新已有渠道时允许不带 apiKey：控制台现在只拿到掩码，留空即"保持原密钥"（见 POST 分支）
   if ((!def.apiKey || typeof def.apiKey !== 'string') && !(opts && opts.allowMissingApiKey)) return 'apiKey is required';
-  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark|hark';
+  if (def.protocol && !['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark', 'opencode'].includes(def.protocol)) return 'protocol must be openai|anthropic|gemini|notion|notion-agent|workbuddy|codex|genspark|hark|opencode';
   if (def.models && typeof def.models !== 'object') return 'models must be an object {alias: upstream}';
   // v1.18.49：**没有模型目录的协议**（hark）别名表不许空——别名是唯一能把请求路由到该渠道的东西，
   //   空别名 = 存得下、但网关永远不暴露它的任何模型 = 「加上了却用不了」。现场（用户报）：
@@ -4721,7 +4758,7 @@ async function handleAdminApi(req, res, url) {
     const def = {
       baseUrl: String(body.baseUrl).replace(/\/+$/, ''),
       apiKey: String(body.apiKey),
-      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark'].includes(body.protocol) ? body.protocol : 'openai',
+      protocol: ['openai', 'anthropic', 'gemini', 'notion', 'notion-agent', 'workbuddy', 'codex', 'genspark', 'hark', 'opencode'].includes(body.protocol) ? body.protocol : 'openai',
       proxy: body.proxy ? String(body.proxy) : undefined,
       // v1.18.49：**把表单当前的别名表也传进来**。四条「上游没有模型目录」的协议分支早就写着
       //   `Object.values(def.models || {})`（workbuddy/genspark/codex 还各带一句"模型列表来自别名配置"），
@@ -4755,7 +4792,16 @@ async function handleAdminApi(req, res, url) {
           consecutiveFail: onlyChannel.consecutiveFail,
           protocol: onlyChannel.def.protocol || 'openai',
         }]
-      : (channelsServing(model, 'openai').length ? channelsServing(model, 'openai') : (channelsServing(model, 'notion').length ? channelsServing(model, 'notion') : (channelsServing(model, 'notion-agent').length ? channelsServing(model, 'notion-agent') : (channelsServing(model, 'workbuddy').length ? channelsServing(model, 'workbuddy') : (channelsServing(model, 'genspark').length ? channelsServing(model, 'genspark') : (channelsServing(model, 'codex').length ? channelsServing(model, 'codex') : channelsServing(model, 'hark'))))))); // openai 优先，notion→notion-agent→workbuddy→genspark→codex→hark 逐级兜底
+      : (() => {
+        // openai 优先，然后 notion → notion-agent → workbuddy → genspark → codex → hark → opencode 逐级兜底。
+        // v1.18.72：这里原本是一串嵌套三元（六个 `))))`），加第七家就得再套一层；改成显式循环——
+        //   顺序一眼可见，加协议只加一个数组元素。**语义与原写法逐字等价**：取第一个有候选的协议族。
+        for (const p of ['openai', 'notion', 'notion-agent', 'workbuddy', 'genspark', 'codex', 'hark', 'opencode']) {
+          const cs = channelsServing(model, p);
+          if (cs.length) return cs;
+        }
+        return [];
+      })();
     if (candidates.length === 0) return sendJson(res, 404, { error: 'no channel for model' });
 
     const prompt = String(body.prompt || 'Reply with "ok".');
@@ -4830,6 +4876,27 @@ async function handleAdminApi(req, res, url) {
             channelId: c.channelId, ok: !!rep.ok, status: rep.ok ? 200 : 0, latencyMs: harkMs,
             reply: rep.ok ? String(rep.text).slice(0, 200) : undefined,
             error: rep.ok ? undefined : String(rep.error || 'no reply').slice(0, 200),
+          });
+          continue;
+        }
+        if (ch.def.protocol === 'opencode') {
+          // opencode 免费模型（v1.18.72）：**真发一条最小生成**（建会话 → generate → 删会话）。
+          //   目录探测只证明凭据活着；手动测试的价值在于把"对话这条路能成"也验掉
+          //   （与 notion-agent 的 quickChat / hark 的真发一条同一取舍）。
+          const tmo = Math.min(120000, Number(body.timeoutMs) || 90000);
+          const r = await opencode.opencodeGenerate(ch.def, zzFetch, c.upstream, prompt, tmo);
+          if (r.ok) {
+            // 真对话成功 → 探测侧半愈合（**真实流量的欠账不清**，与 v1.18.40 同一条纪律）
+            healAfterProbe(ch, true, false);
+            ch.latencyMs = r.ms; ch.lastCheck = Date.now();
+            recordUsage({ model, channelId: c.channelId, kind: 'test', inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(r.text), ok: true, latencyMs: r.ms });
+          } else {
+            recordFailure(ch, 'opencode: ' + String(r.error || 'generate failed').slice(0, 150), failureKindFromStatus(r.status), { source: 'test', model });
+          }
+          results.push({
+            channelId: c.channelId, ok: !!r.ok, status: r.ok ? 200 : (r.status || 0), latencyMs: r.ms,
+            reply: r.ok ? String(r.text).slice(0, 200) : undefined,
+            error: r.ok ? undefined : String(r.error || 'generate failed').slice(0, 200),
           });
           continue;
         }
@@ -5379,6 +5446,9 @@ function openAICandidateChain(requested) {
   // hark（hark.com 网页会话反代，v1.18.47）兜底：只有显式配了模型别名才可能命中（上游只有一个 agent，
   //   模型名不透传）；放链尾——它消耗的是用户自己的 hark 额度（harkTokens）
   for (const hc of channelsServing(requested, 'hark')) if (!out.some((c) => c.channelId === hc.channelId)) out.push(hc);
+  // opencode 免费模型（v1.18.72）兜底：走的是**本机边车**（宿主机上那个已登录的 `opencode serve`），
+  //   放链尾——它消耗的是部署者自己账号的免费额度，且有合规/封号风险（见 opencode.js 文件头）
+  for (const oc of channelsServing(requested, 'opencode')) if (!out.some((c) => c.channelId === oc.channelId)) out.push(oc);
   return out;
 }
 
@@ -6283,6 +6353,10 @@ async function tryChannel(opts) {
     // hark（hark.com 网页会话反代，v1.18.47）：REST 发消息 + SSE 同步流收回复，curl+代理传输
     if ((ch.def.protocol || 'openai') === 'hark') {
       return await tryHarkChannel(specialOpts);
+    }
+    // opencode 免费模型（v1.18.72）：本地 `opencode serve` 边车，建会话 + generate + 删会话
+    if ((ch.def.protocol || 'openai') === 'opencode') {
+      return await tryOpencodeChannel(specialOpts);
     }
   const outgoing = encodeOutgoing(dropParamsFrom(body, ch), candidate);
   const passthrough = opts.passthrough || null;   // 同协议直通时由扩展注入（'anthropic' / 'gemini'）
@@ -7598,6 +7672,110 @@ async function tryHarkChannel(opts) {
     return 'success';
   }
   recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: harkNote, statsCtx: opts.statsCtx });
+  await specialNonStreamOut(opts, candidate, {
+    id: respId,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: displayModel,
+    choices: [{ index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }],
+    usage,
+  });
+  return 'success';
+}
+
+// ─────────────────── opencode 免费模型（本机 opencode serve 边车，v1.18.72）───────────────────
+// 链路：POST /api/session {model:{id,providerID}} → POST /api/session/{id}/generate {prompt}
+//       → DELETE /api/session/{id}（用完即删，绝不在用户账号里堆会话）
+// 特性（都是实测，见 opencode.js 文件头与 docs/opencode-reverse-proxy-research.md §5）：
+//   1) **没有 `stream` 参数** → 只能伪流式（整段到达后由本函数重吐 OpenAI SSE，同 hark）
+//   2) **不下发 token/费用** → 账本按字符估（不假装有上游真值）
+//   3) **同一会话不保留多轮记忆** ⇒ 每请求把 messages 拍平成一个 prompt（不依赖会话态）
+//   4) 与 hark 的关键区别：**边车有模型目录**，所以别名可以自动补；且**不是**"上游只有一个 agent"
+//
+// 错误面（三层要分得清，否则会把"密码不对"读成"模型不可用"）：
+//   · 401 Authentication required      → 渠道钥匙（边车密码）不对
+//   · 503 free tier can only be used from within OpenCode → 这台机器**没登录态**
+//        （**只有会话路是被认可的**；`/api/experimental/generate` 那个精简单发端点回的就是这一句）
+//   · 503 Insufficient account funds   → 付费模型没充值（免费模型不会撞它）
+async function tryOpencodeChannel(opts) {
+  const { res, body, candidate, ch, isStream, requestedModel, kind } = opts;
+  const t0 = Date.now();
+  const timeoutMs = ch.def.timeoutMs || 120_000;
+  const displayModel = requestedModel || candidate.upstream;
+  const failModel = (body && body.model) || requestedModel || '—';
+  // 失败记账带上请求的模型名与来源上下文（v1.18.26 的纪律：失败行要看得出在调哪个模型）
+  const fail = (msg, kindOfFail) => recordFailure(ch, msg, kindOfFail, { model: failModel, statsCtx: opts.statsCtx });
+
+  // 工具仿真（请求侧）：tools 协议注入消息 + 历史 tool_calls / 工具结果渲染成文本
+  const toolEmuReq = toolEmu.emulateRequest(body);
+  const flat = opencode.flattenForOpencode(toolEmuReq ? toolEmuReq.messages : (body.messages || []));
+  if (!String(flat).trim()) {
+    fail('opencode: 拍平后的 prompt 是空的（请求里没有可发送的文本）');
+    return 'opencode: empty prompt';
+  }
+
+  const gen = await opencode.opencodeGenerate(ch.def, zzFetch, candidate.upstream, flat, timeoutMs);
+  if (!gen.ok) {
+    fail('opencode: ' + String(gen.error || 'generate failed').slice(0, 180), failureKindFromStatus(gen.status));
+    return 'opencode: ' + String(gen.error || 'generate failed').slice(0, 120);
+  }
+  const replyText = String(gen.text || '').trim();
+  // 200 + 空正文 = 失败。与 v1.18.26 零正文流 / v1.18.32 空回复同一条纪律：
+  //   "上游回了 200"不等于"客户端拿到了东西"，记成成功会让空回复伪装成正常回答。
+  if (!replyText) {
+    fail('opencode: 上游回 200 但正文是空的');
+    return 'opencode: empty reply';
+  }
+
+  // 工具仿真（响应侧）：模型按注入协议回了 [TOOL_CALL] 标记 → 解析回真 tool_calls。
+  // 解析不出就照旧当纯文本（绝不因为"有 tools"就把普通回复吃掉）。
+  let replyTools = null, replyOut = replyText;
+  if (toolEmuReq) {
+    const parsed = toolEmu.parseEmulatedToolCalls(replyText);
+    if (parsed && parsed.calls.length) { replyTools = parsed.calls; replyOut = parsed.text || ''; }
+  }
+
+  markTrafficOk(ch);
+  ch.latencyMs = Date.now() - t0;
+  const respId = 'chatcmpl-oc-' + Date.now().toString(36);
+  // 边车不下发 token/费用（tokens 与 cost 在 generate 之后恒为 0，实测）→ 按估算记账，
+  // 与 hark / genspark / workbuddy 同口径（不写 realUsage = 没有上游真值，不假装有）
+  const inTok = estimateTokens(flat);
+  const outTok = estimateTokens(replyOut || replyText);
+
+  if (isStream) {
+    specialStreamHead(opts, candidate);
+    const chunk = (delta, finish) => `data: ${JSON.stringify({ id: respId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: displayModel, choices: [{ index: 0, delta, finish_reason: finish || null }] })}\n\n`;
+    if (replyTools) {
+      specialStreamLine(opts, candidate, chunk({
+        role: 'assistant', content: replyOut ? replyOut : null,
+        tool_calls: replyTools.map((c, i) => ({
+          index: i, id: toolEmu.toolCallId() + '_' + i, type: 'function',
+          function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+        })),
+      }));
+      specialStreamLine(opts, candidate, chunk({}, 'tool_calls'));
+    } else {
+      // 伪流式：上游整段到达，这里按 OpenAI SSE 重新吐出（首帧 role、次帧正文、末帧 finish）
+      specialStreamLine(opts, candidate, chunk({ role: 'assistant', content: '' }));
+      specialStreamLine(opts, candidate, chunk({ content: replyText }));
+      specialStreamLine(opts, candidate, chunk({}, 'stop'));
+    }
+    specialStreamLine(opts, candidate, 'data: [DONE]\n\n');
+    specialStreamEnd(opts);
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: 'opencode sidecar', statsCtx: opts.statsCtx });
+    return 'success';
+  }
+
+  const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok };
+  if (replyTools) {
+    const payloadOut = toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyOut || null);
+    payloadOut.usage = usage;
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: 'opencode sidecar', statsCtx: opts.statsCtx });
+    await specialNonStreamOut(opts, candidate, payloadOut);
+    return 'success';
+  }
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: 'opencode sidecar', statsCtx: opts.statsCtx });
   await specialNonStreamOut(opts, candidate, {
     id: respId,
     object: 'chat.completion',

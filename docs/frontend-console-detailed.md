@@ -227,7 +227,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 ### 4.10 自动权重页 `.aw-*`（生产独有，设计稿不含）
 
-「资源 → 自动权重」独立页上的份额预测卡（v1.9 起从渠道页迁出）。**它只算不生效**，所以整卡刻意压低视觉权重：
+「资源 → 自动权重」独立页上的份额预测卡（v1.9 起从渠道页迁出）。**生没生效由 `effective` 决定**（关着 = 只预测，开着 = 它就是真实路由在用的分配），所以整卡刻意压低视觉权重：
 不抢强调色、不用大字、不做动效强调——避免被误读成"已经在分流"，靠 `.aw-note` 一句自证，不靠用户猜。
 样式全部在 `build/extra.css`（第 10–57 行），色值一律走设计令牌（`--ok` / `--warn` / `--err` / `--tx-*` / `--line`），
 **不引入新颜色**；健康度沿用全站三档（`≥0.9` / `≥0.6` / 其余），与成功率条同源。
@@ -343,7 +343,7 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 
 **渠道详情抽屉 `openChannel`（1255）**：
 顶部标签行（状态 / 延迟 / 优先级〔自动降权时显示「→ 有效 X（失败率 Y%）」角标〕/ 启停 / **权重角标**）→
-**自动权重（观测 · 只算不生效）一节** → 接入配置（Base URL / 密钥掩码+明文切换+复制 / 协议 / 模型数）→
+**自动权重（观测）一节** → 接入配置（Base URL / 密钥掩码+明文切换+复制 / 协议 / 模型数）→
 近 7 天表现三宫格 + 曲线 → 模型别名 chips → 底部动作：测试模型 / 重探测 / 编辑 / 启停 / 删除
 
 > **权重角标（v1.5）**：配了权重的渠道显示 `权重 3 · 分流 24% (12 次)`；没配的显示灰色的
@@ -362,8 +362,8 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   `autoweight:vAutoWeight` —— 新增页面照这两步走（见 code-map §5「新增页面（生产）」）。
 - 结构：页头（`page-title` 自动权重 + 一句副标题）→ 一张 `.aw-card`（复用 §4.10 的 `.aw-*`）。
   `vAutoWeight()` 只出页头 + 挂卡，真正的卡在 `autoWeightCard()`（`build/app.js` 678）。
-- 目的：回答"如果开了自动权重，同一个模型的多个候选会怎么分"——**只算不生效**，卡头必须写明这点。
-- 卡头 `.card-hd`：`分流预测` + `只算不生效` chip（生效时才换成 `已生效` accent chip）+ 右侧 `N 个多候选模型` 计数。
+- 目的：回答"同一个模型的多个候选会怎么分"——**关着时是预测、开着时就是真实路由在用的分配**，卡头必须写明当前是哪一种。
+- 卡头 `.card-hd`：`分流预测` + `只算不生效` / `已生效` chip（按 `effective` 二选一，生效态加 accent）+ 右侧 `N 个多候选模型` 计数。
 - `.aw-meta` 说明带：一句加粗自证的 **"当前分流一字未动"**（不说清楚，用户会以为份额已经变了）
   + 旋钮胶囊（速度权重 / 地板 / 单渠道上限 / 样本门槛 / 重算周期）。
 - 每个模型块 `.aw-model`：块头 `.aw-m-hd` = 模型名（等宽 600）+ `N 个候选 · X 次请求`
@@ -659,7 +659,7 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 
 | 原型 | 生产接口 | 备注 |
 | --- | --- | --- |
-| `DATA` 常量 | `GET /admin/api/status` | 渠道状态、用量、探测时间。**v1.6 起同一响应还带自动权重观测**：顶层 `autoWeight`（`enabled` / `effective` 恒 `false` / `knobs` / `at` / `models[]`，模型下挂 `candidates[].share·h·nowShare` 与 `excluded[]`）与每渠道 `autoH` / `autoFailRate` / `autoSamples` / `autoLatMs` / `autoSpeedRatio` —— 控制台**只读展示**，不写回、不影响调度 |
+| `DATA` 常量 | `GET /admin/api/status` | 渠道状态、用量、探测时间。**v1.6 起同一响应还带自动权重观测**：顶层 `autoWeight`（`enabled` / `effective`〔v1.18.63 起 = `enabled`，不再恒 `false`〕 / `knobs` / `at` / `models[]`，模型下挂 `candidates[].share·h·nowShare` 与 `excluded[]`）与每渠道 `autoH` / `autoFailRate` / `autoSamples` / `autoLatMs` / `autoSpeedRatio` —— 控制台**只读展示**，不写回、不影响调度 |
 | `toggleCh` / `saveChannel` / `delChannel` | `POST /admin/api/channel`（局部改）/ `POST /admin/api/channels`（upsert）/ `DELETE /admin/api/channels` | 启停·优先级·**权重 `weight`** 走前者（立即生效并持久化），增改走 upsert，删除带 `{id}`。**v1.5 起渠道表单有「权重」输入框**（`f-weight`，留空 = 0 = 不参与），`weight` 随 upsert body 一起提交；负数/非数字前端先挡下，后端同样拒（400）。⚠ upsert 在 body 未带 `weight` 时保留旧值（见 PT29）——表单始终显式提交该字段，所以"清空权重"是**真的置 0**，不会被旧值悄悄还原 |
 | `reprobe` / 全量重探测 | `POST /admin/api/recheck` | body 可带 `{id}` |
 | `probeUpstream` | `POST /admin/api/probe` | 注意协议白名单（曾漏 `workbuddy` 导致误报） |
