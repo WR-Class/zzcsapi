@@ -4,6 +4,9 @@ config.json
 .DS_Store
 arena-data/
 _*.js
+# 例外（v1.18.74）：全量回归运行器是**交付物**不是本机草稿。README / docs/tests.md / AGENTS.md 里的
+# 「60 个文件 / N 项断言」全靠它汇总，不入库则全新 clone 复现不了那些数字。**口子只开这一个**。
+!_run_all_tests.js
 # 改造过程的中间产物（提取的 head/CSS、diff 转储、改造前备份），不提交
 _*.txt
 _*.css
