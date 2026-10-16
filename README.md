@@ -291,7 +291,7 @@ http://127.0.0.1:8787/console
       "apiKey": "sk-xxx",
       "protocol": "openai",                  // openai | anthropic | gemini
       "priority": 10,                        // 顺序：谁先试、谁兜底
-      "weight": 3,                           // 分流：同模型候选里按比例轮询（不填/0 = 不参与，见「调度详解」）
+      "weight": 3,                           // 分流：同模型候选里按比例轮询（不填/0 = 不参与；⚠️ 打开 autoWeight 后 0/留空/1 等价、都进池，见「调度详解」）
       "enabled": true,
       "proxy": "http://host.docker.internal:7897",  // 可选：HTTP 代理（见协议详解），留空/删掉 = 直连
       "models": {                            // alias -> upstream
@@ -396,7 +396,7 @@ thinking 回放修复）。**七条**专用报文渠道（`notion` / `notion-age
 1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias——**同协议优先，跨协议兜底**（现有 `openai` 渠道先后顺序不受影响），最后才是 notion → notion-agent → workbuddy → genspark → hark → codex → opencode 文本链
 2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
 3. 排序：冷却中 → 末位；`down` → 倒数第二；`probation`（半愈合观察期）→ 健康渠道之后；同状态按**有效优先级**降序，再看 latency
-4. **加权轮询**（填了 `weight` 的渠道按比例决定谁排第一）；**会话粘性**（开着时）把这条会话上次成功的那家提到第一位
+4. **加权轮询**（填了 `weight` 的渠道按比例决定谁排第一；⚠️ 打开 `autoWeight` 后**没填也进池**，基底取 1，见 [调度详解](docs/scheduling.md)「自动权重」）；**会话粘性**（开着时）把这条会话上次成功的那家提到第一位
 5. **含图请求**先按图片能力门裁剪候选；纯文本不受影响
 6. 依次尝试直到成功；全部失败返回 502 + 错误详情。**同渠道重试**（`retries.perChannel`）只对 5xx/网络/超时原地再试，4xx 一律不重试；**上游报文里明说 `isRetryable:false` 时也跳过重试**（目前只有 notion 会这么说，见 [调度详解](docs/scheduling.md)「上游否决」）
 
