@@ -139,6 +139,38 @@ check('网关侧绝不读 CF-Connecting-IP（真实来源唯一通路 = nginx re
 check('README 方式四橙云姿势写全：Proxied + Full (strict) 防重定向循环、CF-Connecting-IP/源站锁定说明、切回灰云放行提醒、100 秒超时告警',
   /橙云/.test(README) && /Full \(strict\)/.test(README) && /CF-Connecting-IP/.test(README) && /100 秒/.test(README) && /源站锁定/.test(README));
 
+/* ── 容器加固（v1.18.87）：只读根文件系统 + 丢弃全部 capability + no-new-privileges ──
+   为什么守：这三项都是"删掉不报错、但保护全没了"的配置。尤其是 read_only ——
+   它和 v1.18.86 的"统一数据目录"是**绑定关系**：数据没全进挂载点时开 read_only
+   必然 EROFS，所以只能等目录挂载落地后才敢开。守卫要同时钉住"开了"和"前提还在"：
+   一旦有人把某个写盘目标挪回 /app（根fs），下面的源码扫描就该红。 */
+console.log('\n容器加固（read_only / cap_drop / no-new-privileges + 写盘目标全在挂载点内）');
+check('compose 开 read_only: true（根fs 只读——RCE 也改不了 /app、塞不进后门）',
+  /(^|\n) {4}read_only:\s*true\b/.test(COMPOSE));
+check('compose 挂 tmpfs /tmp（只读根下 Node/libuv 需要一个可写临时目录，否则启动期 ENOENT）',
+  /(^|\n) {4}tmpfs:\s*\n\s*-\s*\/tmp\b/.test(COMPOSE));
+check('compose cap_drop: ALL（网关只监听 8787，不需要任何 capability；全丢后提权原语失效）',
+  /(^|\n) {4}cap_drop:\s*\n\s*-\s*ALL\b/.test(COMPOSE));
+check('compose no-new-privileges:true（禁止 setuid/setgid 提权）',
+  /no-new-privileges:true/.test(COMPOSE));
+check('★ read_only 的前提：两个绑定目录覆盖全部写盘目标（./data:/app/data + ./dump:/app/dump）',
+  COMPOSE.includes('./data:/app/data') && COMPOSE.includes('./dump:/app/dump'));
+check('★ 写盘目标经 env 指进挂载目录（ZZCSAPI_CONFIG / ZZCSAPI_USAGE / ZZCSAPI_CONFIG_HISTORY_DIR 都在 /app/data 下）',
+  COMPOSE.includes('ZZCSAPI_CONFIG: /app/data/config.json') &&
+  COMPOSE.includes('ZZCSAPI_USAGE: /app/data/usage.json') &&
+  COMPOSE.includes('ZZCSAPI_CONFIG_HISTORY_DIR: /app/data/config-history'));
+// 源码扫描：不允许任何 fs 写盘调用把目标直接写在 __dirname 下（= 容器里的只读 /app）。
+// 这是"本机 node server.js 一切正常、容器里运行期 EROFS"那类现象的唯一结构性拦法。
+check('★ 源码里没有 fs 写盘调用直接写 __dirname（否则只读根下运行期 EROFS，而本机无感）',
+  !/fs\.(writeFileSync|mkdirSync|copyFileSync|appendFileSync|createWriteStream)\(\s*path\.join\(__dirname/.test(SRV) &&
+  !/fs\.(writeFileSync|mkdirSync|copyFileSync|appendFileSync)\(\s*__dirname/.test(SRV));
+// 四个写盘常量必须从 CONFIG_PATH / env 派生——容器里改 env 就能把它们整体搬进挂载目录。
+check('★ 四个写盘常量全部从 CONFIG_PATH / env 派生（CONFIG_PATH / CONFIG_HISTORY_DIR / USAGE_PATH / DUMP_DIR）',
+  /const CONFIG_PATH = process\.env\.ZZCSAPI_CONFIG \|\| path\.join\(__dirname, 'config\.json'\)/.test(SRV) &&
+  /const CONFIG_HISTORY_DIR = process\.env\.ZZCSAPI_CONFIG_HISTORY_DIR \|\| path\.join\(path\.dirname\(CONFIG_PATH\), 'config-history'\)/.test(SRV) &&
+  /const USAGE_PATH = process\.env\.ZZCSAPI_USAGE \|\| path\.join\(path\.dirname\(CONFIG_PATH\), 'usage\.json'\)/.test(SRV) &&
+  /const DUMP_DIR = process\.env\.ZZCSAPI_DUMP_BODIES \|\| ''/.test(SRV));
+
 console.log('──────────────────────────────────────────────────────');
 if (fails) { console.log('✗ 失败 ' + fails + ' / ' + n + ' 项'); process.exit(1); }
 console.log('✓ 全部通过（' + n + ' 项断言）');

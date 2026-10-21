@@ -13,7 +13,14 @@ const FENCE = '```';
 // ─────────────────────────── 请求侧 ───────────────────────────
 
 function toolCallId() {
-  return 'call_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  /* v1.18.88：随机段**必须补足 8 位**。原来写 `Math.random().toString(36).slice(2, 10)`，
+     而 `Math.random().toString(36)` 的位数**不是恒定的**——随机数偏小的时候小数部分很短
+     （`0.5` → `"0.i"`，切出来只有 1 个字符）⇒ id 长度在 14~21 之间浮动，
+     同一毫秒内两条调用的随机段都偏短时还会**撞号**。
+     `tool_call_id` 是要被客户端原样回传、用来把"结果"对回"调用"的，撞号 = 两轮调用被认成同一轮。
+     （这个不恒定是属性测试跑第 15+ 次才闪出来的：断言"全部 21 字符"偶尔报 `[21,20]`。）
+     先把随机串右补到足够长再切，长度就恒定了。 */
+  return 'call_' + Date.now().toString(36) + (Math.random().toString(36) + '00000000').slice(2, 10);
 }
 
 // v1.18.52：工具定义**形状不止一种**，必须一处归一后再用。现场：调用方（agent 客户端）发的是
@@ -169,6 +176,8 @@ function extractCallsFromJson(parsed) {
     if (typeof name !== 'string' || !name.trim()) return;
     calls.push({ name: name.trim(), arguments: (args && typeof args === 'object' && !Array.isArray(args)) ? args : {} });
   };
+  // 顶层数组：模型偶发把多个调用写成 [{name,arguments},…] → 逐个元素递归（v1.18.79）
+  if (Array.isArray(parsed)) { for (const el of parsed) calls.push(...extractCallsFromJson(el)); return calls; }
   if (Array.isArray(parsed && parsed.tool_calls)) {
     for (const c of parsed.tool_calls) {
       if (c && typeof c === 'object') {
@@ -186,7 +195,63 @@ function extractCallsFromJson(parsed) {
   return calls;
 }
 
+// 扫出字符串里所有"顶层平衡 JSON 片段"（`{…}` / `[…]`），跳过字符串字面量与转义。
+// 只服务于 callsFromCapture 的容错分支：模型把多个调用并排写进同一个块时，整块不是合法
+// JSON，但每个片段各自是。
+function scanTopLevelJson(s) {
+  const chunks = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{' || c === '[') { if (depth === 0) start = i; depth++; continue; }
+    if (c === '}' || c === ']') {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) { chunks.push(s.slice(start, i + 1)); start = -1; }
+      }
+    }
+  }
+  return chunks;
+}
+
+// 把一段捕获区段解析成工具调用（v1.18.79）。
+// 优先按"整块就是一个 JSON"解析（标准形态，也兼容 {tool_calls:[…]} 包装与顶层数组）；
+// 整块不是合法 JSON 时退回"扫平衡括号、逐个解析"。
+// 为什么必须有这条退路（现场，2026-10-20）：opencode + minimax-m3.1-flash-free 回了
+//   `[TOOL_CALL] {"name":"read",…} {"name":"glob",…} [/TOOL_CALL]`
+// ——两个调用并排挤在一个块里。JSON.parse 见到并排对象直接抛错，旧实现把整块判成"不是工具
+// 调用"，于是**标记原样透传给客户端**（用户看到的就是那串 [TOOL_CALL] 原文）。非流式
+// （parseEmulatedToolCalls）与流式（createToolStreamScanner 的 handleCapture）两条路都要用它，
+// 否则修一条漏一条。
+function callsFromCapture(inner) {
+  const s = String(inner == null ? '' : inner).trim();
+  if (!s) return [];
+  let parsed;
+  try { parsed = JSON.parse(s); } catch { parsed = undefined; }
+  if (parsed !== undefined) return extractCallsFromJson(parsed);
+  const out = [];
+  for (const chunk of scanTopLevelJson(s)) {
+    let p;
+    try { p = JSON.parse(chunk); } catch { continue; }
+    out.push(...extractCallsFromJson(p));
+  }
+  return out;
+}
+
 // 找出 text 中所有捕获区段（[TOOL_CALL] 标记 或 ```json 围栏），返回排序后的 span 列表
+// ★ v1.18.88：必须**去掉被别的 span 完全包住的**。现场（属性测试抓到）：
+//   `[TOOL_CALL]\n```json\n{...}\n{...}\n```\n[/TOOL_CALL]` —— 标签 span 与围栏 span 的 inner
+//   是**同一段 JSON**，两者各解析一次 ⇒ 调用数量翻倍（write 被执行两次！），且正文残留 `[/TOOL_CALL]`
+//   （content 拼接按 `pos = sp.end` 单调前进，先外后内的重叠 span 会让内层的尾巴漏进正文）。
+//   流式扫描器不走这条函数，所以同一个输入它是对的——非流式（hark/genspark/notion-agent/workbuddy）
+//   走的正是这条路。只留最外层：外层 inner 天然包含内层内容，callsFromCapture 能整段解析。
 function findCaptureSpans(text) {
   const spans = [];
   let idx = -1;
@@ -204,8 +269,14 @@ function findCaptureSpans(text) {
   const fenceRe = /```(?:json|JSON)?[ \t]*\r?\n([\s\S]*?)\r?\n?```/g;
   let m;
   while ((m = fenceRe.exec(text)) !== null) spans.push({ start: m.index, end: m.index + m[0].length, inner: (m[1] || '').trim() });
-  spans.sort((a, b) => a.start - b.start);
-  return spans;
+  // 起点升序、同起点时长的在前 ⇒ 外层先入 kept，被它包住的内层随后被丢弃
+  spans.sort((a, b) => a.start - b.start || b.end - a.end);
+  const kept = [];
+  for (const sp of spans) {
+    if (kept.some((k) => sp.start >= k.start && sp.end <= k.end)) continue;
+    kept.push(sp);
+  }
+  return kept;
 }
 
 // 连续相同调用去重：模型常在 thinking 段和 content 段重复输出同一调用
@@ -229,12 +300,14 @@ function dedupeConsecutiveCalls(calls) {
 // text = 去掉工具调用区段后的剩余正文（作为 content 保留）。
 function parseEmulatedToolCalls(text) {
   if (!text) return null;
+  // ★ v1.18.88：非字符串入参以前会抛 `text.indexOf is not a function`（属性测试抓到）。
+  //   server.js 现有调用点都先 String() 过，所以不是现行故障；但解析层不该因为上游改了类型就 500。
+  //   非字符串一律先转字符串（对象会变成 "[object Object]" → 解析不出调用 → 返回 null，而不是崩）。
+  if (typeof text !== 'string') text = String(text);
   const spans = findCaptureSpans(text);
   let found = null;
   for (const sp of spans) {
-    let parsed = null;
-    try { parsed = JSON.parse(sp.inner); } catch { continue; }
-    const calls = extractCallsFromJson(parsed);
+    const calls = callsFromCapture(sp.inner);
     if (!calls.length) continue;
     if (found) found.calls.push(...calls);
     else found = { calls };
@@ -325,9 +398,7 @@ function createToolStreamScanner(onDelta, onToolCalls) {
     const inner = buf.slice(innerStart, innerEnd).trim();
     const wrap = buf.slice(0, closeEnd);
     buf = buf.slice(closeEnd);
-    let parsed = null;
-    try { parsed = JSON.parse(inner); } catch {}
-    const calls = parsed ? dedupeConsecutiveCalls(extractCallsFromJson(parsed)) : [];
+    const calls = dedupeConsecutiveCalls(callsFromCapture(inner));
     const fresh = calls.filter((c) => {
       let argsStr;
       try { argsStr = JSON.stringify(c.arguments || {}); } catch { argsStr = String(c.arguments); }

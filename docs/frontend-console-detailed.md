@@ -438,10 +438,10 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
   → `.grid.set-cards` 里四张 `.set-card`（会话粘性 / 客户端限流 / 指标端点 / thinking 回放，两排各两张）。
 - 数据源**唯一**：`GET/POST /admin/api/settings`。`loadAll()`（143）把 `settings` 一起拉回来写进 `RAW.settings`，
   **单独 `.catch(()=>null)` 兜底**（端点挂了不能拖垮整页）。`RAW.settings` 缺失时页面显示「设置接口不可用」，不白屏。
-- 四张卡的**唯一真源**是 `SET_GROUPS`（750）/ `SET_META`（751）/ `SET_FIELDS`（761）：加字段只改这三处，
-  `setCard()`（818）按声明生成行，`setPayload()`（795）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
+- 五张卡的**唯一真源**是 `SET_GROUPS`（768）/ `SET_META`（769）/ `SET_FIELDS`（781）：加字段只改这三处，
+  `setCard()`（847）按声明生成行，`setPayload()`（823）按同一份声明收集改动。字段契约见 [`console-settings-spec.md`](console-settings-spec.md)。
   第四张卡（v1.18.8）走同一条声明路：`SET_META` 的「thinking 回放」条目 + `SET_FIELDS` 的
-  `ttlSec`/`maxEntries` 两旋钮 + `setStat()`（810）读 `status.thinkingReplay`（缓存条数 / 学习 / 修复命中 / 未命中 / 作废）。
+  `ttlSec`/`maxEntries` 两旋钮 + `setStat()`（838）读 `status.thinkingReplay`（缓存条数 / 学习 / 修复命中 / 未命中 / 作废）。
 - **只提交有改动的组 / 字段**（PATCH 语义，`setPayload`）：没带的不动、不归零；留空的数字不下发（留空 ≠ 0）。
   没改动时「保存设置」按钮 `disabled`。
 - **400 原文直显**：`api()`（235）把 `status`/`body` 挂到抛出的 Error 上，`saveSettings()`（884）取 `e.body.error`
@@ -492,6 +492,27 @@ body      { display:flex; flex-direction:column }        /* 65–73 */
 - **转义与安全**：客户端标签是外部可控值（UA 截断，不消毒）→ 一律 `esc()`；IP 是服务端校验过的字面量，仍照 `esc()` 纪律过一遍。
 - **后端语义**：统计**内存态**（重启清零、留存有界：IP 512 / 会话 512 / 标签 8 / 模型 64）；封禁**只拦客户端面**（管理面/控制台/健康检查永远可达——解封按钮永远不会把自己锁在门外）；`X-Forwarded-For` 只在 `config.security.trustedProxy` 登记的来源上采信第一跳。详见 docs/behavior.md「来源 IP 态势统计与封禁」与 `test/ip-stats-ban-e2e.test.js`（62 项）。
 - **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
+
+### 5.12 配置历史 `vHistory`（生产独有，原型无此页，v1.18.84）
+
+[`config-history.md`](config-history.md) 的界面——回答"我改渠道时是不是被静默抹掉了某个字段、抹掉的是哪个、怎么拿回来"（工具 → 配置历史，插在密钥管理与接入信息之间；`clock` 图标）。
+
+- **位置与注册**：`NAV`（383）「工具」组、密钥管理之后；`go()`（401）与 `render()`（194）**两张分发表都注册了** `history:vHistory`（页面函数生产锚点 `vHistory` **2920**，整段模块 **2807–2948**）。⚠️ 整段**刻意追加在 `build/app.js` 文件末尾**（`boot()` 之后）：函数声明会提升，放末尾**不移动任何既有行号锚点**（代码地图只需在 §0.2 表格末尾加一行，不必整表平移）。
+- **为什么要有这一页**：`persistConfig` 写 `config.json` 用的是**显式字段白名单**，没登记的新字段会在"保存任意渠道"时被静默抹掉（PT29 一族连发四例：`weight` → `dropParams` → `notionAttachments` → `firstChunkTimeoutMs`/`timeoutMs`）；而 `config.json.bak` 只留上一次、控制台一次批量保存就把它也覆盖。后端 v1.18.83 起每次落盘前存一代（环形 20 代 + sha256 去重），**本页就是它的入口**——数据在而没入口，等于出问题时要 curl 三个端点才看得见"少了哪个字段"。
+- **数据源：按需拉取，不进 8 秒轮询**（`loadAll()` 里**没有** `config/history`）：进页自动拉一次、「重新读取」再拉一次、回滚成功后自动重拉。理由：代际只在"保存/回滚"时变，跟着轮询每 8 秒打一次纯属浪费；如实说明代价——别人刚存的一代不会自己跳进列表，点一下「重新读取」即可。
+- **页面结构**：页头（标题 + 副标题 + 「重新读取」`#hiReload`）→ 动机说明卡 → 两栏（左列代际表 `#hiList`、右列「那一代 → 现在」`#hiDetail`）→ 底部纪律卡（代际文件是**整份配置原文**，别提交 / 别静态暴露 / 别贴截图）。
+- **左列代际表**：只有**元信息**——代次 `#seq`、时间（`fmtTs`）、渠道数、体积 KB、触发原因（`save` → 「保存前」、`before-rollback` → 「回滚前」）。**列表接口本身不含任何配置内容**，所以这一列不可能泄露密钥。行点击（`tr.onclick` → `hiOpen(seq)`）开右列详情，选中行加 `background:var(--panel-3)`。
+- **右列详情**（`GET /admin/api/config/history/{seq}`）：头部（代次 / 触发 / 时间 / 体积 / 渠道数 / hash 前 12 位）+「回滚到这一代」按钮 `#hiRb` + 差异分区：
+  - **被改动 / 被抹掉的渠道**表：渠道显示名（`hiName()` 查 `DATA.channels`，查不到退回 id）+ id 副标题 + **差异字段 chips**（`diff.channels.changed[].fields`）——这就是"少了哪个字段"的直接答案（真实回放：`customField`、`timeoutMs`）。
+  - **当前有、那一代没有**（回滚后会删除）与 **那一代有、当前没有**（回滚后会加回）两组 chips。
+  - **设置组差异** chips（`port` / `health` / `retries` / `cooldown` / 会话粘性 / 限流 / `metrics` / thinking 回放 / 自动权重 / `security`）。
+  - **空差异**：明说「这一代与当前配置**逐字段相同**」——不画空表、不诱导乱点回滚。
+  - 底部常驻说明：回滚**热生效**什么、**只写文件、重启才生效**什么（`needsRestart`）、**密钥段不会回滚**（`diff.keysIgnored` 为真时额外点明"这一代与当前在密钥段上确实不同，已忽略"）、以及"回滚本身可撤销"（后端动手前先把"现在"也存一代，触发原因 `before-rollback`）。
+- **回滚是两步确认**（`armConfirm`，与密钥管理页同一把，6 秒不点自动还原）：第一下只把按钮文案变成「确认回滚到 #N」、**一个请求都不发**；第二下才 `POST /admin/api/config/rollback {seq}`。成功后 toast 交代「回到第几代 + N 个渠道已按那一代重建 + 重启后才生效的项」，随后清 `HIHIT` 缓存、`HIEL=null`、重拉 `loadHistory()` 与 `loadAll()`（渠道与运行期设置都被重建过，整页数据必须重拉）再 `render()`。
+- **渲染纪律**：列表与详情**都不渲染 `config` 整块**（后端给的是掩码视图，前端只取 `diff` 与元信息）；所有外部值（渠道 id、字段名、触发原因、hash）一律 `esc()`；**无内联事件属性**——行点击与按钮都是 `onclick` 程序化挂接（`drawChTable` / `openIpStats` 的同一先例），不往 `ACTS` 里塞页面级动作。
+- **状态回填**：本页**没有输入控件**，但选中态 `HIEL`、详情 `HID`、详情缓存 `HIHIT` 都在 JS 变量里——8 秒重绘只重建 DOM，不会把"正在看哪一代"丢掉（`render()` 重新调用 `vHistory` 后 `drawHi()` 从缓存重画）。
+- **原型 `console-redesign.html` 未同步此页**（生产独有能力，原型不追平）。
+- **守它的测试**：`test/console-state.test.js` §21（**29 项断言**：差异点名到字段、掩码原文一个字都不进 DOM、**第一下不发请求**、POST 报文只有 `{seq}`、404 原文直显、空态有指引）+ §Z（逐页真渲染，新页自动纳入）。
 
 ---
 
@@ -671,11 +692,12 @@ openChannelForm(id)      编辑：回填，id 字段 disabled
 | Playground 生图 | `POST /v1/images/generations` | 需上游支持图像接口 |
 | （控制台未消费） | `POST /v1/responses` · `GET/DELETE /v1/responses/{id}` | **v1.18.38 新增**：OpenAI Responses API（客户端**第四套报文**面）。控制台的 Playground 只发 `/v1/chat/completions`，**不读这条**；它服务于用 Responses SDK 的客户端——入站转成 chat 报文、出站转回 `response` 对象 / Responses 事件序列，中间复用同一条候选链。语义与有损点见 [protocols.md](protocols.md)「OpenAI Responses API」 |
 | （控制台未消费） | `GET /metrics` | **v1.17 新增**：Prometheus 文本格式（零依赖）。供 Prometheus/uptime-kuma 一类外部抓取，控制台**不读它**（渠道/令牌/耗时这门数据控制台走 `/admin/api/status` 与 `/admin/api/usage`）。默认要 `ADMIN_KEY`；`metrics.public:true` 才匿名。渠道标签用**渠道 id**，所以即使接进 Grafana 也不会把渠道名带出去 |
-| 「运行期设置」页（**v1.18 已实现**，见 §5.9；v1.18.8 增第四组） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`（v1.18.8 增）四组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：四张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
+| 「运行期设置」页（**v1.18 已实现**，见 §5.9；v1.18.8 增第四组、v1.18.63 增第五组） | `GET/POST /admin/api/settings` | **v1.18 新增**：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`（v1.18.8 增） / `autoWeight`（v1.18.63 增）五组开关（窄口，字段白名单 + 严格类型）。GET 的 `config` 段回填表单、`effective` 段显示钳制后生效值、`status` 段给实时计数；POST 是 PATCH 语义，**立即生效 + 立即落库**。前端按 [`console-settings-spec.md`](console-settings-spec.md) 的规格实现：五张卡 + 只提交有改动的组 + 400 原文直显 + 跨轮询保留输入 |
 | 「密钥管理」页（**v1.18.5 已实现**，见 §5.10） | `GET /admin/api/keys` · `POST /admin/api/keys` · `POST /admin/api/keys/generate` · `POST /admin/api/keys/reset` · `GET /admin/api/admin-key` | **v1.18.5 新增**：控制台在线轮换 GATEWAY_KEY / ADMIN_KEY。GET 只回**掩码 + 来源**（console / env / generated / none）；POST 立即生效并写入 `config.json` 的 `auth` 段（控制台「随机生成」是本地填框，不走 generate 端点）（**优先级高于环境变量**），**旧密钥立即失效**；新明文只在响应的 `newKeys` 里回这一次；reset 删掉 `auth` 段把控制权交还给环境变量 |
 | 登录门 / 「退出登录」（**v1.18.6 已实现**，见 §8.29） | `POST /admin/api/session` · `DELETE /admin/api/session` | **v1.18.6 新增**：管理密钥登录门换会话——POST body `{key}` 交一次 `ADMIN_KEY` 换回 `HttpOnly + SameSite=Strict` 会话 cookie（`zz_session`，12 小时，**刻意无 `Secure`**：http 本地/局域网部署，加了反而种不下去）；端点在管理面鉴权闸门**之前**（登录时手里还没有会话），登录失败计入 admin 失败限流（NOAUTH 放行）；DELETE 只杀自己那枚 token 并过期 cookie，其余方法 405。轮换/重置管理密钥会清空全部会话，轮换响应**补发新会话**给发起轮换的浏览器 |
 | 「数据统计」页（**v1.18.11 已实现**，见 §5.11） | `GET /admin/api/stats` | **v1.18.11 新增**：来源 IP 态势快照——`global`（敲门 / token / 峰值并发 / 封禁命中 / 活跃来源数）+ `ips[]`（per-IP 敲门 / token / 模型 / 并发峰值 / 会话估计 / 客户端标签 / 24 小时桶，按敲门降序）+ `banned` + `models[]` + `trustedProxy`。**内存态，网关重启清零**（检测数据丢得起）；敲门计数在鉴权之前（401/429 也算敲门）；per-IP token/模型记账只在 `recordUsage` 单漏斗（成功用量才记账）。随 `loadAll()` 拉取、单独兜底 |
 | 封禁 / 解封（**v1.18.11 已实现**，见 §5.11） | `POST /admin/api/bans` · `DELETE /admin/api/bans/{ip}` | **v1.18.11 新增**：IP 字面量校验（非法 400 点名）、幂等、立即生效 + 落库（`config.security.bannedIPs`，重启不丢）；解封不存在 404。**只拦客户端面**（`/v1` `/anthropic` `/gemini` 一律 403，闸门在 Host/Origin 门之后、限流之前）——被封请求不占并发额度但**照常计入封禁命中数**（封了之后对方还在敲，看得见）；管理面/控制台/健康检查**永远可达**（解封按钮不会把自己锁在门外） |
+| 「配置历史」页（**v1.18.84 已实现**，见 §5.12） | `GET /admin/api/config/history` · `GET /admin/api/config/history/{seq}` · `POST /admin/api/config/rollback` | **v1.18.83 新增端点 / v1.18.84 接上控制台**：配置代际与一键回滚（背景：`persistConfig` 的显式白名单会静默吞字段，PT29 一族连发四例）。列表**只给元信息**（seq/时间/字节/hash/渠道数）；详情给**掩码**配置 + 「那一代 → 当前」的字段级 `diff`（`diff.channels.changed[].fields` 直接点名少了哪个字段）；回滚把快照写回并热应用（渠道/五组设置/封禁表），`needsRestart` 点名 `port`/`health`/`retries`/`cooldown`，**密钥段不动**（`keysPreserved`）。控制台侧：左列代际、右列字段级差异、**两步确认**回滚；列表与详情**不渲染任何密钥**、`config` 整块不进 DOM；代际**按需拉取、不进 8 秒轮询**。数据契约与两条硬约束（列表不含密钥、详情一律掩码）见 [`config-history.md`](config-history.md) §3/§5 |
 
 **回填时的注意事项**：
 
@@ -1981,11 +2003,30 @@ const params = (f && (f.parameters || f.input_schema || f.inputSchema))
 
 **新增页面/卡片**：**运行期设置第五张卡「自动权重」**（v1.18.64）。这个页面是**数据驱动**的（`SET_GROUPS`/`SET_META`/`SET_FIELDS` 三张表），所以 `setPayload` 一行没改。只放三个旋钮（`minSamples`/`floor`/`latencyPenalty`）——`maxShare` 在本项目权重语义下基本不触发、`ewma`/`deadband`/`updateMs` 是防振荡内部常数，放出来只会让人误以为"不调就不对"，理由写在代码注释里。契约与文案见 [`console-settings-spec.md`](console-settings-spec.md) 与 [`runtime-settings.md`](runtime-settings.md) ⑤。
 
-**教训**：① **改一个页面之前，先确认它真的被渲染过**（或补一条渲染守卫）——别靠"看着差不多"推断作用域。② **守卫要能证明自己会红**：新断言全绿是"无信息"的，必须拿旧实现跑一遍看它真的红。③ **一个会假红的用例会让整套回归失去意义**（v1.18.66）：时间敏感的判断要写成*有界重试*，不要赌固定发数。④ 修 `auto-weight-apply-e2e` 时我把"必须有行"写成硬断言，结果**跑得越久越容易假红**——断言要对着被测机制的**真实语义**（冷却中的家本来就不该在 live 列表里），不是对着我第一次看到的那次输出。
+**教训**：① **改一个页面之前，先确认它真的被渲染过**（或补一条渲染守卫）——别靠"看着差不多"推断作用域。② **守卫要能证明自己会红**：新断言全绿是"无信息"的，必须拿旧实现跑一遍看它真的红。③ **一个会假红的用例会让整套回归失去意义**（v1.18.66）：时间敏感的判断要写成*有界重试*，不要赌固定发数。④ 修 `auto-weight-apply-e2e` 时我把"必须有行"写成硬断言，结果**跑得越久越容易假红**——断言要对被测机制的**真实语义**（冷却中的家本来就不该在 live 列表里），不是对着我第一次看到的那次输出。
+
+### 8.58 v1.18.84 控制台接上「配置历史」页：把被白名单静默抹掉的字段，摆到能看见、能拿回的地方（2026-10-20，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` §21 + `docs/frontend-code-map.md` / 本文 / `docs/config-history.md` / `docs/tests.md` / `README.md` / `AGENTS.md`）
+
+> v1.18.83 只做了管理面（三个端点 + 环形代际存储），§7 当时如实标着"控制台尚未接 UI"。本轮补入口。
+
+**问题**：补救手段已经在了，但用户手里没有入口——真出问题时得 curl 三个端点才看得见"少了哪个字段"。而对**前端**来说这尤其刺眼：这个 bug 的现场症状就是"控制台里点保存，字段没了"，补救入口却在控制台之外。
+
+**处置**：新增「配置历史」页（工具 → 配置历史，§5.12）。三件事——列代际（只有元信息）、**字段级差异**（`diff.channels.changed[].fields` 直接点名 `customField` 这种没登记进白名单的字段）、**两步确认**回滚。
+
+**三个刻意的设计决定，都不是风格问题**：
+
+1. **整段追加在 `build/app.js` 文件末尾（`boot()` 之后），而不是插进页面渲染区**。函数声明会提升，位置不影响执行；代价是"页面函数不按源码顺序排列"，收益是**任何一个既有行号锚点都不动**（代码地图 §0.2 只需在表格末尾加一行）。上一轮刚因为白名单漏字段踩了四次坑，这一轮不想再顺手制造一批假锚点。
+2. **按需拉取，不塞进 8 秒轮询**。代际只在"保存/回滚"时变，跟着轮询每 8 秒打一次纯属浪费；进页拉一次、「重新读取」再拉一次、回滚成功后自动重拉。代价如实写在页面上：别人刚存的一代不会自己跳出来。
+3. **列表/详情都不渲染 `config` 整块**（后端给的就是掩码视图，前端只取 `diff` 与元信息），回滚**必须两步**（第一下只改文案、一个请求都不发）。一条是隐私面（代际文件里是整份配置原文，含各渠道 apiKey），一条是爆炸半径（一次误点就把整份配置换掉）。
+
+**守它的测试**（`test/console-state.test.js` §21，29 项，从 `build/app.js` 现抠真实函数在 DOM 桩里真跑）：结构侧守"两张分发表都注册""代际不进 `loadAll`""回滚走 `armConfirm`""两个渲染函数里没有 `apiKey`"；行为侧守"差异点名到字段""**掩码视图里的假原文一个字都不进 DOM**""第一下不发请求、第二下 POST 只有 `{seq}`""回滚成功后作废缓存并重拉""404 原文直显""空代际是有指引的空态"。断言数 **281 → 310**。
+
+**边界**：这一页是**补救**，不是修复。白名单本身没变，下次保存仍会抹掉没登记的字段——遇上"字段凭空消失"，先回滚，再来把它加进白名单（`persistConfig` 与 `docs/config-history.md` 五条纪律）。
 
 ## 9. 后续可做（未实现）
 
 - 密钥明文显示加"仅本次会话"提示或二次确认
+- 配置历史页目前只能**整份回滚**（一键换回某一代）；更细的"只回滚某几个渠道 / 某一组设置"需要后端支持按路径应用，暂不做——整份回滚 + 可再回滚已经覆盖"救回被抹掉的字段"这个真实场景
 - 探测结果支持"仅显示新增"过滤
 - 表单校验错误定位（当前只给行内状态文字，不滚动定位到出错字段）
 - 移动端适配（当前 ≤900px 直接隐藏侧栏，无抽屉式导航）

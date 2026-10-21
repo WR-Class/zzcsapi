@@ -2,7 +2,7 @@
 
 > 本文从 README 拆出（v1.18.8）：README 只留调度顺序摘要（含「有效优先级」公式），本文收全量语义——
 > 同渠道重试、熔断冷却分级、加权轮询、自动权重（v1.18.63 起可选生效）、有效优先级、含图请求的候选裁剪。
-> 协议与渠道配置见 [docs/protocols.md](protocols.md)；运行期四组开关见 [docs/runtime-settings.md](runtime-settings.md)。
+> 协议与渠道配置见 [docs/protocols.md](protocols.md)；运行期五组开关见 [docs/runtime-settings.md](runtime-settings.md)。
 
 ## 调度顺序
 
@@ -42,6 +42,34 @@
 - 每次尝试都记账：`perChannel: 1` 且上游一直 502 时，该渠道一次请求里会累加 2 次失败、更快进入
   `down` 与更长的退避。502 的 `attempts` 里带 `attempt` 字段，事后能看出重试痕迹。
 - 已经在向客户端写 chunk 之后的失败**不重试**（半截回复不换渠道，见 [docs/behavior.md](behavior.md)「流式失败」）。
+
+## 重试预算（`retries.budgetAttempts` / `retries.budgetMs`，v1.18.88）
+
+`perChannel` 只管"同一家原地重试几次"，`maxModelFallbacks` 只管"最多换几家"——两者的**乘积**才是
+一次客户端请求真正能发出的上游调用数。候选 40 家 × 每家 6 次 = **240 发**，全部发生在**一个**客户端请求里；
+体感就是"网关卡住、CPU 没满、日志还在刷"，而人只会去查上游。重试预算就是给这个乘积加一道总闸。
+
+| 配置 | 缺省 | 含义 |
+| --- | --- | --- |
+| `retries.budgetAttempts` | `32` | 一次请求最多发多少**上游尝试**（同渠道重试也算）。钳到 1..500，`0` = 显式不限 |
+| `retries.budgetMs` | `600000`（10 分钟） | 一次请求最多花多久。钳到 1s..1h，`0` = 显式不限 |
+
+三条语义（都能被 `test/route-header-budget-e2e.test.js` 的真值表直接验）：
+
+1. **计数单位是"上游尝试"，不是"换了几家"**——同渠道重试也吃预算。否则 `perChannel` 会把预算按倍数放大，
+   这个闸就等于没装。
+2. **两条上限互相独立、先到先停**（次数超了停 / 耗时超了也停，互不影响）。命中的是**第一条**先到的，
+   且**只记一次**（后面的都是"已经在预算外"的重复，再记只会把两个计数搅在一起）。
+3. **命中时如实回 502**，并在 `error.budget` 里给明细（`hit` / `attemptsUsed` / `attemptsMax` / `elapsedMs` / `msMax`），
+   文案直接点名 `retries.budgetAttempts` 或 `retries.budgetMs`。**不伪装成"渠道全部失败"**——后者会让人去查上游，
+   而真因是他的重试配置在这个请求里已经烧完了。同时**不再往后遍历候选**（否则剩下每家各推一条废话进 `attempts`，
+   让"试了几家"看起来比实际多）。
+
+为什么缺省取这么宽：正常请求（1~3 家、`perChannel ≤ 1`）根本够不着，只有"链很长 + 全在抖"的病态场景才会命中。
+配 `0` 关掉它 = 老配置行为一字不变。
+
+配套两个可观测点：响应头 `X-ZZCSAPI-Route` 的 `pick=exhausted`（与 `pick=all-failed` 分得开）、
+以及 `zzcsapi_retry_budget_exhausted_total{reason="attempts"|"elapsed"}`（见 [docs/runtime-settings.md](runtime-settings.md) ③）。
 
 ### 上游否决：`isRetryable:false`（v1.18.45，目前只有 notion）
 
@@ -350,12 +378,13 @@ effPriority = priority − 失败率 × 3
 请求体里带图片时（内部统一格式 = OpenAI，即 `messages[].content` 数组里的 `image_url` block），候选链**只保留能原样/等价转发图片的渠道**：
 
 ```
-IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini']      # server.js
+IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini', 'workbuddy']      # server.js
 ```
 
-- 三种协议各自的带图出站方式：`openai` 原样转发 `image_url`；`anthropic` 转成 `image` 块（`source.type = base64 | url`）；`gemini` 转成 `inlineData`（data URL）或 `fileData`（http 链接）。
-- **为什么必须裁剪**：`notion` / `notion-agent` / `workbuddy` / `genspark` / `codex` 这几条链只把 `content` 当字符串用。把带图请求丢过去，图会被**静默丢掉、模型照样自信作答**——用户以为它看过图。这比直接失败更糟，所以宁可明确报错。
-- **裁干净了怎么办**：返回 400 + `this request contains images, but no channel can forward them: only openai / anthropic / gemini protocol channels can carry images`（不是 404、不是降级重试、不是静默丢图）。
+- 四种协议各自的带图出站方式：`openai` 原样转发 `image_url`；**`workbuddy` 同为 OpenAI 兼容面、也原样转发 `image_url`**（v1.18.82 实测：1×1 PNG 直传上游 → HTTP 200 且模型答出了颜色，即"图真的到了模型"）；`anthropic` 转成 `image` 块（`source.type = base64 | url`）；`gemini` 转成 `inlineData`（data URL）或 `fileData`（http 链接）。
+- **为什么必须裁剪**：`notion` / `notion-agent` / `hark` / `genspark` / `codex` 这几条**文本仿真/网页会话**链只把 `content` 当字符串用；`opencode` 则把 `messages` **拍平成单个 prompt 字符串**，图无处可放。把带图请求丢过去，图会被**静默丢掉、模型照样自信作答**——用户以为它看过图。这比直接失败更糟，所以宁可明确报错。
+- **判据是"图能不能真送到模型"，不是协议名好不好看**：`workbuddy` 的协议名不叫 `openai`，但它走的是原生 `{...body}` 透传（见 [docs/protocols.md](protocols.md)「workbuddy」一节），所以它在名单里；反过来，一个"名字像 openai 但内部拍平文本"的渠道绝不能因为名字而混进来。
+- **裁干净了怎么办**：返回 400 + `this request contains images, but no channel can forward them: only <名单> protocol channels can carry images`——**这段文案里的名单由 `IMAGE_CAPABLE_PROTOCOLS.join(' / ')` 拼出，不许再手写一份**（手写的那份在加 workbuddy 时已经过期过一次：文案说"只有三家"、名单已经四家，正是文档/文案漂移的典型）。不是 404、不是降级重试、不是静默丢图。
 - **纯文本零影响**：`bodyHasImages()` 为假时函数原样返回同一个候选数组，排序与老行为逐字节一致。
-- 三条客户端协议共用这道门：`/v1/chat/completions`、`/anthropic/v1/messages`、`/gemini/v1beta/...`（Anthropic 的 `image` block 与 Gemini 的 `inlineData`/`fileData` 都先转成内部 `image_url`，因此判定点统一）。
-- 回归：`node test/gemini-multimodal.test.js`（含"含图 → 只留可转图渠道 / 纯文本 → 候选链原样"两组断言）+ `node test/native-channels-e2e.test.js`（原生化后仍带图）。
+- 三条客户端协议共用这道门：`/v1/chat/completions`、`/anthropic/v1/messages`、`/gemini/v1beta/...`（Anthropic 的 `image` block 与 Gemini 的 `inlineData`/`fileData` 都先转成内部 `image_url`，因此判定点统一；`/v1/responses` 亦接同一道门，共 4 处调用）。
+- 回归：`node test/gemini-multimodal.test.js`（含"含图 → 只留可转图渠道（openai + workbuddy）/ 纯文本 → 候选链原样 / notion·opencode 仍被挡"三组断言 + 400 文案由常量拼出的守卫）+ `node test/native-channels-e2e.test.js`（原生化后仍带图）。

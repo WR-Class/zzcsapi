@@ -1711,6 +1711,196 @@ function testSearchClear() {
     src.includes("$('#chQ',v).oninput=e=>{chQ=e.target.value;drawChTable()}"));
 }
 
+/* ═══════ §21 配置历史页（v1.18.84）：列代际 / 看字段级差异 / 两步确认回滚 ═══════
+   这一页的用户价值只有一条：**把被白名单静默抹掉的字段找回来**。所以判据不是"画得像不像"，而是：
+   ① 差异真的**点名到字段**（`customField` 这种没登记进白名单的字段必须显出来）；
+   ② 回滚**必须两步**——第一下只变文案、一个请求都不发（一次误点就把整份配置换掉是不可接受的）；
+   ③ 列表与详情**一个字密钥都不渲染**（后端已给掩码，前端也不许把 `config` 整块画出来）。
+   另守两条结构纪律：分发表**两张**都注册（只加一张 = "能进页但 8 秒轮询不刷新"）、历史**不进轮询**。 */
+function testConfigHistory() {
+  G('21. 配置历史页 vHistory（v1.18.84）：字段级差异、两步回滚、页面不渲染任何密钥');
+  /* ── 结构守卫（源码级）── */
+  check('render() 与 go() **两张**分发表都注册了 history:vHistory（只加一张 = 能进页但 8 秒轮询不刷新）',
+    src.includes('keys:vKeys, history:vHistory }[page]')
+    && src.includes('keys:vKeys,history:vHistory}[p]||vOverview'));
+  check('侧栏 NAV 里有「配置历史」项（工具组，clock 图标）',
+    src.includes("{id:'history',label:'配置历史',icon:'clock'}"));
+  check('代际**不塞进 8 秒轮询**：loadAll 里不出现 config/history',
+    !extract('loadAll').includes('config/history'));
+  check('行点击绑在 data-seq 上（seq 不拼进任何事件代码字符串）',
+    src.includes("$$('#hiList tr[data-seq]',box)") && src.includes('hiOpen(Number(tr.dataset.seq))'));
+  check('回滚走 armConfirm 两步确认（写成单击即回滚就红）', src.includes("armConfirm(btn,'回滚到 #'"));
+  check('两个渲染函数里都不出现 apiKey（掩码也不画：这一页只显示元信息与字段名）',
+    !extract('hiListHtml').includes('apiKey') && !extract('hiDetailHtml').includes('apiKey'));
+
+  /* ── 行为（现抠真实函数，在最小 DOM 桩里真跑）── */
+  const stateSrc = (() => {
+    const a = src.indexOf('let HI=null;');
+    const b = src.indexOf('function hiListHtml(');
+    if (a < 0 || b < 0 || b < a) throw new Error('配置历史模块的状态块抠不出来（改名了？请同步本脚本）');
+    return src.slice(a, b);      /* 含 HI/HIEL/HID/HIBUSY/HIHIT 与 HI_REASON/hiReason/hiName */
+  })();
+  const mkApi = (opts) => {
+    const o = opts || {};
+    const calls = [];
+    const api = async (p, body) => {
+      calls.push({ p, opts: body });
+      if (p === '/admin/api/config/history') {
+        if (o.listErr) { const e = new Error('http 500'); e.body = { error: o.listErr }; throw e; }
+        return { ok: true, max: 20, entries: o.entries || [] };
+      }
+      if (p.indexOf('/admin/api/config/history/') === 0) {
+        if (o.detailErr) { const e = new Error('http 404'); e.body = { error: o.detailErr }; throw e; }
+        return o.detail;
+      }
+      if (p === '/admin/api/config/rollback') return { ok: true, rolledBackTo: 3, channels: 2, keysPreserved: true, needsRestart: ['port'], diff: {} };
+      return {};
+    };
+    api.calls = calls;
+    return api;
+  };
+  const mkEnv = (o) => {
+    const opts = o || {};
+    const dom = makeDom();
+    const toasts = [];
+    const api = opts.api || mkApi();
+    const deps = {
+      $: dom.$, $$: dom.$$, DATA: opts.DATA || DATA, RAW: {}, esc, svg, nf,
+      fmtTs: (ts) => 'T(' + ts + ')', toast: (m) => toasts.push(String(m)),
+      api, render: () => {}, loadAll: async () => null,
+    };
+    const body = stateSrc + '\n'
+      + extract('armConfirm') + '\n'
+      + extract('hiListHtml') + '\n' + extract('hiDetailHtml') + '\n' + extract('drawHi') + '\n'
+      + extract('loadHistory') + '\n' + extract('hiOpen') + '\n' + extract('hiRollback') + '\n'
+      + extract('vHistory') + '\n'
+      + 'return {vHistory,hiListHtml,hiDetailHtml,drawHi,loadHistory,hiOpen,hiRollback,'
+      + 'setHI(v){HI=v},getHI(){return HI},setHIEL(v){HIEL=v},getHIEL(){return HIEL},'
+      + 'getHID(){return HID},getHIDERR(){return HIDERR},getHILERR(){return HILERR}};';
+    const fn = new Function(...Object.keys(deps), body)(...Object.values(deps));
+    return { dom, fn, toasts, api, root: dom.root };
+  };
+  const tick = () => new Promise((r) => setImmediate(r));
+  const ENTRIES = [
+    { seq: 3, at: '2026-10-20T01:00:00.000Z', bytes: 4096, reason: 'save', hash: 'abcdef123456', channels: 2 },
+    { seq: 2, at: '2026-10-19T23:00:00.000Z', bytes: 2048, reason: 'before-rollback', hash: 'ffffff123456', channels: 1 },
+  ];
+  return (async () => {
+    /* ① 列表：元信息齐、密钥零渲染、空态有指引 */
+    {
+      const api = mkApi({ entries: ENTRIES });
+      const env = mkEnv({ api });
+      env.fn.setHI({ ok: true, max: 20, entries: ENTRIES });
+      env.fn.vHistory(env.root);
+      const page = env.root.innerHTML;
+      check('页面标题是「配置历史」（Z 节按页标题点名，这里也守一条）', /class="page-title">配置历史</.test(page));
+      check('页头写明"每次真正改写 config.json 前自动存一代"这层动机（不是一句空话）', page.includes('自动存一代'));
+      const list = env.dom.$('#hiList').innerHTML;
+      check('列表逐代显示：代次 / 时间 / 渠道数 / 体积 / 触发原因',
+        list.includes('#3') && list.includes('T(2026-10-20T01:00:00.000Z)') && list.includes('4.0 KB')
+        && list.includes('保存前') && list.includes('#2') && list.includes('回滚前'));
+      check('代际计数角标取自服务端的 max（不是前端写死 20）', env.dom.$('#hiCnt').textContent === '2 / 20 代');
+      check('列表里没有任何密钥字样', !/apiKey|sk-/.test(list));
+      check('还没选代时详情区提示"从左边选一代"', env.dom.$('#hiDetail').innerHTML.includes('从左边选一代'));
+      check('「重新读取」按钮已挂上（programmatic onclick，不是内联属性）',
+        typeof env.dom.$('#hiReload', env.root).onclick === 'function');
+    }
+    {
+      const api = mkApi({ entries: [] });
+      const env = mkEnv({ api });
+      env.fn.setHI({ ok: true, max: 20, entries: [] });
+      env.fn.vHistory(env.root);
+      const list = env.dom.$('#hiList').innerHTML;
+      check('空代际是**有指引的空态**（说清什么时候才会有第一代，而不是一句"暂无数据"）',
+        list.includes('还没有任何代际') && list.includes('改写前的那一份'));
+    }
+    /* ② 列表接口整体挂掉：错误原文要看得见，不许白屏 */
+    {
+      const api = mkApi({ listErr: 'snapshot file missing or corrupt' });
+      const env = mkEnv({ api });
+      env.fn.vHistory(env.root);          /* HI 为 null → 进页自动拉一次 */
+      await tick();
+      check('列表接口 500 时把后端原文直显（不是"加载失败"四个字）',
+        env.fn.getHILERR().includes('snapshot file missing or corrupt')
+        && env.dom.$('#hiList').innerHTML.includes('snapshot file missing or corrupt'));
+      check('列表失败时也发了请求（说明 vHistory 确实按需拉取，而不是只画静态壳）',
+        api.calls.some((c) => c.p === '/admin/api/config/history'));
+    }
+    /* ③ 详情：差异点名到字段、掩码原文不进 DOM、两步确认 */
+    {
+      const api = mkApi({
+        entries: ENTRIES,
+        detail: {
+          ok: true, seq: 3, at: '2026-10-20T01:00:00.000Z', bytes: 4096, reason: 'save',
+          hash: 'abcdef123456', channels: 2,
+          config: { channels: [{ id: 'stub-alpha', apiKey: 'sk-RAW-SECRET-123456' }], port: 8787 },
+          diff: {
+            channels: { added: ['newch'], removed: ['oldch'], changed: [{ id: 'stub-alpha', fields: ['customField', 'timeoutMs'] }] },
+            groups: ['metrics'], keysIgnored: true,
+          },
+          willTouchKeys: false,
+        },
+      });
+      const env = mkEnv({ api, DATA: { channels: [{ id: 'stub-alpha', name: 'Alpha 渠道', proto: 'openai', on: true }], models: [], meta: {} } });
+      env.fn.setHI({ ok: true, max: 20, entries: ENTRIES });
+      env.fn.vHistory(env.root);
+      await env.fn.hiOpen(3);
+      const d = env.dom.$('#hiDetail').innerHTML;
+      check('★ 详情把差异**点名到字段**（customField / timeoutMs 都要显出来——这就是"少了什么"的答案）',
+        d.includes('customField') && d.includes('timeoutMs'));
+      check('渠道显示名优先于 id（Alpha 渠道），id 仍作副标题可查',
+        d.includes('Alpha 渠道') && d.includes('stub-alpha'));
+      check('新增 / 删除 / 设置组差异都列出来（回滚会发生什么一目了然）',
+        d.includes('newch') && d.includes('oldch') && d.includes('metrics'));
+      check('密钥段有差异时明说「已忽略」（不让用户以为回滚能把密钥也带回去）', d.includes('忽略'));
+      check('★ 掩码视图里的 apiKey 原文一个字都没进 DOM', !d.includes('sk-RAW-SECRET'));
+      check('回滚按钮存在（id=hiRb）且文案写明"不会动密钥 / 点错了能再回滚"',
+        d.includes('id="hiRb"') && d.includes('不会动密钥') && d.includes('再回滚回去')
+        && typeof env.dom.$('#hiRb').onclick === 'function');
+
+      const btn = mkEl('hiRb');
+      const rbCalls = () => api.calls.filter((c) => c.p === '/admin/api/config/rollback').length;
+      const before = rbCalls();
+      await env.fn.hiRollback(3, btn);
+      check('★ 第一下只把按钮变成「确认回滚到 #3」，**一个请求都不发**（误点一次不该换掉整份配置）',
+        rbCalls() === before && /确认回滚到 #3/.test(btn.innerHTML));
+      await env.fn.hiRollback(3, btn);            /* armConfirm 已把 dataset.arm 置 1 → 这一下才真发 */
+      const rbc = api.calls.filter((c) => c.p === '/admin/api/config/rollback');
+      check('★ 第二下才真发 POST，报文只有 {seq:3}',
+        rbc.length === before + 1 && JSON.parse(rbc[rbc.length - 1].opts.body).seq === 3);
+      check('回滚成功后 toast 交代"回到第几代 + 重启后才生效的项"（不静默成功）',
+        env.toasts.some((t) => t.includes('已回滚到第 3 代') && t.includes('重启后生效') && t.includes('port')));
+      check('回滚成功后作废详情缓存与选中态并重拉（否则页面还显示回滚前的旧差异）',
+        env.fn.getHIEL() === null && env.fn.getHID() === null);
+    }
+    /* ④ 详情 404：原文直显 */
+    {
+      const api = mkApi({ entries: ENTRIES, detailErr: 'snapshot not found' });
+      const env = mkEnv({ api });
+      env.fn.setHI({ ok: true, max: 20, entries: ENTRIES });
+      env.fn.vHistory(env.root);
+      await env.fn.hiOpen(9);
+      check('快照不存在时把后端原文直显（不是"加载失败"四个字）',
+        env.fn.getHIDERR() === 'snapshot not found' && env.dom.$('#hiDetail').innerHTML.includes('snapshot not found'));
+    }
+    /* ⑤ 差异为空：明说"逐字段相同"，不诱导用户乱点回滚 */
+    {
+      const api = mkApi({
+        entries: ENTRIES,
+        detail: { ok: true, seq: 3, at: '2026-10-20T01:00:00.000Z', bytes: 4096, reason: 'save', hash: 'abc', channels: 2,
+          config: {}, diff: { channels: { added: [], removed: [], changed: [] }, groups: [], keysIgnored: false } },
+      });
+      const env = mkEnv({ api });
+      env.fn.setHI({ ok: true, max: 20, entries: ENTRIES });
+      env.fn.vHistory(env.root);
+      await env.fn.hiOpen(3);
+      const d = env.dom.$('#hiDetail').innerHTML;
+      check('无差异时明说「逐字段相同」（而不是画一个空表让人以为坏了）', d.includes('逐字段相同'));
+      check('无差异时也不再显示"密钥段已忽略"的角标（没有差异就不提）', !d.includes('已<b>忽略</b>'));
+    }
+  })();
+}
+
 (async () => {
   testModels();
   testPlayground();
@@ -1731,6 +1921,7 @@ function testSearchClear() {
   testProbeTrim();
   testKeyAutofill();
   testSearchClear();
+  await testConfigHistory();
 
   /* ── §Z 每一页都要真的渲染一次（v1.18.65 的教训）──────────────────────────────
      `vAutoWeight` 引用了只存在于 `autoWeightCard()` 内部的 `a` → ReferenceError →

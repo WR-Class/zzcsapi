@@ -4,7 +4,7 @@
  *
  * 为什么需要它：v1.17 把会话粘性 / 客户端限流 / /metrics 三个开关做进了后端，但**控制台改不了**——
  * 渠道级 upsert 只管渠道字段，`/admin/api/config` 又是只读的。于是有了
- * `GET/POST /admin/api/settings` 这个**窄口**：只认这四组（v1.18.8 增 thinkingReplay 第四组），
+ * `GET/POST /admin/api/settings` 这个**窄口**：只认这五组（v1.18.8 增 thinkingReplay 第四组、v1.18.63 增 autoWeight 第五组），
  * 每组走与启动路径**同一个** norm* 函数。
  *
  * 这份用例守的三件事，每件都对应一种真实翻车方式：
@@ -80,7 +80,7 @@ function makeNorms() {
     /applyRuntimeSettings\(\);[\s\S]{0,400}persistConfig\(\);/.test(SRC)
     && /Object\.assign\(AUTO_W, normAutoWeight\(/.test(SRC));
   check('保存后立即落库（不靠"下次保存渠道时顺手带上"）', /return sendJson\(res, 200, \{ ok: true, updated: touched/.test(SRC));
-  check('四组开关仍在 persistConfig 白名单里（否则存了也会被别的保存动作抹掉）',
+  check('五组开关仍在 persistConfig 白名单里（否则存了也会被别的保存动作抹掉）',
     /sessionAffinity: \(config && config\.sessionAffinity\) \|\| undefined/.test(SRC) &&
     /rateLimit: \(config && config\.rateLimit\) \|\| undefined/.test(SRC) &&
     /metrics: \(config && config\.metrics\) \|\| undefined/.test(SRC) &&

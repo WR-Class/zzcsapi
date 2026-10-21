@@ -88,11 +88,24 @@ const fakeJwt = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vIn0.c2lnbm
 
 /* 假 WorkBuddy 上游：无 /models，只有 POST /v2/chat/completions */
 function makeWbFake() {
-  const st = { mode: 'ok', hits: 0, quotaBody: '', lastBody: null };
+  // v1.18.78：lastHeaders / convIds 专门守「会话信封三件套」（X-Conversation-*）。
+  // 上游 2026-10-19 起对流式请求校验这三个头，缺任一即 400 request illegal ——
+  // 这个失败在假上游里默认"看不见"（只影响真上游），所以必须把收到的头留下来断言。
+  const st = { mode: 'ok', hits: 0, quotaBody: '', lastBody: null, lastHeaders: null, convIds: [] };
   st.server = http.createServer((req, res) => {
     const cs = []; req.on('data', (c) => cs.push(c)); req.on('end', () => {
       st.hits++;
+      st.lastHeaders = req.headers;
+      st.convIds.push([req.headers['x-conversation-id'], req.headers['x-conversation-request-id'], req.headers['x-conversation-message-id']]);
       try { st.lastBody = JSON.parse(Buffer.concat(cs).toString('utf8') || '{}'); } catch { st.lastBody = null; }
+      // v1.18.80：复刻真上游对 role:"developer" 的拒绝（400 code 11-128）。
+      // 假上游必须照抄这条，否则「网关有没有把 developer 归一成 system」在本地测不出来
+      // ——真上游会 400、假上游却回 200，测试全绿而线上照挂。
+      const msgs = st.lastBody && Array.isArray(st.lastBody.messages) ? st.lastBody.messages : [];
+      if (msgs.some((m) => m && m.role === 'developer')) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ code: 11-128, msg: 'Illegal API invocation from an unapproved channel' }));
+      }
       if (st.mode === 'quota') {
         res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8' });
         return res.end(st.quotaBody);                       // 真实的 429 + code 6004 文案
@@ -100,6 +113,27 @@ function makeWbFake() {
       if (st.mode === 'html') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end('<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>cf</body></html>');
+      }
+      // v1.18.81：原生工具调用回合（按 index 分片下发；名字整段给、参数是碎片）。
+      // 用 JSON.stringify 拼，别手写转义——手写 \" 层级极易错，错了就变成"假上游发了个坏帧"，
+      // 看起来像网关的问题。
+      if (st.mode === 'tools' || st.mode === 'toolonly') {
+        const hasText = st.mode === 'tools';
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write('data: ' + JSON.stringify({
+          id: 'x',
+          choices: [{ index: 0, delta: { role: 'assistant', content: hasText ? 'Let me look.' : '', tool_calls: [{ index: 0, id: 'call_a1', type: 'function', function: { name: 'glob', arguments: '' } }] } }],
+        }) + '\n\n');
+        res.write('data: ' + JSON.stringify({
+          id: 'x',
+          choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ pattern: '**/*.md' }) } }] } }],
+        }) + '\n\n');
+        res.write('data: ' + JSON.stringify({
+          id: 'x',
+          choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 9, completion_tokens: 5, total_tokens: 14 },
+        }) + '\n\n');
+        return res.end('data: [DONE]\n\n');
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write('data: {"id":"x","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}\n\n');
@@ -148,6 +182,21 @@ function makeWbFake() {
     check('★ 聊天侧非 SSE 也带上 HTTP 码与响应开头', !/'workbuddy: non-SSE response'/.test(chat) && /wbOpaqueBodyMsg\(out\.status, sseText\)/.test(chat));
     check('★ 密文 token 在发请求前就拦下（两处都拦）',
       /const keyHint = wbEncryptedKeyHint\(def\.apiKey\)/.test(probe) && /const wbKeyHint = wbEncryptedKeyHint\(ch\.def\.apiKey\)/.test(chat));
+    // ★ v1.18.78：上游 2026-10-19 起给流式请求加了「会话信封」校验 —— 三个 X-Conversation-*
+    // 头必须同时齐发，缺任一即 400 {"code":"11-128","msg":"request illegal"}（实测：只带一个
+    // /任意两个都 400，三个齐发 200；补 X-Domain/X-Product/UA 那一套一律无效）。
+    // 这两条守"三件套有单点真源" + "每个发起点都真的用了它"。
+    // ★ 后一条是必要的：第一版只改了聊天侧，探测侧另写了一份 2 个头的旧写法 →
+    //   容器里 recheck 仍报 request illegal，而聊天其实已经通了（这就是"漏一处"的现场）。
+    const wbh = extract('wbSessionHeaders');
+    check('★ 会话信封三件套有单点真源 wbSessionHeaders（三个头齐发 + ID 每次现生成）',
+      /'X-Conversation-ID': crypto\.randomUUID\(\)/.test(wbh)
+      && /'X-Conversation-Request-ID': crypto\.randomUUID\(\)\.replace\(\/-\/g, ''\)/.test(wbh)
+      && /'X-Conversation-Message-ID': crypto\.randomUUID\(\)\.replace\(\/-\/g, ''\)/.test(wbh));
+    check('★ 三个发起点都用它（聊天 tryWorkbuddyChannel / 探测 workbuddyChatProbe / 手动测试）——漏一处就是"探测红、聊天绿"',
+      /wbSessionHeaders\(ch\.def\.apiKey\)/.test(chat)
+      && /wbSessionHeaders\(def\.apiKey\)/.test(probe)
+      && (SRC.match(/wbSessionHeaders\(/g) || []).length >= 4);   // 1 处定义 + 3 处调用
   }
 
   /* ══════════ 1. 真值表 ══════════ */
@@ -221,6 +270,11 @@ function makeWbFake() {
   const chat = () => fetch(`http://127.0.0.1:${GW}/v1/chat/completions`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GW_KEY}` },
     body: JSON.stringify({ model: 'wb-demo', messages: [{ role: 'user', content: 'ping' }] }),
+  }).then(async (r) => ({ code: r.status, text: await r.text() }));
+  // v1.18.80：可指定 messages 的版本（§7 要发 role:"developer" 的报文）
+  const chatWith = (messages) => fetch(`http://127.0.0.1:${GW}/v1/chat/completions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GW_KEY}` },
+    body: JSON.stringify({ model: 'wb-demo', messages }),
   }).then(async (r) => ({ code: r.status, text: await r.text() }));
   const waitUp = async () => { for (let i = 0; i < 40; i++) { try { if ((await fetch(`http://127.0.0.1:${GW}/healthz`)).ok) return true; } catch { } await sleep(150); }   /* ★ v1.18.68：超时**不再返回 false 让人继续跑**。
      现场：网关没能按时起来时，调用方多半不看返回值，于是后面每个请求都打在没人听的端口上
@@ -338,6 +392,114 @@ function makeWbFake() {
       check('上游收到的是 OpenAI 报文 + 强制流式（首条 system 也在）',
         fake.lastBody && fake.lastBody.stream === true && fake.lastBody.model === 'deepseek-v4.1-flash'
         && fake.lastBody.messages[0].role === 'system', fake.lastBody);
+      // ★ v1.18.78 真链路：上游**实际收到**的会话信封三件套（仅靠上文的源码守卫会漏——
+      // 源码里写了但没真送出去，或者形状不对，上游照样回 400 request illegal）。
+      const hh = fake.lastHeaders || {};
+      const conv = hh['x-conversation-id'] || '';
+      const reqId = hh['x-conversation-request-id'] || '';
+      const msgId = hh['x-conversation-message-id'] || '';
+      check('★ 上游真收到会话信封三件套，形状照抄官方客户端（conversation 带连字符 UUID / request+message 为 32 位十六进制）',
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(conv)
+        && /^[0-9a-f]{32}$/.test(reqId) && /^[0-9a-f]{32}$/.test(msgId), { conv, reqId, msgId });
+      const c2 = await chat();
+      const last = fake.convIds[fake.convIds.length - 1] || [];
+      check('★ 两次请求的会话 ID 各不相同（每次现生成，不复用固定值）',
+        c2.code === 200 && (last[0] !== conv || last[1] !== reqId), { first: [conv, reqId], second: last });
+    }
+
+    console.log('\n7. role:"developer" 归一成 system（v1.18.80）');
+    {
+      // 现场（2026-10-20）：DSH 把系统提示写成 role:"developer"，上游回
+      //   400 {"code":"11-128","msg":"Illegal API invocation from an unapproved channel"}
+      // 假上游已照抄这条拒绝（见 makeWbFake），所以本节是**判别性**的：网关不归一 → 400，归一 → 200。
+      fake.mode = 'ok';
+      const r = await chatWith([
+        { role: 'developer', content: 'You are a coding agent. RULES-9F3' },
+        { role: 'user', content: 'ping' },
+      ]);
+      check('★ 带 role:"developer" 的请求不再被上游打回（网关已归一）', r.code === 200, { code: r.code, text: r.text.slice(0, 160) });
+      const got = (fake.lastBody && fake.lastBody.messages) || [];
+      check('★ 上游真的没收到 developer 角色（不是"假上游放水"）', !got.some((m) => m && m.role === 'developer'), got);
+      check('developer 的内容原样保留、角色变成 system',
+        got[0] && got[0].role === 'system' && /RULES-9F3/.test(got[0].content || ''), got[0]);
+      // 中段的 developer 也要归一（新客户端常把 developer 夹在 system 之后）
+      const r2 = await chatWith([
+        { role: 'system', content: 'SYS-A' },
+        { role: 'developer', content: 'DEV-B' },
+        { role: 'user', content: 'ping' },
+      ]);
+      check('★ 中段的 developer 同样归一（不是只处理首条）', r2.code === 200, { code: r2.code, text: r2.text.slice(0, 160) });
+      const got2 = (fake.lastBody && fake.lastBody.messages) || [];
+      check('中段 developer → system 且内容保留',
+        !got2.some((m) => m && m.role === 'developer') && got2.some((m) => m.role === 'system' && /DEV-B/.test(m.content || '')), got2);
+      // 对照：普通报文一字没变（首条已是 system 时不再重复注入）
+      const r3 = await chatWith([{ role: 'system', content: 'SYS-ONLY' }, { role: 'user', content: 'ping' }]);
+      const got3 = (fake.lastBody && fake.lastBody.messages) || [];
+      check('对照：本来就是 system 的报文没被改动（不重复注入、不改内容）',
+        r3.code === 200 && got3.length === 2 && got3[0].role === 'system' && got3[0].content === 'SYS-ONLY', got3);
+    }
+
+    console.log('\n8. 原生 tool_calls 不许在非流式回包里丢掉（v1.18.81）');
+    {
+      // 现场：workbuddy 是原生工具渠道，上游按 index 分片下发 tool_calls；旧实现只收 delta.content
+      // ⇒ 非流式回包把 tool_calls 整个丢掉，且"只调工具不写字"的回合被判成 empty content 失败。
+      // 本节的假上游照真上游的形状发分片，所以"网关拼没拼回来"是能被判出来的。
+      fake.mode = 'tools';
+      const r = await chat();                       // chat() 不带 stream → 走非流式装配
+      let j = null; try { j = JSON.parse(r.text); } catch { }
+      check('非流式回包 HTTP 200 且是 JSON', r.code === 200 && !!j, { code: r.code, text: r.text.slice(0, 160) });
+      const tc = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.tool_calls;
+      check('★ 非流式回包里带回原生 tool_calls（旧实现整个丢掉）',
+        Array.isArray(tc) && tc.length === 1 && tc[0].function.name === 'glob', tc);
+      let argsOk = false;
+      try { argsOk = JSON.parse(tc[0].function.arguments).pattern === '**/*.md'; } catch { }
+      check('★ 参数分片被拼回合法 JSON（不是残片）', argsOk, tc && tc[0] && tc[0].function.arguments);
+      check('tool_calls[].id 非空、type=function', !!tc && !!tc[0].id && tc[0].type === 'function', tc && tc[0]);
+      check('★ finish_reason=tool_calls（不是 stop）', !!j && j.choices[0].finish_reason === 'tool_calls', j && j.choices[0].finish_reason);
+      check('正文与工具调用可以并存（content 仍在）', !!j && /Let me look/.test(j.choices[0].message.content || ''), j && j.choices[0].message.content);
+      // 只调工具、完全不写字的回合：旧判据是 `!fullText.trim()` → 记失败并切下家
+      fake.mode = 'toolonly';
+      const r2 = await chat();
+      let j2 = null; try { j2 = JSON.parse(r2.text); } catch { }
+      check('★ "只调工具、不写字"不再被判成空回复失败',
+        r2.code === 200 && !!j2 && Array.isArray(j2.choices[0].message.tool_calls) && j2.choices[0].message.tool_calls.length === 1,
+        { code: r2.code, text: r2.text.slice(0, 160) });
+      check('该回合 content 是空串而不是 null（保持 OpenAI 形状）', !!j2 && j2.choices[0].message.content === '', j2 && j2.choices[0].message.content);
+      // 对照：纯文本回合一个字没变
+      fake.mode = 'ok';
+      const r3 = await chat();
+      let j3 = null; try { j3 = JSON.parse(r3.text); } catch { }
+      check('对照：纯文本回合没有凭空多出 tool_calls', r3.code === 200 && !!j3 && !j3.choices[0].message.tool_calls && /pong/.test(j3.choices[0].message.content || ''), j3 && j3.choices[0].message);
+    }
+
+    console.log('\n9. 图片：workbuddy 必须真的把 image_url 送到上游（v1.18.82）');
+    {
+      // 现场：含图请求被**网关自己**的能力门挡掉，回 400 "no channel can forward them … only
+      // openai / anthropic / gemini"。文案看着像上游拒绝，其实是 `IMAGE_CAPABLE_PROTOCOLS` 没把
+      // workbuddy 算进来（它的协议名不叫 openai，但走的是 `{...body}` 原生透传）。
+      // 本节的假上游把收到的报文留下来 ⇒ "图是原样送到了、还是被静默丢了"判得出来。
+      const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      fake.mode = 'ok';
+      fake.lastBody = null;
+      const r = await chatWith([
+        { role: 'system', content: 'SYS' },
+        { role: 'user', content: [{ type: 'text', text: '看图' }, { type: 'image_url', image_url: { url: PNG } }] },
+      ]);
+      check('★ 含图请求不再被能力门挡成 400（workbuddy 已进 IMAGE_CAPABLE_PROTOCOLS）',
+        r.code === 200, { code: r.code, text: r.text.slice(0, 200) });
+      const sent = fake.lastBody && Array.isArray(fake.lastBody.messages) ? fake.lastBody.messages[1] : null;
+      const block = Array.isArray(sent && sent.content) ? sent.content.find((b) => b && b.type === 'image_url') : null;
+      check('★ 图真的到了上游（image_url 原样透传，不是静默丢图后照样回答）',
+        !!block && !!block.image_url && block.image_url.url === PNG, sent && sent.content);
+      check('文本部件也还在（图与文字都不丢）',
+        Array.isArray(sent && sent.content) && sent.content.some((b) => b && b.type === 'text' && b.text === '看图'));
+      // 对照：纯文本请求的 content 仍是字符串（加了图片能力门不该改变纯文本的报文形状）
+      fake.lastBody = null;
+      const r2 = await chat();
+      const m2 = fake.lastBody && fake.lastBody.messages;
+      check('对照：纯文本请求的 content 仍是字符串（报文形状没被图片逻辑改坏）',
+        r2.code === 200 && Array.isArray(m2) && typeof m2[0].content === 'string');
+      fake.mode = 'ok';
     }
   } catch (e) {
     fail++;

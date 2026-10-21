@@ -246,7 +246,7 @@
   · 上游不发 `[DONE]` 时，由收尾钩子补上关块 + `message_delta` + `message_stop`（客户端不会一直等）。
   · Gemini 的流式体现在 URL 动作（`:streamGenerateContent`），出站会显式带上 `stream:true`。
   · 流式失败细节见上文「流式失败」。
-- **图片（多模态）**：三条客户端协议统一把图片转成内部 `image_url` block（识别规则与部件顺序见 [docs/protocols.md](protocols.md)「图片（多模态）的统一转换」）。带图请求只走 `openai` / `anthropic` / `gemini` 三种协议的渠道（候选裁剪见 [docs/scheduling.md](scheduling.md)「含图请求的候选裁剪」）。
+- **图片（多模态）**：三条客户端协议统一把图片转成内部 `image_url` block（识别规则与部件顺序见 [docs/protocols.md](protocols.md)「图片（多模态）的统一转换」）。带图请求只走 `openai` / `anthropic` / `gemini` / **`workbuddy`** 四种协议的渠道（候选裁剪见 [docs/scheduling.md](scheduling.md)「含图请求的候选裁剪」；workbuddy 虽不叫 openai，但走原生 `{...body}` 透传，v1.18.82 实测上游接受 `image_url` 并真读了图）。
 - **冷启动**：第一次请求时 `status=unknown` 仍然会被选中（health 探测在后台进行）。
 - **密钥轮换（v1.18.5，控制台可在线轮换）**：`GATEWAY_KEY` / `ADMIN_KEY` 的生效值按 `config.json` 的 `auth` 段（控制台轮换）**> 环境变量 >** 首启自动生成取值——控制台说了算，重启不会被 `.env` 顶回去。控制台「工具 → 密钥管理」页可手填或随机生成新密钥，点一下「轮换」**立即生效、旧密钥立即失效**（无宽限期）；页面上每把密钥标注来源（控制台轮换 / 环境变量 / 首启生成），「回到环境变量值」删除 `auth` 段把控制权交还给 `.env`。新密钥准入：8–128 位可见 ASCII、禁 `change-me`、两把不得相同；**管理密钥另需大小写字母+数字+特殊字符四样齐全**（它是控制台的唯一门锁），被拒的值**不生效也不落库**。换管理密钥时**全部控制台会话同时作废**（换锁后旧会话不该继续开门），但发起轮换的那个响应会**补发一枚新会话 cookie**——发起页不会被踢回登录门，其它标签页 / 设备 / 脚本里的旧值立即 401，各自重新登录一次。
 - **管理面会话（v1.18.6，渗透第三批）**：浏览器打开控制台不再是"密钥常驻 localStorage"，而是**登录门交一次密钥换会话 cookie**——

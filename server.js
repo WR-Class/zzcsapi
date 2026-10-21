@@ -12,6 +12,70 @@ const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
 const { URL } = require('url');
+
+/* ── 原子写文件（v1.18.85）─────────────────────────────────────────────────────
+   动机**不是**洁癖，是一类"尚未触发但会致命"的现场：`persistConfig` 一直用裸
+   `fs.writeFileSync(CONFIG_PATH, ...)` 直接覆盖正主文件。进程在写盘中途被 kill（控制台保存、
+   一键回滚、甚至 Ctrl+C 撞在同一毫秒），或者磁盘在这几 KB 上写满，留下的就是**半截 JSON**。
+   而 `loadConfig` 里 `JSON.parse` 没有兜底 —— 于是"半截文件"直接变成"网关起不来"，
+   报错还是 `Unexpected end of JSON input`，离真因（上一次写盘被打断）很远。
+
+   本项目其实早就知道这个模式：同一个文件里 `writeHistoryIndex` 就是 tmp + rename，
+   注释还写着「先写临时文件再改名：半截索引比没有索引更难查」。**索引用了，正主忘了用。**
+
+   三条纪律：
+     ① **同盘 rename 才原子**：tmp 必须和目标是同一个目录（跨盘/跨文件系统 rename 会退化成
+        copy+unlink，中途失败照样半截）。这里 `.tmp` 就放在 `path.dirname(target)`。
+     ② **写完 fsync 再 rename**：不 fsync 的话，断电时目录项可能先于内容落盘，rename 后拿到
+        一个"长度对、内容空"的文件——比半截更难查。落盘失败就让异常往上抛，调用方自己决定。
+     ③ **失败要清理 tmp**：写一半抛异常时把 `.tmp` 删掉，别在目录里越堆越多；
+        清理本身失败不许掩盖原始异常。
+    ④ **目标不可替换时要降级，而不是把进程打挂**（v1.18.85 容器实测补）：Docker 的
+       `-v ./config.json:/app/config.json` 是**单文件挂载**，容器里那个路径是**挂载点本身**，
+       `rename()` 到它必然 `EBUSY`。第一版没管这条，实测"点一次保存渠道 → 网关 Exited(1)"
+       （`Error: EBUSY: resource busy or locked, rename '/app/.config.json.…tmp' -> '/app/config.json'`）。
+       这不是"写失败"，是"这个路径不支持原子替换"——退化成**原地覆写**（即 P0-1 之前的行为），
+       并把降级事实**明确打一行日志**，别让人以为还是原子的。 */
+const ATOMIC_DEGRADED = new Set();   // 已警告过的目标（同一目标只啰嗦一次）
+function writeFileAtomic(target, text, encoding) {
+  const dir = path.dirname(target);
+  // pid + 随机后缀：同一个进程里并发写同一目标也不会互相覆盖 tmp
+  // （这里刻意不用 crypto —— 它在本文件里比本函数晚 require，用它会撞 TDZ）
+  const tmp = path.join(dir, '.' + path.basename(target) + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 10) + '.tmp');
+  let fd = null;
+  try {
+    fd = fs.openSync(tmp, 'w', 0o600);
+    fs.writeFileSync(fd, text, encoding || 'utf8');
+    try { fs.fsyncSync(fd); } catch { /* 某些文件系统不支持 fsync，降级但继续 */ }
+    fs.closeSync(fd);
+    fd = null;
+    try {
+      fs.renameSync(tmp, target);
+      return;   // 正常路径：原子替换完成
+    } catch (e) {
+      const code = e && e.code;
+      // 挂载点（EBUSY）/ 跨设备（EXDEV）/ 权限类：目标无法被 rename 替换 ⇒ 走原地覆写
+      if (code !== 'EBUSY' && code !== 'EXDEV' && code !== 'EPERM' && code !== 'EACCES') throw e;
+      if (!ATOMIC_DEGRADED.has(target)) {
+        ATOMIC_DEGRADED.add(target);
+        console.log(`[atomic] ${target} 无法原子替换（${code}）——多半是 Docker 单文件挂载。`
+          + `已降级为原地覆写：功能正常，但进程若在此刻被杀仍可能留下半截文件。`
+          + `想恢复原子性请改挂**目录**（见 docker-compose.yml 的说明）。`);
+      }
+    }
+    // 降级路径：直接打开目标截断重写（挂载点只能这么写）
+    const fd2 = fs.openSync(target, 'w', 0o600);
+    try {
+      fs.writeFileSync(fd2, text, encoding || 'utf8');
+      try { fs.fsyncSync(fd2); } catch { }
+    } finally {
+      try { fs.closeSync(fd2); } catch { }
+    }
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd); } catch { } }
+    try { fs.unlinkSync(tmp); } catch { }   // 成功路径下 tmp 已被 rename 走，unlink 静默失败即可
+  }
+}
 const notion = require('./notion.js');
 const notionAgent = require('./notion-agent.js');
 const hark = require('./hark.js');   // v1.18.47 hark.com 网页会话反代（专用报文渠道）
@@ -425,23 +489,102 @@ function maskSecret(k) {
 // ─────────────────────────── 加载配置 ───────────────────────────
 const CONFIG_PATH = process.env.ZZCSAPI_CONFIG || path.join(__dirname, 'config.json');
 const EXAMPLE_PATH = path.join(__dirname, 'config.example.json');
+// 与下方 HISTORY_DIR 同一处逻辑，但 loadConfig 在模块初始化期就要用，所以提前算一份。
+// （HISTORY_DIR 到后面才 const 声明——在 loadConfig 里直接引用它会撞 TDZ。）
+const CONFIG_HISTORY_DIR = process.env.ZZCSAPI_CONFIG_HISTORY_DIR || path.join(path.dirname(CONFIG_PATH), 'config-history');
+
+/* 解析一份配置文本，返回**结构合法**的对象或 null（只做"起不起得来"的判断，不做字段补全）。
+   与 loadConfig 的硬规矩保持一致：必须有 channels 数组、每个渠道要有 id/baseUrl/apiKey。 */
+function parseConfigText(text) {
+  let cfg = null;
+  try { cfg = JSON.parse(String(text).replace(/^\uFEFF/, '')); } catch { return null; }
+  if (!cfg || typeof cfg !== 'object' || !Array.isArray(cfg.channels)) return null;
+  for (const ch of cfg.channels) {
+    if (!ch || typeof ch !== 'object') return null;
+    if (!ch.baseUrl || !ch.apiKey) return null;
+  }
+  return cfg;
+}
+
+/* 依次尝试：正主 → config.json.bak → 最新的几代代际快照。
+   返回 { cfg, from, badText }：
+     · from = 'main' / 'bak' / 'gen:<seq>'  —— 命中的来源（供日志与自愈写回）
+     · badText —— 正主文件**存在但解析失败**时的原文（用于留档 .corrupt-<ts>），否则 null。
+   全部失败则返回 { cfg: null, ... }，由 loadConfig 抛出原来那句错误（保持旧行为）。 */
+function readConfigWithFallback() {
+  const raw = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf8') : null;
+  if (raw !== null) {
+    const cfg = parseConfigText(raw);
+    if (cfg) return { cfg, from: 'main', badText: null };
+  }
+  // ① 正主坏了（或读不到）：先试 .bak —— persistConfig 每次写前都会复制一份，它就是"上一个好版本"
+  try {
+    if (fs.existsSync(CONFIG_PATH + '.bak')) {
+      const cfg = parseConfigText(fs.readFileSync(CONFIG_PATH + '.bak', 'utf8'));
+      if (cfg) return { cfg, from: 'bak', badText: raw };
+    }
+  } catch { }
+  // ② 再试最新的代际快照（v1.18.83 起每代都是整份 config.json 原文，按 seq 从大到小）
+  try {
+    const idxPath = path.join(CONFIG_HISTORY_DIR, 'index.json');
+    if (fs.existsSync(idxPath)) {
+      const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+      const entries = (idx && Array.isArray(idx.entries)) ? idx.entries.slice() : [];
+      entries.sort((a, b) => (Number(b.seq) || 0) - (Number(a.seq) || 0));
+      for (const e of entries) {
+        const p = path.join(CONFIG_HISTORY_DIR, `gen-${String(e.seq).padStart(6, '0')}.json`);
+        try {
+          if (!fs.existsSync(p)) continue;
+          const cfg = parseConfigText(fs.readFileSync(p, 'utf8'));
+          if (cfg) return { cfg, from: 'gen:' + e.seq, badText: raw };
+        } catch { }
+      }
+    }
+  } catch { }
+  return { cfg: null, from: null, badText: raw };
+}
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
     if (fs.existsSync(EXAMPLE_PATH)) {
+      // v1.18.86：先确保配置文件所在目录存在——compose 挂 ./data 时 Docker 会建目录，
+      // 但本机跑 `ZZCSAPI_CONFIG=data/config.json node server.js` 时可能还没有，直接 copy 会 ENOENT。
+      try { fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true }); } catch { }
       fs.copyFileSync(EXAMPLE_PATH, CONFIG_PATH);
       console.log(`[init] 已从 config.example.json 生成 ${CONFIG_PATH}，请填入真实渠道信息后重启`);
     } else {
       throw new Error(`配置文件不存在: ${CONFIG_PATH}`);
     }
   }
-  const raw = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
-  const cfg = JSON.parse(raw);
+  const { cfg, from, badText } = readConfigWithFallback();
+  if (!cfg) {
+    // 保持旧错误文案（有测试按它断言），但补一句"已经试过哪些退路"，别让人再去猜
+    const raw = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '') : '';
+    let parsed = null; try { parsed = JSON.parse(raw); } catch (e) {
+      throw new Error(`config.json 解析失败（已尝试 config.json.bak 与 ${CONFIG_HISTORY_DIR} 下的代际快照，均不可用）: ${e && e.message}`);
+    }
+    // 解析成功但结构不合法（缺 channels 数组等）——保留原来那句更精确的提示
+    if (!parsed || !Array.isArray(parsed.channels)) throw new Error('config.json 缺少 channels 数组');
+    throw new Error('config.json 结构不合法');
+  }
+  if (from !== 'main') {
+    // ★ 自愈：把坏的正主留档，再把找到的好版本**原子写回**正主，否则下次重启又要再走一遍退路。
+    console.log('');
+    console.log('════════════════════ 配置自愈 ════════════════════');
+    console.log(`  config.json 不可用，已从 ${from === 'bak' ? 'config.json.bak' : '代际快照 ' + from} 恢复`);
+    if (badText !== null) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const badPath = CONFIG_PATH + '.corrupt-' + stamp;
+      try { fs.writeFileSync(badPath, badText, 'utf8'); console.log('  坏文件已留档: ' + badPath); }
+      catch (e) { console.log('  ⚠ 坏文件留档失败（继续恢复）: ' + (e && e.message)); }
+    }
+    try { writeFileAtomic(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf8'); console.log('  已原子写回 config.json（下次启动不再需要退路）'); }
+    catch (e) { console.log('  ⚠ 写回 config.json 失败（本次仍可运行，但下次重启仍需退路）: ' + (e && e.message)); }
+    console.log('════════════════════════════════════════════════════');
+    console.log('');
+  }
   // 空数组是**合法**配置：控制台把最后一个渠道删掉后 persistConfig 写回来的就是 `"channels": []`。
   // 以前这里要求 length > 0，于是"删光渠道 → 重启 → 起不来"（配置错误信息还会误导成文件损坏）。
-  if (!Array.isArray(cfg.channels)) {
-    throw new Error('config.json 缺少 channels 数组');
-  }
   for (const ch of cfg.channels) {
     if (!ch.id) ch.id = ch.name || `ch-${Math.random().toString(36).slice(2, 8)}`;
     if (!ch.baseUrl) throw new Error(`渠道 ${ch.id} 缺少 baseUrl`);
@@ -466,6 +609,30 @@ const RETRIES = config.retries || { perChannel: 0, maxModelFallbacks: 99 };
 //   所以连败计数与指数退避按**真实尝试次数**增长，不被打折；③ 钳制 0..5，配置写错不该把上游调用量放大十倍。
 //   注意默认值：配置里没有这个键时是 **0**（不重试 = 与接线前的行为一致），要重试必须显式写 ≥1。
 const PER_CHANNEL_RETRIES = Math.max(0, Math.min(5, Math.floor(Number(RETRIES.perChannel) || 0)));
+
+/* ★ 重试预算（v1.18.88）＝ 一次客户端请求**在整条候选链上**允许发出的上游尝试总数与总耗时上限。
+   为什么需要：`perChannel` 只限制"同一家原地重试几次"，`maxModelFallbacks` 只限制"最多换几家"，
+   两者**相乘**才是真实上界 —— 候选 40 家 × 每家 6 次 = 240 次上游调用，全部发生在**一个**客户端请求里；
+   体感就是"网关卡住、CPU 没满、日志还在刷"，而用户只会去看上游。
+   三个语义选择（都能被真值表直接验）：
+     · **计数单位是"上游尝试"**，不是"换了几家"——同渠道重试也吃预算，否则 `perChannel` 会把预算按倍数放大；
+     · **两条上限互相独立，先到先停**（次数超了停 / 耗时超了也停，互相不影响）；
+     · 命中时**如实**回 502 并带上 `budget` 明细，**不**伪装成"渠道全部失败"——后者会让人去查上游，
+       而真因是他的重试配置在这个请求里已经烧完了。
+   默认值刻意取宽（32 次 / 10 分钟）：正常请求（1~3 家、perChannel≤1）够不到，
+   只有"链很长 + 全在抖"的病态场景才会命中；配 `0` = 显式不限（老配置零行为变化）。 */
+const RETRY_BUDGET = (() => {
+  const pick = (v, lo, hi, dflt) => {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n)) return dflt;
+    if (n === 0) return 0;                       // 0 = 显式不限
+    return Math.max(lo, Math.min(hi, n));
+  };
+  return {
+    attempts: pick(RETRIES.budgetAttempts, 1, 500, 32),
+    ms: pick(RETRIES.budgetMs, 1000, 3_600_000, 600_000),
+  };
+})();
 
 // ★ 熔断冷却（v1.10 起分级；此前是"一条公式复制 11 份"）＝ 连续失败后把这个渠道从候选链上挪开的时长。
 //   两类真实世界的失败需要完全不同的耐心，混在一起用同一条 1s→60s 的曲线才是根本问题：
@@ -661,8 +828,33 @@ function rateStatus() {
 const METRICS = {
   startedAt: Date.now(),
   requests: new Map(),     // `${route}|${status}` → n
-  channels: new Map(),     // channelId → { ok, fail, inTok, outTok, msSum, msCount, probes }
+  routes: new Map(),       // route → { hist, msSum, msCount }（客户端面端到端耗时 → histogram）
+  channels: new Map(),     // channelId → { ok, fail, inTok, outTok, msSum, msCount, probes, hist }
 };
+// v1.18.88：重试预算命中计数（按原因分开——"次数用尽"通常要调 budgetAttempts，"耗时用尽"要查是哪家慢）
+const BUDGET_STAT = { attempts: 0, elapsed: 0 };
+
+/* ★ 延迟直方图桶（v1.18.88，Prometheus histogram）──────────────────────────────
+   此前只有 summary（`_sum` / `_count`）。summary 的已知短板是**算不出分位数**：
+   Prometheus 只能在客户端聚合出 sum/count，P95/P99 在服务端算不出来（除非上 native histogram）。
+   本网关的耗时分布本来就极度分裂——本地 openai 渠道 200~800ms，而 hark / notion 这类
+   "网页会话反代 + 伪流式"动辄 10~60 秒——平均值毫无意义，**分桶才看得出两峰**。
+   桶边界取 50ms ~ 5min（秒）：0.05/0.1/0.25/0.5/1/2.5/5/10/30/60/120/300，最后补 `+Inf`。
+   ★ 三条纪律：① 累加语义（每个 le 桶是"≤ le 的总数"，观测值落进**所有** le≥v 的桶）；
+   ② 单位是**秒**（Prometheus 惯例），与既有的 `zzcsapi_channel_latency_ms` summary（毫秒）并存不混用；
+   ③ 桶边界是**常量**，配置改不动它——改桶会让同一指标的历史序列不可比。 */
+const LAT_BUCKETS_S = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300];
+const newLatHist = () => new Array(LAT_BUCKETS_S.length).fill(0);
+// 返回 true 表示这次观测落在某个有限桶里；false = 超过最大桶（只进 +Inf 与 sum/count）
+function latHistObserve(hist, secs) {
+  const v = Number(secs);
+  if (!Number.isFinite(v) || v < 0) return false;
+  let hit = false;
+  for (let i = 0; i < LAT_BUCKETS_S.length; i++) if (v <= LAT_BUCKETS_S[i]) { hist[i]++; hit = true; }
+  return hit;
+}
+const sec3 = (ms) => (Math.round((Number(ms) || 0) * 1000) / 1e6).toFixed(3);   // 毫秒 → 秒，3 位小数
+
 
 // 端点开关：默认**开**（本地自用，端点本身零成本、可用性信息本来就该拿得到），
 // 但仍要 admin key；要放进 Prometheus 抓取（不带 Bearer）就显式写 metrics.public=true。
@@ -882,13 +1074,26 @@ function metricRequest(route, status) {
 function metricChannel(channelId, rec) {
   if (!channelId) return;
   let m = METRICS.channels.get(channelId);
-  if (!m) { m = { ok: 0, fail: 0, inTok: 0, outTok: 0, msSum: 0, msCount: 0, probes: 0 }; METRICS.channels.set(channelId, m); }
+  if (!m) { m = { ok: 0, fail: 0, inTok: 0, outTok: 0, msSum: 0, msCount: 0, probes: 0, hist: newLatHist() }; METRICS.channels.set(channelId, m); }
   if (rec.ok) m.ok++; else m.fail++;
   if (rec.kind && String(rec.kind).includes('probe')) m.probes++;
   m.inTok += Math.max(0, Math.floor(Number(rec.inputTokens) || 0));
   m.outTok += Math.max(0, Math.floor(Number(rec.outputTokens) || 0));
   const ms = Number(rec.latencyMs) || 0;
-  if (ms > 0) { m.msSum += ms; m.msCount++; }
+  if (ms > 0) { m.msSum += ms; m.msCount++; latHistObserve(m.hist, ms / 1000); }
+}
+
+// v1.18.88：客户端面**端到端**耗时（进网关 → 响应收尾，含所有换家/重试）。
+// 与渠道耗时是两个不同问题：渠道耗时可加总（一次请求最多一个成功渠道），
+// 端到端耗时会因为"前面几家挂了"而远大于任一渠道耗时——分位数偏高说明"链太长/冷却不够"。
+function metricRequestLatency(route, ms) {
+  if (!route) return;
+  let m = METRICS.routes.get(route);
+  if (!m) { m = { hist: newLatHist(), msSum: 0, msCount: 0 }; METRICS.routes.set(route, m); }
+  const v = Number(ms) || 0;
+  if (v < 0) return;
+  m.msSum += v; m.msCount++;
+  latHistObserve(m.hist, v / 1000);
 }
 
 const metricLabel = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -916,6 +1121,25 @@ function renderMetrics() {
     L.push(`zzcsapi_channel_latency_ms_sum{channel="${metricLabel(id)}"} ${m.msSum}`,
       `zzcsapi_channel_latency_ms_count{channel="${metricLabel(id)}"} ${m.msCount}`);
   }
+  head('zzcsapi_channel_duration_seconds', 'histogram', '渠道维度耗时分布（秒；bucket 是"≤le 的累计数"，与上面的 *_latency_ms summary 并存）');
+  for (const [id, m] of METRICS.channels) {
+    const lab = `channel="${metricLabel(id)}"`;
+    for (let i = 0; i < LAT_BUCKETS_S.length; i++) L.push(`zzcsapi_channel_duration_seconds_bucket{${lab},le="${LAT_BUCKETS_S[i]}"} ${m.hist[i]}`);
+    L.push(`zzcsapi_channel_duration_seconds_bucket{${lab},le="+Inf"} ${m.msCount}`,
+      `zzcsapi_channel_duration_seconds_sum{${lab}} ${sec3(m.msSum)}`,
+      `zzcsapi_channel_duration_seconds_count{${lab}} ${m.msCount}`);
+  }
+  head('zzcsapi_request_duration_seconds', 'histogram', '客户端面端到端耗时分布（秒，含换家与同渠道重试）');
+  for (const [route, m] of METRICS.routes) {
+    const lab = `route="${metricLabel(route)}"`;
+    for (let i = 0; i < LAT_BUCKETS_S.length; i++) L.push(`zzcsapi_request_duration_seconds_bucket{${lab},le="${LAT_BUCKETS_S[i]}"} ${m.hist[i]}`);
+    L.push(`zzcsapi_request_duration_seconds_bucket{${lab},le="+Inf"} ${m.msCount}`,
+      `zzcsapi_request_duration_seconds_sum{${lab}} ${sec3(m.msSum)}`,
+      `zzcsapi_request_duration_seconds_count{${lab}} ${m.msCount}`);
+  }
+  head('zzcsapi_retry_budget_exhausted_total', 'counter', '重试预算命中次数（reason=attempts 次数用尽 / elapsed 耗时用尽）');
+  L.push(`zzcsapi_retry_budget_exhausted_total{reason="attempts"} ${BUDGET_STAT.attempts}`,
+    `zzcsapi_retry_budget_exhausted_total{reason="elapsed"} ${BUDGET_STAT.elapsed}`);
   head('zzcsapi_channels', 'gauge', '渠道状态计数（按健康分层）');
   const states = { ok: 0, down: 0, cooldown: 0, probation: 0, disabled: 0 };
   const now = Date.now();
@@ -1128,7 +1352,7 @@ function resolveGeneratedKeys() {
   }
   if (fresh.admin || fresh.gateway) {
     let persisted = true;
-    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf8'); } catch (e) { persisted = false; }
+    try { writeFileAtomic(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf8'); } catch (e) { persisted = false; }
     console.log('');
     console.log('════════════════════ 首启密钥 ════════════════════');
     if (fresh.admin) console.log('  ADMIN_KEY   = ' + fresh.admin + '   （控制台 / 管理接口）');
@@ -2007,6 +2231,28 @@ function wbEncryptedKeyHint(apiKey) {
 // 用 def.models 里第一个 upstream 模型（通常是 deepseek-v4.1-flash），
 // system+user、max_tokens=1、stream=true，读到首个 SSE chunk 即判活。
 // 注意：必须走 curl 子进程——该上游对 Node/undici 的 TLS 指纹直接 ECONNRESET。
+// v1.18.78：WorkBuddy 上游 2026-10-19 起对流式请求加了「会话信封」校验 —— X-Conversation-ID /
+// X-Conversation-Request-ID / X-Conversation-Message-ID **三个必须同时齐发**，缺任一即
+// 400 `{"code":"11-128","msg":"request illegal"}`，且 displayTips 会误导成「不是官方客户端发出的」。
+// 实测矩阵（同一把有效 JWT、同一时刻、只改请求头）：裸 3 个头 400 / 只带一个 400 / 任意两个 400 /
+// 三个齐发 200；补 X-Domain / X-Product / X-User-Id / User-Agent / Accept 那一整套**一律无效**——
+// 故判据是这三件套本身，**不是**客户端指纹（所以"伪造官方客户端身份"这条路不必走，也刻意不走）。
+// ID 每次请求现生成：网关是无状态转发，客户端本来每轮都把完整历史带上来，不需要跨请求复用会话。
+// 形状照抄官方客户端（curl 抓包实测）：conversation 是带连字符的 UUID，request/message 是去掉
+// 连字符的 32 位十六进制。
+// ★ 单点真源：聊天（tryWorkbuddyChannel）与探测（workbuddyChatProbe）**都必须**用它——
+// 分开各写一份的话，改了一处漏另一处，症状是"探测红着、聊天却能过"（或反之），很难查。
+function wbSessionHeaders(apiKey) {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+    'Accept': 'text/event-stream',
+    'X-Conversation-ID': crypto.randomUUID(),
+    'X-Conversation-Request-ID': crypto.randomUUID().replace(/-/g, ''),
+    'X-Conversation-Message-ID': crypto.randomUUID().replace(/-/g, ''),
+  };
+}
+
 async function workbuddyChatProbe(def, timeoutMs) {
   const t0 = Date.now();
   const keyHint = wbEncryptedKeyHint(def.apiKey);
@@ -2021,9 +2267,8 @@ async function workbuddyChatProbe(def, timeoutMs) {
     stream: true,
     max_tokens: 1,
   });
-  const out = await wbCurlRequest('POST', joinUrl(def.baseUrl, 'chat/completions'), {
-    'Content-Type': 'application/json', 'Authorization': `Bearer ${def.apiKey}`,
-  }, bodyStr, timeoutMs || 15000, def.proxy);
+  const out = await wbCurlRequest('POST', joinUrl(def.baseUrl, 'chat/completions'),
+    wbSessionHeaders(def.apiKey), bodyStr, timeoutMs || 15000, def.proxy);
   if (out.error || !out.body) {
     return { ok: false, error: out.error || 'empty body', latencyMs: Date.now() - t0, status: out.status || 0 };
   }
@@ -3458,6 +3703,7 @@ const server = http.createServer(async (req, res) => {
       rateAcquire();
       ipStatsAcquire(sip);
       const route = url.pathname;
+      const reqStartAt = Date.now();                      // v1.18.88：端到端耗时（含排队/换家/重试）
       let settled = false;
       const settle = () => {
         if (settled) return;
@@ -3465,6 +3711,7 @@ const server = http.createServer(async (req, res) => {
         rateRelease();
         ipStatsRelease(sip);
         metricRequest(route, res.statusCode || 0);
+        metricRequestLatency(route, Date.now() - reqStartAt);
       };
       res.on('close', settle);
       res.on('finish', settle);
@@ -3594,6 +3841,10 @@ function channelStatusAll() {
 // 持久化到 config.json（写之前备份到 config.bak.json）
 function persistConfig() {
   if (!fs.existsSync(CONFIG_PATH)) return;
+  // v1.18.83：改写之前先把**磁盘上这一份**存进代际历史（内容没变就不存）。
+  // 必须放在下面的 writeFileSync 之前——存"新版本"等于没存，回滚只会回到同一个状态。
+  // 失败不影响落盘：历史是补救手段，不是落盘的前置条件。
+  snapshotConfigForHistory('save');
   try {
     if (fs.existsSync(CONFIG_PATH)) fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak');
   } catch (e) { /* ignore */ }
@@ -3651,12 +3902,205 @@ function persistConfig() {
       expiresAt: ch.def.expiresAt || undefined,
     })),
   };
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(out, null, 2) + '\n', 'utf8');
+  // v1.18.85：**原子写**（tmp + fsync + rename）。裸 writeFileSync 覆盖正主文件时，进程若在写盘中途
+  // 被杀，盘上留下的是半截 JSON —— 而启动侧以前没有兜底，于是"上一次保存被打断"直接变成"网关起不来"。
+  writeFileAtomic(CONFIG_PATH, JSON.stringify(out, null, 2) + '\n', 'utf8');
+}
+
+/* ── 配置代际与一键回滚（v1.18.83）────────────────────────────────────────────
+   动机**不是**理论，是本项目连着发生的现场：`persistConfig` 是**显式字段白名单**，任何没进清单的
+   渠道字段都会在"保存任意一个渠道"时被静默抹掉——PT29 一族已经连发四例（`weight` → `dropParams`
+   → `notionAttachments` → `firstChunkTimeoutMs`/`timeoutMs`）。抹掉之后**没有任何副本可查**：
+   `config.json.bak` 只留上一次，而控制台一次批量保存就把上一份也覆盖掉了，用户只能凭记忆重配。
+
+   做法：每次真正改写配置前，把**磁盘上那一份原文**存成一代（附 hash / 时间戳 / 触发原因），
+   环形保留最近 N 份（默认 20）。配三个端点：列出 / 看差异（掩码）/ 一键回滚。
+
+   纪律（破一条都是事故）：
+     ① **快照含上游明文密钥** ⇒ 目录必须 gitignore；列表接口一个字都不给，详情接口**一律掩码**，
+        原文只留"按需揭示"那一条路（`GET /admin/api/channels/{id}/key`）。这样"看差异"不会变成
+        "下载密钥"的旁路。
+     ② **hash 去重**：内容没变就不存。否则连续保存十次会把历史挤成同一个状态，真正要回滚的那一代
+        反而被顶掉——这是"有历史但没得回滚"的经典死法。
+     ③ **任何异常都不许影响落盘**：历史坏了不能让保存失败（`snapshotConfigForHistory` 自己吞异常）。
+     ④ **回滚不动密钥段**（`auth` / `adminKey` / `gatewayKey`）：回滚配置 ≠ 回滚门锁。否则一次回滚
+        就把控制台正在用的会话全踢掉，或者把用户锁在门外（v1.18.5/6 的轮换与会话纪律）。
+     ⑤ **回滚本身也要能撤销**：动手前先把"现在"存一代（reason = `before-rollback`）。
+     ⑥ 冷启动类字段（`port` / `health` / `retries` / `cooldown`）**只写文件不热改**——它们在模块
+        初始化时被算成 const（`PORT` / `HEALTH` / `PER_CHANNEL_RETRIES` / `COOLDOWN`），热改一半
+        比不改更糟；由响应里的 `needsRestart` 如实报告。 */
+const HISTORY_DIR = CONFIG_HISTORY_DIR;   // 单一来源：上面 loadConfig 的启动恢复已经要用它（见 CONFIG_HISTORY_DIR）
+const HISTORY_INDEX = path.join(HISTORY_DIR, 'index.json');
+const HISTORY_MAX = (() => {
+  const raw = process.env.ZZCSAPI_CONFIG_HISTORY_MAX;
+  if (raw === undefined || raw === '') return 20;
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 20;
+})();
+
+function configHash(text) {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+function snapshotPath(seq) {
+  return path.join(HISTORY_DIR, `gen-${String(seq).padStart(6, '0')}.json`);
+}
+function readHistoryIndex() {
+  try {
+    const j = JSON.parse(fs.readFileSync(HISTORY_INDEX, 'utf8'));
+    if (j && Array.isArray(j.entries)) return j.entries;
+  } catch { }
+  return [];
+}
+function writeHistoryIndex(entries) {
+  try {
+    fs.mkdirSync(HISTORY_DIR, { recursive: true });
+    // v1.18.85：改走统一的原子写（原先手写 tmp+rename，现在与 persistConfig / 回滚共用一处实现）
+    writeFileAtomic(HISTORY_INDEX, JSON.stringify({ version: 1, entries }, null, 1) + '\n', 'utf8');
+  } catch (e) {
+    console.log('[history] 索引写入失败（不影响配置落盘）: ' + (e && e.message));
+  }
+}
+
+/* 把「磁盘上此刻的 config.json」存成一代。返回新条目，未存（内容没变/文件坏/出异常）返回 null。 */
+function snapshotConfigForHistory(reason) {
+  try {
+    if (!fs.existsSync(CONFIG_PATH)) return null;
+    const text = fs.readFileSync(CONFIG_PATH, 'utf8');
+    const hash = configHash(text);
+    const entries = readHistoryIndex();
+    // 纪律 ②：与最近一代内容相同 ⇒ 不存（避免同一状态占满整个环）
+    if (entries.length && entries[entries.length - 1].hash === hash) return null;
+    let cfg = null;
+    try { cfg = JSON.parse(text.replace(/^\uFEFF/, '')); } catch { return null; }
+    if (!cfg || !Array.isArray(cfg.channels)) return null;           // 坏文件不当历史
+    const seq = entries.reduce((m, e) => Math.max(m, Number(e.seq) || 0), 0) + 1;
+    fs.mkdirSync(HISTORY_DIR, { recursive: true });
+    // 原样存：连字段顺序与格式都保留（v1.18.85 起原子写，半截快照同样会让回滚读到坏代）
+    writeFileAtomic(snapshotPath(seq), text, 'utf8');
+    const entry = {
+      seq, at: new Date().toISOString(), hash, bytes: Buffer.byteLength(text),
+      reason: String(reason || 'save').slice(0, 40), channels: cfg.channels.length,
+    };
+    entries.push(entry);
+    while (entries.length > HISTORY_MAX) {
+      const drop = entries.shift();
+      try { fs.unlinkSync(snapshotPath(drop.seq)); } catch { }       // 淘汰文件，别在盘上留下环外的残骸
+    }
+    writeHistoryIndex(entries);
+    return entry;
+  } catch (e) {
+    console.log('[history] 快照失败（不影响配置落盘）: ' + (e && e.message));
+    return null;
+  }
+}
+
+function historyEntryView(e) {
+  // 列表项：**只有元信息**。这里漏一个密钥字段，整条链路就白做了。
+  return {
+    seq: e.seq, at: e.at, bytes: e.bytes, reason: e.reason || '',
+    hash: String(e.hash || '').slice(0, 12), channels: e.channels,
+  };
+}
+function readSnapshotConfig(e) {
+  try {
+    const text = fs.readFileSync(snapshotPath(e.seq), 'utf8');
+    const cfg = JSON.parse(text.replace(/^\uFEFF/, ''));
+    if (!cfg || !Array.isArray(cfg.channels)) return null;
+    return cfg;
+  } catch { return null; }
+}
+function currentConfigFile() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, ''));
+    return cfg && Array.isArray(cfg.channels) ? cfg : null;
+  } catch { return null; }
+}
+/* 详情视图一律掩码（纪律 ①）。删掉 adminKey / gatewayKey，auth 只报"存在"——
+   它们不是"差异查询"该看到的东西，要原文走按需揭示端点。 */
+function maskConfigForView(cfg) {
+  const out = JSON.parse(JSON.stringify(cfg));
+  for (const ch of out.channels || []) {
+    if (ch && ch.apiKey) ch.apiKey = maskSecret(ch.apiKey);
+    if (ch && ch.accessToken) ch.accessToken = maskSecret(ch.accessToken);
+  }
+  delete out.adminKey;
+  delete out.gatewayKey;
+  if (out.auth) out.auth = { redacted: true };
+  return out;
+}
+
+/* 快照 → 当前 的字段级差异（这就是"静默抹掉了什么"的答案）。 */
+function configDiff(snap, cur) {
+  const byId = (cfg) => new Map(((cfg && cfg.channels) || []).filter((c) => c && c.id).map((c) => [c.id, c]));
+  const A = byId(snap), B = byId(cur || {});
+  const added = [...B.keys()].filter((k) => !A.has(k));               // 当前有、快照没有 = 后来新增的
+  const removed = [...A.keys()].filter((k) => !B.has(k));             // 快照有、当前没有 = 被删掉的
+  const changed = [];
+  for (const [id, a] of A) {
+    const b = B.get(id);
+    if (!b) continue;
+    const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+      .filter((f) => JSON.stringify(a[f]) !== JSON.stringify(b[f]));
+    if (fields.length) changed.push({ id, fields });
+  }
+  const GROUPS = ['port', 'health', 'retries', 'cooldown', 'autoWeight',
+    'sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay', 'security'];
+  const groups = GROUPS.filter((g) => JSON.stringify(snap && snap[g]) !== JSON.stringify(cur && cur[g]));
+  const keysIgnored = JSON.stringify([snap && snap.auth, snap && snap.adminKey, snap && snap.gatewayKey])
+    !== JSON.stringify([cur && cur.auth, cur && cur.adminKey, cur && cur.gatewayKey]);
+  return { channels: { added, removed, changed }, groups, keysIgnored };
+}
+
+/* 把一代快照应用到运行期。**不改** port/health/retries/cooldown 的生效值（见纪律 ⑥）。 */
+function applyConfigSnapshot(snap) {
+  // ① 渠道：快照里有的 upsert（保留运行期状态——冷却/延迟/探测结果不该被一次回滚清零）；
+  //    快照里没有的删掉，并像 DELETE 渠道那样清掉轮询状态（同 id 再加回来别继承旧权值）。
+  const ids = new Set(snap.channels.map((c) => c.id));
+  for (const id of Array.from(channels.keys())) {
+    if (ids.has(id)) continue;
+    channels.delete(id);
+    SWRR_CUR.delete(id); SWRR_HITS.delete(id); AUTO_STATE.delete(id);
+  }
+  for (const def of snap.channels) upsertChannel(JSON.parse(JSON.stringify(def)));  // 深拷贝：别把历史对象挂进运行期
+  // ② 运行期设置五组（含自动权重）：整份覆盖，也支持"回滚成未设置"
+  for (const g of ['sessionAffinity', 'rateLimit', 'metrics', 'thinkingReplay', 'autoWeight']) {
+    if (snap[g] === undefined) delete config[g];
+    else config[g] = JSON.parse(JSON.stringify(snap[g]));
+  }
+  // ③ 封禁表 / 反代采信层：读的是 config.security，但 SECURITY_BANNED 是启动时建的集合，要重建
+  if (snap.security === undefined) delete config.security;
+  else config.security = JSON.parse(JSON.stringify(snap.security));
+  SECURITY_BANNED.clear();
+  for (const ip of ((config.security && config.security.bannedIPs) || [])) {
+    const s = String(ip).trim();
+    if (s) SECURITY_BANNED.add(s);
+  }
+  // ④ 冷启动类字段：只同步进 config（供写盘与下次启动），不试图热改已算好的 const
+  for (const g of ['port', 'health', 'retries', 'cooldown']) {
+    if (snap[g] === undefined) delete config[g];
+    else config[g] = JSON.parse(JSON.stringify(snap[g]));
+  }
+  applyRuntimeSettings();
+  Object.assign(AUTO_W, normAutoWeight((config && config.autoWeight) || {}));
+}
+
+/* 回滚写入文件的最终形态：快照本体 + **当前**的密钥段（纪律 ④）。 */
+function buildRollbackConfig(snap) {
+  const next = JSON.parse(JSON.stringify(snap));
+  for (const k of ['adminKey', 'gatewayKey', 'auth']) {
+    if (config[k] === undefined) delete next[k];
+    else next[k] = JSON.parse(JSON.stringify(config[k]));
+  }
+  return next;
 }
 
 // ─────────────────────────── 用量统计 ───────────────────────────
 // usage.json 持久化（容器内 /app/usage.json，compose 挂载到宿主机 ./usage.json）
-const USAGE_PATH = process.env.ZZCSAPI_USAGE || path.join(__dirname, 'usage.json');
+// v1.18.86：默认从 **config.json 所在目录**推导（与 CONFIG_HISTORY_DIR 同一姿势），
+// 而不是 `__dirname`。这样"一个目录装全部"才成立：compose 挂 `./data:/app/data` +
+// ZZCSAPI_CONFIG=/app/data/config.json 时，usage.json 自动落到 /app/data/usage.json（同目录 = 同 device，
+// 原子写的 rename 才能成功）；否则它落在 /app（另一 device），每次 flush 都 EXDEV 降级。
+const USAGE_PATH = process.env.ZZCSAPI_USAGE || path.join(path.dirname(CONFIG_PATH), 'usage.json');
 let usageData = null;
 let usageFlushTimer = null;
 
@@ -3679,7 +4123,7 @@ function flushUsage() {
   if (usageFlushTimer) { clearTimeout(usageFlushTimer); usageFlushTimer = null; }
   try {
     const u = ensureUsage();
-    fs.writeFileSync(USAGE_PATH, JSON.stringify(u, null, 1) + '\n', 'utf8');
+    writeFileAtomic(USAGE_PATH, JSON.stringify(u, null, 1) + '\n', 'utf8');
   } catch { /* 磁盘失败不影响服务 */ }
 }
 
@@ -4339,6 +4783,77 @@ async function handleAdminApi(req, res, url) {
       dropParamWhitelist: DROP_PARAM_WHITELIST,
     });
   }
+
+  // ─── 配置代际（v1.18.83）：列出 / 看差异 / 一键回滚 ──────────────────────────────
+  // 动机与纪律见 persistConfig 下方那段长注释。三条铁律在这里落地：
+  //   · 列表**不含任何配置内容**（只有 seq/时间/字节/hash/渠道数）；
+  //   · 详情**一律掩码**（apiKey 掩码、adminKey/gatewayKey 直接删、auth 只报存在）；
+  //   · 回滚**不动密钥段**，并且动手前先把"现在"存一代（回滚本身可撤销）。
+  if (req.method === 'GET' && url.pathname === '/admin/api/config/history') {
+    const entries = readHistoryIndex();
+    return sendJson(res, 200, {
+      ok: true,
+      max: HISTORY_MAX,
+      dir: HISTORY_DIR,
+      entries: entries.slice().reverse().map(historyEntryView),   // 新的在前（控制台直接按顺序画）
+    });
+  }
+  const histMatch = /^\/admin\/api\/config\/history\/(\d+)$/.exec(url.pathname);
+  if (req.method === 'GET' && histMatch) {
+    const seq = Number(histMatch[1]);
+    const e = readHistoryIndex().find((x) => Number(x.seq) === seq);
+    if (!e) return sendJson(res, 404, { error: 'snapshot not found' });
+    const snap = readSnapshotConfig(e);
+    if (!snap) return sendJson(res, 500, { error: 'snapshot file missing or corrupt' });
+    const cur = currentConfigFile();
+    return sendJson(res, 200, {
+      ok: true,
+      ...historyEntryView(e),
+      config: maskConfigForView(snap),                 // 掩码视图（不是密钥下载口）
+      diff: configDiff(snap, cur),                     // 快照 → 当前 的字段级差异
+      willTouchKeys: false,                            // 回滚不动密钥段，这里提前说明
+    });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/config/rollback') {
+    const body = await safeReadJson(req);
+    const seq = Number(body && (body.seq !== undefined ? body.seq : body.id));
+    if (!Number.isFinite(seq)) return sendJson(res, 400, { error: 'body.seq required' });
+    const e = readHistoryIndex().find((x) => Number(x.seq) === seq);
+    if (!e) return sendJson(res, 404, { error: 'snapshot not found' });
+    const snap = readSnapshotConfig(e);
+    if (!snap) return sendJson(res, 500, { error: 'snapshot file missing or corrupt' });
+    // 落盘前按与 loadConfig 同一套硬规矩校验：回滚到一个起不来的配置，
+    // 等于用"补救手段"制造事故（那种错误还会在下次重启时才暴露）。
+    for (const c of snap.channels) {
+      if (!c || typeof c !== 'object') return sendJson(res, 400, { error: 'snapshot has non-object channel' });
+      if (!c.id) return sendJson(res, 400, { error: 'snapshot channel missing id' });
+      if (!c.baseUrl) return sendJson(res, 400, { error: `snapshot channel ${c.id} missing baseUrl` });
+      if (!c.apiKey) return sendJson(res, 400, { error: `snapshot channel ${c.id} missing apiKey` });
+    }
+    const restartNeeded = ['port', 'health', 'retries', 'cooldown']
+      .filter((g) => JSON.stringify(snap[g]) !== JSON.stringify(config[g]));
+    const diff = configDiff(snap, currentConfigFile());   // 回滚前的差异（回滚后就看不到了）
+    snapshotConfigForHistory('before-rollback');          // 纪律 ⑤：先把"现在"存一代
+    const next = buildRollbackConfig(snap);
+    applyConfigSnapshot(next);
+    try {
+      writeFileAtomic(CONFIG_PATH, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    } catch (err) {
+      return sendJson(res, 500, { error: '写入 config.json 失败: ' + (err && err.message) });
+    }
+    console.log(`[history] 回滚到 #${seq}（${e.at}）: ${next.channels.length} 个渠道`
+      + (restartNeeded.length ? `；需重启生效: ${restartNeeded.join('/')}` : ''));
+    return sendJson(res, 200, {
+      ok: true,
+      rolledBackTo: seq,
+      at: e.at,
+      channels: next.channels.length,
+      keysPreserved: true,          // 密钥段保持当前值（见 buildRollbackConfig）
+      needsRestart: restartNeeded,  // 这四组是模块初始化时算的 const，热改一半比不改更糟
+      diff,
+    });
+  }
+
   if (req.method === 'POST' && url.pathname === '/admin/api/recheck') {
     const body = await safeReadJson(req);
     if (body && body.id) {
@@ -4396,7 +4911,9 @@ async function handleAdminApi(req, res, url) {
   // ── 运行期设置读写（v1.18：给控制台用的开关面板）─────────────
   // 为什么需要它：渠道级 upsert 改不了这三组开关，`/admin/api/config` 又是只读的，
   // 于是控制台在 v1.17 里只能"看得见、改不了"（状态由 /admin/api/status 暴露）。
-  // 这里给一个**窄口**：只认 sessionAffinity / rateLimit / metrics / thinkingReplay 四组，
+  // 这里给一个**窄口**：只认 sessionAffinity / rateLimit / metrics / thinkingReplay / autoWeight 五组，
+  // （v1.18.86 校正：v1.18.63 加了 autoWeight 之后下面数组已是五项，这句注释却还停在"四组"——
+  //   注释与数组对不上，下一个人读注释就会以为第五组是绕开窄口写的）
   // 每组走与启动路径同一个 norm* 函数（钳制规则完全一致），写 config → 持久化 → 立即生效。
   // 刻意不做成"通用 config 写入"：那等于给控制台一个能改坏任何配置的口子，
   // 而它的每个调用点都得自己保证字段合法——窄口 + 白名单字段是这里唯一可靠的做法。
@@ -4991,7 +5508,8 @@ async function handleAdminApi(req, res, url) {
             messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: prompt }],
             stream: true,
           });
-          const out = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'chat/completions'), { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` }, wbBody, tmo, ch.def.proxy);
+          // v1.18.78：同样要带会话信封三件套（wbSessionHeaders 单点真源），否则手动测试必回 request illegal
+          const out = await wbCurlRequest('POST', joinUrl(ch.def.baseUrl, 'chat/completions'), wbSessionHeaders(ch.def.apiKey), wbBody, tmo, ch.def.proxy);
           ttfb = Date.now() - t0;
           let reply = '', wbErr = '';
           const wbStatus = out.status || 0;
@@ -5279,7 +5797,14 @@ function sanitizeOpenAIToolIds(body) {
 // notion / notion-agent / workbuddy / genspark / codex 这些逆向与文本链只把 content 当字符串用 ——
 // 把带图请求丢给它们＝**静默丢图后照样回答**，那比直接失败更糟（用户以为模型看过图）。
 // 所以含图请求只保留能转发图片的渠道，一个都没有就明确报错。
-const IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini'];
+// v1.18.82：workbuddy 进名单——它的协议名不是 `openai`，但**就是** OpenAI 兼容面的原生转发
+// （`tryWorkbuddyChannel` 里 `{...body, model, messages, stream:true}` 整体透传），实测把 `image_url`
+// 直传上游拿到 **HTTP 200 且模型真读了图**（1×1 PNG → 答出颜色）。判据是"图能不能真送到模型"，
+// 不是协议名好不好看。
+// ⚠ 仍**不**在名单里的两类（有意为之）：① 文本仿真／网页会话渠道（notion / notion-agent / hark /
+// genspark）——content 被当字符串用，图会**静默丢**；② opencode——messages 被拍平成单个 prompt
+// 字符串，图无处可放。对它们，宁可 400 也不装作看过了图。
+const IMAGE_CAPABLE_PROTOCOLS = ['openai', 'anthropic', 'gemini', 'workbuddy'];
 
 function bodyHasImages(body) {
   const msgs = Array.isArray(body && body.messages) ? body.messages : [];
@@ -5296,7 +5821,11 @@ function filterCandidatesForImages(candidates, body) {
 }
 
 // 含图但裁剪后没有候选 → 统一的 400 文案（避免"无渠道"的 404 误导成模型名写错）
-const NO_IMAGE_CHANNEL_MSG = 'this request contains images, but no channel can forward them: only openai / anthropic / gemini protocol channels can carry images (openai 原样转发 image_url；anthropic 转 image 块；gemini 转 inlineData/fileData)';
+// v1.18.82：协议清单**从常量拼出来**，别再手写一份——手写的那份在上一次加 workbuddy 时就已经过期，
+// 文案说"只有 openai / anthropic / gemini"，而实际名单已经变了（文档与错误文案漂移的老毛病）。
+const NO_IMAGE_CHANNEL_MSG = 'this request contains images, but no channel can forward them: only '
+  + IMAGE_CAPABLE_PROTOCOLS.join(' / ')
+  + ' protocol channels can carry images (openai 原样转发 image_url；workbuddy 同为 OpenAI 兼容面、也原样转发；anthropic 转 image 块；gemini 转 inlineData/fileData)';
 
 /* ── 上下文节食：摘掉「几十轮前的截图」（v1.18.61）──────────────────────────────
    动机（对真实落盘报文实测，不是估算）：**每张旧截图会让之后每一轮**的请求体永久 +500KB。
@@ -6202,6 +6731,40 @@ function cursorStartFor(prev, curHash, nowMs, candidateIds) {
   return (at + 1) % ids.length;
 }
 
+/* ★ 路由决策头（v1.18.88）：`X-ZZCSAPI-Route` 回答"**为什么**是这家"。
+   为什么需要：`X-ZZCSAPI-Channel` 只答"谁"（v1.14 起就有，21 个用例在守）。可排查
+   "为什么这次走了兜底家 / 为什么跳过了第 1 家 / 是不是加权轮询把它提上来的"时，"谁"不够用——
+   只能去翻日志。两者**并存**，身份仍以 `X-ZZCSAPI-Channel` 为准（不拿这个新头替代它，否则现有
+   客户端与用例全得改，而"谁"与"为什么"本来就是两个问题）。
+   取值是**纯 ASCII 分号键值对**（HTTP 头不允许非 ASCII；渠道 id 里的非 ASCII 一律替换成 '?'，
+   分号替换成逗号，避免把一个 id 变成两个键）：
+     ch=<渠道id>; pick=<取值见下>; pos=<第几家>/<候选总数>; attempt=<本请求已发上游尝试数>; skipped=<因冷却跳过的家数>
+   `pick` 的**全量取值**（每一种都有确定含义，不多不少）：
+     · priority    —— 按有效优先级排到链首（没配 weight / 没命中粘性 / 没续试，正常路径）；
+     · weighted    —— 加权轮询（smooth WRR）把它选出来提到链首；
+     · affinity    —— 会话粘性命中，把这一会话上次用的那家提到链首；
+     · cursor      —— 同报文续试，从上一发停下的下一家开始（v1.18.62 的候选游标）；
+     · fallback    —— 前面那些家已经失败/冷却，换到这一家（不是"选出来的"，是"轮到的"）；
+     · all-failed  —— 整条链都试过了，仍然没有一家成功（回 502）；
+     · exhausted   —— 重试预算先用尽，后面还有没试到的候选（回 502，`error.budget` 里有明细）；
+     · all-cooldown—— 一个都没试：全部候选都在冷却（回 503，`error.cooldown` 里有明细）。
+   为什么不用中文/长话术：这个头随**每个**响应发出去，脚本里常被读取，必须短且机器可解析。 */
+function routeHeaderValue(o) {
+  const clean = (v) => String(v == null ? '' : v).replace(/[^\x20-\x7E]/g, '?').replace(/;/g, ',');
+  const parts = ['ch=' + clean(o.ch || '-'), 'pick=' + clean(o.pick || 'priority'),
+    'pos=' + clean(o.pos || '?')];
+  if (o.attempt != null) parts.push('attempt=' + clean(o.attempt));
+  if (o.skipped != null) parts.push('skipped=' + clean(o.skipped));
+  return parts.join('; ');
+}
+
+// 只设不发：`writeHead(status, {...})` 不会清掉 setHeader 设过的头，所以只要在**响应开始前**设好，
+// 成功 / 流式 / 上游 4xx 直出 / 502 / 503 五条路径都会自动带上，一处接线覆盖全部出口。
+function setRouteHeader(res, o) {
+  if (!res || res.headersSent || res.writableEnded) return;
+  try { res.setHeader('X-ZZCSAPI-Route', routeHeaderValue(o)); } catch { /* 头已提交：忽略，响应本身更重要 */ }
+}
+
 async function dispatchRequest(opts) {
   const b = opts && opts.body;
   const scope = {
@@ -6219,7 +6782,12 @@ async function dispatchRequestInner(opts) {
   const maxCand = Math.min(candidates.length, RETRIES.maxModelFallbacks || 99);
   // v1.17 会话粘性（默认关闭）：命中且"那家确实还在候选里、还能上场"时把它提到链首。
   // 只动顺序、不硬塞渠道——冷却/down/不在候选表里时一切照旧，也不会去清冷却。
+  // v1.18.88：粘性有没有**真的**动过链首，是 `X-ZZCSAPI-Route` 里 `pick=affinity` 的唯一依据。
+  //   判据必须是"链首换人了"，不能是"粘性表里有这个会话"——`applyAffinity` 只在目标**不在链首且可上场**时
+  //   才重排，命中但已经在链首时它什么都没做，那种情况如实写 `pick=priority`。
+  const headBeforeAffinity = candidates[0] && candidates[0].channelId;
   applyAffinity(candidates, opts.affinityKey);
+  const affinityHoisted = !!(candidates[0] && candidates[0].channelId !== headBeforeAffinity);
 
   // 候选游标：算出这一发该从第几家开始（同报文续、报文变了归零）
   const curKey = chainCursorKey(body);
@@ -6241,6 +6809,19 @@ async function dispatchRequestInner(opts) {
     }
   }
   let stoppedAt = -1;                                 // 这一轮真正尝试到第几家（供游标前移）
+  /* v1.18.88 重试预算：一次客户端请求在**整条链**上允许发的上游尝试数与总耗时（见 RETRY_BUDGET 注释）。
+     `budgetExhausted` 在这一轮里只记第一次命中的原因 —— 后面全是"已经在预算外"的重复，再记一遍只会把
+     「次数」与「耗时」两个计数搅在一起，看不出到底是哪一条先到。 */
+  const budgetStartedAt = Date.now();
+  let budgetAttempts = 0, budgetExhausted = '';
+  let skippedCooldown = 0;                            // v1.18.88：因冷却跳过的家数（进 X-ZZCSAPI-Route）
+  const budgetHit = () => {
+    if (!budgetExhausted && budgetAttempts > 0) {
+      if (RETRY_BUDGET.attempts > 0 && budgetAttempts >= RETRY_BUDGET.attempts) budgetExhausted = 'attempts';
+      else if (RETRY_BUDGET.ms > 0 && Date.now() - budgetStartedAt >= RETRY_BUDGET.ms) budgetExhausted = 'elapsed';
+    }
+    return !!budgetExhausted;
+  };
 
   // 客户端断开 → 立刻停链：继续做的工必须有人等（否则废弃的链会和重试链抢同一批渠道）
   const clientGone = { v: false };
@@ -6257,6 +6838,7 @@ async function dispatchRequestInner(opts) {
     if (c.cooldownUntil > Date.now()) {
       // 冷却跳过也要说明"为什么 + 还有多久"：只说一句 'in cooldown'，用户拿到的 502 里
       // 就看不出是额度用尽（还要等几小时）还是刚抖了一下（几秒后就恢复）。v1.14.1
+      skippedCooldown++;                               // v1.18.88：这个数会进响应头（skipped=）
       const st = channels.get(c.channelId);
       const leftMs = c.cooldownUntil - Date.now();
       const leftS = leftMs >= 3600e3 ? `${Math.floor(leftMs / 3600e3)}h${Math.round((leftMs % 3600e3) / 60e3)}m`
@@ -6270,6 +6852,15 @@ async function dispatchRequestInner(opts) {
     }
     attemptedAny = true;
     stoppedAt = i;                                    // 真正尝试过这一家 → 游标前移的锚点
+    /* v1.18.88：这一次打它，**为什么**是它（`pick` 的八个取值与含义见 routeHeaderValue 上方注释）。
+       只描述"链首那一家"的三种来源，其余一律 fallback——把 fallback 说成 priority 就是在撒谎。 */
+    let pickWhy;
+    if (i === startAt) {
+      if (startAt > 0) pickWhy = 'cursor';
+      else if (candidates[0] && candidates[0].weightedPicked) pickWhy = 'weighted';
+      else if (affinityHoisted) pickWhy = 'affinity';
+      else pickWhy = 'priority';
+    } else pickWhy = 'fallback';
     // 还有后续候选 → 守门可以掐得早（快速切兜底）；已是最后候选 → 守门放宽到 300s（对齐
     // 客户端 idle 超时：上游"慢但能成"的请求留给客户端自身的重试机制，而不是被网关提前掐死）
     // ★ 必须只看**还能上场的**候选：冷却中的那家这一轮根本不会被 attempt，若把它算成"还有后手"，
@@ -6293,6 +6884,24 @@ async function dispatchRequestInner(opts) {
     //   注意：冷却只挡"下一次请求"选不选它，不挡这里的原地重试——正是要靠这次重试把瞬时抖动吃掉。
     let result;
     for (let attempt = 0; ; attempt++) {
+      // v1.18.88 重试预算：进 attempt 前先看——已经超预算就**不再发**这一发。
+      //   budgetAttempts 从 0 起算、budgetHit 在 0 时恒 false ⇒ 第一家至少能试一次（不会一进门就 502）。
+      if (budgetHit()) {
+        errors.push({
+          ch: c.channelId,
+          err: `retry budget exhausted（已用 ${budgetAttempts} 次上游尝试 / ${Math.round((Date.now() - budgetStartedAt) / 1000)}s；` +
+            `上限 ${RETRY_BUDGET.attempts || '∞'} 次 / ${RETRY_BUDGET.ms ? Math.round(RETRY_BUDGET.ms / 1000) + 's' : '∞'}；先到的是 ${budgetExhausted}）`,
+          budget: true,
+        });
+        break;
+      }
+      budgetAttempts++;
+      // v1.18.88：每发一次上游都刷新这个头——**最后一次刷进去的那发**就是产生响应的那发，
+      // 所以成功响应上的 `attempt=` 是"第几次上游尝试成功的"，4xx 直出时也一样。
+      setRouteHeader(res, {
+        ch: c.channelId, pick: pickWhy, pos: `${i + 1}/${maxCand}`,
+        attempt: budgetAttempts, skipped: skippedCooldown,
+      });
       result = await tryChannel({
         res, url, body, candidate: c, isStream: stream,
         encodeOutgoing, buildOutgoingUrl, buildOutgoingHeaders, onSuccessNonStream, onStreamChunk, requestedModel, kind,
@@ -6316,6 +6925,9 @@ async function dispatchRequestInner(opts) {
       errors.push({ ch: c.channelId, err: attemptErr(result, c.channelId), ...(attempt ? { attempt } : {}) });
       if (!isRetryableFailure(result) || attempt >= PER_CHANNEL_RETRIES) break;
     }
+    // v1.18.88：预算已耗尽就别再往后遍历候选了——否则剩下每一家都会各推一条 "budget exhausted"
+    // 进 errors，把 502 的 attempts 冲成一屏废话，还让"试了几家"看起来比实际多。
+    if (budgetExhausted) break;
   }
   // 游标前移：只在这一轮**没成功**时执行（成功路径在上面直接 `return` 了）。
   // 记「最后真正试过的那一家是**谁**」（渠道 id，不是序号——序号会被下一发的加权轮询重排打乱）。
@@ -6344,9 +6956,40 @@ async function dispatchRequestInner(opts) {
     const payload = upstreamErrorPayload(503, 'all channels in cooldown' +
       (soonest ? `（全部候选都在冷却，最近一家 ${soonest.channelId} 约 ${soonest.recoverIn} 后恢复）` : ''));
     payload.error.cooldown = cd;
+    setRouteHeader(res, { ch: '-', pick: 'all-cooldown', pos: `0/${maxCand}`, attempt: 0, skipped: skippedCooldown });
     return sendJson(res, 503, payload);
   }
-  return sendJson(res, 502, { error: { message: `all channels failed`, type: 'gateway_error', attempts: errors } });
+  // v1.18.88：预算命中时**如实**报出来。为什么要单独一段而不是混进 attempts：
+  // `attempts[]` 回答的是"哪几家、各自怎么失败的"，`budget` 回答的是"为什么**不再**试第 N+1 家"。
+  // 两者混在一起，用户会以为是渠道不够用；分开写，才看得见"是预算先到了"。
+  if (budgetExhausted) {
+    BUDGET_STAT[budgetExhausted] = (BUDGET_STAT[budgetExhausted] || 0) + 1;
+    console.log(`[budget] 重试预算耗尽（先到的是 ${budgetExhausted}）：已发 ${budgetAttempts} 次上游尝试 / ${Math.round((Date.now() - budgetStartedAt) / 1000)}s，上限 ${RETRY_BUDGET.attempts || '∞'} 次 / ${RETRY_BUDGET.ms || '∞'}ms`);
+  }
+  setRouteHeader(res, {
+    ch: '-', pick: budgetExhausted ? 'exhausted' : 'all-failed',
+    pos: `${Math.max(0, stoppedAt + 1)}/${maxCand}`, attempt: budgetAttempts, skipped: skippedCooldown,
+  });
+  return sendJson(res, 502, {
+    error: {
+      message: budgetExhausted
+        ? `all channels failed（重试预算先耗尽：${budgetExhausted === 'attempts'
+          ? `已发 ${budgetAttempts} 次上游尝试，达到 retries.budgetAttempts=${RETRY_BUDGET.attempts} 上限`
+          : `已耗时 ${Math.round((Date.now() - budgetStartedAt) / 1000)}s，达到 retries.budgetMs=${RETRY_BUDGET.ms} 上限`}——后面还有没试到的候选）`
+        : `all channels failed`,
+      type: 'gateway_error',
+      attempts: errors,
+      ...(budgetExhausted ? {
+        budget: {
+          hit: budgetExhausted,
+          attemptsUsed: budgetAttempts,
+          attemptsMax: RETRY_BUDGET.attempts || null,
+          elapsedMs: Date.now() - budgetStartedAt,
+          msMax: RETRY_BUDGET.ms || null,
+        },
+      } : {}),
+    },
+  });
 }
 
 // v1.18.21 流内错误帧哨兵：预检期（正文未出、响应未提交）扫到 data:{"error":…} 时用它跳出读取循环
@@ -7213,7 +7856,17 @@ async function tryWorkbuddyChannel(opts) {
   }
 
   // 规则 2：首条必须 system（不存在则在头部注入）
-  const inMsgs = Array.isArray(body.messages) ? body.messages : [];
+  // v1.18.80：role:"developer" 必须先归一成 "system"。现场（2026-10-20，用户报「workbuddy 渠道报错」）：
+  //   DSH 等新客户端按 OpenAI Responses 的习惯把系统提示写成 role:"developer"，而 workbuddy 上游
+  //   见到 developer 角色直接回 400 `{"code":"11-128","msg":"Illegal API invocation from an unapproved
+  //   channel"}`——文案是"这次调用没通过渠道校验，可能不是官方客户端发出的"，把人误导到客户端指纹/
+  //   渠道校验上去（同版 11-128 的另一种文案是 `request illegal`，那是缺会话信封三件套，见 v1.18.78）。
+  //   对照实验（同一账号、同一出口、只改 role 一个字）：[developer,user]→400 / [system,user]→200 /
+  //   [developer("hi"),user]→400（与内容长度无关）/ developer 的 9KB 原文改写成 system→200。
+  //   ⚠ 另一个同类触发：孤立的 role:"tool"（前面没有配对的 assistant.tool_calls）也回 400；那是客户端
+  //   报文本身不合法，网关不替它编造工具调用（正确的工具往返实测 200，带不带 tools 都是）。
+  const inMsgs = (Array.isArray(body.messages) ? body.messages : [])
+    .map((m) => (m && m.role === 'developer' ? { ...m, role: 'system' } : m));
   const outMsgs = (inMsgs.length && inMsgs[0].role === 'system')
     ? inMsgs
     : [{ role: 'system', content: 'You are a helpful assistant.' }, ...inMsgs];
@@ -7221,7 +7874,8 @@ async function tryWorkbuddyChannel(opts) {
   const upstreamBody = { ...body, model: candidate.upstream, messages: outMsgs, stream: true };
   const bodyStr = JSON.stringify(upstreamBody);
   const target = joinUrl(ch.def.baseUrl, 'chat/completions');
-  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ch.def.apiKey}` };
+  // v1.18.78：会话信封三件套由 wbSessionHeaders() 统一构造（见其函数头注释的实测矩阵）。
+  const headers = wbSessionHeaders(ch.def.apiKey);
 
   // 请求必须走 curl 子进程：该上游对 Node/undici 的 TLS 指纹直接 ECONNRESET（实测），
   // curl（Win Schannel / Linux OpenSSL）可过。代价是 SSE 全量缓冲后再分发——
@@ -7265,6 +7919,15 @@ async function tryWorkbuddyChannel(opts) {
   let fullText = '';
   let usageOut = null;
   let lastFinish = 'stop';
+  // v1.18.81：原生 tool_calls 的增量必须单独累计。
+  // workbuddy 是**原生工具渠道**（OpenAI 兼容面，与 hark/genspark 的文本仿真无关），上游按 index
+  // 分片下发：`delta.tool_calls:[{index:0,id:'call_x',function:{name:'read',arguments:'{"file'}}]`
+  // （名字通常整段一次给，参数是碎片）。旧实现只收 delta.content ⇒ 两处塌方：
+  //   ① **非流式**回包把 tool_calls 整个丢掉，客户端只看到一个空回复；
+  //   ② "只调工具、不写字"的回合 fullText 为空 → 被判成 `stream: empty content` 失败并切下家，
+  //      于是工具调用在客户端看来是"渠道坏了"。
+  // 流式那条路没这个问题（原样转发上游 SSE），但这正是"流式好用、非流式莫名其妙"的成因。
+  const toolCallsAcc = [];
   // SSE 全量文本逐行解析（data 块可能同帧粘连，按 \n 切即可）
   const sseLines = [];
   for (const ln of sseText.split('\n')) {
@@ -7275,13 +7938,38 @@ async function tryWorkbuddyChannel(opts) {
     if (d === '[DONE]') continue;
     try {
       const j = JSON.parse(d);
-      const delta = j.choices?.[0]?.delta?.content || '';
+      const dl = j.choices?.[0]?.delta || {};
+      const delta = dl.content || '';
       if (delta) fullText += delta;
+      if (Array.isArray(dl.tool_calls)) {
+        for (const tc of dl.tool_calls) {
+          const idx = Number.isInteger(tc.index) ? tc.index : toolCallsAcc.length;
+          const slot = toolCallsAcc[idx] || (toolCallsAcc[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } });
+          if (tc.id) slot.id = tc.id;
+          if (tc.type) slot.type = tc.type;
+          if (tc.function) {
+            // 名字：整段给（常见）或分片给（少见）都要能拼；同一段重复下发时不重复拼
+            if (tc.function.name) {
+              slot.function.name = (slot.function.name && slot.function.name.includes(tc.function.name))
+                ? slot.function.name : slot.function.name + tc.function.name;
+            }
+            if (tc.function.arguments) slot.function.arguments += tc.function.arguments;
+          }
+        }
+      }
       if (j.usage) usageOut = j.usage;
       const fr = j.choices?.[0]?.finish_reason;
       if (fr) lastFinish = fr;
     } catch {}
   }
+  // 丢掉既没名字也没参数的空槽位；补默认 id（OpenAI 客户端要求 tool_calls[].id 非空）
+  const toolCalls = toolCallsAcc.filter((c) => c && (c.function.name || c.function.arguments)).map((c, i) => ({
+    id: c.id || ('call_wb' + i + '_' + Math.random().toString(36).slice(2, 10)),
+    type: 'function',
+    function: { name: c.function.name, arguments: c.function.arguments || '{}' },
+  }));
+  // 记账用文本（工具名 + 参数也算输出，否则"只调工具"的回合会被记成 0 输出）
+  const outTextForTokens = fullText + toolCalls.map((c) => c.function.name + c.function.arguments).join('');
   if (!sseLines.length) {
     recordFailure(ch, 'workbuddy stream: empty');
     return 'stream empty';
@@ -7295,24 +7983,33 @@ async function tryWorkbuddyChannel(opts) {
     recordUsage({
       model: displayModel, channelId: candidate.channelId, kind: opts.kind,
       inputTokens: estimateTokens(messagesText(body && body.messages)),
-      outputTokens: estimateTokens(fullText), ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
+      outputTokens: estimateTokens(outTextForTokens), ok: true, latencyMs: Date.now() - t0, realUsage: usageOut,
       statsCtx: opts.statsCtx,
     });
     return 'success';
   }
 
   // 非流式：拼成 OpenAI chat.completion 一次性回包
-  if (!fullText.trim()) {
+  // v1.18.81：判空要连工具调用一起看——"只调工具、不写字"是合法回合，不是空回复
+  // （旧判据把它记成 `stream: empty content` 并切下家，客户端看到的就是"工具用不了"）
+  if (!fullText.trim() && !toolCalls.length) {
     recordFailure(ch, 'workbuddy stream: empty content');
     return 'stream empty content';
   }
+  const wbMsg = { role: 'assistant', content: fullText };
+  if (toolCalls.length) wbMsg.tool_calls = toolCalls;   // 原生 tool_calls 原样带回（不再丢）
   const assembled = {
     id: respId,
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: displayModel,
-    choices: [{ index: 0, message: { role: 'assistant', content: fullText }, finish_reason: lastFinish || 'stop' }],
-    usage: usageOut || { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(fullText), total_tokens: 0 },
+    choices: [{
+      index: 0,
+      message: wbMsg,
+      // 上游给了非 stop 的终止原因（如 length=被截断）就照实带；否则有工具调用即 tool_calls
+      finish_reason: toolCalls.length ? ((lastFinish && lastFinish !== 'stop') ? lastFinish : 'tool_calls') : (lastFinish || 'stop'),
+    }],
+    usage: usageOut || { prompt_tokens: estimateTokens(messagesText(body && body.messages)), completion_tokens: estimateTokens(outTextForTokens), total_tokens: 0 },
   };
   if (!usageOut) assembled.usage.total_tokens = assembled.usage.prompt_tokens + assembled.usage.completion_tokens;
   await specialNonStreamOut(opts, candidate, assembled);

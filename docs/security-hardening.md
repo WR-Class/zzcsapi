@@ -132,3 +132,69 @@ v1.18.11 加了来源 IP 态势统计（per-IP 敲门 / token / 并发 / 会话�
 - 挂反代时（公网部署常态）**必须**把反代地址填进 `security.trustedProxy`，否则统计与封禁都会记/封反代自己的 IP（假功能）；同时按上文给公网入口加 TLS。Docker Desktop 上尤其要在意这条：不加反代层时端口发布是 NAT，**所有来源都会折叠成网桥网关一个 IP**（per-IP 态势等于废掉一半，且封禁会变成"一封封全部"）——现成接法见 README「方式三」（宿主机 nginx + `ZZCSAPI_PUBLISH` 开关 + 固定子网 `172.28.137.0/24`，`trustedProxy` 填网桥网关 `172.28.137.1`；配置守卫 `test/reverse-proxy-config.test.js`）。
 
 语义与守卫：`test/ip-stats-ban-e2e.test.js`（62 项，含 trustedProxy 采信与伪造对照组）；行为细节见 docs/behavior.md「来源 IP 态势统计与封禁」。
+
+## 配置代际快照的隐私边界（v1.18.83 补记）
+
+v1.18.83 加了配置代际（每次改写 `config.json` 前存一代、可查差异与一键回滚）。它**天生是一个新的密钥落点**，
+所以边界写在最前面：**每一代 `gen-*.json` 都是整份 `config.json` 原文**，含全部渠道明文 `apiKey` 与 `auth` 段
+（控制台轮换过的两把密钥）——敏感级别与 `config.json` / `config.json.bak` **完全相同**，不是"备份文件所以可以随便放"。
+
+四条边界：
+
+- **磁盘**：目录（v1.18.86 起随配置一起在 `./data/config-history/`，容器里只挂 `./data:/app/data` 一行）
+  已在 `.gitignore`（`/data/` 整目录盖住 config.json / usage.json / config-history 全族），注释里写明理由。
+  **不要**把它放进任何第三方备份/同步/工单附件——那等于把全部上游密钥复制出去。
+  排查完想清干净就整个目录删掉（网关会重建，历史从空开始，`config.json` 不受影响）。
+- **下发**：`GET /admin/api/config/history` **只给元信息**（seq / 时间 / 字节 / hash / 渠道数），
+  `GET /admin/api/config/history/{seq}` **一律掩码**——`apiKey`/`accessToken` 走 `maskSecret()`，
+  `adminKey`/`gatewayKey` **整个字段不下发**，`auth` 只回 `{redacted: true}`。
+  理由：详情是"看差异"的口子，**不是**第二个密钥出口；要原文只能走按需揭示端点（`GET /admin/api/channels/{id}/key` 等），
+  那条路有自己的鉴权与 `no-store` 纪律。
+- **回滚不动密钥段**：`auth` / `adminKey` / `gatewayKey` 永远取**当前值**，绝不由快照覆盖。
+  既是安全（轮换掉的密钥不许被历史快照复活、`rotateKeys()` 清掉的会话不许被间接恢复），
+  也是可用性（回滚通常发生在出事后手忙脚乱时，不能顺手把用户锁在门外）。
+- **不要为"方便下载备份"把该目录做成静态可下载路径**，也不要把它挂在 Web 根下——`/console/**` 的静态白名单是
+  按文件名查表的，多一个目录就多一个失守面。
+
+守卫：`test/config-history-e2e.test.js`（**44 项**——v1.18.86 目录挂载 +1，含"列表/详情响应里绝不出现明文 key"与"回滚后密钥仍是新值"两条硬断言）；
+语义细节见 [config-history.md](config-history.md)。
+
+## 容器加固：只读根文件系统 + 全丢 capability（v1.18.87）
+
+**问题**：此前容器以 root 运行、根文件系统可写。网关一旦被拿下（HTTP 层 RCE、依赖链投毒、上游返回内容触发解释器），
+攻击者在容器里**有写权限就能持久化**：改 `/app/console.html` 给每个访客塞脚本、往 `/app/*.js` 追加代码、
+在 `/usr/local/bin` 放个同名程序等下次重启生效。容器会被 `restart: unless-stopped` 拉起来，所以"重启即恢复"是假的。
+
+**为什么以前不能开**：只读根fs 的前提是"运行时所有写盘目标都在挂载卷里"。v1.18.85 之前 `config.json` / `usage.json` /
+`config-history` 是**三个独立挂载**（甚至单文件挂载），`config.json.bak`、`writeFileAtomic` 的 tmp、代际快照分散在三处，
+只要有一处没挂上就必然 `EROFS`；那时开只读根等于"点一次保存就崩"。**v1.18.86 把三者统一进 `./data` 一个目录挂载**，
+前提才成立——所以这条加固是目录挂载的**直接后续**，不是独立想到的。
+
+**四项处置**（`docker-compose.yml`）：
+
+| 项 | 值 | 挡的是什么 |
+| --- | --- | --- |
+| `read_only` | `true` | 根fs 不可写 ⇒ 改不了 `/app`、塞不进 `/usr`，RCE 无法持久化 |
+| `tmpfs` | `/tmp` | 只读根下唯一需要可写临时目录的地方（Node/libuv）；**内存盘**，容器一停即空 |
+| `cap_drop` | `ALL` | 网关只监听 8787（>1024，不需要 `NET_BIND_SERVICE`）、不 chown、不改网络栈、不 ptrace ⇒ 一项都不需要 |
+| `security_opt` | `no-new-privileges:true` | 禁止 setuid/setgid 提权（镜像里的 `wget` 不需要） |
+
+**实测证据**（2026-10-20，v1.18.87）：`docker inspect` → `ReadonlyRootfs: true` / `CapDrop: [ALL]` /
+`SecurityOpt: [no-new-privileges:true]` / `Tmpfs: /tmp`；容器 `Up (healthy)`；容器内 `touch /app/x` →
+`Read-only file system`；`/proc/self/status` → `CapEff: 0000000000000000`、`NoNewPrivs: 1`；
+`usage.json` 在只读根下正常写入（时间戳前进）；`POST /admin/api/settings` → 200，`config.json.bak` 与
+`config-history/gen-*.json` 正常生成、0 个 `.tmp` 残留、日志无 `EROFS`。
+
+**新增纪律（写盘）**：以后任何"往磁盘写点什么"的功能，目标**必须**落在 `CONFIG_PATH` / `CONFIG_HISTORY_DIR` /
+`USAGE_PATH` / `DUMP_DIR` 这四个派生路径下（容器里都在 `/app/data` 或 `/app/dump`），或走 `os.tmpdir()`。
+否则线上表现为**运行期 `EROFS`**，而本机 `node server.js` 一切正常（根fs 可写）——"本机好好的、容器里报错"这一类里
+最难查的一种。守卫：`test/reverse-proxy-config.test.js` 的 8 项（4 项配置 + 2 项前提 + **2 项源码扫描**：
+不许任何 `fs.*` 写盘调用直接写 `__dirname`；四个写盘常量必须从 `CONFIG_PATH`/env 派生）。
+
+**刻意没做的**：**没有**把镜像改成非 root（`USER node`）。原因是它会**静默破坏绑定挂载**：Linux 上 Docker 首次自动创建的
+`./data` 属 `root:root`，镜像内 `node`（uid 1000）写不进去 ⇒ 用户看到的是"保存失败/EACCES"，而 Windows/macOS 的
+Docker Desktop 绑定挂载是宽权限、**测不出来这个差异**。要非 root 就得让用户 `chown 1000:1000 ./data`，
+或引入"以 root 启动、chown 后 su-exec 降权"的入口脚本（还需 `cap_add: SETUID/SETGID`，与 `cap_drop: ALL` 冲突）。
+本项目是单人自托管网关，权衡后取"只读根 + 全丢 cap"——它挡住的是**持久化**（真正的目标），代价为零；
+非 root 挡的是**容器内提权**，而 `cap_drop: ALL` + `no-new-privileges` 已经把提权路径基本掐死。
+想更严的部署者可自行在 compose 加 `user: "1000:1000"`，并**先把 `./data` 的属主改对**。

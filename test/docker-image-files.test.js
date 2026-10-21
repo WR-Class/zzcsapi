@@ -102,7 +102,11 @@ console.log('\n══ §4 镜像必备件（不是 require，但缺了就是功�
 check('COPY console.html（控制台静态壳；缺了控制台 404）', A.copied('console.html'));
 check('COPY assets/fonts（自托管字体分片；缺了页面不报错，只是字变了 —— v1.18.37 现场）', A.copied('assets/fonts'));
 const cfgCopy = A.copies.find((c) => c.src === 'config.example.json');
-check('COPY config.example.json → ./config.json（首启配置模板）', !!cfgCopy && cfgCopy.dest === './config.json', cfgCopy);
+check('COPY config.example.json → ./config.example.json（首启模板**必须保持原名**）', !!cfgCopy && cfgCopy.dest === './config.example.json', cfgCopy);
+check('★ 那段 COPY 不得再把模板改名成 config.json（改名后 EXAMPLE_PATH=/app/config.example.json 在镜像里不存在，'
+  + 'loadConfig 的首启分支永远走不通——v1.18.86 在目录挂载下当场暴露成「配置文件不存在」）',
+  !A.copies.some((c) => c.src === 'config.example.json' && c.dest === './config.json'),
+  A.copies.filter((c) => c.src === 'config.example.json'));
 
 console.log('\n══ §5 阴性对照：把清单退回 v1.18.47 事故当时的文本，守卫必须报出来 ══');
 const before = DOCKERFILE.replace(/^# hark 网页会话渠道[\s\S]*?^COPY hark\.js \.\/\n/m, '');

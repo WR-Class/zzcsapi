@@ -1,7 +1,7 @@
 {
   "port": 8787,
   "health": { "intervalSec": 300, "timeoutMs": 8000 },
-  "retries": { "perChannel": 1, "maxModelFallbacks": 99 },
+  "retries": { "perChannel": 1, "maxModelFallbacks": 99, "budgetAttempts": 32, "budgetMs": 600000 },
   "cooldown": {
     "transientBaseMs": 5000,
     "transientMaxMs": 600000,

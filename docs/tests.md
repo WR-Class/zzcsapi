@@ -1,9 +1,9 @@
-# 测试清单（60 个文件 · 2828 项断言，零依赖）
+# 测试清单（64 个文件 · 3091 项断言，零依赖）
 
 > **断言总数怎么来的（v1.18.55 校正）**：等于 `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须与合计相等**。
 > 该运行器原先认不出 `hark-channel.test.js` 的收尾格式（`通过 97 · 失败 0`，中点分隔），把它记成
 > `?? 收尾格式没认出来` 且**断言数按 0 计入合计** → README/本文件曾据此写出 2430 这种少算一个文件的总数。
-> 已补上该格式的正则（并前置），现在 60 个文件一个不漏。改收尾格式或加新格式时，跑一遍并核对"逐文件行相加 = 合计"。
+> 已补上该格式的正则（并前置），现在 62 个文件一个不漏。改收尾格式或加新格式时，跑一遍并核对"逐文件行相加 = 合计"。
 >
 > **⚠ 2026-10-15 再次校正（一次把三处漂移一起清掉）**：本轮跑 `node _run_all_tests.js` 实测 **58 个文件 / 2721 项断言**，而本文原写 57 / 2684。差额不是一笔，是**两类共四笔**，逐笔如下：
 > ① **全量清单漏了 3 个文件**（`auto-weight-apply-e2e` 11 项、`cooldown-grading-e2e` 57 项、`opencode-probe` 33 项；前两个此前只在速查表里被提到，从没进过全量清单）—— 现已全部补入下方清单；
@@ -40,6 +40,156 @@
 > **对照组**确认过**真能红**（连本文件原有的"`weightedHits` 与实测落点一致"也一起红：60 vs 实测 30）。
 > ⚠ 同轮**第一次**全量里 `opencode-probe` 偶发一条红（第二次全量 60/60 绿、单跑 6/6 绿，与本次改动无代码耦合）——**如实记下，未定性**。
 > 校验式：**2810 + 12 + 6 = 2828** ✓
+
+> **⚠ 2026-10-20 第八次校正（v1.18.78 workbuddy 会话信封）**：本轮实测 **60 个文件 / 2832 项断言**。
+> 差额一笔：**`workbuddy-quota` 39→43**（+4）。原因为上游 2026-10-19 起对流式请求校验
+> `X-Conversation-ID` / `-Request-ID` / `-Message-ID`（缺任一即 400 `request illegal`，而提示文案会
+> 误导成"客户端指纹"），网关补上这三件套后必须把它钉住，四条新断言分工如下：
+> ① 装配——三个头都在 `tryWorkbuddyChannel` 的 headers 里；② 装配——ID 由 `crypto.randomUUID()` **每次现生成**（不是写死常量）；
+> ③ **真链路**——假上游**实际收到**的三件套形状正确（conversation 带连字符 UUID / request+message 为 32 位十六进制）；
+> ④ **真链路**——两次请求的 ID 不同（复用固定值即红）。★ ③④ 是必须的：只做源码正则守卫时，
+> "写了但没真送出去"或"形状不对"照样会让上游回 400，而本地全绿。
+> 校验式：**2828 + 4 = 2832** ✓
+>
+> **⚠ 2026-10-20 第九次校正（v1.18.79 工具仿真「一个块里多个调用」）**：本轮实测 **60 个文件 / 2840 项断言**。
+> 差额一笔：**`genspark-tools` 47→55**（+8）。现场（用户报）：opencode + `minimax-m3.1-flash-free`
+> 回了 `[TOOL_CALL] {"name":"read",…} {"name":"glob",…} [/TOOL_CALL]` —— 两个调用**并排挤在一个块里**，
+> 而 `tool-emu.js` 对捕获区段是整块 `JSON.parse`，见到并排对象直接抛错 → 判成"不是工具调用" →
+> **标记原样透传给客户端**（用户看到一串 `[TOOL_CALL]` 原文，而不是工具调用）。处置：整块解析失败时
+> **扫平衡括号逐个解析**（跳过字符串字面量与转义），并兼容顶层数组 `[{…},{…}]`；非流式
+> （`parseEmulatedToolCalls`）与流式（`createToolStreamScanner` 的 `handleCapture`）**两条路一起走同一个
+> `callsFromCapture()`**，避免修一条漏一条。八条新断言：★并排两对象出 2 个调用 / ★标记不残留正文 /
+> 换行分隔同样解析 / 顶层数组形态 / 参数里的花括号不带偏平衡扫描 / 非工具 JSON 仍判"不是调用"（不误伤）/
+> ★流式扫描器分片喂也出 2 个调用 / ★流式正文无标记且前后文字都保留。
+> 校验式：**2832 + 8 = 2840** ✓
+>
+> **⚠ 2026-10-20 第十次校正（v1.18.80 workbuddy `role:"developer"` 归一）**：本轮实测 **60 个文件 / 2846 项断言**。
+> 差额一笔：**`workbuddy-quota` 43→49**（+6）。现场（用户报）：DSH 把系统提示写成 `role:"developer"`，
+> 上游回 `400 {"code":"11-128","msg":"Illegal API invocation from an unapproved channel"}` —— 文案说
+> "不是官方客户端发出的"，把人误导到客户端指纹/渠道校验上（同版另一枚 `11-128` 是缺会话信封三件套，
+> 见第八次校正）。**决定性对照实验**（同一账号、同一出口、只改 role 一个字）：`[developer,user]`→400 /
+> `[system,user]`（内容一字不改）→200 / `[developer("hi"),user]`→400（与内容长度无关）/ developer 的
+> 9KB 原文改写成 system→200 ⇒ 判据是**角色名**。处置：`tryWorkbuddyChannel` 组报文前把 `developer`
+> 一律改写成 `system`。六条新断言：★带 developer 的请求不再被打回 / ★**上游真的没收到 developer**
+> （假上游照抄这条拒绝 ⇒ 网关不归一就红，杜绝"假上游放水、本地全绿"）/ 内容原样保留 /
+> ★中段 developer 同样归一（不是只处理首条）/ 中段内容保留 / 对照"本来就是 system 的报文一字没动"。
+> 校验式：**2840 + 6 = 2846** ✓
+>
+> **⚠ 2026-10-20 第十一次校正（v1.18.81 workbuddy 原生 `tool_calls` 非流式丢失）**：本轮实测
+> **60 个文件 / 2855 项断言**。差额一笔：**`workbuddy-quota` 49→58**（+9）。现场（用户报"workbuddy
+> 工具用不了"的一部分）：workbuddy 是**原生工具渠道**，上游按 `index` 分片下发 `delta.tool_calls`，
+> 而旧实现只收 `delta.content` ⇒ ① 非流式回包把 `tool_calls` 整个丢掉（客户端只看到空回复）；
+> ② "只调工具、不写字"的回合 `fullText` 为空 → 被判成 `stream: empty content` 失败并切下家。
+> 流式那条路原样转发 SSE，所以一直是好的——这正是"流式能用、非流式莫名其妙"的成因。
+> 处置：分片按 `index` 拼回（名字兼容整段/分片两种下发）、补默认 `id`、`finish_reason` 给 `tool_calls`、
+> 判空连工具调用一起看、记账把工具名与参数也算进输出。九条新断言（§8）：非流式回包带回 tool_calls /
+> ★参数分片拼回合法 JSON / id 非空且 type=function / ★finish_reason=tool_calls / 正文与工具调用并存 /
+> ★"只调工具不写字"不再失败 / content 是空串不是 null / 对照纯文本回合不凭空多出 tool_calls。
+> 校验式：**2846 + 9 = 2855** ✓
+>
+> **⚠ 2026-10-20 第十二次校正（v1.18.82 workbuddy 带图 + 400 文案去手写）**：本轮实测
+> **60 个文件 / 2863 项断言**。差额两笔：**`gemini-multimodal` 41→45**（+4）、**`workbuddy-quota`
+> 58→62**（+4）。现场（用户报，附网关原文）：`400 this request contains images, but no channel can
+> forward them: only openai / anthropic / gemini ...` —— **这句是网关自己生成的，不是上游**
+> （很多渠道根本没有机会看到这次请求）。根因：`IMAGE_CAPABLE_PROTOCOLS` 只认 `openai / anthropic /
+> gemini` 三个**协议名**，而 workbuddy 虽然协议名不叫 openai，走的却是 `{...body}` 原生透传——
+> **实测 1×1 PNG 直传上游 HTTP 200 且模型答出了颜色**（图真的到了模型）。处置：① workbuddy 进名单；
+> ② 400 文案里的协议清单改成由 `IMAGE_CAPABLE_PROTOCOLS.join(' / ')` **拼出来**——手写的那份已经
+> 过期过一次（文案说三家、名单已四家），这正是本项目反复出现的"文档/文案漂移"。★ 仍**不**进名单的
+> 两类有明确理由：文本仿真/网页会话渠道（notion / notion-agent / hark / genspark）把 content 当字符串，
+> opencode 把 messages 拍平成**单个 prompt**，图无处可放 ⇒ 宁可 400 也不装作看过图。
+> 活体复验（拿用户真实转储重放，非构造）：`deepseek-v4.1-flash-w`（workbuddy）2 图 → **200 channel=workbuddy**；
+> `deepseek-v4.1-flash` 189 条消息 / 139 图块 / 430KB → 200；`deepseek-v4.1-flash-free`（opencode）→ **仍 400**
+> （符合设计，那是它做不到的事）。另修两处 e2e 把旧文案**整串写死**的断言（一加协议就红）。
+> 校验式：**2855 + 4 + 4 = 2863** ✓
+>
+> **⚠ 2026-10-20 第十三次校正（v1.18.83 配置代际与一键回滚）**：本轮跑 `node _run_all_tests.js` 实测
+> **61 个文件 / 2906 项断言**。差额一笔：新增 **`config-history-e2e` 43 项**，其余 60 个文件一字未动。
+> 现场（同一类事故的第五次）：`persistConfig` 是**显式字段白名单**，没登记的新字段会在"保存任意一个渠道"时
+> 被**静默抹掉**——PT29 一族已连发四例（`weight` → `dropParams` → `notionAttachments` →
+> `firstChunkTimeoutMs`/`timeoutMs`）。真正难的不是丢，而是**丢了查不出来**：`config.json.bak` 只留上一次，
+> 一次批量保存就把它也覆盖 ⇒ 用户手里没有任何副本可对照，连"少了哪个字段"都答不上来。
+> 处置：每次改写前把**磁盘上那一份**存成一代（`config-history/` 环形 20 代 + sha256 去重 + 原子索引），
+> 三个端点（列表**只给元信息** / 详情给**掩码视图 + 字段级 `diff`** / 一键回滚）。回滚**热应用**渠道 ·
+> 五组运行期设置 · 封禁表，`port`/`health`/`retries`/`cooldown` 只写文件并如实报 `needsRestart`，
+> **密钥段绝不动**（否则把用户锁在门外、或让一次轮换白做），且动手前自动存一代 ⇒ 回滚本身可撤销。
+> 详见 [config-history.md](config-history.md)。
+> 校验式：**2863 + 43 = 2906** ✓
+>
+> **⚠ 2026-10-20 第十四次校正（v1.18.84 控制台「配置历史」页）**：本轮跑 `node _run_all_tests.js` 实测
+> **61 个文件 / 2935 项断言**。差额一笔：`console-state` **281 → 310**（新增 §21「配置历史页」29 项），
+> 其余 60 个文件一字未动——**没有新增文件**，所以文件数仍是 61。
+> 为什么要给这一页写 29 项：它的用户价值只有一条——**把被白名单静默抹掉的字段找回来**，
+> 所以判据不是"画得像不像"，而是三件事必须被钉住：① 差异**点名到字段**（不是笼统一句"配置有变化"）；
+> ② 回滚**两步确认**、第一下**一个请求都不发**（一次误点就把整份配置换掉是不可接受的）；
+> ③ 列表与详情**不渲染任何密钥**（后端给的是掩码视图，前端连 `config` 整块都不画）。
+> 另守两条结构纪律：`render()` 与 `go()` **两张**分发表都要注册（只加一张 = "能进页但 8 秒轮询不刷新"）、
+> 代际**不进** `loadAll`（按需拉取，别跟着轮询每 8 秒打一次）。
+> 校验式：**2906 + 29 = 2935** ✓
+>
+> **⚠ 2026-10-20 第十五次校正（v1.18.85 配置原子写 + 启动自愈）**：本轮跑 `node _run_all_tests.js` 实测
+> **62 个文件 / 2975 项断言**。差额两笔：新增 **`config-atomic-write-e2e` 38 项**，其余 61 个文件
+> 只有一处判据放宽（见下），断言数一字未动。
+> 现场（**尚未触发但会致命**的那一类，与前十四次不同）：`persistConfig` 长期用裸
+> `fs.writeFileSync(CONFIG_PATH, ...)` 直接覆盖正主文件。进程在写盘中途被 kill（控制台保存、一键回滚、
+> Ctrl+C 撞在同一毫秒）或磁盘在这几 KB 上写满，盘上留下的就是**半截 JSON**；而 `loadConfig` 里
+> `JSON.parse` **没有兜底** ⇒ "上一次保存被打断"直接变成"网关起不来"，报错还是 `Unexpected end of JSON input`，
+> 离真因很远。**本项目其实早就知道这个模式**——同一个文件里的 `writeHistoryIndex` 一直是 tmp+rename
+> （注释：「先写临时文件再改名：半截索引比没有索引更难查」）。**索引用了，正主忘了用。**
+> 处置：① `writeFileAtomic()`（同目录 tmp → 写 → **fsync** → rename，失败清 tmp）覆盖四处落盘
+> （`config.json` 保存/回滚/首启密钥、`usage.json`、`index.json`、`gen-*.json`）；
+> ② `loadConfig` 走**三跳退路**「正主 → `config.json.bak` → 代际快照」，命中后把坏文件留档
+> `config.json.corrupt-<时间戳>`、再把好版本**原子写回**正主（否则每次重启都要再走一遍退路）；
+> ③ **三跳全坏必须非 0 退出**——静默用空配置起来等于把用户全部渠道丢掉还说启动成功。
+> ★ **④ 容器实测抓出的真回归（本轮最该记的一条）**：Docker 的 `-v ./config.json:/app/config.json` 是
+> **单文件挂载**，容器里那个路径是**挂载点本身**，`rename()` 到它必然 `EBUSY`——第一版没兜住，
+> 实测"点一次保存渠道 → 网关 `Exited(1)`"（`Error: EBUSY: … rename '/app/.config.json.…tmp' -> '/app/config.json'`）。
+> **这正说明"离线用例全绿"不等于"容器里能用"**：本用例全程用临时目录，根本没有挂载点。
+> 处置：捕获 `EBUSY`/`EXDEV`/`EPERM`/`EACCES` ⇒ **降级原地覆写**（退回 P0-1 之前的行为）并打一行
+> `[atomic] … 已降级为原地覆写`；其它错误（`EIO` 等）仍如实抛。修复后同场景实测：`HTTP 200`、
+> 容器仍 `healthy`、宿主机文件真被写入、日志如实报降级。用例侧用 `vm` 把源码里那段函数抠出来 +
+> 注入会抛 `EBUSY` 的假 `fs`，确定性复现（9 项断言，不依赖平台）。
+> 详见 [config-history.md](config-history.md) §2.4 / §2.5。
+> 校验式：**2935 + 38 + 2 = 2975** ✓（+2 = 同版 `docker-image-files` 19→20 补"COPY 不得把模板改名成 config.json"、`config-history-e2e` 43→44 补"compose 必须挂目录"）
+>
+> **⚠ 2026-10-20 第十六次校正（v1.18.87，容器加固）**：实测 **62 / 2983**（**没有新增文件**）——
+> `reverse-proxy-config` 37→45（+8）：read_only / tmpfs /tmp / cap_drop ALL / no-new-privileges 四项
+> 配置守卫，加两条前提（两个绑定目录必须覆盖全部写盘目标；三个写盘 env 必须指进 `/app/data`），
+> 加两条源码扫描（不许 `fs.*` 写盘调用直接写 `__dirname`；四个写盘常量必须从 `CONFIG_PATH`/env 派生）。
+> 校验式 **2975 + 8 = 2983** ✓。★ 为什么这 8 项是"结构性"的而不是"配置快照"：只读根fs 与
+> v1.18.86 的统一数据目录**互为前提**，谁把写盘目标挪回 `/app`，守卫当场红；否则线上表现是
+> 运行期 `EROFS`、而本机 `node server.js` 完全正常（根fs 可写）——又一处"本机好好的、容器里报错"
+>
+> **⚠ 2026-10-20 第十七次校正（v1.18.88：路由决策头 + 重试预算 + 直方图 + tool-emu 属性测试）**：
+> 实测 **64 / 3091**（+2 文件 / +108 项）——
+> ① **新增 `route-header-budget-e2e` 44 项**：`X-ZZCSAPI-Route` 的取值真值表（非 ASCII→`?`、分号→逗号、
+>    头注入、缺字段默认）、`RETRY_BUDGET` 钳制真值表（0=不限 / 越界钳回 / 非法落默认）、以及**真链路**四条出口
+>    （成功 `pick=priority` / **流式也带头** / 预算耗尽 502 `pick=exhausted`+`error.budget` / 全失败 502
+>    `pick=all-failed` / 全冷却 503 `pick=all-cooldown`）；
+> ② **新增 `tool-emu-fuzz` 52 项**：确定性 PRNG（mulberry32 固定种子）+ 属性断言——never-throws、
+>    输出形状不变量、**流式分块等价性（整块喂 vs 随机切 k 块必须逐字相同，60 组）**、JSON 跨块（每 1 字符一块 +
+>    枚举全部 211 个两点切分）、幂等、`openaiToolCallsPayload` 形状、`toolCallId` 2000 个唯一、罐头道歉识别真值表。
+>    ★ 它第一次跑就抓到两个**真 bug**、之后连跑又抖出第三个（见下）；
+> ③ `metrics-e2e` 45→57（+12）：直方图装配守卫 + 真取值（13 档 bucket 都在、**单调不减**、`+Inf == _count`、
+>    `_sum` 与既有 ms summary 同源）、端到端直方图、预算计数两原因都在。
+> 校验式 **2983 + 44 + 52 + 12 = 3091** ✓。
+>
+> ★ **`tool-emu-fuzz` 抓到的三个真 bug（本版已修，修完钉成断言）**：
+> ① **嵌套围栏重复捕获**（危险级：会导致**写操作执行两次**）——`[TOOL_CALL]` 里包 ` ```json ` 围栏、
+>    围栏内 2+ 调用时，`findCaptureSpans` 同时收集"标签 span"与"围栏 span"、只 `sort` 不合并重叠，
+>    两者 `inner` 是**同一段 JSON** 各解析一次 ⇒ 调用翻倍，且正文残留 `[/TOOL_CALL]`（content 拼接按
+>    `pos = sp.end` 单调前进，先外后内的重叠会让内层尾巴漏进正文）。**流式扫描器不走这条函数，所以同一输入它是对的**
+>    ——非流式（hark/genspark/notion-agent/workbuddy）走的正是这条路。修法：排序后丢弃被完全包住的 span，只留最外层。
+> ② **非字符串入参抛 `TypeError: text.indexOf is not a function`**——`!text` 只挡 falsy。现已先 `String()`，
+>    对象/数字一律返回 `null` 而不是崩（`server.js` 现有调用点都先 `String()` 过，属潜在风险而非现行故障）。
+> ③ **`toolCallId()` 长度不恒定（运气型撞号）**——`'call_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)`：
+>    `Math.random().toString(36)` 的位数**不是恒定的**，随机数偏小时小数部分很短（`0.5` → `"0.i"`，切出来只有 1 个字符）
+>    ⇒ id 长度在 14~21 之间浮动，同一毫秒内两条调用的随机段都偏短时就会**撞号**。`tool_call_id` 由客户端原样回传、
+>    用来把"结果"对回"调用"，撞号 = 两轮调用被认成同一轮。修法：随机串先右补到足够长再切 8 位，长度恒定
+>    （实测 10 万个 id 全是 21 字符）。★ **这个 bug 的性质值得单独记**：它不是一次跑出来的——属性测试第一版
+>    断言"全部 21 字符"，单跑 15 次里闪 1 次（`实际: [21,20]`）、40 次里闪 1 次，**报错信息长得很像测试自己不稳定**。
+>    要是当时把它当成"抖动"重跑掉，这条就永远留着了。**偶发红字先找不变量，别先怪机器。**
+> 三条现在都有断言守着（含"两个互不重叠的标签块都被保留"这条反向守卫——别把"去重叠"写成"只留第一块"）。
 
 > **✅ 运行器已入库（v1.18.74 处置）**：`node _run_all_tests.js` 一度是**本机工具**——
 > `.gitignore:6` 的 `_*.js` 约定把它挡在库外（v1.18.67 实测 `git log --all -- _run_all_tests.js` 是 **0 条提交**）。
@@ -146,15 +296,17 @@
 | **专用报文渠道的输出收口**（notion / notion-agent / workbuddy / genspark / codex / hark / opencode 的响应写出口、`tryChannel` 的输出钩子转发、新增/修改客户端报文面） | `special-channel-output-seam-e2e`（装配守卫会当场抓住"某条路径又自己写响应"；★ 新协议**必须同时加进该文件的 `SPECIAL` 清单**，否则它不被检查——而且清单每多一条，`specialNonStreamOut`/`specialStreamHead`/`specialStreamEnd` 的调用点计数就要跟着调）+ `genspark-tools` + `workbuddy-quota` |
 | **新增/修改渠道协议**（协议白名单、`tryChannel` 分发、探测、手动测试、前端 `PROTO_META`/`PROTO_ORDER`、构建产物） | 该协议自己的 `*-channel` / `*-tools` 用例（opencode 是 `opencode-channel-e2e`）+ `channel-timeout-attribution-e2e`（"加渠道字段要三处一起加"）+ `outbound-http-client`（`zzFetch` 实参计数）+ `console-state`（前端产物守卫）+ `security-headers-e2e`；**改了被 require 的文件就要同时加 `Dockerfile` 的 `COPY`** 并跑 `docker-image-files`；改完**必须重新 `node build/build.js`**。⚠️ 加协议会同时动**三个计数守卫**（`zzFetch` 实参 / 收口调用点 / 无目录协议相邻守卫），**都在各自文件里注明来源**，别只改数字 |
 | 新增/修改**客户端路由**（新报文面、POST 白名单、鉴权点） | `responses-api-e2e` + `gemini-multimodal` + `session-affinity-e2e` + `ip-stats-ban-e2e` + `security-headers-e2e` —— 后四个各有一条「每个客户端面都必须接上 X」的**计数守卫**（图片门 / 粘性键 / statsCtx / authGate），加一个面就会当场报错，改完必须一起更新计数 |
-| 调度 / 候选链 / 重试 / 冷却 / 权重 | `weighted-rr*` / `auto-weight*` / `per-channel-retry-e2e` / `cooldown-grading-e2e` / `upstream-4xx-fallback-e2e` / `session-affinity-e2e` |
+| 调度 / 候选链 / 重试 / 冷却 / 权重 | `weighted-rr*` / `auto-weight*` / `per-channel-retry-e2e` / `cooldown-grading-e2e` / `upstream-4xx-fallback-e2e` / `session-affinity-e2e` / **`route-header-budget-e2e`（重试预算 + 路由决策头）** |
 | 流式读取循环 / 流内错误帧 / 懒提交（writeHead 时机） | `stream-error-frame-e2e` + `streaming-e2e` + `outbound-http-client`（直通字节一致性） |
 | 流式或非流式的「200 但空」记账（零正文 / 空回复判据、直通空流） | `stream-error-frame-e2e` + `same-protocol-passthrough` |
 | 常规链路的流式记账口径（上游 usage 帧 / 工具轮的 out / `reason`） | `tool-turn-accounting-e2e` + `reasoning-only-fallback-e2e` |
 | 账本的「天 / 小时」口径（`byDay` 桶、24 小时分布、per-IP 24 桶的日界） | `usage-day-key` |
 | 渠道级出站参数剔除（`dropParams` 白名单 / 出站副本不串味 / 直通路径 / 落库与清空语义） | `channel-drop-params-e2e` + `console-state`（§3b 表单回填与"总是提交"） + `same-protocol-passthrough`（直通路径） |
-| 运行期四组开关（粘性 / 限流 / metrics / 回放） | `settings-api-e2e` + 对应开关的 e2e |
+| 运行期五组开关（粘性 / 限流 / metrics / 回放 / 自动权重） | `settings-api-e2e` + 对应开关的 e2e；改 `renderMetrics` / 加指标 → 另跑 `metrics-e2e`（格式合法性 + 直方图累计语义 + `+Inf == _count`） |
+| **配置代际 / 回滚**（`persistConfig` 字段白名单、新增管理面"写配置"端点、快照目录与下发掩码） | `config-history-e2e`（★ 两条硬断言：被白名单吞掉的字段回滚后**真的回到 config.json 且运行期也认**；列表/详情响应里**绝不出现明文 key**、回滚后密钥仍是新值）+ `security-headers-e2e`（管理面掩码纪律）+ **改控制台「配置历史」页时另跑 `console-state`（§21：差异点名到字段 / 掩码不进 DOM / 两步确认第一下不发请求）** + 改渠道字段清单时另跑 `channel-drop-params-e2e` / `channel-headers-roundtrip-e2e` |
+| **配置落盘的原子性与启动自愈**（`writeFileAtomic`、`loadConfig` 的三跳退路、`.corrupt-*` 留档） | `config-atomic-write-e2e`（★ 五条硬断言：保存后**无 `.tmp` 残留**；正主写坏 → 从 `.bak` 恢复且坏文件留档；正主与 `.bak` 都坏 → 从**代际快照**恢复；三跳全坏 → **非 0 退出**，不许静默用空配置起来）+ `config-history-e2e`（§0 顺序判据）|
 | **新增/修改根目录只读探针**（`*-probe.js` / `sec-audit.js` 的判别逻辑与"未作判定"纪律） | 该探针自己的用例（`opencode-probe` 守**两种 403 不许混为一谈**、撞地区门/连不上必须记「未作判定」而不是失败；`opencode-sidecar-probe` 守**"直连死 / 边车活"不许混为一谈**、测不到 ≠ 不通、口令必须逐字命中、密码绝不打印）+ `sec-audit`（探针类改动后跑一遍确认没把密钥泄露面带出来） |
-| 密钥 / 鉴权 / 会话 / 响应头 | `security-headers-e2e` + `key-rotation-e2e` + `admin-session-e2e` |
+| 密钥 / 鉴权 / 会话 / 响应头 | `security-headers-e2e` + `key-rotation-e2e` + `admin-session-e2e`；加/改**客户端面响应头** → 另跑 `route-header-budget-e2e`（流式路径也要带头） |
 | 来源 IP 统计 / 封禁 / trustedProxy 采信 / 客户端标签列 | `ip-stats-ban-e2e` + `console-state`（统计页渲染与日志跳转链路一节） |
 | 部署配置（docker-compose / 反代层 / 来源 IP 采信开关） | `reverse-proxy-config` + `ip-stats-ban-e2e`（trustedProxy 采信语义） |
 | thinking / 签名 / 回放 | `thinking-fidelity` + `thinking-replay-e2e` |
@@ -181,12 +333,12 @@
 ## 全量清单
 
 ```bash
-node test/console-state.test.js           # 281 项断言，退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；**渠道级「不发这些参数」（v1.18.33 §3b）：adapt() 收 dropParams → dp 数组、表单回填 `'a, b'`、saveChannel **总是**提交（框空 = 显式 `[]` = 清空，与 weight 的"留空 = 不动"刻意不同）、chips 来自服务端下发的 dropParamWhitelist（桩里给一份与真实白名单明显不同的短清单，界面显示的是桩里那份 → 证明没有硬编码）、服务端没下发时降级不抛、点 chip 去重去空白、结构守卫：前端不许抄白名单**；**渠道表单「首字死线 / 总超时」（v1.18.46 §3c）：`adapt()` 收成 `fcMs`/`toMs`（没配 = 空串，表单才好留空）、`msTextOf` 真值表（坏值 `0` 如实显示成 "0"，不静默当成"没配"）、在最小 DOM 桩里**真跑 `openChannelForm`** 断言两个框真回填/真留空（不回填的框就是保存按钮旁的删除键）、`saveChannel` **总是**提交这两个字段（框空 = 显式 `''` = 回默认）而非整数/越界在前端就挡下（不发请求 + 提示带值域）、`loadAll` 的 id 合并与「改了源没重建」的产物守卫**；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜，**客户端标签列（v1.18.11，v1.18.13 跳转直开抽屉 + 索引错位回归）**；运行期设置页：草稿跨轮询保留、**四张卡（v1.18.8 增 thinking 回放）**、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换、**会话语义（密钥不落任何浏览器存储）**；**事件委托：真实委托块在桩上真跑分发——dataset 参数到达动作函数、嵌套只触发最近那枚、未知动作不炸、change 走同一条路、ACTS 双向覆盖（49 个函数名硬编码）**；**数据统计页（v1.18.11）：stats=null / 刚清零不抛且有空态、满数据画 per-IP 表与 sparkline、客户端过滤（日志跳转那条路）、UA 标签 esc()、封禁/解封按钮 data-act+data-t、详情抽屉；v1.18.12 增布局守卫：KPI 四卡 `.st-kpi*` 居中、来源明细表 `.st-fixed`+9 列 colgroup、表头与数值 `t-c` 居中（旧 `t-r` 清零）、占位符「—」走 `.t-c-ph` 而真名左对齐、产物 CSS 存在性 + 旧写法对照组；v1.18.13 增跳转链路：真跑 `drawLogTable` 的客户端 chip 绑定——chip 自带 `data-cl`、点击跳统计页并直接弹开最活跃来源的详情抽屉、无标签行在前时"旧写法按 rows[i] 取标签"的索引错位回归、无匹配标签不误弹、stopPropagation 不连坐行点击**；**v1.18.17 错误显示与登录门**：errMsgOf 真值表（网关错误体 {error:{message,type}} 直接拼 j.error 会显示 [object Object]——对象取 message、字符串透传、j.message 兜底）+ api()/登录门两处装配守卫与旧裸拼全仓清零 + 登录门提交前 trim（终端 cat 复制带尾随换行/空格不再 401）；**v1.18.19「从上游探测」钥匙 trim**：probeUpstream 读钥匙框 `.trim()` 与保存路径对齐——粘贴尾巴的换行没 trim 时把脏钥匙发上游吃 401 Invalid token（库里存的原文其实一直是好的，服务器侧原文直发 302 个模型验证）；**v1.18.20 密码框 autocomplete**：渠道表单钥匙框与登录门输入框都带 `autocomplete="new-password"`、全仓 password 框无一裸奔——浏览器把登录密钥自动填进渠道钥匙框（现场报告：编辑渠道点「明文」显示出来的是登录控制台的那把钥匙），配合服务端 400 闸门双保险）
+node test/console-state.test.js           # 310 项断言（v1.18.84 增 §21「配置历史页」29 项，281 → 310），退出码非 0 = 有回归（含渠道表单权重：能填 → 能存 → 能显示；**渠道级「不发这些参数」（v1.18.33 §3b）：adapt() 收 dropParams → dp 数组、表单回填 `'a, b'`、saveChannel **总是**提交（框空 = 显式 `[]` = 清空，与 weight 的"留空 = 不动"刻意不同）、chips 来自服务端下发的 dropParamWhitelist（桩里给一份与真实白名单明显不同的短清单，界面显示的是桩里那份 → 证明没有硬编码）、服务端没下发时降级不抛、点 chip 去重去空白、结构守卫：前端不许抄白名单**；**渠道表单「首字死线 / 总超时」（v1.18.46 §3c）：`adapt()` 收成 `fcMs`/`toMs`（没配 = 空串，表单才好留空）、`msTextOf` 真值表（坏值 `0` 如实显示成 "0"，不静默当成"没配"）、在最小 DOM 桩里**真跑 `openChannelForm`** 断言两个框真回填/真留空（不回填的框就是保存按钮旁的删除键）、`saveChannel` **总是**提交这两个字段（框空 = 显式 `''` = 回默认）而非整数/越界在前端就挡下（不发请求 + 提示带值域）、`loadAll` 的 id 合并与「改了源没重建」的产物守卫**；自动权重观测页渲染；停用渠道的手动测试弹窗；测试结果行：模型名 + 通过/空回复/失败三档；调用日志渠道列：显示渠道名不显示 id、紧跟请求 ID、按名字/按 id 都能搜，**客户端标签列（v1.18.11，v1.18.13 跳转直开抽屉 + 索引错位回归）**；运行期设置页：草稿跨轮询保留、**四张卡（v1.18.8 增 thinking 回放）**、POST 只发改动组、400 原文直显；密钥管理页：掩码可见、草稿跨轮询、轮换、**会话语义（密钥不落任何浏览器存储）**；**事件委托：真实委托块在桩上真跑分发——dataset 参数到达动作函数、嵌套只触发最近那枚、未知动作不炸、change 走同一条路、ACTS 双向覆盖（49 个函数名硬编码）**；**数据统计页（v1.18.11）：stats=null / 刚清零不抛且有空态、满数据画 per-IP 表与 sparkline、客户端过滤（日志跳转那条路）、UA 标签 esc()、封禁/解封按钮 data-act+data-t、详情抽屉；v1.18.12 增布局守卫：KPI 四卡 `.st-kpi*` 居中、来源明细表 `.st-fixed`+9 列 colgroup、表头与数值 `t-c` 居中（旧 `t-r` 清零）、占位符「—」走 `.t-c-ph` 而真名左对齐、产物 CSS 存在性 + 旧写法对照组；v1.18.13 增跳转链路：真跑 `drawLogTable` 的客户端 chip 绑定——chip 自带 `data-cl`、点击跳统计页并直接弹开最活跃来源的详情抽屉、无标签行在前时"旧写法按 rows[i] 取标签"的索引错位回归、无匹配标签不误弹、stopPropagation 不连坐行点击**；**v1.18.17 错误显示与登录门**：errMsgOf 真值表（网关错误体 {error:{message,type}} 直接拼 j.error 会显示 [object Object]——对象取 message、字符串透传、j.message 兜底）+ api()/登录门两处装配守卫与旧裸拼全仓清零 + 登录门提交前 trim（终端 cat 复制带尾随换行/空格不再 401）；**v1.18.19「从上游探测」钥匙 trim**：probeUpstream 读钥匙框 `.trim()` 与保存路径对齐——粘贴尾巴的换行没 trim 时把脏钥匙发上游吃 401 Invalid token（库里存的原文其实一直是好的，服务器侧原文直发 302 个模型验证）；**v1.18.20 密码框 autocomplete**：渠道表单钥匙框与登录门输入框都带 `autocomplete="new-password"`、全仓 password 框无一裸奔——浏览器把登录密钥自动填进渠道钥匙框（现场报告：编辑渠道点「明文」显示出来的是登录控制台的那把钥匙），配合服务端 400 闸门双保险**；**v1.18.84 配置历史页 §21（29 项）**：结构侧——`render()` 与 `go()` 两张分发表都注册 `history:vHistory`、代际**不进** `loadAll`（不跟 8 秒轮询）、行点击走 `data-seq` 而不是把 seq 拼进事件代码、回滚走 `armConfirm`、两个渲染函数里都没有 `apiKey`；行为侧——差异**点名到字段**（`customField`/`timeoutMs`）、渠道显示名优先于 id、新增/删除/设置组差异都列、`keysIgnored` 时说「已忽略」、★**掩码视图里的假原文一个字都不进 DOM**、★**第一下只改文案不发请求**（第二下 POST 只有 `{seq}`）、成功后 toast 交代重启项并作废详情缓存、详情 404 原文直显、空代际是有指引的空态、无差异时明说「逐字段相同」）
 node test/channel-headers-roundtrip-e2e.test.js # 38 项断言（v1.18.44）：★渠道「自定义请求头」必须存得住、回填得上、探测真带上。现场（用户报「AgentRouter 这个渠道为什么获取模型总是失败？✗ HTTP 401 unauthorized client detected」）：容器内实测**同一账号同一时刻同一 URL、只改请求头**——① 只带 Authorization → 401；② 加 `User-Agent: claude-cli/2.0.0 (external, cli)` → 200 + 4 个模型；③ 换浏览器 UA → **照样 401**（它认的是 Claude CLI 指纹本身，不是"任意浏览器化 UA"）。所以是**我们自己的两个 bug 叠在一起**：① 控制台「自定义请求头」textarea **从不回填**（同表单里 proxy 是有 value= 的）→ 框永远空着 → 「获取模型」的探测不带那个 UA → 必 401；② 渠道 POST 的 headers 没有 prevDef 兜底（旧写法 `body.headers ? body.headers : undefined`）→ 打开该渠道顺手保存就**静默删掉**已配的 UA（与 v1.18.4「掩码回写抹掉密钥」同一类数据损失）。§1 parseCustomHeaders/applyCustomHeaders 真值表（对象与 `Name: value` 文本两形态、注释/空行/无冒号行跳过、**Authorization 不可覆盖**、空值归一成"没配"、**没配时返回同一引用**、配了也不原地改入参）；§2 ★真链路主用例（假上游复刻 AgentRouter 指纹行为：带上 headers 才 ok:true 且拿到模型；对照组不带 → ok:false + status 401 + 原文；浏览器 UA 一样被拒）；§3 ★401 文案必须出现「自定义请求头」并点名 claude-cli；§4 ★真链路（建渠道带 headers 落库 → **再 POST 不带该字段仍在** → 保存**别的**渠道后仍在 → 文本形态能换掉 → **显式空串真能清空**；清空那一发刻意打在**另一个**渠道上，因为渠道 POST 会顺手自动探测、没配 UA 的家必然吃 401 并进冷却）；§5 真链路（带 headers 的**真实对话**上游也真收到那个 UA）；§6 结构守卫（prevDef 兜底 + 清空语义同 dropParams、textarea 带 `${esc(headersTextOf(c))}`、saveChannel 提交原文、headersTextOf 存在且过 esc()、**构建产物 console.html 也带上了**）
 node test/font-assets-e2e.test.js        # 44 项断言（v1.18.37）：自托管字体资产的**授权、交付与安全边界**——§0 装配守卫（启动扫成白名单 Map、只查表不拼路径、扩展名只放 woff2/css/txt、分片 immutable 而入口 CSS 短缓存、woff2 不二次压缩、Dockerfile 两条 COPY、`build/head.html` 仍 21 行且字体入口已换、CSP 的 style-src/font-src 收回 'self'、全仓无第三方字体主机、产物带 HCRound 字体栈、源码里 font-weight 500/600 清零）；§1 资产自洽（266 条 @font-face = 片数、引用逐一存在、400/700 都真声明、CSS 无保留字体名、LICENSE.txt 是 OFL 原文、★ **266 片解压后的 name 表都不含 ChillRoundF/ChillRoundM** 且都带原始版权）；§2 真链路（临时网关：br/gzip/原样三条压缩线、缓存分层、真 wOF2 字节与 font/woff2、**八种路径穿越写法全部 404**、不存在分片/目录路径 404、POST 405+Allow、nosniff + font-src 'self'、/console 真发出来的 HTML 同源、匿名管理面仍 401）。**用例自带最小 woff2 解码器**：woff2 的表数据是一条 Brotli 流，在压缩字节上直接搜字体名**永远是"假通过"**；解码器带"解压长度 = Σ表长"自检与 HCRound 正对照，并用分片内真实存在的 7 条 name 记录揭穿了"result.css 头部有 LicenseDescription"这个假证据（那份头读的是**输入**字体，切分工具会丢掉输出分片的 nameID 13/14）
-node test/docker-image-files.test.js      # 19 项断言（v1.18.48；**v1.18.72 由 18 涨到 19**）：**镜像清单守卫**——现场：`Dockerfile` 是**显式 COPY 白名单**，v1.18.47 加了 `hark.js` 却没加 `COPY hark.js ./` → `docker compose build && up -d` 之后容器**启动即 crash-loop**（`Cannot find module '/app/hark.js'`，requireStack 指向 `/app/server.js`），而本机 `node server.js` 一切正常（工作目录里那个文件在）。★ **断言数是动态的**：§1 会为 require 闭包里的**每个文件**各出一条 `COPY 清单含 <file>`（`for (const f of A.required) check(...)`），所以**往闭包里加一个模块，这个数字就自己 +1**——v1.18.72 加 `opencode.js` 就是 18→19，改协议时看到它变了别慌、也别去改断言（改的是文档）。§1 正向：从镜像入口 `server.js` 出发跟**本地 require 传递闭包**（notion → notion-agent → hark → **opencode** → tool-emu → font-assets），每一个都必须在 COPY 清单里，且闭包内不许有解析不到的 require；§2 反向：每条 `COPY *.js` 的源文件必须真实存在（删文件忘删行同样会烂）；§3 入口与自检（`CMD ["node","server.js"]`、`HEALTHCHECK` 指向 `/healthz`）；§4 镜像必备件（`console.html` / `config.example.json` → `./config.json` / `assets/fonts`——都不是 require，但缺了就是 404 或静默降级）；§5 **阴性对照**：把清单退回事故当时的文本（少了那一行），守卫必须报出 `hark.js` 缺失——否则这条守卫只是"刚好现在通过"，拦不住回潮
-node test/reverse-proxy-config.test.js  # 37 项断言：反代采信层配置守卫——本机层（XFF 必须**覆写**不可追加、转发口只绑宿主回环 127.0.0.1:18787、server_tokens off 不报版本号（复测 N-01）、固定子网与 README 写的 trustedProxy 逐字一致、默认直连模式走 ${ZZCSAPI_PUBLISH:-8787:8787} 不被写死、自启脚本幂等且纯 ASCII、README 开/关/坑齐）+ 公网层 v1.18.16（nginx-public.conf：XFF 覆写同源、只反代回环转发口、server_tokens off、**HSTS/COOP/CORP 三头（N-03 TLS 里程碑落地）**、TLS 只开 1.2/1.3、80 只留 ACME webroot+301 / 业务只在 443、Let's Encrypt 标准证书路径、README 公网四件套：域名进 ZZCSAPI_ALLOWED_HOSTS、公网必须换新密钥、certbot 续期、防火墙收口；另守 compose 真透传 ZZCSAPI_ALLOWED_HOSTS——注释行透传 = 公网域名一律 421；v1.18.17 增 README 方式四 .env 钥匙名必须带 ZZCSAPI_ 前缀——裸 ADMIN_KEY= 被 compose 映射漏掉，静默回落首启生成，.env 钥匙两头都不生效；v1.18.18 增 CF 橙云姿势——nginx realip 只对 CF 网段（≥22 条 set_real_ip_from）采信 CF-Connecting-IP 恢复真实访客 IP、XFF 覆写纪律一字不动、**网关侧（server.js）绝不读该头**、README 必须写全 Full (strict) 防重定向循环/源站锁定/切回灰云放行/100 秒超时告警）；改 docker-compose.yml / deploy/* 或部署方式后必跑
-node test/gemini-multimodal.test.js       # 41 项断言：图片转换 / 候选裁剪 / 原生 SDK 鉴权头（单元级）
+node test/docker-image-files.test.js      # 20 项断言（v1.18.48；**v1.18.72 由 18 涨到 19**）：**镜像清单守卫**——现场：`Dockerfile` 是**显式 COPY 白名单**，v1.18.47 加了 `hark.js` 却没加 `COPY hark.js ./` → `docker compose build && up -d` 之后容器**启动即 crash-loop**（`Cannot find module '/app/hark.js'`，requireStack 指向 `/app/server.js`），而本机 `node server.js` 一切正常（工作目录里那个文件在）。★ **断言数是动态的**：§1 会为 require 闭包里的**每个文件**各出一条 `COPY 清单含 <file>`（`for (const f of A.required) check(...)`），所以**往闭包里加一个模块，这个数字就自己 +1**——v1.18.72 加 `opencode.js` 就是 18→19，改协议时看到它变了别慌、也别去改断言（改的是文档）。§1 正向：从镜像入口 `server.js` 出发跟**本地 require 传递闭包**（notion → notion-agent → hark → **opencode** → tool-emu → font-assets），每一个都必须在 COPY 清单里，且闭包内不许有解析不到的 require；§2 反向：每条 `COPY *.js` 的源文件必须真实存在（删文件忘删行同样会烂）；§3 入口与自检（`CMD ["node","server.js"]`、`HEALTHCHECK` 指向 `/healthz`）；§4 镜像必备件（`console.html` / `config.example.json` → `./config.json` / `assets/fonts`——都不是 require，但缺了就是 404 或静默降级）；§5 **阴性对照**：把清单退回事故当时的文本（少了那一行），守卫必须报出 `hark.js` 缺失——否则这条守卫只是"刚好现在通过"，拦不住回潮
+node test/reverse-proxy-config.test.js  # 45 项断言（v1.18.87 由 37 涨到 45）：反代采信层配置守卫——本机层（XFF 必须**覆写**不可追加、转发口只绑宿主回环 127.0.0.1:18787、server_tokens off 不报版本号（复测 N-01）、固定子网与 README 写的 trustedProxy 逐字一致、默认直连模式走 ${ZZCSAPI_PUBLISH:-8787:8787} 不被写死、自启脚本幂等且纯 ASCII、README 开/关/坑齐）+ 公网层 v1.18.16（nginx-public.conf：XFF 覆写同源、只反代回环转发口、server_tokens off、**HSTS/COOP/CORP 三头（N-03 TLS 里程碑落地）**、TLS 只开 1.2/1.3、80 只留 ACME webroot+301 / 业务只在 443、Let's Encrypt 标准证书路径、README 公网四件套：域名进 ZZCSAPI_ALLOWED_HOSTS、公网必须换新密钥、certbot 续期、防火墙收口；另守 compose 真透传 ZZCSAPI_ALLOWED_HOSTS——注释行透传 = 公网域名一律 421；v1.18.17 增 README 方式四 .env 钥匙名必须带 ZZCSAPI_ 前缀——裸 ADMIN_KEY= 被 compose 映射漏掉，静默回落首启生成，.env 钥匙两头都不生效；v1.18.18 增 CF 橙云姿势——nginx realip 只对 CF 网段（≥22 条 set_real_ip_from）采信 CF-Connecting-IP 恢复真实访客 IP、XFF 覆写纪律一字不动、**网关侧（server.js）绝不读该头**、README 必须写全 Full (strict) 防重定向循环/源站锁定/切回灰云放行/100 秒超时告警）；**v1.18.87 增容器加固 8 项**——read_only / tmpfs /tmp / cap_drop ALL / no-new-privileges 四项配置，加两条**前提守卫**（两个绑定目录必须覆盖全部写盘目标；三个写盘 env 必须指进 /app/data），加两条**源码扫描**（不许任何 `fs.*` 写盘调用直接写 `__dirname`；四个写盘常量必须从 CONFIG_PATH/env 派生）。★ 后四条是**结构性**的：只读根fs 与 v1.18.86 的统一数据目录是绑定关系，谁把写盘目标挪回 /app，本用例当场红——否则线上表现就是运行期 EROFS 而本机 `node server.js` 完全正常，距离真因很远
+node test/gemini-multimodal.test.js       # 45 项断言：图片转换 / 候选裁剪（含 workbuddy 在名单内、notion·opencode 仍被挡）/ 400 文案由常量拼出 / 原生 SDK 鉴权头（单元级）
 node test/gemini-multimodal-e2e.test.js   # 22 项断言：真起「假上游 + 临时网关」，走完整 HTTP 链路（约 5 秒）
 node test/anthropic-tools.test.js         # 60 项断言：Anthropic tool_use ↔ OpenAI tool_calls（含工具结果带图、id 往返、有状态流式）
 node test/anthropic-tools-e2e.test.js     # 30 项断言：两轮工具回合（要工具 → 回传结果）真 HTTP 链路
@@ -222,26 +374,30 @@ node test/auto-weight-e2e.test.js         # 37 项断言：真流量下预测与
 node test/upstream-4xx-fallback-e2e.test.js  # 43 项断言：上游 4xx 不许短路兜底（404/400 都继续切、最后一家才透传、冷却位不算后手）；v1.18.34 加两节——全链 429 → 502 时每条 attempts 都要带 HTTP 码与上游原文（现场 channel_error 光秃秃、看不出是余额还是 WAF）+ 对照组防拼两遍
 node test/tool-turn-accounting-e2e.test.js # 41 项断言（v1.18.35；v1.18.40 更新结构守卫）：★工具轮不许被记成"零产出的成功"——现场账本里 deepseek-v4.1-flash 有 196 行 ok:true 且 out=0（耗时只有 8~38 秒、与有正文的行同渠道同分钟交错），开留证开关抓 DSH 真实报文后**逐字节回放**才定性：客户端拿到的是 49 个 tool_call、finish=tool_calls、可见正文 0 字符，而上游 usage 帧自报 prompt_tokens=176351 / completion_tokens=114，账本却记 in=56324 out=0。根因在常规链路（openai 渠道 → openai 客户端）的记账侧：usage 帧被整帧丢掉（只数可见正文），纯工具轮 out 就是 0。断言：两个新函数的真值表（工具帧的 name+arguments 也算输出、usage 帧归一、全 0 空帧不覆盖累计）；真链路 ★ 纯工具轮 + usage 帧 → in/out 取上游真值、留 tool_calls 标记；真链路 ★ 纯工具轮**没有** usage 帧 → out>0（旧写法=0）；文本轮两组对照（有 usage → 上游优先、没有 → 仍是估算）；思考轮 reason 用上游自报数字且 ≤ out；结构守卫：usage 帧必须在 `if (sawStreamContent) return` 早退**之前**抓（上游常把 usage 放最后一个 chunk）
 node test/usage-day-key.test.js            # 27 项断言（v1.18.36）：账本的「天 / 小时」一律按**北京时间**切——现场查「yu1 渠道 24 小时用量」时发现日桶与小时桶对不上：`byDay` 用 `new Date(ts).toISOString().slice(0,10)`（UTC 日）、24 小时分布用 `getHours()`（本地小时），同一个账本里两套钟，日界落在北京时间早上 8 点（`ipStatsBumpHour` 更自相矛盾：注释写"本地时区跨天清零"，代码是 UTC 日 + 本地小时）。处置：新增 `cnDayKey()`/`cnHour()`（**固定 +8**，不依赖进程时区——compose 设了 TZ 但裸跑可能是 UTC），账本四处统一走它们。断言：真值表（北京 00:00 边界、跨月跨年、字符串 ts、`cnHour` 三态、**老写法在同一点上差一天**的对照）；★ 真链路**用 TZ=UTC 起网关**——`byDay` 桶键 = 该行 `ts` 的北京日、不含 UTC 日桶、`hourly` 落在北京小时而 **UTC 小时那格必须是 0**、per-IP 24 桶同理；结构守卫（`bumpUsageBucket(u.byDay, …)` 的 day 来自 `cnDayKey`、`ipStatsBumpHour` 不再混用、全仓 Date→日字符串的转换只有 `cnDayKey` 一处）
-node test/per-channel-retry-e2e.test.js   # 55 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5；v1.18.45 增 §8 上游说 isRetryable:false → 跳过重试、§9 对照组照旧重试、§10 内部标记不漏进 502）node test/cooldown-grading-e2e.test.js    # 57 项断言（v1.18.40 契约更新）：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 半愈合 + 观察期排序）——**半愈合不再把欠账减半**（探测成功只放开冷却、清 probeFail、进观察期，consecutiveFail 一字不动）、探测失败不再把 3 变 1、真机第 6 节改为"欠账原样保留 + probeFail 回 0"；`cooldownMsFor` 现在读 effFailStreak，沙箱里必须一起抠出 `effFailStreak` / `markTrafficOk`
+node test/per-channel-retry-e2e.test.js   # 55 项断言：同渠道重试（抖动被原地救回、4xx 绝不重试、0/缺省=不重试、上限钳到 5；v1.18.45 增 §8 上游说 isRetryable:false → 跳过重试、§9 对照组照旧重试、§10 内部
+node test/route-header-budget-e2e.test.js  # 44 项断言（v1.18.88）：路由决策头 `X-ZZCSAPI-Route` + 重试预算——取值真值表（非 ASCII→`?`、分号→逗号、头注入、缺字段默认）、`RETRY_BUDGET` 钳制真值表（0=不限/越界钳回/非法落默认）、真链路四条出口（成功 pick=priority、**流式也带头**、预算耗尽 502 pick=exhausted + error.budget、全失败 502 pick=all-failed、全冷却 503 pick=all-cooldown）。★ 它守的是"**如实**"：把 fallback 说成 priority、把"预算耗尽"说成"渠道全挂"，比不设这个头更糟
+node test/tool-emu-fuzz.test.js            # 52 项断言（v1.18.88）：tool-emu.js 的**属性/模糊**测试——确定性 PRNG（mulberry32 固定种子）、never-throws（18 个对抗样本 + 随机 500 组）、输出形状不变量、★**流式分块等价性**（整块喂 vs 随机切 k=1..40 块必须逐字相同，60 组）、JSON 跨块（每 1 字符一块 + 枚举全部 211 个两点切分）、幂等、`openaiToolCallsPayload` 形状、`toolCallId` 2000 个唯一、罐头道歉识别真值表。★ 首次运行即抓到两个**真 bug**（嵌套围栏重复捕获→写操作执行两次；非字符串入参抛 TypeError），已修并钉成断言标记不漏进 502）node test/cooldown-grading-e2e.test.js    # 57 项断言（v1.18.40 契约更新）：熔断分级（瞬时/凭证/限流三条曲线 + Retry-After + 半愈合 + 观察期排序）——**半愈合不再把欠账减半**（探测成功只放开冷却、清 probeFail、进观察期，consecutiveFail 一字不动）、探测失败不再把 3 变 1、真机第 6 节改为"欠账原样保留 + probeFail 回 0"；`cooldownMsFor` 现在读 effFailStreak，沙箱里必须一起抠出 `effFailStreak` / `markTrafficOk`
 node test/gemini-tools.test.js            # 44 项断言：Gemini 客户端路由的工具转换（functionCall⇄tool_calls、id 配对与无状态退路、toolConfig 三态、流式分片攒整、仿真链兼容）
 node test/gemini-tools-e2e.test.js        # 29 项断言：真起「假上游 + 临时网关」走 /gemini/... 两轮工具回合（含流式与三种 toolConfig）
 node test/same-protocol-passthrough.test.js # 52 项断言：同协议直通（Anthropic/Gemini 客户端 → 同协议渠道不翻译；thinking/cache_control/seed 原样到达、响应逐字节一致、真实 token 仍记录、跨协议仍走转换、v1.18.8 修复只注入同协议直通且没坏不碰）；**v1.18.32 §3b 直通空流**：上游只回 `message_start` + `message_stop`（零 `content_block_delta`）→ 客户端仍拿 200 + 上游原始 SSE（字节已写出、换不了家）、用量如实记 `ok:false`（备注含 `no content`/零正文）、该渠道 `lastError` 写明 `stream empty` 且 `consecutiveFail ≥ 1`（下一发才会退避），并含"正常直通流之后 `ant-native` 仍是零欠账"的对照 + 那条判据逐字为 `streamError === null && !nativeStream && !sawStreamContent` 的结构守卫（`!nativeStream` 必须在，也不许再加 `streamOutText.length === 0`）
-node test/workbuddy-quota.test.js      # 39 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）
-node test/genspark-tools.test.js          # 47 项断言：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路；v1.18.38 起流式分支的源码断言改为 `specialStreamLine(opts, candidate, chunk(…))`——纯文本分支的行为一字未变，只是出口改走收口钩子）
+node test/workbuddy-quota.test.js      # 62 项断言：WorkBuddy 额度用尽要看得懂（trim 后再判 JSON、重置时刻→精确冷却、错误带 HTTP 码与响应开头、密文 token 提前拦、冷却跳过也带原因）；**v1.18.78 增 4 项「会话信封」守卫**——上游 2026-10-19 起流式请求必须带齐 `X-Conversation-ID`/`-Request-ID`/`-Message-ID`（缺任一即 400 `request illegal`，文案会误导成"客户端指纹"）：装配两条（三个头都在 + ID 由 `crypto.randomUUID()` 每次现生成）+ **真链路两条**（假上游**实际收到**的三件套形状正确、两次请求 ID 各不相同）——只守源码会漏"写了没真送出去"；**v1.18.80 增 §7 六条**——`role:"developer"` 必须归一成 `system`（现场 DSH 把系统提示写成 developer，上游回 400 `11-128 Illegal API invocation from an unapproved channel`，文案把人误导成"客户端指纹"；假上游照抄这条拒绝 ⇒ 网关不归一就红）；**v1.18.81 增 §8 九条**——原生 `tool_calls` 不许在非流式回包里丢：上游按 `index` 分片下发 `delta.tool_calls`，旧实现只收 `delta.content` ⇒ 非流式回包把工具调用整个丢掉、"只调工具不写字"的回合被判成空回复失败（假上游照真上游形状发分片，所以"拼没拼回来"判得出来）；**v1.18.82 增 §9 四条**——含图请求必须真的把 `image_url` 送到上游（workbuddy 进图片能力门；假上游留下收到的报文 ⇒ "原样透传"还是"静默丢图后照样回答"判得出来）
+node test/genspark-tools.test.js          # 55 项断言（v1.18.79 增 §2b 八条：一个块里**并排/换行/数组**多个调用 + 流式分片；旧实现整块 `JSON.parse` 抛错就判"不是工具调用"，把 `[TOOL_CALL]` 标记原样透传给客户端——opencode + `minimax-m3.1-flash-free` 现场）：Genspark 网页会话反代的工具调用（system 折叠 + [TOOL_CALL] 仿真往返 + 真网关经假代理跑完整链路；v1.18.38 起流式分支的源码断言改为 `specialStreamLine(opts, candidate, chunk(…))`——纯文本分支的行为一字未变，只是出口改走收口钩子）
 node test/hark-channel.test.js            # 103 项断言（v1.18.47；v1.18.49 增 §6、v1.18.52 增 §8、v1.18.55 增 §9、v1.18.56 扩 §8）：**hark.com 网页会话反代渠道**（`protocol:"hark"`）——上游**没有 OpenAI 兼容面**（带有效 cookie 打 `POST /v1/chat/completions` 回的是 200 text/html 的 SPA 壳），真协议是「建会话 → REST 发消息 → SSE 收 patch」，回复**整段一次**下发（伪流式），工具**全在服务端执行**（流里零 `tool_add`/`tool_update`）⇒ 客户端工具走文本仿真。§1 纯函数真值表（`flattenForHark` 带角色标注/保留 `tool_calls` 历史/空白段落跳过/产物必是字符串；`harkCookie` 三形态归一：裸值补前缀、已带前缀原样、整段 cookie 串原样、空值**不伪造** cookie；请求头 Origin/Referer 去尾斜杠；会话映射有界）；§2–§4 **真链路**（真网关 + 真 curl + 假「hark 上游兼 HTTP 代理」——照 genspark 的招：`baseUrl=http://hark.invalid` + `proxy=127.0.0.1:PORT`，于是 curl 必然把请求交给假代理，**零外网零额度零凭据**）：★ 纯文本回合（客户端拿到正文、渠道头是 `hark1`、上游真收到建会话 + `POST /api/messages/send?cid=` + SSE 同步流、★ 建会话必带 `title`+`autoTitle:false`（`{}` 会命中**用户主会话**，绝不能用）、成功之后**真删会话**、发给上游的是**拍平后的单条字符串**、报文带 `idempotencyKey`/`responseMessageId`）；★ 工具回合（`finish_reason:"tool_calls"` + 名字/参数正确 + 正文清空 + **工具协议真注进了上游报文** + 尾部提醒在）；★ **失败不删会话**（上游 500 → 网关不假装成功、会话留证）；★ 流式（role 帧 → 整段正文 → finish → `[DONE]`，不伪造逐字增量）；§5 装配守卫（server.js 七处登记：require / 两处协议白名单 / `aliasedProto` / `probeChannel` / `probeDef` / `tryChannel` 分发 / OpenAI 类候选链 / 手动测试分支与独立会话键 / ★ 工具仿真两侧真接上 / ★ 删除调用在成功分支之后 / hark.js 不把 apiKey 写进日志；前端两处 `PROTO_META`/`PROTO_ORDER` **含构建产物** `console.html` 也已重建；前端没为 hark 新增字段）；**§6（v1.18.49）两条同类渠道：会话键必须按「渠道+凭据」隔离 + 死缓存自愈**——现场（用户报「两个 hark 渠道，一个测试没问题一个测试有问题」）：手动测试的会话键是**常量** `'__admin_test__'`，而 `convMap` 只用它当键 → 第二条渠道命中第一条建的会话，拿 B 的 cookie 去访问 A 账号下的会话 → 上游 `404 conversation not found`，规律是"谁先测谁过"。断言：★ `convKeyOf` 存在且键含「渠道 id + cookie 的 sha256 前 12 位 + sessionKey」（换 cookie 即换键，不继承旧账号死会话）；★ **判别性断言：全程没有任何一发打到过别人的会话**（只断言"最终通过"是不够的——**自愈会把键的错误掩盖掉**，对照实验：旧键 + 自愈同样能测过）；两条渠道各建自己的会话、对调顺序两条都过；★ 死缓存（用户在 hark 里删掉了缓存那条 / 上游回收）首发 404 → **丢掉缓存重建、只重试一次**（断言"恰恰 2 次建会话"，不无限重试），且真实失败（401/额度）不触发自愈。**改 hark 会话缓存 / 手动测试分支 / 新增同类有状态渠道时必跑**。**§8（v1.18.52）工具定义形状归一**——现场：调用方（agent 客户端）在真实生产里发 `gpt-6-astra` 请求，hark **不回工具调用**，只回一句散文（"我在这里替你执行不了这些工具调用…"）。根因在仿真器：`tool-emu.js` 只认 OpenAI **嵌套**形状（`t.function.name`），而调用方可能发**扁平** `{type:'function',name,description,parameters}`（→ 目录被渲染成 `### function` + 空 schema `{}`）或 **Anthropic 式** `{name,description,input_schema}`（→ 连 `function`/`type` 键都没有，旧过滤条件把整批工具丢掉 → **协议完全不注入**）。两种情况上游都拿不到真工具名，只能回散文。断言：★ 两种非嵌套形状经**真网关**发出去，目标上游报文里必须是 `### read_local_file` + 真 schema（旧代码是 `### function`/`{}`/干脆不注入），且**客户端仍拿到 tool_calls**；★ 结构守卫（有 `normTool`、入口先归一后过滤、不再只认 `t.function.name`）；★ 尾部提醒必须自包含（**带工具名清单** + 明说"你没有执行能力、不要回答我无法执行工具"，因为真实 agent 请求的前半段十几万字符会把顶部协议稀释掉）；对照（纯文本回合不注入、`tool_choice=none` 不注入、连名字都归不出来的定义返回 null）。**阴性对照实测**：把 `tool-emu.js` 换回修复前版本，本节 10 条当场变红（§3 的嵌套形状仍绿——缺陷只在非嵌套形状）。**§7（v1.18.51）大正文不许当命令行参数**——现场：四个 hark 渠道 `lastError` 全是 `hark send: curl: curl spawn: spawn E2BIG`，**手工测试过、真实调用挂**。根因：真实调用把整段会话拍平成一条几十万字符的字符串，而它被当成了 `curl --data-binary <正文>` 的**命令行参数**——Windows 命令行上限约 32KB、**Linux 单个参数上限 128KB**（容器就是 Linux，所以容器里同样会炸）→ 请求根本没发出去。断言：★ 12 万字符的正文经**真网关**发出去不报 E2BIG（HTTP 200）、客户端拿到回复、★ **上游真收到完整正文**（长度对得上 + 末尾标记在）、临时正文文件不堆积（每条退出路径都清）；外加两条结构守卫（`harkCurl` 走 `'@' + bodyFile`、通用 CF 回退路径的 `--data-raw` 已清零）。**阴性对照实测**：把实现退回 argv，这一节当场变红并复现 `spawn ENAMETOOLONG` + 502 `all channels failed`**§8（v1.18.52）工具定义形状归一**——现场：agent 客户端（DSH `client=deepseek-harness/0.2.0`）真实调用 hark，**不回工具调用**只回散文（"我在这里替你执行不了这些工具调用…"）。根因在仿真器：`tool-emu.js` 只认 OpenAI **嵌套**形状（`t.function.name`），而调用方发的是**扁平** `{type:'function',name,description,parameters}` 或 **Anthropic 式** `{name,description,input_schema}` → 扁平形状的目录被渲染成 `### function` + 空 schema `{}`，Anthropic 式更是**整批被过滤掉**（`emulateRequest` 返回 null ⇒ 协议一个字都没注入）。处置：`normTool` 一处归一三种形状（含 camelCase `inputSchema`）+ 入口先归一后过滤。断言：三种形状各自带**真工具名与真 schema** 注进上游报文、客户端仍拿到 `tool_calls`；结构守卫（`normTool` 存在、入口先归一后过滤、不再出现"拿 `t.type` 当目录名"的旧写法、尾部提醒带 `本次可用工具：`）；对照（无工具 → null、`tool_choice:'none'` → null、`{type:'function'}` 无名 → null）。**阴性对照实测**：换回旧 `tool-emu.js` 时本节 10 项当场变红（而 §3 嵌套那批仍绿 ⇒ 缺陷是**形状特异**的，不是仿真器整体坏了）。**§8 补充（v1.18.56）schema 字段名的两种拼法 × 两种嵌套位**——现场是 v1.18.52 那批形状归一里**没被覆盖到的第二层**：schema 的键名本身也有 snake（`input_schema`，Anthropic 原生）与 camel（`inputSchema`，多个 JS SDK / 中间层转驼峰）两种，且**两种都可能出现在顶层或 `function` 里**；而旧链在 `function` 那层只读 `parameters`、snake 那层只看**顶层** → `{type:'function',function:{name,input_schema}}` 与顶层 `{name,inputSchema}` **双双落到空 `{}`**（工具名读到了、参数 schema 是空的 → 模型知道有这个工具却不知道传什么，症状与 §8 的一模一样）。断言：**六种组合真值表**（`parameters`／`input_schema`／`inputSchema` × 顶层／`function` 内）全部把真 schema 注进提示；真链路新增**驼峰形状**一发（目录真工具名 + 真 schema + 客户端拿到 `tool_calls`）；优先级（`parameters` 压过驼峰）与边界（schema 是数组 → 退成空对象，**目录里工具仍在**、不崩）；外加结构守卫（取值链在源码里是完整的一段 `f.parameters || f.input_schema || f.inputSchema`，别被后人删回两处）。**阴性对照实测**：把 `git show HEAD:tool-emu.js` 抠出来对同一批形状跑，四条里**三条为 `false`**（只有 `parameters` 那条新旧都过 = 没误伤）。**§9（v1.18.55）上游偶发"固定道歉"必须判成可重试失败**——现场（v1.18.52 上线后用户仍报"真实调用两次还是有问题"，账本 `in=212,453 out=106/98/121`）：**同一发 211k token 载荷连打 8 次，6 次正常回 `[TOOL_CALL]`、2 次回同一句** `I wasn't able to answer this message.`（out=10）/ `I couldn't complete your request. Please try again.`（out=13）——这两句是 **hark 基础设施层的固定道歉，约 25% 偶发**：不是模型在拒绝，也不是协议没注进去（同尺寸同报文的 A/B/C 三臂都能出 tool_calls），而是**上游 200 ≠ 成功**这一类里的新成员。旧行为把它记成 `ok:true` 并原样回给客户端 ⇒ 用户看到的是"渠道坏了/不回工具调用"。处置：`looksLikeHarkCannedFailure` 一处识别（三组句式：hark 固定道歉原文 / 模型自称没有工具能力（英）/ 同上（中，含用户转来的 hark 原话））→ 在 `tryHarkChannel` **就地同渠道重试最多两发**（**不走调度层的 `PER_CHANNEL_RETRIES`**——那个配置键默认是 0，等于没有）；两发都还是道歉才如实报失败（`hark: canned apology (retryable)`，交给调度层切下家）。断言：**16 条真值表**（6 条真道歉全部命中含中文原文 / 10 条正常短答一条都不误伤，含"长正文里带道歉字样"与"工具名出现在正常回答里"）；★ **真网关下第一发 canned、第二发正常 → 客户端必须拿到 `tool_calls`（不是那句道歉）**，且那句道歉**不许漏进 `content`**；★ 上游真收到**两发**（证明重试真发生）；对照组（一直回道歉）**如实报失败、不假装成功**；结构守卫（判据真接在 hark 渠道里 + 返回的是可重试失败）。**活体验证**：同一发 211k 载荷连打 8 发（**只统计真落在 hark 的那些**，按响应头 `X-ZZCSAPI-Channel` 判别——`gpt-6-astra` 是十几个渠道共用的别名，不判别会把 notion 等的回复当成 hark 的结论），改前基线 **6/8 = 75%** → 改后 **8/8 = 100%**。
 node test/channel-default-alias-e2e.test.js # 27 项断言（v1.18.49，v1.18.58 codebuff 接入时扩到 4 协议 30 项，v1.18.60 渠道撤掉后回到 3 协议 27 项）：**「上游没有模型目录的协议」必须仍然可用**——现场（用户报）：hark 渠道点「获取模型」拿到**空列表** → 顺手保存 → 渠道是启用的但任何请求都命中不了它（别名是唯一能把请求路由到某个渠道的东西）= "渠道加上了却用不了"。根因不是协议问题：`probeDef` 的 hark 分支直接 `return def.models`，而探测时表单**还没有**别名配置 → 必然空；同类协议（workbuddy / genspark / codex）的"别名表为空时给默认建议 + `account.note` 说明"约定。§1 装配守卫（★ 默认别名单一真源 `HARK_DEFAULT_ALIAS`；★ **相邻**正则守四个站点"取配置别名的下一行必有默认建议"——只数个数时加第五家漏了照样蒙过去；★ 探测端点真把 `models` 传进 `def`；既有三家的说明没被改坏；前端状态行显示 `account.note` 且产物已重建）；§2/§3 **真链路**（临时网关 + 假「hark 上游兼 HTTP 代理」）：★ 探测（无别名）真回默认建议 + note；对照（带别名）回报**上游模型名**、不再推默认建议；★ 过期凭据被判成「cookie 已失效」（Better Auth 回 **200 + `null`**，旧判据会误报成"疑似 CF 拦截页"——真因是一枚过期 cookie）；★ 空别名保存 **400** 且文案给出可照抄的例子与控制台下一步；按建议保存后 ★ `/v1/models` 真出现该别名、★ 端到端真能打通；对照 openai 空别名仍可保存（不误伤"先存渠道后补别名"）
 node test/disabled-channel-manual-test-e2e.test.js  # 26 项断言：停用渠道「能手动测、不被自动测」（自动探测 0 次 / 手动测试真打通 / 手动重探测照探）
 node test/outbound-http-client.test.js    # 33 项断言：出站长连接客户端（fetch 形状真值表 + 20 次请求 0 条新连接、对照 agent:false 建 20 条）+ 直通流式逐字节一致（含 CRLF 与跨片帧）；装配守卫 **v1.18.42 更新**：`await zzFetch(` 由 6 → **4**（探测 2 + 常规聊天 1 + 原生/直通 1）——notion 推理的两处（主推理、管理面手动测试）**刻意**改走 `notion.notionFetch` 的通道链，留在 `zzFetch`（HTTP/1.1）上就是留在被墙的通道上；同一条守卫另断言 `notion.notionFetch(` 恰好 3 处
 node test/session-affinity-e2e.test.js    # 67 项断言：会话粘性（键推导真值表 + 过期/淘汰 + 冷却/down 不硬塞 + 同会话 8 次落同一家 + 上游挂了重新粘 + 关闭时零状态）
 node test/rate-limit-e2e.test.js          # 50 项断言：客户端限流（令牌桶真值表 + 429 带 Retry-After + 按时间回填 + 并发闸门 + 管理面不受影响 + 关闭时零影响）
-node test/metrics-e2e.test.js             # 45 项断言：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态 + thinking 回放 gauge 与六事件）
+node test/metrics-e2e.test.js             # 57 项断言（v1.18.88 由 45 涨到 57，+12 直方图）：/metrics（Prometheus 格式合法性 + 标签转义 + 计数随真流量动 + 密钥绝不出现在正文 + public/关闭两态 + thinking 回放 gauge 与六事件）
 node test/thinking-fidelity.test.js        # 36 项断言：thinking/签名 保真度地图（跨协议双向都不产出 thinking 块 → 跨协议"无签名块触发 400"不可达；`signature` 只活在回放块与 4xx 作废分支；直通仍是唯一活路，回放只补上游真签过的）
 node test/thinking-replay-e2e.test.js      # 64 项断言：thinking 回放缓存（v1.18.8，同协议直通签名修复）——复现失败（关=400）→ 开=补回原签名（逐字段）→ 跨会话/渠道/模型绝不回放（三组反向）→ 过期/淘汰/作废计数 → 流式分片攒对照样修 → 完好客户端一字不动 → 设置第四组/status/metrics 暴露
-node test/settings-api-e2e.test.js        # 68 项断言：运行期设置端点（四组窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
+node test/settings-api-e2e.test.js        # 68 项断言：运行期设置端点（五组窄口白名单 + 钳制与启动路径共用同一份规则 + 改完不重启立即生效（真发请求看到 429/404）+ 落库并重启后仍在 + 400 点名字段）
 node test/security-headers-e2e.test.js    # 72 项断言：安全加固（渲染层"裸插值"必须一个不剩 + toast/data-t 必须转义 + 安全响应头覆盖 401/404/静态壳/所有 API + 管理面与 /healthz 带 no-store + **/metrics 全态 no-store（外部复测 N-02：未鉴权 401 也不落中间层缓存）** + **/healthz 只回 {ok:true}（V-08：匿名面不带渠道数与密钥状态）** + 页面壳零密钥明文 + **CSP 逐字等于设计稿（v1.18.6）** + 管理面 ?key= 已停用 / 客户端面保留 + **内联事件属性必须为 0 且 ACTS 与模板双向一一对应（v1.18.7）** + **第六批（v1.18.10）Host/Origin 门：陌生域名与公网 IP → 421、白名单域名与回环/私网 IP 字面量 → 200、跨源 Origin 写请求 → 403（揣着正确密钥也拒）、同源/无 Origin 照常、装配位置必须在一切路由分支之前（V-07，含 ZZCSAPI_ALLOWED_HOSTS 注入）** + **v1.18.20 数据损失闸门：POST 渠道 apiKey 填的是管理/网关密钥一律 400 拒收且原密钥不被覆盖（浏览器把登录密钥自动填进渠道钥匙框 / 剪贴板残值的保险丝）**）
 node test/key-rotation-e2e.test.js         # 85 项断言：控制台轮换密钥（优先级链 config.auth>env>首启生成 + 旧密钥立即失效 + 非法值不落库 + 重启后仍生效 + 回到环境变量值）
 node test/admin-session-e2e.test.js        # 66 项断言：管理面会话 cookie（v1.18.6）——登录门换 HttpOnly+SameSite=Strict 会话、会话单独鉴权管理面、Bearer 通道保留、管理面 ?key= 拆除 / 客户端面保留、退出只杀自己、轮换清全会话并补发新会话、重启全部掉线、逐出先清过期；**v1.18.57 增 3 项**：`/admin/api/channels` 的 body 判空装配守卫 + 畸形 JSON 真链路 400 `invalid json body` + 之后 `/healthz` 仍 200（此前 `safeReadJson` 解析失败返回 null，该分支直接取 `body.id` → TypeError 无人接 → **整个网关进程退出**，靠容器 `restart: unless-stopped` 自愈）
 node test/ip-stats-ban-e2e.test.js         # 62 项断言：来源 IP 态势与封禁（v1.18.11）——装配（闸门在 Host/Origin 门后、限流前，只拦客户端面；在飞归还挂限流同一条 settle；单漏斗；persistConfig 白名单含 security；XFF 只在 trustedProxy 上采信；4 路由注入 statsCtx）+ 纯函数真值表（IP 字面量校验 / 标签映射 / 采信与伪造 / 记账 / 24h 桶 / 峰值 / 会话饱和 / 淘汰）+ 真链路（预置封禁 403、XFF 三来源各行、401 算敲门、token/模型/标签/会话记成功路径、并行峰值 ≥2 且归零、封禁端点全语义 400/404/幂等、封禁落 config 且渠道不丢、重启统计清零封禁仍在）+ 对照（无 trustedProxy 时伪造 XFF 不采信）
+node test/config-history-e2e.test.js       # 44 项断言（v1.18.83）：配置代际与一键回滚——守的是"**被白名单吞掉的字段能不能真的回来**"这条只靠跑测才看得见的纪律。§0 装配守卫（快照调用必须在 `writeFileSync` **之前**〔顺序反了就变成"存的是新版本"，回滚只会回到同一个状态〕、去重比的是**最近一代**、列表视图不含 `apiKey`/`config`、详情掩码三件套〔apiKey 掩码 / `adminKey`·`gatewayKey` 整个删掉 / `auth` 只报存在〕、`buildRollbackConfig` 覆盖三个密钥字段、回滚前存 `before-rollback`、`.gitignore` 有 `config-history/`、compose 挂的是**目录**不是文件〔挂文件时宿主机没该文件会被 Docker 建成同名目录 → 服务端写文件 `EISDIR`〕）；§1 真链路（临时网关 + 假上游，配置/历史全在临时目录）：保存 → `customField` 真被抹掉 → 列表/详情/差异（`diff.channels.changed[].fields` 直接点名 `customField`）→ 回滚 → **字段回到 `config.json` 且运行期也认**（不是只改文件、内存里还是旧值）；回滚留下 `before-rollback` 代（可撤销）；hash 去重（连发三次结果相同的保存，从第二次起不再占新代）；轮换管理密钥后回滚到"还没有 `auth` 段"的那一代 ⇒ **新密钥照常可用、旧密钥仍然失效**（`keysPreserved`）；§2 环形上限（`ZZCSAPI_CONFIG_HISTORY_MAX=3`：条数封顶 + 环外文件真被删）与坏快照（渠道缺 `apiKey` → 400 且 `config.json` 一个字节没动）。**改 `persistConfig` 白名单、回滚路径、或新增管理面"写配置"端点时必跑**（v1.18.85 起 §0 那条"先存快照后写文件"的顺序判据同时认 `writeFileAtomic(CONFIG_PATH` 与旧 `writeFileSync(CONFIG_PATH`：它守的是**顺序**，写盘方式由下一个文件单独守）
+node test/config-atomic-write-e2e.test.js  # 38 项断言（v1.18.85）：配置落盘的**原子性**与**启动自愈**——守的是"尚未触发但会致命"的那一类。现场：`persistConfig` 长期裸 `fs.writeFileSync(CONFIG_PATH, ...)` 覆盖正主文件，进程在写盘中途被 kill（或磁盘写满）就留下**半截 JSON**，而 `loadConfig` 的 `JSON.parse` 没有兜底 ⇒ "上一次保存被打断"直接变成"网关起不来"，报错离真因很远；**同一文件里的 `writeHistoryIndex` 一直是 tmp+rename，索引用了、正主忘了用**。§0 装配守卫（`writeFileAtomic` 的 tmp 与目标**同目录**〔跨盘 rename 会退化成 copy+unlink，照样半截〕、`fsync` 必须在 `rename` **之前**〔否则断电可能拿到"长度对、内容空"的文件〕、失败清理 tmp、**四处落盘都不再有裸 `writeFileSync`**〔剥掉块注释后再找——本用例第一版被说明注释里的反例误报成失败〕、`loadConfig` 走 `readConfigWithFallback`、恢复顺序「正主 → `.bak` → 代际快照」、恢复后**原子写回**正主、坏文件留档 `.corrupt-*`、两端共用 `CONFIG_HISTORY_DIR`、`.gitignore` 覆盖临时文件与坏文件留档）；★ **§1b 目标不可替换（Docker 单文件挂载）必须降级而不是把进程打挂**：`-v ./config.json:/app/config.json` 让容器里那个路径成为**挂载点**，`rename()` 到它必然 `EBUSY` —— 第一版没兜住，实测"点一次保存渠道 → 网关 `Exited(1)`"（**离线用例全绿不等于容器里能用**：本用例全程临时目录，根本没有挂载点）。判据用 `vm` 把源码里那段函数原样抠出来 + 注入会抛 `EBUSY` 的假 `fs`，确定性复现：`EBUSY` **不抛**且降级为以 `"w"` 打开**目标本身**写入、打一行 `[atomic]` 日志、tmp 仍清理；`EXDEV` 同样降级；而 `EIO` 这类**仍如实抛出**（降级只针对"路径不支持替换"，不许吞真故障）；§1 真链路（保存后**目录里没有 `.tmp` 残留**、`config.json` 完整合法、`.bak` 已生成）；§2 **正主写坏 → 从 `.bak` 恢复**（仍能启动、写回合法 JSON、恢复出两个渠道的完整版本、坏文件留档、无 `.tmp` 残留）；§3 **正主与 `.bak` 都坏 → 从代际快照恢复**（正对着"一次批量保存把 `.bak` 也覆盖了"的现场）；§4 **三跳全坏 → 非 0 退出**且错误文案点明"已尝试 `.bak` 与代际快照"（**绝不许静默用空配置起来**——那等于把用户全部渠道丢掉还说启动成功）。**改 `persistConfig` / 回滚写盘 / `loadConfig` / 新增任何落盘点时必跑**
 ```
 
 ## 测试哲学（为什么这么写）

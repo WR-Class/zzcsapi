@@ -8,11 +8,13 @@
 > **诚实声明**：**没有做同机、同负载的横向实测**。所以外部项目只列"机制上可考证的性能相关事实"，
 > 不给倍数结论；任何"比谁快 N 倍"的说法在这份文档里都不存在。
 
-版本锚点（抓取于 2026-09-28）
+> **版本锚点**：外部五家抓取于 **2026-09-28**，原样保留（不追更——把"我们自己的进度"混进横向对比会让这张表失效）；
+> **本项目那一行已更新至 v1.18.86 / 2026-10-20**。凡给本项目打分的数字都重测过，口径与复现命令见 §5.1。
+
 
 | 项目 | 语言 / 形态 | 版本锚点 | 存储依赖 |
 | --- | --- | --- | --- |
-| **本项目 zzcsapi** | Node 20/24，单文件 `server.js`（约 5.7k 行），**零 npm 依赖**（无 `package.json`） | v1.17 | 两个 JSON 文件（`config.json` / `usage.json`） |
+| **本项目 zzcsapi** | Node 20/24，`server.js` **9,379 行** + 6 个本地模块（约 2.3k 行），**零 npm 依赖**（无 `package.json`、无 `node_modules`，`require` 只有内置模块 + 同目录 `./*.js`） | **v1.18.86** | 两个 JSON 文件（`config.json` / `usage.json`）+ 配置代际快照目录 `config-history/` |
 | [new-api](https://github.com/QuantumNous/new-api) | Go 1.25 + gin + GORM，单二进制（前端打进二进制） | HEAD `c2b7a9a9`（2026-09-25）/ `v1.0.0-rc.40` | SQLite/MySQL/PG + 可选 Redis |
 | [one-api](https://github.com/songquanpeng/one-api) | Go + gin + GORM，单二进制 | 主干 HEAD `8df4a26`，**2025-02-21 后停更** | SQLite/MySQL/PG |
 | [sub2api](https://github.com/Wei-Shaw/sub2api) | Go 1.27 + gin + Ent + Vue3 | `VERSION 0.2.9`，HEAD `9a62841`（2026-09-28，日更） | **PostgreSQL 15（必选）+ Redis 7（必选）** |
@@ -33,7 +35,7 @@
 
 | | 客户端协议 | 转换策略 | 流式实现 |
 | --- | --- | --- | --- |
-| **zzcsapi** | OpenAI / Anthropic / Gemini（另有 5 种特殊上游协议：notion、notion-agent、workbuddy、genspark、codex） | 内部统一 OpenAI 格式；**同协议直通（v1.15）**、跨协议双向转换 | 按行转发；**直通时原始字节直转**（v1.16）；无整包缓冲 |
+| **zzcsapi** | **4 套客户端报文**：`/v1/chat/completions` / `/v1/messages` / `/v1beta/models` / `/v1/responses`（v1.18.38）；**10 种上游协议**：openai / anthropic / gemini / notion / notion-agent / workbuddy / codex / genspark / hark / opencode | 内部统一 OpenAI 格式；**同协议直通（v1.15）**、跨协议双向转换 | 按行转发；**直通时原始字节直转**（v1.16）；无整包缓冲 |
 | new-api | openai / claude / gemini / openai_responses | `relaykit/relayconvert` 三套注册表按 (from,to) 查表，覆盖 4 格式互转，9 个方向有 golden 测试 | 逐行扫 SSE → 解析 dto → 按目标协议**重新序列化**；缓冲 64KB 起、上限可配到 128MB |
 | one-api | **只有 OpenAI**（assistants/threads/files/fine-tunes 是 `RelayNotImplemented`） | 单向 N→OpenAI，各 adaptor 自写 handler | 逐行反解重构 SSE |
 | sub2api | OpenAI / Anthropic / Gemini（另有 `/antigravity/*`、`/backend-api/codex/responses`） | `pkg/apicompat` 四方向矩阵（anthropic↔responses、chatcompletions↔anthropic、chatcompletions↔responses…），**同平台可原生透传** | 事件解析后重构，64KB scanner `sync.Pool` |
@@ -46,7 +48,7 @@
 
 | | 选渠道算法 | 权重 | 会话粘性 | 健康度参与排序 |
 | --- | --- | --- | --- | --- |
-| **zzcsapi** | 健康分层（冷却→末位、`down`→倒数第二、`probation`→健康之后）+ **有效优先级** + 延迟 | **SWRR 平滑加权轮询**（真实分流）；自动权重**只观测不生效** | 无 | 是（冷却 / 半愈合 / 延迟） |
+| **zzcsapi** | 健康分层（冷却→末位、`down`→倒数第二、`probation`→健康之后）+ **有效优先级** + 延迟 | **SWRR 平滑加权轮询**（真实分流）；自动权重 v1.18.63 起**可选生效**（默认关；关 = 只观测只展示，开 = 健康系数真进权重，四护栏 + 抗振荡，见 `docs/scheduling.md`） | 无 | 是（冷却 / 半愈合 / 延迟） |
 | new-api | 物化 `abilities` 表：优先级 DESC，重试时按 distinct priority 阶梯下降；同级**加权随机 `Σ(weight+10)`**（权重 0 仍占 10 份基础份额） | 有效 | 可选渠道亲和（Redis） | 是（`AutoDisabled`） |
 | one-api | 取最高优先级档，档内 `ORDER BY RANDOM()`；`Channel.Weight` **定义了但全仓无读取点（未实现）** | **未实现** | 无 | 仅禁用/恢复 |
 | sub2api | 三层（分组→平台→账号）：先过滤（模型/配额/窗口费用/RPM/利润门/并发），命中粘性则锁定原账号，否则 Priority 升序 + last-used + 最小分层 + 负载因子，并批量预取 RPM/窗口费用 | 有（账号级） | **最强**：`session_hash`、`X-Claude-Code-Session-Id`、`previous_response_id`、`guardian_parent` 四层 | 是（Redis `temp_unsched` 临时封禁） |
@@ -77,10 +79,10 @@
 - **CLIProxyAPI**：OAuth 凭据池 + **thinking/签名回放缓存**（bounded LRU，TTL 1h，10240 条上限）——跨轮思维链保真的关键。
 - **new-api / one-api**：以 API key 为主，**未找到指纹伪装一类实现的证据**。
 
-### 1.5 六项差异的强弱结论（本项目 vs notion2api，v1.18.41 定稿，v1.18.43 修订）
+### 1.5 七项差异的强弱结论（本项目 vs notion2api，v1.18.41 定稿，v1.18.43 修订；标题原写"六项"，第 7 轴是 v1.18.42 追加的，v1.18.86 校正）
 
 **为什么单列这一节**：notion2api 是目前唯一能对照的"notion 反代"实现，前四家都不碰这条上游。
-六项逐条给**强弱**（谁强、强多少、证据强度），不给"谁更好"的整体结论——两边目标不同：
+七项逐条给**强弱**（谁强、强多少、证据强度），不给"谁更好"的整体结论——两边目标不同：
 它是"给 notion 套一个 OpenAI 兼容壳"，我们是"多渠道路由 + 四套客户端报文"。
 
 | # | 轴 | 结论（强弱） | 证据与强度 |
@@ -124,9 +126,9 @@
 | 客户端 TCP 写次数（上游 10 片） | 24 | **11（与上游分帧对齐）** |
 | 连续 50 条流式的异常条数 | 0 | 0 |
 | 冷启动到 `/healthz` 200 | — | **882 ms** |
-| 常驻内存 RSS | — | **26 MiB（空载）/ 45 MiB（线上 31 渠道）** |
+| 常驻内存 RSS | — | **26 MiB（空载）/ 45 MiB（v1.16 线上 31 渠道）**；**2026-10-20 复测：刚启动 28.1 MiB，运行约 1 小时后 39–45 MiB（75 渠道 / 16 启用；cgroup `anon` 49 MB、`file` 仅 1 MB ⇒ 几乎全是堆）**——这是会随统计滑窗与 `usage` 累积上涨的量，**报单个数字没有意义** |
 | 每请求磁盘 I/O | 0（用量 4s 防抖落盘、`recent` 上限 800 条） | 0 |
-| 回归测试 | 22 文件 / 898 断言 | **23 文件 / 930 断言**（v1.18 起 28 文件 / 1185 断言） |
+| 回归测试 | 22 文件 / 898 断言 | **23 文件 / 930 断言**（v1.16 当时）；**现为 64 文件 / 3091 断言**（v1.18.88 实测，`node _run_all_tests.js`） |
 
 口径说明（避免误读）：
 - 本机回环上"一跳"的成本约 0.3～0.6 ms；上面的**净增**= 经网关 − 直连，含网关自己的 JSON 解析、候选选择、记账。
@@ -149,22 +151,24 @@
 
 | 能力 | zzcsapi | new-api | one-api | sub2api | CLIProxyAPI |
 | --- | --- | --- | --- | --- | --- |
-| 客户端协议 | 3 | 4（含 responses） | **1** | 3+（antigravity / codex 端点） | 4+（含 interactions） |
-| 上游协议族 / 渠道类型 | 8 种协议（现网 31 渠道） | **60 常量 / 40 适配器目录** | 38 适配器 | 10+ 平台 | 11–12 类 |
+| 客户端协议 | **4**（chat / anthropic / gemini / responses） | 4（含 responses） | **1** | 3+（antigravity / codex 端点） | 4+（含 interactions） |
+| 上游协议族 / 渠道类型 | **10 种协议**（现网 **75 渠道**，16 启用） | **60 常量 / 40 适配器目录** | 38 适配器 | 10+ 平台 | 11–12 类 |
 | chat / embeddings / images | ✅（多为透传） | ✅ | ✅ | ✅ | ✅ |
 | audio / rerank / moderations | ❌ | ✅ | 部分 | 部分 | 部分（images/videos/alpha search） |
 | realtime / WebSocket | ❌ | ✅ `/v1/realtime` | ❌ | ✅（OpenAI 上游 WS 通道 + 连接池） | ✅ |
 | 工具调用 | ✅ 三协议全通 + 两种上游**文本仿真** | ✅ | ✅ | ✅（含 parallel tools、reasoning 别名） | ✅ |
 | 多模态图片 | ✅（图片能力门裁剪候选） | ✅ | ✅ | ✅ | ✅ |
 | 推理字段保真 | 同协议直通保留；跨协议丢弃 | 转换映射 | 无证据 | thinking budget/effort 映射 + Gemini 签名清洗 | **thinking 回放缓存** |
+| thinking 签名回放 | **✅ v1.18.8**（仅同协议直通的人工丢失块：只回放上游真签过的，四元键不跨会话/渠道/模型，4xx 即作废，默认关） | 无证据 | 无证据 | 无证据 | ✅（bounded LRU，TTL 1h，10240 条） |
 | 提示 / 响应缓存 | ❌ | 无证据 | ❌ | L1 ristretto + L2 Redis + singleflight | 仅 thinking 回放 |
 | 会话粘性 | ✅ v1.17（默认关；只改链首、不污染份额统计） | 渠道亲和 | ❌ | **最强（四层）** | ✅（默认关） |
 | 客户端限流 | ✅ v1.17（整机 rpm + 并发，429 + Retry-After） | ✅ Redis/内存 + 按模型 | 进程内 | ✅ RPM / 窗口费用 | 无证据 |
-| 指标 / 运维面 | 11 个 `/admin/api/*` + 单页控制台 + **`/metrics`（Prometheus 文本，v1.17）** | `perf_metrics` + 系统监控 | 无 | 有 | management API v8/v0 + pprof + 内建面板（**v6.10 起不再内置统计**） |
+| 指标 / 运维面 | **25 条 `/admin/api/*` 路径 / 30 个 method+path 组合**（实测统计口径见 §5）+ 单页控制台 + **`/metrics`（Prometheus 文本，v1.17）** | `perf_metrics` + 系统监控 | 无 | 有 | management API v8/v0 + pprof + 内建面板（**v6.10 起不再内置统计**） |
 | 配置热更新 | ✅（写 `config.json` 即时生效） | DB 轮询 | ❌ | ✅ | fsnotify + 管理 API |
+| 配置变更保护 | **✅ v1.18.83–86**：代际快照（环形 20 代 + hash 去重，可一键回滚）；**原子写**（同目录 tmp → fsync → rename）；启动**三跳自愈**（正主 → `.bak` → 代际快照，全坏才退非 0），坏文件留档 | DB 事务（天然原子，**无"上一代可回滚"**） | DB 事务（同左） | DB 事务（同左） | 单文件 `config.yaml`，**未找到原子写/代际证据** |
 | 插件 / MCP | ❌ | 无 MCP 证据 | ❌ | ❌ | **插件体系（c-shared）** |
 | 集群 / 多实例 | ❌ 单机设计 | Redis 共享（配置秒级延迟） | ❌ | Redis 跨实例 | ✅（Home + JWT） |
-| 回归测试 | **28 文件 / 1185 断言，零依赖真链路 e2e** | golden 测试（9 方向） | 少量 | benchmark + 测试 | 有测试 |
+| 回归测试 | **64 文件 / 3091 断言，零依赖真链路 e2e** | golden 测试（9 方向） | 少量 | benchmark + 测试 | 有测试 |
 
 ---
 
@@ -173,23 +177,27 @@
 **优势（与上面表格互证）**
 
 1. **失败语义最细**：分级冷却 + `Retry-After` 对齐 + 探测半愈合 + 4xx 不短路 + 冷却原因回传客户端。
-2. **零依赖单文件**：约 5.7k 行、可读可改；**1185 项断言**的零依赖真链路回归（假上游 + 临时网关，不出网、不烧额度）。
+2. **零依赖、可读可改**：`server.js` 9,379 行 + 6 个本地模块（共约 2.4k 行）；**3091 项断言**的零依赖真链路回归（假上游 + 临时网关，不出网、不烧额度）——规模比 v1.16 那份对比时涨了 2.5 倍，`server.js` 已不再是"单文件"这个形态的全部。
 3. **特殊上游工程**：curl/PowerShell 指纹绕行、网页会话、文本协议工具仿真、订阅额度解析——与 sub2api 的
    uTLS 路线解决同一类问题，但**零依赖**。
 4. **v1.17 补齐三项**：会话粘性（只改链首，不污染加权份额统计）、客户端限流（整机 rpm + 并发，429 + `Retry-After`）、
    `/metrics`（Prometheus 文本格式，零依赖，正文不含任何密钥）——对比表里此前唯一还站得住的差距就这三项。
+5. **v1.18.63–86 又补两项**：自动权重**可选生效**（默认关，开就真进分流）；配置**原子写 + 三跳启动自愈 + 代际回滚**——
+   这两条同类网关要么没有（自动权重），要么用数据库事务代替、但**没有"上一代可对照/可回滚"**（配置保护）。
 
 **短板（诚实清单）**
 
-1. **广度不如 new-api**：audio / rerank / moderations / realtime / WebSocket 都没有；渠道类型只有 8 种协议。
-2. **还缺一项机制，且已论证"不做"**：thinking 回放缓存 —— 逐行核对 + 保真度测试
-   （`test/thinking-fidelity.test.js`）证明：网关**从不向客户端产出 thinking 块**（除 v1.15 同协议直通，那条路给的是带签名的原件），
-   所以"客户端回传无签名块 → 上游 400"**不可达**；唯一会 400 的场景（签名跨渠道）回放缓存也治不了。
-   详见 [`docs/thinking-replay-design.md`](thinking-replay-design.md)。集群/多实例一致性同样属于"不做"（与单点自用定位不符），不是"没做"。
-3. **v1.17 三个开关还没进控制台**：只能改 `config.json`（`/admin/api/status` 里能看到实时状态）。
-4. **流式写放大已在 v1.16 修掉，但非直通路径仍是"逐行解析"**：跨协议转换无法避免解析，与 new-api/one-api 同源。
-5. **出站连接池上限 128、`identity` 编码**：v1.16 引入的取舍，见 docs/behavior.md「出站与流式写路径」。
-6. **指标是进程内计数**（重启清零），不是持久化时间序列——要长期趋势得让 Prometheus 去拉。
+1. **广度不如 new-api**：audio / rerank / moderations / realtime / WebSocket 都没有；渠道类型只有 10 种协议。
+2. **thinking 回放：v1.18.8 改判并已实现（范围比 CLIProxyAPI 窄）**。v1.17 曾论证"不做"（网关从不产出 thinking 块 ⇒ 客户端回传无签名块的场景不可达），
+   v1.18.8 重启后落地的是**同协议直通**那一条：只把上游真签过的签名补回客户端弄丢的块，四元键隔离、4xx 即作废、默认关
+   —— 与 CLIProxyAPI 的"跨协议通用签名缓存"不是一回事，**不许读成"我们也有它那套"**。
+   详见 [`docs/thinking-replay-design.md`](thinking-replay-design.md)。集群/多实例一致性仍属于"不做"（与单点自用定位不符），不是"没做"。
+3. **流式写放大已在 v1.16 修掉，但非直通路径仍是"逐行解析"**：跨协议转换无法避免解析，与 new-api/one-api 同源。
+4. **出站连接池上限 128、`identity` 编码**：v1.16 引入的取舍，见 docs/behavior.md「出站与流式写路径」。
+5. **指标是进程内计数**（重启清零），不是持久化时间序列——要长期趋势得让 Prometheus 去拉。
+6. **配置保护是"补救"而非"根治"**：代际快照能回滚，但 `persistConfig` 的显式字段白名单**本身没改**——
+   下一个新增字段若忘了登记，保存任意渠道时照样会被静默抹掉（详见 `docs/config-history.md` 已知边界）。
+   这是与"数据库事务 + 迁移脚本"那类做法真正的差距，不是能靠加一层快照补平的。
 
 ---
 
@@ -199,7 +207,7 @@
 
 1. `node test/outbound-http-client.test.js` —— 出站客户端形状、keep-alive 复用（含 `agent:false` 对照组）、
    直通流式逐字节一致（CRLF + 跨片帧）、真实 usage 仍记录。
-2. 全量回归：`Get-ChildItem test -Filter *.test.js | % { node $_.FullName }`（28 个文件 / 1185 断言）。
+2. 全量回归：`node _run_all_tests.js`（**64 个文件 / 3091 断言**，输出即合计；`Get-ChildItem test -Filter *.test.js | % { node $_.FullName }` 是等价的手工跑法）。
 3. 延迟与吞吐：起一个假上游 + 临时网关（动态端口、配置在临时目录），客户端用 Node `http` + keep-alive，
    分别对"直连假上游"和"经网关"各跑 N 次取 mean/p50/p95，并发吞吐用 32 并发 × 600 请求。
    注意：**客户端必须用 keep-alive 的 `http.request`**，否则客户端自己（undici）的每跳开销会盖住被测对象。
@@ -216,3 +224,40 @@
 **明确"未找到证据"的项**：new-api 的重试退避/定时冷却计时器/仓库内压测/MCP 实现；
 CLIProxyAPI 的内置客户端限流/响应级缓存/官方基准；sub2api 与 one-api 的公开压测数字；
 new-api 与 one-api 的 TLS 指纹伪装实现。
+
+### 5.1 本轮校准口径（v1.18.86，2026-10-20）
+
+上一版这些数字停在 v1.16 时期（5.7k 行 / 31 渠道 / 1185 断言 / 11 个管理端点 / 8 种协议），
+其中 **"回归测试"那一行甚至写的是 v1.18 起点、而不是终点**。本轮全部重测，**每个数字都给可复现的命令**：
+
+| 文中数字 | 实测值 | 怎么复现 |
+| --- | --- | --- |
+| `server.js` 行数 | **9,379** | `(Get-Content server.js).Count` |
+| 本地模块规模 | notion 857 / notion-agent 313 / hark 347 / opencode 171 / tool-emu 490 / font-assets 92 | 同上逐文件 |
+| 测试文件 / 断言 | **64 / 3091** | `node _run_all_tests.js`（合计行即答案；**逐文件行相加必须等于它**） |
+| 渠道数 / 启用数 | **75 / 16** | `(Get-Content data/config.json -Raw \| ConvertFrom-Json).channels` 计数 |
+| 上游协议数 | **10** | `server.js` 的 `aliasedProto` 数组（`validateChannelDef` 内，唯一权威清单） |
+| 客户端报文数 | **4** | 路由分支：`/v1/chat/completions`、`/v1/messages`、`/v1beta/models`、`/v1/responses` |
+| `/admin/api/*` | **25 条路径 / 30 个 method+path** | 见下 |
+| 常驻 RSS | **28.1 MiB（刚启动）→ 39–45 MiB（运行 1 小时后，75 渠道）** | `docker stats zzcsapi --no-stream` 连采三次；堆占比看 `docker exec zzcsapi cat /sys/fs/cgroup/memory.stat` 的 `anon`（49 MB）vs `file`（1 MB） |
+
+**管理端点怎么数**（口径写清，否则下一个人数出来还是不一样）：
+
+```powershell
+# method+path 组合：精确匹配的 + startsWith 的子路由 + session 内部分支
+Select-String -Path server.js `
+  -Pattern "req\.method === '(GET|POST|DELETE|PUT)' && url\.pathname (===|\.startsWith\() '/admin/api[^']*'" `
+  | ForEach-Object { $_.Line.Trim() }
+```
+
+- **精确匹配 26 条**（`status` / `usage` / `usage/clear` / `stats` / `bans` / `config` / `config/history` /
+  `config/rollback` / `recheck` / `channel` / `settings`×2 / `keys`×2 / `admin-key` / `keys/generate` /
+  `keys/reset` / `gateway-key` / `channels`×2 / `codex-import` / `genspark-import` / `codex-quota` / `probe` / `test`）
+- **子路由 2 条**：`DELETE /admin/api/bans/{ip}`、`GET /admin/api/channels/{id}/key`
+- **`/admin/api/session` 2 条**（POST 登录 / DELETE 登出，在同一分支内按 method 分派，上面那条正则打不到）
+
+⇒ 合计 **30 个 method+path、25 条路径**。旧版写的"11 个"是 v1.17 时的口径，**少算了会话/密钥/封禁/代际/导入那一批**。
+
+**为什么给本项目单独更新、而不顺手把外部五家也刷一遍**：那五家的数字各自需要重新 clone + 逐文件核对，
+本轮没做（也不想用"看起来更新"掩盖没求证）。所以本文档里**外部项目的每一条仍是 2026-09-28 的快照**，
+比较时请把它当"当时的他们"而不是"今天的他们"。

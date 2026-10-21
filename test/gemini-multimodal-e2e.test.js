@@ -169,7 +169,9 @@ const cleanup = () => {
     const imgGem = { contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: IMG } }] }] };
     r = await call(GW2_PORT, gwPath, imgGem, bearer());
     check('Gemini 路由 → 400（不是 200 后丢图作答）', r.status === 400, r.status);
-    check('错误文案说明原因', !!(r.txt && r.txt.includes('only openai / anthropic / gemini protocol channels')), r.txt.slice(0, 160));
+    // v1.18.82：清单由 `IMAGE_CAPABLE_PROTOCOLS.join(' / ')` 拼出 ⇒ 别写死整串，只断言
+    // "说了原因"+"名单是当前的"（写死整串的那次一加 workbuddy 就红）。
+    check('错误文案说明原因', !!(r.txt && r.txt.includes('protocol channels can carry images') && r.txt.includes('workbuddy')), r.txt.slice(0, 160));
     r = await call(GW2_PORT, '/v1/chat/completions', { model: 'mock-vision', messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,' + IMG } }] }] }, bearer());
     check('OpenAI 路由同样 400', r.status === 400, r.status);
     r = await call(GW2_PORT, '/anthropic/v1/messages', { model: 'mock-vision', max_tokens: 8, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: IMG } }] }] }, bearer());
@@ -177,7 +179,7 @@ const cleanup = () => {
 
     console.log('\n6. 纯文本不受能力门影响（只有 notion 渠道时，老行为照旧）');
     r = await call(GW2_PORT, gwPath, { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] }, bearer());
-    check('未误报图片错误文案', !(r.txt || '').includes('only openai-protocol channels'), r.status + ' ' + (r.txt || '').slice(0, 120));
+    check('未误报图片错误文案', !(r.txt || '').includes('protocol channels can carry images'), r.status + ' ' + (r.txt || '').slice(0, 120));
 
     console.log('\n7. 原生 SDK 鉴权头（PT24）');
     const txtBody = { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] };

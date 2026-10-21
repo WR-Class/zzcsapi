@@ -43,12 +43,22 @@ for (const f of files) {
   if (!matched) { m = out.match(/全部通过[（(](\d+)\s*项/); if (m) { n = Number(m[1]); matched = true; } }
   if (!matched) { m = out.match(/(\d+)\/(\d+)\s*通过/); if (m) { n = Number(m[1]); bad2 = Number(m[2]); matched = true; } }
   if (!matched) { m = out.match(/(\d+)\s*项断言/); if (m) { n = Number(m[1]); matched = true; } }
-  if (!matched) { console.log('  ??   ' + f + ' —— 收尾格式没认出来，请人工看'); }
   asserts += n;
-  if (r.status === 0 && bad2 === 0) { filesOk++; console.log('  ok   ' + f.padEnd(52) + n + ' 项'); }
+  /* v1.18.88：**"退出码 0 但一条断言都没解析到"必须判红**。这是最安静的一种坏法——
+     用例要么压根没跑（文件被清空、`process.exit(0)` 提前跑掉、条件分支判断失手），
+     要么收尾格式被改了而这里还按 0 项记 ok：v1.18.55 的 `hark-channel.test.js` 就是
+     整份文件按 0 计入合计、总数少 97 项却一路绿灯。**"通过 0 项"不是通过，是"什么都没验到"**。
+     （退出码非 0 的情形下面单列，两者原因不同、不能混成一句话。） */
+  const emptyRun = r.status === 0 && bad2 === 0 && (!matched || n === 0);
+  if (r.status === 0 && bad2 === 0 && !emptyRun) { filesOk++; console.log('  ok   ' + f.padEnd(52) + n + ' 项'); }
   else {
     filesBad++; bad.push(f);
-    console.log('  FAIL ' + f.padEnd(52) + n + ' 通过 / ' + bad2 + ' 失败 (exit ' + r.status + ')');
+    if (emptyRun) {
+      console.log('  FAIL ' + f.padEnd(52) + '0 项断言（退出码 0 但' + (matched ? '收尾行是 0 项' : '没有任何可解析的收尾行') + '）');
+      console.log('        ↑ 空跑：这不是"通过 0 项"，是"一条都没验到" —— 除非该文件被清空/提前 exit 0/收尾格式被改，否则不该出现');
+    } else {
+      console.log('  FAIL ' + f.padEnd(52) + n + ' 通过 / ' + bad2 + ' 失败 (exit ' + r.status + ')');
+    }
     /* v1.18.75：**先打网关遗言**。真因常常在网关自己的输出里——端口被抢是 EADDRINUSE、
        配置非法是 ERR_SOCKET_BAD_PORT、文件没进镜像/没 require 到是 MODULE_NOT_FOUND——
        而 41/57 个用例把它的 stdio 设成了 'ignore'，不打出来就只能看到「网关未启动」

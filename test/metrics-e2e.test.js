@@ -73,6 +73,18 @@ function makeLabelFn() {
     !/writeFileSync|persistConfig|recordFailure/.test(SRC.slice(SRC.indexOf('function renderMetrics()'), SRC.indexOf('function renderMetrics()') + 3200)));
   check('渠道状态 gauge 覆盖五档（ok/down/cooldown/probation/disabled）',
     /states = \{ ok: 0, down: 0, cooldown: 0, probation: 0, disabled: 0 \}/.test(SRC));
+  // v1.18.88：直方图桶与重试预算
+  check('两个直方图指标都声明成 histogram 类型（不是 gauge/counter）',
+    /head\('zzcsapi_channel_duration_seconds', 'histogram'/.test(SRC) &&
+    /head\('zzcsapi_request_duration_seconds', 'histogram'/.test(SRC));
+  check('桶边界是常量数组（改配置改不动它——改了同一指标历史序列就不可比）',
+    /const LAT_BUCKETS_S = \[0\.05, 0\.1, 0\.25, 0\.5, 1, 2\.5, 5, 10, 30, 60, 120, 300\];/.test(SRC));
+  check('桶是**累计**语义（观测值落进所有 le≥v 的桶，不是只落进一个）',
+    /for \(let i = 0; i < LAT_BUCKETS_S\.length; i\+\+\) if \(v <= LAT_BUCKETS_S\[i\]\) \{ hist\[i\]\+\+; hit = true; \}/.test(SRC));
+  check('每个直方图都补了 +Inf 桶（Prometheus 硬要求：+Inf 必须等于 _count）',
+    (SRC.match(/le="\+Inf"/g) || []).length === 2 && (SRC.match(/_bucket\{[^\n]*le="\+Inf"\} \$\{m\.msCount\}/g) || []).length === 2);
+  check('重试预算的两个计数按原因分开（attempts / elapsed，混在一起就看不出哪条先到）',
+    /BUDGET_STAT\[budgetExhausted\]/.test(SRC) && /zzcsapi_retry_budget_exhausted_total\{reason="elapsed"\}/.test(SRC));
 
   /* ─────────────────────────── 1. 标签转义真值表 ─────────────────────────── */
   console.log('\n1. 标签转义（现抠真实源码）');
@@ -215,6 +227,35 @@ function makeLabelFn() {
     check('耗时 sum/count 都在动（count ≥ 2 且 sum > 0）',
       (val(m1.text, 'zzcsapi_channel_latency_ms_count', 'channel="mock-mxGood"') || 0) >= 2 &&
       (val(m1.text, 'zzcsapi_channel_latency_ms_sum', 'channel="mock-mxGood"') || 0) > 0);
+
+    /* ── v1.18.88 直方图（真实取值，不是"有行就行"）──
+       直方图最容易出的错是**累计语义写反**（落进单个桶）与 **+Inf ≠ count**——
+       前者会让 P95 算出来偏低、后者会被 Prometheus 直接判成格式错。所以这里逐条验：
+       ① 每档 bucket 单调不减；② le="+Inf" 必须等于 _count；③ sum 与 _sum 一致（秒）。 */
+    const bucketOf = (text, name, le, labels) => {
+      const re = new RegExp('^' + name + '_bucket\\{' + labels + ',le="' + le.replace(/[.+]/g, '\\$&') + '"\\} (-?[0-9.eE+]+)$', 'm');
+      const m = text.match(re);
+      return m ? Number(m[1]) : null;
+    };
+    const LE = ['0.05', '0.1', '0.25', '0.5', '1', '2.5', '5', '10', '30', '60', '120', '300', '+Inf'];
+    const buckets = LE.map((le) => bucketOf(m1.text, 'zzcsapi_channel_duration_seconds', le, 'channel="mock-mxGood"'));
+    check('渠道直方图 13 档 bucket 全在（12 个有限档 + +Inf）', buckets.every((v) => v !== null), buckets);
+    check('bucket 单调不减（累计语义没写反）', buckets.every((v, i) => i === 0 || v >= buckets[i - 1]), buckets);
+    check('le="+Inf" 等于 _count（Prometheus 硬要求）',
+      buckets[buckets.length - 1] === val(m1.text, 'zzcsapi_channel_duration_seconds_count', 'channel="mock-mxGood"'),
+      [buckets[buckets.length - 1], val(m1.text, 'zzcsapi_channel_duration_seconds_count', 'channel="mock-mxGood"')]);
+    check('_sum 与既有 ms summary 同源（秒 = 毫秒/1000，误差 ≤ 0.002s）',
+      Math.abs(Number(m1.text.match(/^zzcsapi_channel_duration_seconds_sum\{channel="mock-mxGood"\} ([0-9.]+)$/m)[1]) * 1000 -
+        (val(m1.text, 'zzcsapi_channel_latency_ms_sum', 'channel="mock-mxGood"') || 0)) <= 2,
+      m1.text.match(/^zzcsapi_channel_duration_seconds_sum\{channel="mock-mxGood"\}.*$/m));
+    const rq = m1.text.match(/^zzcsapi_request_duration_seconds_count\{route="\/v1\/chat\/completions"\} ([0-9.eE+]+)$/m);
+    check('端到端直方图把这两发都算进去了（count ≥ 2）', rq && Number(rq[1]) >= 2, rq && rq[1]);
+    check('端到端耗时 ≥ 渠道耗时（前者包含换家与重试，不可能更小）',
+      (val(m1.text, 'zzcsapi_request_duration_seconds_count', 'route="/v1/chat/completions"') || 0) > 0 &&
+      Number(m1.text.match(/^zzcsapi_request_duration_seconds_sum\{route="\/v1\/chat\/completions"\} ([0-9.]+)$/m)[1]) >= 0);
+    check('重试预算计数在空载时是 0（两个原因都有行，不是缺失）',
+      ['attempts', 'elapsed'].every((r) => val(m1.text, 'zzcsapi_retry_budget_exhausted_total', `reason="${r}"`) === 0),
+      m1.text.split('\n').filter((l) => l.startsWith('zzcsapi_retry_budget')));
     check('会话粘性 gauge 随请求增长（表里 1 条会话）', val(m1.text, 'zzcsapi_affinity_entries') === 1, val(m1.text, 'zzcsapi_affinity_entries'));
 
     // 401 也进 requests_total（否则"被挡掉的流量"在监控里是隐形的）

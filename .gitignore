@@ -40,3 +40,23 @@ docs/服务器信息.txt
 
 # 请求体落盘诊断产物（v1.18.27，含完整对话内容，绝不入仓库）
 dump/
+
+# 配置代际快照目录（v1.18.83）：每一代都是**整份 config.json 的原文**，含全部渠道明文 apiKey，
+# 与 config.json / config.json.bak 同级机密，绝不入仓库。默认留最近 20 份。
+config-history/
+
+# ★ 统一数据目录（v1.18.86）：compose 改挂 ./data:/app/data，里面同时装着 config.json、
+# config.json.bak、usage.json、config-history/ —— 全族都是明文渠道 key 或用量记录，绝不入仓库。
+# 这一条同时取代了上面 `config.json` / `usage.json` / `config-history/` 三条的容器部署形态
+# （那三条保留着，是为了本机 `node server.js` 直接跑时也用根目录那份）。
+/data/
+
+# 原子写的临时文件与「配置自愈」留下的坏文件留档（v1.18.85）。
+# 临时文件形如 .config.json.12345.ab12cd34.tmp（隐藏式前缀），坏文件形如 config.json.corrupt-<时间戳>——
+# 两者都含明文渠道 key，与 config.json 同级机密，绝不入仓库。
+.*.tmp
+*.corrupt-*
+# 升级前的整份配置备份（形如 config.json.pre-v1.18.85）。上面那条 `config.json` 只匹配**这个精确路径**，
+# 带后缀的兄弟文件一个都不盖 ⇒ 手动 `Copy-Item config.json config.json.pre-vX` 得到的备份是明文全量渠道 key。
+# 用 `config.json.*` 一并盖住 .bak / .corrupt-<时间戳> / .pre-<版本> 全族，免得下次再漏。
+config.json.*

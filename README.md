@@ -19,6 +19,7 @@
 - 🧠 **thinking 回放（v1.18.8，默认关）**：同协议直通上把上游自己签的 `signature` 补回给弄丢它的开源客户端——四元键绝不跨会话/渠道/模型，没坏不碰（[设计记录](docs/thinking-replay-design.md)）
 - 🔐 **双层鉴权**：`GATEWAY_KEY`（客户端）+ `ADMIN_KEY`（控制台与管理 API）；未设置则**首启自动生成**随机密钥（日志可查、写入 config.json）
 - 🖥 **Web 控制台**：浏览器打开 `http://127.0.0.1:8787/console` 看渠道状态、改优先级、启停渠道
+- 🕘 **配置历史与一键回滚（v1.18.83 后端 / v1.18.84 控制台入口）**：每次改写 `config.json` 前自动存一代（环形 20 代、hash 去重）；控制台「工具 → 配置历史」可看**「那一代 → 现在」的字段级差异**（直接点名少了哪个字段）并**两步确认**回滚——热生效渠道/设置/封禁表，密钥段不动，回滚本身也能再回滚（[机制详解](docs/config-history.md)）
 - 🔤 **字体自托管（v1.18.37）**：全站用**寒蝉全圆体**（ChillRoundF，SIL OFL 1.1）的子集化**改名**版 `HCRound`，266 个 woff2 分片按 `unicode-range` 从**同源** `/console/fonts/**` 按需加载——不向任何第三方域名发请求（[字体与授权记录](docs/fonts.md)）
 - 📊 **统一模型清单**：`/v1/models`、`/anthropic/v1/models` 自动合并各协议所有可用模型
 - 🧩 **OpenAI Responses API（v1.18.38）**：`/v1/responses`（POST，含流式）+ `/v1/responses/{id}`（GET 取回 / DELETE）——入站按 Responses 报文收，出站转回 `response` 对象与 Responses 的 SSE 事件序列，中间复用同一条候选链与全部兜底（[协议详解](docs/protocols.md)）
@@ -31,20 +32,30 @@
 
 ### 方式一：Docker（推荐）
 
+> **v1.18.86 起：配置 / 用量 / 代际快照统一放在宿主机 `./data` 目录挂载**（此前是三个单文件/目录挂载混着）。
+> 全新部署只需要建一个空目录，**不用手动拷贝 `config.json` / `usage.json`**——`./data` 为空时网关会自动从镜像自带的
+> `config.example.json` 生成一份（含 5 条示例渠道，去控制台改成自己的），`usage.json` 首次写入时自动创建。
+
 ```powershell
-# usage.json 是运行时持久化文件，不入仓库，首次部署先由模板生成
-Copy-Item usage.example.json usage.json
+mkdir data
 docker compose up -d --build
 # 控制台 http://127.0.0.1:8787/console
 # 首次启动的 ADMIN_KEY / GATEWAY_KEY 打印在容器日志里：docker logs zzcsapi | grep ADMIN_KEY
 # 想固定自己的密钥：根目录建 .env 写 ZZCSAPI_ADMIN_KEY=... / ZZCSAPI_GATEWAY_KEY=...
 ```
 
+> 🛡️ **容器加固（v1.18.87）**：compose 已开 `read_only: true`（只读根文件系统）+ `cap_drop: ALL` + `no-new-privileges:true` + `/tmp` tmpfs。
+> 含义：**即使网关被拿下（RCE），攻击者也没法在镜像里落东西**（改不了 `/app/console.html`、塞不进后门脚本），
+> 唯一可写处是 `./data`、`./dump` 两个宿主机可见目录和内存盘 `/tmp`。实测：容器内 `touch /app/x` → `Read-only file system`，
+> `CapEff` 全 0、`NoNewPrivs: 1`，而 `usage.json` 与 `config.json.bak` / 代际快照照常写入。
+> ⚠️ **代价（改代码前必读）**：以后任何"要写磁盘"的新功能，目标**必须**落在 `CONFIG_PATH` / `CONFIG_HISTORY_DIR` /
+> `USAGE_PATH` / `DUMP_DIR` 这四个派生路径下（容器里即 `/app/data` 与 `/app/dump`）或走 `os.tmpdir()`；写别处会**运行期 `EROFS`**，
+> 而本机 `node server.js` 一切正常——这是"本机好好的、容器里报错"里最难查的一类。详见 [docs/security-hardening.md](docs/security-hardening.md) §容器加固。
 > ⚠️ **改完代码要确认容器真的换了镜像**（v1.18.1 现场踩到过）：`up -d --build` 有时只构建不重建（输出是 `Running` 而不是 `Recreated`），刷新看到的还是旧代码。
 > 判断：`docker inspect zzcsapi --format '{{.Image}}'` 与 `docker images zzcsapi:local --format '{{.ID}}'` 不一致就补 `docker compose up -d --force-recreate`。`/console` 带 `no-store`，不需要强刷浏览器。
-> ⚠️ `config.json` / `usage.json` **必须先在宿主机存在**，否则 Docker 会把挂载点建成目录（服务不崩，但用量统计每次重启归零）。
+> ⚠️ **别再问"config.json 要不要先在宿主机存在"**（v1.18.86 之前的老顾虑，现在反过来）：数据目录挂载下宿主机为空才是**正确**的首启状态。反过来，**千万别把 `config.json` 当单文件挂**（`./config.json:/app/config.json`）——容器里那个路径是挂载点本身、与 `/app` 跨 device，原子写的 `rename()` 必然 `EXDEV`/`EBUSY`（v1.18.85 现场：点一次保存 → 网关 `Exited(1)`）。
 > ⚠️ **`Dockerfile` 的 `COPY` 是显式白名单**（v1.18.48 现场踩到过）：新增任何被 `server.js` `require` 的文件（如 v1.18.47 的 `hark.js`）都必须同时加一条 `COPY`，漏了**本机 `node server.js` 一切正常**，但容器会**启动即 crash-loop**（`Cannot find module '/app/xxx.js'`、healthz 连不上，症状离原因很远）。`node test/docker-image-files.test.js` 守这条；改完照旧要 `docker compose build && up -d` 并确认 `docker ps` 里是 `Up (healthy)`。
-> 端口映射 `8787:8787`（局域网可访问）；手工 `docker run` 别忘 `ZZCSAPI_BIND=0.0.0.0`、`TZ=Asia/Shanghai`、`ZZCSAPI_CONFIG=/app/config.json`（compose 已写死，不会踩到）。
+> 端口映射 `8787:8787`（局域网可访问）；手工 `docker run` 别忘 `ZZCSAPI_BIND=0.0.0.0`、`TZ=Asia/Shanghai`、`-v "$PWD/data:/app/data" -e ZZCSAPI_CONFIG=/app/data/config.json`（compose 已写死，不会踩到）。
 > 想让来源统计看到**每台机器的真实 IP**（而不是一行网桥 IP）走 [方式三](#方式三反代采信模式想让来源统计看到每台机器真实-ip)。
 
 ### 方式三：反代采信模式（想让来源统计看到每台机器真实 IP）
@@ -100,8 +111,9 @@ chmod 600 .env
 #    钥匙名必须带 ZZCSAPI_ 前缀——compose 的映射读的是 .env 里的 ZZCSAPI_ADMIN_KEY / ZZCSAPI_GATEWAY_KEY；
 #    写成裸 ADMIN_KEY= 会静默失效：容器回落首启生成，.env 里的钥匙两头都不生效（v1.18.17 公网现场教训）
 
-# 4) config.json 准备好渠道（本地挑好再传上去，此文件不入仓库）+ usage.json 空档起步
-touch usage.json && docker compose up -d --build
+# 4) 只需要准备 config.json（本地挑好再传上去，此文件不入仓库）——data/ 里**不要**预先塞 usage.json：
+#    网关首次写入时自己创建，缺文件/内容坏掉都会自动补成空账本（ensureUsage()），预置反而是多一步
+mkdir -p data && docker compose up -d --build
 curl -s http://127.0.0.1:18787/healthz   # {"ok":true}——此刻只有服务器本机摸得到它
 
 # 5) 签证书：nginx-public.conf 的 443 段引用的证书还没存在，nginx 起不来——
@@ -142,12 +154,16 @@ ADMIN_KEY=yyy    node server.js    # 控制台 + /admin/* 必须带 Bearer yyy
 ZZCSAPI_NOAUTH=1 node server.js    # 本地开发：完全关闭鉴权（仅限本机自用）
 ZZCSAPI_BIND=0.0.0.0 node server.js  # 绑定地址，缺省 127.0.0.1（裸跑时对外提供服务的必填项）
 ZZCSAPI_ALLOWED_HOSTS=a.com,b.com node server.js  # Host 门白名单域名（逗号分隔）。默认放行 localhost 与回环/私网 IP 字面量；反代/公网域名必须在此登记，否则 421（v1.18.10 渗透整改 V-07：拦 DNS 重绑定）
+ZZCSAPI_CONFIG=data/config.json node server.js    # 配置放哪（默认 ./config.json）。指向 ./data 就与容器共用同一份；
+                                                  # usage.json 与 config-history/ 会自动跟到同一目录（同 device ⇒ 原子写生效）
 ZZCSAPI_DUMP_BODIES=/app/dump node server.js  # 【排查用，默认关】把客户端会话类请求体原样落盘到该目录，用于留证"上游异常"的真实请求形态（v1.18.27）
 ZZCSAPI_DUMP_MAX=30 node server.js            # 落盘最多保留几个（默认 30，钳到 1–500）
 ZZCSAPI_CONTEXT_DIET=1 node server.js         # 【默认关】上下文节食：摘掉几十轮前的旧截图（v1.18.61）
 ZZCSAPI_DIET_KEEP_MSGS=30 node server.js      # 节食窗口：只保留最近 K 条消息里出现的图（默认 30）
 ZZCSAPI_DIET_KEEP_IMAGES=5 node server.js     # 节食上限：最多保留最近 N 张图（默认 5）。显式写 0 = 全部摘掉
 ZZCSAPI_FIRST_BYTE_SCALING=0 node server.js   # 【默认开】写成 0 即关掉"首字死线随体积缩放"，退回写死的 30s/60s
+ZZCSAPI_CONFIG_HISTORY_DIR=/app/config-history node server.js  # 配置代际快照目录（默认 config.json 同级的 config-history/，v1.18.83）
+ZZCSAPI_CONFIG_HISTORY_MAX=20 node server.js   # 环上保留几代配置（默认 20，钳到 1–100）。见[配置代际与回滚](docs/config-history.md)
 ZZCSAPI_FIRST_BYTE_PER_KB=40 node server.js   # 缩放斜率：报文体每 1KB 多加多少毫秒（默认 40）
 ZZCSAPI_FIRST_BYTE_MAX_MS=90000 node server.js # 缩放上限（默认 90000 = 90s，钳到 600000）
 ```
@@ -219,7 +235,7 @@ apiKey  = <GATEWAY_KEY>
 
 > **鉴权**：`x-goog-api-key:`（**Gemini SDK 的默认头**）、`?key=`、`Authorization: Bearer` 都行。
 > **支持图片**：`inlineData`（base64）与 `fileData`（`fileUri` 直链）都会转成上游的图片块转发，部件顺序保留；
-> 带图请求只走 `openai` 协议渠道（[含图请求的候选裁剪](docs/scheduling.md)）。
+> 带图请求只走 `openai` / `anthropic` / `gemini` / `workbuddy` 四种协议的渠道（[含图请求的候选裁剪](docs/scheduling.md)）。
 
 ## Web 控制台
 
@@ -231,7 +247,8 @@ http://127.0.0.1:8787/console
 密钥本身**不落浏览器**；管理 API 每次调用仍强制鉴权（"页面能开 ≠ 有权限"），会话失效时自动重新弹门（详见 [行为细节 · 管理面会话](docs/behavior.md)）。
 
 可做：实时看每个渠道的健康/延迟/错误/探测时间、改 priority、启停渠道、触发单渠道或全量重新探测、看各协议聚合模型清单、
-**测试停用渠道里的模型**（停用只是"不参与调度与自动探测"，不代表不能手动打一发验证）、测试结果每行写明**测的哪个模型 + 通过/空回复/失败 + 延迟与 token + 回复或错误原文**。
+**测试停用渠道里的模型**（停用只是"不参与调度与自动探测"，不代表不能手动打一发验证）、测试结果每行写明**测的哪个模型 + 通过/空回复/失败 + 延迟与 token + 回复或错误原文**、
+**在「工具 → 配置历史」里查配置代际并一键回滚**（v1.18.84；代际按需拉取、不进 8 秒轮询，列表/详情里都不出现任何密钥原文）。
 
 > 自动 vs 手动的边界：自动探测（启动时 + `health.intervalSec`）**只探启用渠道**；手动（「测试」/「重探测」/ `/admin/api/test` / `/admin/api/recheck`）不受此限，连停用渠道一起探。
 
@@ -243,22 +260,24 @@ http://127.0.0.1:8787/console
 | --- | --- |
 | [协议与渠道详解](docs/protocols.md) | 协议速查表之外的**全量细节**：原生出站与同协议直通、三条客户端路由的工具调用方向、notion-agent / workbuddy / genspark / codex / hark 配置要点、`proxy` 字段、图片转换 |
 | [调度详解](docs/scheduling.md) | 调度顺序全量语义：同渠道重试、熔断冷却分级、加权轮询、自动权重（v1.18.63 起可选生效）、有效优先级、含图请求的候选裁剪 |
-| [运行期设置（四组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放的语义与 `GET/POST /admin/api/settings` 用法 |
+| [运行期设置（五组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放 / 自动权重的语义与 `GET/POST /admin/api/settings` 用法 |
+| [配置代际与回滚](docs/config-history.md) | **为什么需要**（`persistConfig` 的显式白名单会静默吞字段，PT29 一族连发四例）、快照目录与 hash 去重、三个端点、回滚语义（哪些热生效 / 哪些要重启 / **为什么不动密钥段**）、**原子写与启动三跳自愈**（v1.18.85）、运维与边界（v1.18.83） |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 60 个测试文件 · 2828 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 64 个测试文件 · 3091 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
 | [字体与授权记录](docs/fonts.md) | 全站 `HCRound` 的**来龙去脉**：OFL-1.1 逐条依据、**为什么必须改名**（子集化＝修改版，不得沿用保留字体名）、改了哪些 `name` 字段、交付形态与缓存分层、字重映射逐处理由、可复现的再生成步骤与两个踩坑 |
-| [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | 设置页的施工图：字段契约、四张卡结构、必须守住的交互细节、验收清单 |
+| [控制台「运行期设置」页实现规格](docs/console-settings-spec.md) | 设置页的施工图：字段契约、五张卡结构、必须守住的交互细节、验收清单 |
 | [thinking 回放缓存设计与实现记录](docs/thinking-replay-design.md) | 三次决策完整过程、跨协议 thinking/签名保真度地图、as-built 边界与验收映射 |
 | [Ponytail 全项目审查](docs/PONYTAIL_REVIEW.md) | 动代码前过目：整改项 PT 清单（file:line 证据 + 最小修复）、已验证的非问题（别重查） |
-| [同类网关内部机制对比](docs/gateway-comparison.md) | 本项目 vs new-api / one-api / sub2api / CLIProxyAPI / **notion2api** 的内部机制/性能/全面性对照（只比机制，不比多用户），含实测数字与各家源码级证据；**§1.5 = 与 notion2api 七项差异的强弱结论**（附件/CSV 那一格 v1.18.42 起**已追平**，另加一条"教训型差异"：同一个软墙我们误判过三次，它的实现里根本没有这道坎） |
+| [同类网关内部机制对比](docs/gateway-comparison.md) | 本项目 vs new-api / one-api / sub2api / CLIProxyAPI / **notion2api** 的内部机制/性能/全面性对照（只比机制，不比多用户），含实测数字（v1.18.86 已全量重测本项目那一列，口径见 §5.1）与各家源码级证据；**§1.5 = 与 notion2api 七项差异的强弱结论**（附件/CSV 那一格 v1.18.42 起**已追平**，另加一条"教训型差异"：同一个软墙我们误判过三次，它的实现里根本没有这道坎） |
 | [Genspark Claw 反代研究](docs/genspark-claw-reverse-proxy-research.md) | 逆向过程留档 |
 | [hark.com 网页会话反代研究](docs/hark-reverse-proxy-research.md) | **已接入**（`protocol: "hark"`）：为什么不能当 openai 渠道填 base_url（`/v1/*` 回的是 SPA 壳）、**本机 403 的真因是 Node/curl 不读系统代理而不是 IP 声誉**（同一台机器 PowerShell 走代理 200）、回复整段下发（伪流式）、**上游工具全在服务端**（流里零 `tool_add`，客户端工具只能文本仿真）、**每轮约 11.5 万 harkTokens → 免费日额度只够约 69 轮**、系统路径护栏、复现命令 |
 | [PromptQL（prompt.ql.app）反代研究](docs/promptql-reverse-proxy-research.md) | 结论：不建议接（多人协作 bot 工作台、按 OLU 计量付费，不是可蹭的模型额度；控制面 `auth.pro.ql.app` 本机被 DNS 污染） |
 | [Arena 协议](docs/arena-protocol.md) / [Prism 反代研究](docs/prism-reverse-proxy-research.md) | 已撤渠道留档 |
 | [notion 附件上传研究](docs/notion-attachment-upload-research.md) | **机制查明 + 活体验证 + 软墙根因**：**★ 最有价值的是抓法**——notion2api 的 `upstream.base_url` 可配，指向记录代理就抓到它发给 Notion 的原始报文（含三个必踩的坑：`origin`/`referer` 由 base_url 推出来、账号要按完整 probe JSON 导入、失败会把账号打成 `error`）。据此查明：CSV **不上 S3**，而是 `enableCsvAttachmentSupport:true` + 把 `{"file":{"file_data":"data:…","filename":"…"},"type":"file"}` 内联进 user step 正文（已按此实现为 opt-in 渠道字段，字节逐字对齐，见 `test/notion-attachment-inline-e2e.test.js`）；另白捡到 `getInferenceTranscriptsForUser` 的正确形状。**✅「模型真读到了」v1.18.42 已活体验证**（§8：对照答"没找到文件"、带附件答出只存在于 CSV 里的 `K7Q2M9`）——仍默认关，但那是**稳妥默认**不是"没验证过"。**§7/§7.7 = 软墙的两个维度**（账号状态主导、与传输无关且随时间变；客户端指纹只在账号可过时才看得见——同一秒交替打 curl 3/3 真答、fetch 0/3 软墙）；**§5/§6 是被推翻的旧结论、§7.4 是三次误判的留档，别重犯**。含上传链留档（取目标 → S3 桶根 204 → 公开 URL）、**软墙 ≠ 形状错的判别纪律**、判决实验与复现命令 |
+| [notion 反代实现文档](docs/notion-implementation.md) | **照着配就能用**：`notion`（逆向 `token_v2`）与 `notion-agent`（官方 Agent API）两条路的区别、四类 `transcript` step 与 NDJSON 响应解析、出站通道链（软墙**两个维度**）、凭据发现与缓存、33 个模型代号表、伪流式输出与流断取回、**工具调用全流程**（注入协议原文、四种工具定义形状、流式扫描器、验证方法与失败模式表）、内联附件，以及「取凭据 → 建渠道 → 三级验证 → 故障排查表」全流程。协议层细节见[协议与渠道详解](docs/protocols.md)，逆向取证留档见[notion 附件上传研究](docs/notion-attachment-upload-research.md) |
 | [OpenCode Zen 免费模型反代研究](docs/opencode-reverse-proxy-research.md) | **结论：可反代，两条路都通**（v1.18.72 第二次更正）——**① 正路 = 本机 `opencode serve` 边车**（**已接入**为 `protocol:"opencode"`）：跑的是真客户端、**不伪造任何东西**，建会话 + `generate` 即可拿到免费模型答复（实测口径与数字见 §5）。**② 直连面其实也是通的**，但必须同时伪造三样：UA 写成 `opencode/<渠道>/<版本>/<名字>`、`x-session-id` 铸一个 `descending()` 形状的 `ses_…`、system 以 OpenCode 标题生成器提示词的**前 ≥965 字符**开头并强制 `stream:true`（v1.18.71 写的"直连是死的、判据在报文之外、没有收敛点"**已被推翻**，§3 改写、§9 补第五/六条误判）。两种 403 仍要分开读（`RegionError` = 换出口有用 / `FreeTierError` = 换出口没用）。工程约束：**无 `stream` 参数**（只能伪流式）、不下发 token/费用、**同一会话不保留多轮记忆** ⇒ 必须把 `messages` 拍平成一个 prompt；工具只能文本仿真（**实测可用**）。合规：免费层条款写的是 "can only be used from within OpenCode"，**两条路都有封号风险**，直连那条更重（明确伪造客户端身份）。**付费面反而标准可用**（无密钥回 401 `AuthError`）⇒ 用现有 `openai` 渠道 + `baseUrl: https://opencode.ai/zen/v1` 即可。另查明：你已有五条中继渠道在供 opencode 系免费模型（`20110318` 等），链路瓶颈在中继自己的分组容量（§8） |
 | [AI 工具调用桥接](docs/AI工具调用桥接-群友分享版.md) | 群友分享版说明 |
 
@@ -271,7 +290,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**60 个文件 · 2828 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**64 个文件 · 3091 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 跑全量：`node _run_all_tests.js`（仓库根，零依赖，逐个跑 `test/*.test.js` 并汇总文件数与断言数）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
@@ -283,6 +302,10 @@ http://127.0.0.1:8787/console
   "health": { "intervalSec": 300, "timeoutMs": 8000 },
   "retries": { "perChannel": 1, "maxModelFallbacks": 99 },   // perChannel = 同一家失败后原地再试几次
                                                               //   （只对 5xx/超时/网络错误；0/缺省 = 不重试，上限 5）
+  // v1.18.88 重试预算（可选，缺省 32 次 / 10 分钟，正常请求够不着）：
+  //   "budgetAttempts": 32,   // 一次请求最多发多少上游尝试（同渠道重试也算），1..500，0 = 不限
+  //   "budgetMs": 600000,     // 一次请求最多花多久，1s..1h，0 = 不限
+  //   命中时回 502 + error.budget 明细，不是伪装成"渠道全挂"（见 docs/scheduling.md「重试预算」）
   "channels": [
     {
       "id": "vendor-a-openai",
@@ -358,7 +381,21 @@ http://127.0.0.1:8787/console
 > 控制台入口：渠道编辑弹窗「首字死线 (ms)」「总超时 (ms)」。⚠️ v1.18.46 之前这两个字段**运行期一直在读、却三处都没登记**：
 > 配好之后**保存任意一个渠道**就会被 `persistConfig` 的显式字段清单抹掉（下次重启悄悄回默认），GET 也不下发（控制台看不到它）。
 > 现已补齐（落库清单 / GET 下发 / POST 三态语义），回归见 `test/channel-timeout-attribution-e2e.test.js` §E。
-> 调度旋钮（`cooldown` / `retries` / `autoWeight`）与运行期四组开关（`sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay`）
+> 🛟 **这一类"保存即丢字段"的事故现在有兜底了（v1.18.83 后端 / v1.18.84 控制台入口）**：每次改写 `config.json` 前都会先存一代快照，
+> 控制台「配置历史」页（工具 → 配置历史）可以查「某一代 → 现在」的**字段级差异**（直接点名少了哪个字段）并一键回滚（两步确认、不动密钥、回滚本身也可撤销）。
+> 见[配置代际与回滚](docs/config-history.md)。
+> 🛡️ **写盘与启动也补硬了（v1.18.85 起，v1.18.86 补齐容器侧）**：`config.json` / `usage.json` / 代际快照一律**原子写**（同目录 tmp → **fsync** → rename），
+> 进程在写盘中途被杀不会再留下半截 JSON；万一 `config.json` 已经坏了，启动会按「正主 → `config.json.bak` → 代际快照」
+> **三跳自动恢复**（坏文件留档 `config.json.corrupt-<时间戳>`、好版本原子写回正主，下次启动不再需要退路），
+> **三跳全坏才报错退出**——绝不会静默用空配置起来骗你说启动成功。
+> ⚠️ **原子写的前提是"tmp 与目标同 device"**：旧版 `docker-compose.yml` 把配置挂成**单文件**
+> （`./config.json:/app/config.json`），容器里那是**挂载点本身**、与 `/app` 不在同一 device ⇒ `rename` 失败。
+> **v1.18.85 第一版没兜这条，实测"点一次保存渠道 → 网关 `Exited(1)`"**（`EBUSY`）；补了降级后功能正常但只剩"坏了能救"。
+> **v1.18.86 起改为挂一个目录 `./data:/app/data`**（`config.json` / `usage.json` / `config-history/` 都在里面），
+> tmp 与目标同 device，**rename 成功、原子性完整**——实测启动与真实保存后日志里**不再出现** `[atomic] … 已降级`。
+> 本机 `node server.js` 想与容器共用同一份配置：`ZZCSAPI_CONFIG=data/config.json node server.js`。
+> 见[配置代际与回滚](docs/config-history.md) §2.4 / §2.5 / §2.6，回归见 `test/config-atomic-write-e2e.test.js`。
+> 调度旋钮（`cooldown` / `retries` / `autoWeight`）与运行期五组开关（`sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay` / `autoWeight`）
 > 的全量取值与钳制范围见 [调度详解](docs/scheduling.md) 与 [运行期设置](docs/runtime-settings.md)。
 > `security.trustedProxy` 只在网关部署在反向代理后面时才需要：留空 = 直连模式，一律只认 socket 地址
 > （`X-Forwarded-For` 是客户端可伪造的头，不设门槛就采信会把封禁变成假功能）。Docker 下想让来源统计
@@ -374,7 +411,7 @@ http://127.0.0.1:8787/console
 | `gemini` | `GET /v1beta/models` | `x-goog-api-key: ...` | **原生 Gemini**：`POST /v1beta/models/{m}:generateContent` |
 | `notion` | `POST getSpaces` | `Cookie: token_v2=...` | 逆向 Notion AI（需 token_v2 Cookie） |
 | `notion-agent` | `POST /v1/agents/query` | `Authorization: Bearer ntn_...` | Notion 官方 Agent API（公开 beta） |
-| `workbuddy` | 自检 `chat/completions` | `Authorization: Bearer ...` | WorkBuddy 逆向（必须走 curl 子进程；token 是 JWT，新版已加密） |
+| `workbuddy` | 自检 `chat/completions` | `Authorization: Bearer ...` + **会话信封三件套** | WorkBuddy 逆向（必须走 curl 子进程；token 是 JWT，新版已加密）。**v1.18.78 起上游对流式请求校验 `X-Conversation-ID` / `-Request-ID` / `-Message-ID`，三个缺一即 400 `request illegal`**（网关每次请求现生成，无需配置）。**v1.18.80：报文里只要有一条 `role:"developer"` 就吃同一枚 `11-128`（文案变成 `Illegal API invocation from an unapproved channel`，看着像客户端指纹、实际只认角色名），网关已统一把 `developer` 归一成 `system`**。**v1.18.81：原生 `tools` 可用，非流式回包也会带回 `tool_calls`**（按 `index` 拼回分片）。**v1.18.82：可带图**——它走的是 OpenAI 兼容面的原生透传，`image_url` 原样转发（实测上游 200 且模型真读了图），已进 `IMAGE_CAPABLE_PROTOCOLS` |
 | `codex` | 一次令牌刷新 | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效） |
 | `genspark` | `GET /api/is_login` | `Cookie: session_id=...` | Genspark 网页会话反代（**必须配代理**；工具调用靠文本仿真） |
 | `hark` | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；伪流式、工具靠文本仿真）。**别名至少要配一条**（上游没有 `/v1/models`，推荐 `hark-agent`）——控制台点「获取模型」会拿到这条默认建议；别名表空 = 这个渠道永远不会被请求命中 |
@@ -393,18 +430,45 @@ thinking 回放修复）。**七条**专用报文渠道（`notion` / `notion-age
 
 ## 调度顺序（摘要）
 
-1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias——**同协议优先，跨协议兜底**（现有 `openai` 渠道先后顺序不受影响），最后才是 notion → notion-agent → workbuddy → genspark → hark → codex → opencode 文本链
+1. 按请求的 `model` 在所有 `enabled` 且协议匹配的渠道里查 alias——**同协议优先，跨协议兜底**（现有 `openai` 渠道先后顺序不受影响），最后才是 notion → notion-agent → workbuddy → genspark → **codex → hark** → opencode 文本链（顺序以 `server.js` 里那张遍历表为准：`['openai','notion','notion-agent','workbuddy','genspark','codex','hark','opencode']`；v1.18.88 前这里把 codex 与 hark 写反了）
 2. 候选 = 命中的渠道 ∪ 探测结果里识别到该模型的渠道（有效优先级 -0.5）
 3. 排序：冷却中 → 末位；`down` → 倒数第二；`probation`（半愈合观察期）→ 健康渠道之后；同状态按**有效优先级**降序，再看 latency
 4. **加权轮询**（填了 `weight` 的渠道按比例决定谁排第一；⚠️ 打开 `autoWeight` 后**没填也进池**，基底取 1，见 [调度详解](docs/scheduling.md)「自动权重」；★ v1.18.76 起**一次真实请求只记一次命中、且只记真正竞争的那个池**——控制台那列份额不再被"只是排在后面的兜底协议"虚抬）；**会话粘性**（开着时）把这条会话上次成功的那家提到第一位
 5. **含图请求**先按图片能力门裁剪候选；纯文本不受影响
 6. 依次尝试直到成功；全部失败返回 502 + 错误详情。**同渠道重试**（`retries.perChannel`）只对 5xx/网络/超时原地再试，4xx 一律不重试；**上游报文里明说 `isRetryable:false` 时也跳过重试**（目前只有 notion 会这么说，见 [调度详解](docs/scheduling.md)「上游否决」）
+7. **重试预算**（`retries.budgetAttempts` / `budgetMs`，v1.18.88，缺省 32 次 / 10 分钟）：给"`perChannel` × `maxModelFallbacks`"这个乘积加总闸——同渠道重试也吃预算，两条上限先到先停；命中时回 502 + `error.budget` 明细（不伪装成"渠道全挂"）。正常请求够不着，`0` = 不限。见 [调度详解](docs/scheduling.md)「重试预算」
 
 ```
 有效优先级 effPriority = priority − 失败率 × 3      // 失败率取滚动窗口 ch.roll（样本 ≥5 生效，120 次后减半衰减）
 ```
 
 重试/冷却/权重/自动权重/图片门的全量语义与调参：[调度详解](docs/scheduling.md)。
+
+## 响应头（排查用）
+
+客户端面的每个响应都带两枚头——**"谁"与"为什么"是两个问题**，所以两枚都留：
+
+| 头 | 举例 | 说明 |
+| --- | --- | --- |
+| `X-ZZCSAPI-Channel` | `vendor-a-openai` | **实际服务的渠道 id**（身份以这枚为准，v1.14 起） |
+| `X-ZZCSAPI-Route` | `ch=vendor-a-openai; pick=priority; pos=1/3; attempt=1; skipped=0` | **为什么是这家**（v1.18.88）：`pick` 取值见下表 |
+
+`pick` 的全量取值（不多不少，每一种都有确定含义）：
+
+| 值 | 含义 |
+| --- | --- |
+| `priority` | 按有效优先级排到链首（没配 weight / 没命中粘性 / 没续试，正常路径） |
+| `weighted` | 加权轮询（smooth WRR）把它选出来提到链首 |
+| `affinity` | 会话粘性命中，把这条会话上次用的那家提到链首 |
+| `cursor` | 同报文续试，从上一发停下的**下一家**开始（v1.18.62 的候选游标） |
+| `fallback` | 前面那些家已经失败/冷却，**轮到**这一家（不是"选出来的"） |
+| `all-failed` | 整条链都试过了，仍没有一家成功（502） |
+| `exhausted` | 重试预算先用尽，后面还有没试到的候选（502，`error.budget` 有明细） |
+| `all-cooldown` | 一个都没试：全部候选都在冷却（503，`error.cooldown` 有明细） |
+
+- `pos=<第几家>/<候选总数>`、`attempt=<本请求已发上游尝试数>`、`skipped=<因冷却跳过的家数>` 是三个计数，方便一眼看出"是不是在链尾兜底"。
+- 取值是**纯 ASCII 分号键值对**（HTTP 头不允许非 ASCII）：渠道 id 里的非 ASCII 一律换成 `?`、分号换成逗号（否则一个 id 能把头拆成两个键）。
+- 它**不替代** `X-ZZCSAPI-Channel`——排查"为什么这次走了兜底家 / 为什么跳过了第 1 家 / 是不是加权轮询把它提上来的"看这枚；要"谁在干活"看那枚。
 
 ## 端点
 
@@ -430,6 +494,9 @@ thinking 回放修复）。**七条**专用报文渠道（`notion` / `notion-age
 | `/admin/api/codex-quota` | GET | admin | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import` | POST | admin | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
 | `/admin/api/config` | GET | admin | 接入信息（URL / 端口 + 密钥**掩码** + `keysInsecure`；不交任何密钥原文）+ `dropParamWhitelist`（渠道 `dropParams` 的合法参数名，控制台照用） |
+| `/admin/api/config/history` | GET | admin | **配置代际列表**（v1.18.83）：每次改写 `config.json` 前存一代（hash 去重、环上默认留 20 份）；**只给 seq / 时间 / 字节 / hash / 渠道数，不含任何配置内容**（快照含明文 key） |
+| `/admin/api/config/history/{seq}` | GET | admin | 取某一代的**掩码视图** + 「那一代 → 当前」的字段级 `diff`——`diff.channels.changed[].fields` 直接点名**被静默抹掉了哪个字段** |
+| `/admin/api/config/rollback` | POST | admin | **一键回滚**（body `{seq}`）：写回 `config.json` 并**热应用**渠道 / 五组设置 / 封禁表；`port`/`health`/`retries`/`cooldown` 报 `needsRestart`；**密钥段不动**（`keysPreserved`）；回滚前自动存一代 ⇒ 可撤销。见[配置代际与回滚](docs/config-history.md) |
 | `/admin/api/channels/{id}/key` | GET | admin | **按需揭示**：取单个渠道的上游密钥原文 |
 | `/admin/api/gateway-key` | GET | admin | **按需揭示**：取网关 `GATEWAY_KEY` 原文 |
 | `/admin/api/admin-key` | GET | admin | **按需揭示**：取管理 `ADMIN_KEY` 原文 |
@@ -439,7 +506,7 @@ thinking 回放修复）。**七条**专用报文渠道（`notion` / `notion-age
 | `/admin/api/keys/reset` | POST | admin | 删掉 `config.json` 的 `auth` 段，回到「环境变量 → 首启生成」取值链 |
 | `/admin/api/session` | POST | 匿名（登录门） | 交一次 `ADMIN_KEY` 换回 `HttpOnly` 会话 cookie（12 小时）；登录失败计入 admin 失败限流 |
 | `/admin/api/session` | DELETE | 会话 cookie | 退出登录：只杀自己那枚 token + 过期 cookie；其余方法 405 |
-| `/admin/api/settings` | GET/POST | admin | **运行期设置**：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay` 四组（PATCH 语义，立即生效 + 落库，未知字段 400 点名）——语义见 [运行期设置](docs/runtime-settings.md) |
+| `/admin/api/settings` | GET/POST | admin | **运行期设置**：读写 `sessionAffinity` / `rateLimit` / `metrics` / `thinkingReplay` / `autoWeight` 五组（PATCH 语义，立即生效 + 落库，未知字段 400 点名）——语义见 [运行期设置](docs/runtime-settings.md) |
 | `/metrics` | GET | admin（`metrics.public:true` 时匿名） | **Prometheus 文本格式**：请求/渠道/令牌/耗时/熔断分档/粘性/限流/回放指标；`enabled:false` 时 404 |
 | `/admin/status` / `/admin/recheck` | */POST | admin | 旧版兼容路径 |
 | `/v1/models` | GET | gateway | OpenAI 聚合模型 |
@@ -665,4 +732,5 @@ node sec-audit.js
 
 ## 计划中
 
-- **自动权重「生效版」**：v1.6 只做到观测（算得出来、看得见，但一行不碰真实分流）。下一步才是把健康系数折进候选份额真正生效——需要同时解决「自动份额与手填权重并存谁优先」「护栏（地板/上限）被反复触碰时如何告警」「份额变化要不要写日志」三个问题。**当前刻意再等等：线上观测时间还不够长**。
+- ~~**自动权重「生效版」**~~ —— **已落地（v1.18.63）**：`autoWeight.enabled: true` 真的把健康系数乘进权重、真的改分流；关掉逐字节回旧行为。当初列的三个问题在实现时都定下来了（手工权重与自动系数**相乘**、四条护栏不变、份额变化进 `/admin/api/status` 的观测字段）。详见 [调度详解](docs/scheduling.md)「自动权重」。
+- 目前**没有已承诺的下一版功能**。讨论中的候选（未排期、未承诺，写在这里是为了别再被当成"待办"重复提问）：① 容器内非 root 用户（`USER node`）——要先定 `/app/data` 属主与 `tmpfs /tmp` 权限；② 精确匹配响应缓存——只对"同报文 + 同模型 + 非流式"命中，缓存键漏一项就会串味。

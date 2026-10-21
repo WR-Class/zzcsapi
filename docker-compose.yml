@@ -27,7 +27,19 @@ services:
       #   ZZCSAPI_ALLOWED_HOSTS=你的域名
       # v1.18.16 教训：这里必须真透传——此前是注释行，公网域名进容器一律 421。
       ZZCSAPI_ALLOWED_HOSTS: ${ZZCSAPI_ALLOWED_HOSTS:-}
-      ZZCSAPI_CONFIG: /app/config.json
+      # v1.18.86：配置/用量/代际快照统一放进**一个目录**挂载（原来是三个单文件/目录挂载混着）。
+      # 为什么必须挂目录：单文件挂载时容器里那个路径是**挂载点本身**，它与 /app 是**不同 device**，
+      #   `writeFileAtomic` 的 `rename(tmp, target)` 必然失败（本机实测报 EXDEV；挂载点在别的系统上会是 EBUSY），
+      #   只能降级成原地覆写 —— 即"进程恰好在这几 KB 写入时被杀 → 留下半截 JSON"那个窗口又回来了。
+      #   挂目录后 config.json / usage.json / config-history 三者与 tmp **同 device**，rename 成功，原子性完整。
+      # 本机实测（v1.18.85 那版单文件挂载）：/app 是 dev=91，/app/config.json 与 /app/usage.json 是 dev=72 ⇒ 跨设备。
+      # 迁移：把根目录的 config.json / usage.json / config-history/ 挪进 ./data/（首启为空也可，
+      #   loadConfig 会自动从镜像里的 config.example.json 生成一份并提示填渠道）。
+      ZZCSAPI_CONFIG: /app/data/config.json
+      # 用法统计与代际快照都从 CONFIG_PATH 的 dirname 推导（见 server.js 的 USAGE_PATH / CONFIG_HISTORY_DIR），
+      # 所以挂一个目录就够了，不用逐个配 env。
+      ZZCSAPI_USAGE: /app/data/usage.json
+      ZZCSAPI_CONFIG_HISTORY_DIR: /app/data/config-history
       # 请求体落盘诊断（v1.18.27，默认关闭）：根目录 .env 写 ZZCSAPI_DUMP_BODIES=/app/dump 即开启，
       # 把客户端会话类请求体原样落到 ./dump/（只留最近 ZZCSAPI_DUMP_MAX 个，默认 30）。
       # 用途：抓"上游 200 + finish=length + 输出仅 1 token / 200 + 空流"那类失败的真实请求形态。
@@ -51,8 +63,11 @@ services:
       # 下一家继续；报文一变（用户新一轮）就归零。留空 = 默认 15 分钟。
       ZZCSAPI_CHAIN_CURSOR_TTL_MS: ${ZZCSAPI_CHAIN_CURSOR_TTL_MS:-}
     volumes:
-      - ./config.json:/app/config.json
-      - ./usage.json:/app/usage.json
+      # ★ 配置/用量/代际快照：**一个目录装全部**（v1.18.86 起，取代原来的
+      #   `./config.json:/app/config.json` + `./usage.json:/app/usage.json` + `./config-history:/app/config-history`
+      #   三行）。理由见 environment 里 ZZCSAPI_CONFIG 上面那段：单文件挂载是挂载点、跨 device，rename 必然失败。
+      # ⚠️ 这个目录里全是**整份配置原文 + 用量记录**，含全部渠道明文 apiKey，已 gitignore。
+      - ./data:/app/data
       # 诊断落盘目录（未开启诊断时该挂载点为空目录，零副作用）
       - ./dump:/app/dump
     healthcheck:
@@ -60,6 +75,32 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    # ── 容器加固（v1.18.87）：只读根文件系统 + 丢弃全部 capability ──────────────
+    # 为什么现在才敢开：只读根fs 的前提是"运行时需要写的东西都在挂载卷里"。
+    #   v1.18.86 把 config.json / usage.json / config-history 统一收进 ./data 之后，
+    #   网关的**全部**写盘目标（见 server.js 的 CONFIG_PATH / USAGE_PATH /
+    #   CONFIG_HISTORY_DIR / DUMP_DIR）都落在两个挂载点上，根fs 一次都不用写。
+    #   在此之前（单文件挂载时代）`config.json.bak`、`usage.json` 的 tmp 与代际快照
+    #   分散在三处，只要有一处没挂就必然 EROFS，所以那时开不了。
+    # 效果：即使网关被拿下（RCE），攻击者也**没法在镜像里落东西**——
+    #   没有可写的 /app、没有可写的 /usr，改不了 console.html、塞不进后门脚本。
+    #   唯一可写处是两个绑定目录（宿主机可见，删了即恢复）+ /tmp（内存盘，重启即空）。
+    # ⚠️ 纪律：以后任何"往磁盘写点什么"的新功能，**必须**写进 CONFIG_HISTORY_DIR 那类
+    #   挂载点内，或走 /tmp；否则线上表现为运行期 EROFS，而本机 `node server.js`
+    #   完全正常（根fs 可写）——又一处"本机好好的、容器里报错"的距离很远的现象。
+    read_only: true
+    tmpfs:
+      # Node 与 alpine 的临时文件落点（内存盘，容器一停就没了）。
+      # 不挂这行：libuv / 某些 zlib 路径在只读根下取不到临时目录，表现为启动期 ENOENT/EROFS。
+      - /tmp
+    # 网关不需要任何 capability：监听 8787（>1024，不需要 NET_BIND_SERVICE）、
+    # 不 chown（不需要 CHOWN）、不改网络栈（不需要 NET_ADMIN）、不跟踪进程（不需要 SYS_PTRACE）。
+    # 全丢之后即使二进制里有提权原语也失效。
+    cap_drop:
+      - ALL
+    # 禁止 setuid/setgid 程序提权：镜像里的 wget（healthcheck 用）不需要，给了只是攻击面。
+    security_opt:
+      - no-new-privileges:true
     networks:
       - zznet
 

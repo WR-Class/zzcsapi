@@ -49,13 +49,19 @@ let api;
 try {
   const constLine = (src.match(/const IMAGE_CAPABLE_PROTOCOLS = \[[^\]]*\];/) || [])[0];
   if (!constLine) throw new Error('server.js 里找不到 IMAGE_CAPABLE_PROTOCOLS');
+  // v1.18.82：400 文案也要在沙箱里可见（断言"清单是拼出来的"必须看运行时值，不能只看源码正则）。
+  // ⚠ 别在正则里用 `\n` 收尾——src 是**原样读入**的（server.js 是 CRLF），`;` 后面跟的是 `\r\n`，
+  // 写成 `;[ \t]*\n` 会静默匹配不到（本用例第一版就是这么报"找不到 NO_IMAGE_CHANNEL_MSG"的）。
+  const msgLine = (src.match(/const NO_IMAGE_CHANNEL_MSG = [\s\S]*?;/) || [])[0];
+  if (!msgLine) throw new Error('server.js 里找不到 NO_IMAGE_CHANNEL_MSG');
   const body = [
     constLine,
+    msgLine,
     extract('geminiToOpenAI'),
     extract('anthropicToOpenAI'),
     extract('bodyHasImages'),
     extract('filterCandidatesForImages'),
-    'return { geminiToOpenAI, anthropicToOpenAI, bodyHasImages, filterCandidatesForImages, IMAGE_CAPABLE_PROTOCOLS };',
+    'return { geminiToOpenAI, anthropicToOpenAI, bodyHasImages, filterCandidatesForImages, IMAGE_CAPABLE_PROTOCOLS, NO_IMAGE_CHANNEL_MSG };',
   ].join('\n');
   api = new Function(body)();
 } catch (e) {
@@ -167,8 +173,14 @@ function testImageGate() {
     { channelId: 'd', protocol: 'openai' },
   ];
   const filtered = api.filterCandidatesForImages(cands, withImg);
-  check('含图 → 只留 openai 协议渠道', filtered.length === 2 && filtered.every((c) => c.protocol === 'openai'),
+  check('★ 含图 → 留 openai 协议渠道 + workbuddy（v1.18.82：workbuddy 是 OpenAI 兼容面，实测能转发 image_url）',
+    filtered.length === 3 && filtered.every((c) => c.protocol === 'openai' || c.protocol === 'workbuddy'),
     filtered.map((c) => c.channelId));
+  check('★ 文本仿真/网页会话渠道仍被挡（notion / hark / genspark 会把图静默丢掉）',
+    !filtered.some((c) => c.protocol === 'notion'),
+    filtered.map((c) => c.protocol));
+  check('★ opencode 仍被挡（messages 被拍平成单个 prompt 字符串，图无处可放）',
+    api.filterCandidatesForImages([{ channelId: 'o', protocol: 'opencode' }], withImg).length === 0);
   check('纯文本 → 候选链原样不动（零行为变化）',
     api.filterCandidatesForImages(cands, textOnly) === cands);
   const noProto = api.filterCandidatesForImages([{ channelId: 'x' }], withImg);
@@ -235,10 +247,16 @@ function testWiring() {
   // 1 处常量声明 + 4 处使用（v1.18.38 起 /v1/responses 也接了图片能力门）
   const msgs = (src.match(/NO_IMAGE_CHANNEL_MSG/g) || []).length;
   check('常量 1 处声明 + 4 处使用（不静默降级）', msgs === 5, msgs);
-  check('能力门白名单 = openai + anthropic + gemini（原生出站能带图后扩到三种；新增可转图协议要同时改文档）',
-    JSON.stringify(api.IMAGE_CAPABLE_PROTOCOLS) === '["openai","anthropic","gemini"]', api.IMAGE_CAPABLE_PROTOCOLS);
+  check('能力门白名单 = openai + anthropic + gemini + workbuddy（新增可带图协议要同时改文档）',
+    JSON.stringify(api.IMAGE_CAPABLE_PROTOCOLS) === '["openai","anthropic","gemini","workbuddy"]', api.IMAGE_CAPABLE_PROTOCOLS);
   check('★ 三种协议各自的转图方式都写在常量旁边（出站 image 块 / inlineData）',
     /anthropic —— 出站转成 image 块/.test(src) && /gemini {4}—— 出站转成 inlineData/.test(src));
+  // v1.18.82：错误文案必须从常量**拼出来**。手写的那份在加 workbuddy 时已经过期一次
+  // （文案说"只有 openai / anthropic / gemini"，实际名单已变），所以这里守住"不许再手写一份"。
+  check('★ 400 文案里的协议清单由 IMAGE_CAPABLE_PROTOCOLS 拼出，不再手写（防文档/文案漂移）',
+    /IMAGE_CAPABLE_PROTOCOLS\.join\(' \/ '\)/.test(src) && !/only openai \/ anthropic \/ gemini protocol channels/.test(src));
+  check('★ 文案实际列出了 workbuddy（拿运行时值核对，不只看源码）',
+    /workbuddy/.test(api.NO_IMAGE_CHANNEL_MSG) && api.NO_IMAGE_CHANNEL_MSG.includes('workbuddy'), api.NO_IMAGE_CHANNEL_MSG.slice(0, 200));
   check('非流式 shim 同时提供 text() 与 json()（PT23 的回归防线）',
     /const shim = \{[\s\S]{0,240}?json: async \(\) => JSON\.parse\(text\)/.test(src));
 }

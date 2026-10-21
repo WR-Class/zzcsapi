@@ -358,6 +358,49 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
 
 - **Base URL**：`https://www.workbuddy.ai/v2`；**API Key**：`auth.accessToken` 的 **JWT**（`ey` 开头、三段点分；**别填 refreshToken**）
 - **必须走 curl 子进程**：该上游对 Node/undici 的 TLS 指纹直接 `ECONNRESET`（Win Schannel / Linux OpenSSL 可过）
+- ⚠️ **★ 会话信封三件套（v1.18.78，2026-10-19 上游新增的门）**：流式请求必须同时带
+  `X-Conversation-ID`、`X-Conversation-Request-ID`、`X-Conversation-Message-ID`，**缺任一即**
+  `HTTP 400 {"code":"11-128","msg":"request illegal","displayTips":{"zh":"这次调用没通过渠道校验，可能不是官方客户端发出的。"}}`。
+  这个提示**极具误导性**——它看着像"客户端身份指纹"，实测不是：
+  - 判据**只**是这三件套本身。同一把有效 JWT、同一时刻，只改请求头的实测矩阵：
+    裸 3 个头 400 / 只带 1 个 400 / 任意 2 个 400 / **三个齐发 200**；
+    补 `X-Domain` / `X-Product` / `X-User-Id` / `User-Agent: CLI/2.137.1 WorkBuddy AI/…` / `Accept` 那一整套
+    **一律无效**（所以「伪造官方客户端指纹」这条路不必走，也刻意不走）。
+  - **形状照抄官方客户端**（curl 抓包）：`X-Conversation-ID` 是带连字符的 UUID，
+    `X-Conversation-Request-ID` / `X-Conversation-Message-ID` 是去掉连字符的 32 位十六进制。
+  - 网关**每次请求现生成**（`crypto.randomUUID()`）：网关是无状态转发，客户端本来每轮都把完整历史带上来，
+    不需要跨请求复用会话 ID。所以**渠道侧无需任何配置**，填好 JWT 即可。
+  - 旁证：`/v2/plugin/accounts` 用同一把 JWT 仍是 **200**，说明 token 没过期、`request illegal`
+    与鉴权无关；`stream:false` 时上游回的是 `11101 Non-stream chat request is currently not supported`
+    （本渠道强制流式，这条永远看不到）。
+- ⚠️ **★ `role:"developer"` 必须归一成 `system`（v1.18.80，同一枚 `11-128` 的第二种触发）**：2026-10-20 上游
+  对**消息角色**也做校验——报文里只要有一条 `{"role":"developer"}`，同样回
+  `HTTP 400 {"code":"11-128","msg":"Illegal API invocation from an unapproved channel"}`（文案比 `request illegal`
+  更唬人，明着说"不是官方客户端发出的"）。对照实验（同一账号、同一出口、**只改 role 一个字**）：
+  `[developer,user]`→400 / `[system,user]`（内容一字不改）→200 / `[developer("hi"),user]`→400（与内容长度无关）/
+  把 developer 的 9KB 原文改写成 system→200 ⇒ 判据是**角色名**，不是客户端指纹、也不是 UA/来源。
+  网关处置：`tryWorkbuddyChannel` 在组报文前把 `developer` 一律改写成 `system`（该角色本就是 OpenAI
+  Responses 里 `system` 的新名字，`responsesToOpenAI` 早就这么认），**首条是 developer 的报文因此不再被
+  塞一条 `You are a helpful assistant.` 占位**。回归：`test/workbuddy-quota.test.js` §7（假上游照抄这条
+  拒绝 ⇒ 网关不归一就红，不会出现"假上游放水、本地全绿"）。
+  - 另一个同类触发：**孤立的 `role:"tool"`**（前面没有配对的 `assistant.tool_calls`）也回 400；那是客户端
+    报文本身不合法，网关不替它编造工具调用。**正确的工具往返实测 200**（带不带 `tools` 都是）。
+- **工具调用是原生的（v1.18.81 修好非流式）**：workbuddy 上游认 OpenAI `tools`，按 `index` 分片下发
+  `delta.tool_calls`（名字整段给、参数是碎片）——**不是** hark/genspark 那种文本仿真渠道。旧实现只收
+  `delta.content`，于是非流式回包把 `tool_calls` 整个丢掉（客户端只看到一个空回复），而且"只调工具、
+  不写字"的回合会因 `fullText` 为空被判成 `stream: empty content` 失败并切下家；流式那条路原样转发
+  上游 SSE 所以一直是好的——这正是"流式能用、非流式莫名其妙"的成因。现在：分片按 `index` 拼回、
+  `finish_reason` 给 `tool_calls`（上游给了 `length` 这类非 `stop` 原因则照实带）、判空连工具调用一起看、
+  记账把工具名与参数也算进输出。回归 `test/workbuddy-quota.test.js` §8。
+- **上下文上限 1,048,576 tokens（实测）**：这家的窗口是百万级，日常对话基本撞不到；网关在这一层**不做任何截断**
+  （整段历史原样透传，超限由上游自己拒绝）。⚠️ 真撞到时的失败形态**不是**一句"上下文太长"：上游报错 ⇒ 网关按
+  失败曲线把这家记一次失败并进冷却 ⇒ 客户端可能只看到 `503 所有渠道都在冷却`。所以看到 503 而渠道本身是好的时，
+  **先量请求体**（`/app/dump/req-*.json` 的大小与 message 条数），别先怀疑熔断。
+- **图片（多模态，v1.18.82 起可带图）**：报文体就是 OpenAI 兼容面，`messages[].content` 里的 `image_url`
+  （data URL 或 http 直链）**原样透传**；实测 1×1 PNG 直传上游 → HTTP 200 且模型真答出了颜色，所以它进了
+  `IMAGE_CAPABLE_PROTOCOLS`（见 [docs/scheduling.md](scheduling.md)「含图请求的候选裁剪」）。⚠ 此前它不在名单里，
+  含图请求会被能力门裁光并回 400 `no channel can forward them` —— **那是网关拦的，不是上游拦的**，
+  别照着这句去查上游。
 - **探活**：`/v2` 没有 `/models`（404），探测 = 一次真实轻量聊天（`max_tokens:1`，读到第一个 SSE 分片即判活）——所以成功探测本身就是"真凭实据"，可满血
 - ⚠️ **auth 文件里的 token 已被加密（v1.14.1 起明确提示）**：新版 CodeBuddy 存的是
   `{"$wbEncrypted":1,"envelope":{"suite":1,"keyId":…,"nonce":…,"authTag":…,"ciphertext":…}}` —— **AES-GCM 密文，不是 JWT**，
@@ -542,6 +585,14 @@ DELETE /api/session/{id}                                               → 204�
 **token/费用**：边车**不下发**（`Session.Info.tokens` 与 `cost` 在 `generate` 之后**恒为 0**，
 `/message` 也是空数组，本机实测）⇒ 账本按 `estimateTokens` 估算，**不假装有上游真值**。
 
+**上下文上限（实测，免费层）约 256K tokens**（≈25.6 万）——和 workbuddy 的 1,048,576 差一个数量级，
+一套带长历史 + 大文件的会话很容易撞。三条纪律：
+① **网关不替客户端裁历史**（`ZZCSAPI_CONTEXT_DIET` 只摘几十轮前的旧截图，不按模型上限掐 message）；
+② 超限时上游**不会**回一句"上下文太长"，而是这一发失败 ⇒ 网关记这家一次失败、按失败曲线进冷却
+⇒ 客户端可能只看到 `503 所有渠道都在冷却`（若别的渠道同样超限，更像"网关挂了"）；
+③ 排查顺序固定：**先量请求体**（`/app/dump/req-*.json` 的大小与 message/图片块数）→ 再看该渠道 `lastError`
+→ **最后**才怀疑冷却是谁踢的。真正的处置是收敛客户端上下文，不是加大超时。
+
 **工具调用**：走**文本仿真**（与 hark 同一套路）——`tool-emu` 注入工具协议 → 模型回 `[TOOL_CALL]` 标记
 → `parseEmulatedToolCalls` 还原成标准 `tool_calls`。**活体实测可用**（`read_file` 带参数正确还原）。
 
@@ -564,4 +615,4 @@ DELETE /api/session/{id}                                               → 204�
 
 ## 图片（多模态）的统一转换
 
-三条客户端协议统一把图片转成内部 `image_url` block —— Gemini 的 `inlineData`（base64，`mimeType` 缺省 `image/png`）与 `fileData`（`fileUri` 直链）、Anthropic 的 `image`（`source.type='base64'` 与 `source.type='url'` 两种都认）都会被识别；**部件顺序保留**（先图后问 vs 先问后图对视觉模型有语义）。带图请求只走 `openai` / `anthropic` / `gemini` 三种协议的渠道（候选裁剪规则见 [docs/scheduling.md](scheduling.md) 的「含图请求的候选裁剪」）。
+三条客户端协议统一把图片转成内部 `image_url` block —— Gemini 的 `inlineData`（base64，`mimeType` 缺省 `image/png`）与 `fileData`（`fileUri` 直链）、Anthropic 的 `image`（`source.type='base64'` 与 `source.type='url'` 两种都认）都会被识别；**部件顺序保留**（先图后问 vs 先问后图对视觉模型有语义）。带图请求只走 `openai` / `anthropic` / `gemini` / `workbuddy` **四种**协议的渠道（源码常量 `IMAGE_CAPABLE_PROTOCOLS`——数字以它为准，**别在文档里另写一份**：v1.18.88 前这里写的是"三种"，而 workbuddy 早已在列）（候选裁剪规则见 [docs/scheduling.md](scheduling.md) 的「含图请求的候选裁剪」）。

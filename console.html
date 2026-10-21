@@ -901,7 +901,7 @@ async function loadAll() {
    所以进页面之前先记下来，出页面之后再还原。 */
 function render() {
   const v = $('#viewport'); if (!v) return;
-  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, stats:vStats, playground:vPlayground, access:vAccess, settings:vSettings, keys:vKeys }[page];
+  const fn = { overview:vOverview, channels:vChannels, models:vModels, autoweight:vAutoWeight, logs:vLogs, stats:vStats, playground:vPlayground, access:vAccess, settings:vSettings, keys:vKeys, history:vHistory }[page];
   if (!fn) return;
   const top = v.scrollTop;
   const act = document.activeElement;
@@ -1090,7 +1090,7 @@ const NAV=[
   {sec:'工具'},
   {id:'playground',label:'Playground',icon:'terminal'},
   {id:'settings',label:'运行期设置',icon:'sliders'},
-  {id:'keys',label:'密钥管理',icon:'key'},
+  {id:'keys',label:'密钥管理',icon:'key'},{id:'history',label:'配置历史',icon:'clock'},
   {id:'access',label:'接入信息',icon:'book'}
 ];
 let page='overview';
@@ -1108,7 +1108,7 @@ function go(p){
   renderRail();
   const v=$('#viewport');
   v.innerHTML='';
-  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,stats:vStats,playground:vPlayground,access:vAccess,settings:vSettings,keys:vKeys}[p]||vOverview)(v);
+  ({overview:vOverview,channels:vChannels,models:vModels,autoweight:vAutoWeight,logs:vLogs,stats:vStats,playground:vPlayground,access:vAccess,settings:vSettings,keys:vKeys,history:vHistory}[p]||vOverview)(v);
   v.firstElementChild?.classList.add('page');
   // 现在滚动容器是 .viewport 自己，scrollIntoView 不会生效，必须直接归零
   v.scrollTop=0;
@@ -3494,6 +3494,167 @@ function boot(){
     if(a&&vp&&vp.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return;
     loadAll().catch(()=>{});
   },8000);
+}
+
+/* ═══════════════════════ 页面：配置历史（v1.18.84）═══════════════════════
+   为什么有这一页：`persistConfig` 写 config.json 用的是**显式字段白名单**，任何没登记进清单的
+   渠道字段都会在"保存任意一个渠道"时被静默抹掉（PT29 一族连发四例：weight → dropParams →
+   notionAttachments → firstChunkTimeoutMs/timeoutMs）；而 config.json.bak 只留上一次，
+   控制台一次批量保存就把上一份也覆盖 ⇒ 用户手里没有任何副本可对照，连"少了哪个字段"都答不上来。
+   服务端因此做了代际（`snapshotConfigForHistory`：环形 N 代 + sha256 去重 + 原子索引），
+   这一页只做三件事：列代际 / 看某一代与「现在」的**字段级差异** / 一键回滚。
+
+   四条纪律（与 docs/config-history.md 一一对应，别在这里打折扣）：
+   ① **列表只给元信息、详情只给掩码** —— 密钥原文永不出现在这一页（后端也不下发）；
+   ② **回滚不动密钥段**（`auth` / `adminKey` / `gatewayKey` 保持当前值）—— 按钮旁明写，
+      否则用户不敢点（"点了会不会把我锁在门外 / 让刚轮换的密钥白做"）；
+   ③ **回滚是危险动作 ⇒ 两步确认**（复用密钥管理页的 `armConfirm`，6 秒不点自动还原）；
+   ④ **代际按需拉取，不塞进 8 秒轮询** —— 历史只在"保存 / 回滚"时才变，跟着轮询每 8 秒拉一次
+      纯属浪费；进页拉一次、"重新读取"再拉一次、回滚之后自动重拉。
+   ⚠️ 页面 id 是 `history`：`render()` 与 `go()` **两张分发表都要注册**（只加一张 = "能进页但 8 秒轮询不刷新"）。
+   ⚠️ 本模块刻意放在文件**最末尾**（`boot()` 之后）：函数声明会提升，而放在末尾不移动任何既有行号锚点
+   （`docs/frontend-code-map.md` 的 app.js 索引表因此只需追加一行，不必整体重算）。 */
+let HI=null;            /* GET /admin/api/config/history 的响应（含 max / entries） */
+let HILERR='';          /* 列表级错误（后端原文直显） */
+let HIEL=null;          /* 当前选中的 seq */
+let HID=null;           /* 选中代的详情（掩码 config + 字段级 diff） */
+let HIDERR='';          /* 详情级错误（404 / 500 原文） */
+let HIBUSY=false;       /* 回滚进行中（防连点） */
+const HIHIT={};         /* seq → 详情缓存：来回点不重复打接口 */
+
+const HI_REASON={save:'保存前', 'before-rollback':'回滚前'};
+const hiReason=r=>{const s=String(r==null?'':r);return HI_REASON[s]||s||'—'};
+/* 渠道 id → 显示名（历史里只有 id；名字取当前运行期那份，取不到就退回 id） */
+const hiName=id=>(DATA.channels.find(c=>c.id===id)||{}).name||id;
+
+function hiListHtml(){
+  if(HILERR) return `<div class="empty" style="color:var(--err)">${esc(HILERR)}</div>`;
+  if(!HI) return '<div class="empty">正在读取代际…</div>';
+  const rows=HI.entries||[];
+  if(!rows.length) return `<div class="empty">还没有任何代际。<br>
+    下一次真正改写配置时（保存任意渠道 / 运行期设置 / 封禁表 / 回滚），网关会先把<b>改写前的那一份</b>存成一代。</div>`;
+  return `<table class="tbl"><thead><tr>
+      <th style="width:56px">代</th><th>时间</th><th class="t-r">渠道</th><th class="t-r">体积</th><th>触发</th>
+    </tr></thead><tbody>${rows.map(e=>`<tr class="clickable" data-seq="${Number(e.seq)}"${HIEL===Number(e.seq)?' style="background:var(--panel-3)"':''}>
+      <td class="mono">#${Number(e.seq)}</td>
+      <td class="mono">${esc(fmtTs(e.at))}</td>
+      <td class="t-r mono">${e.channels==null?'—':nf(e.channels)}</td>
+      <td class="t-r mono">${(Number(e.bytes||0)/1024).toFixed(1)} KB</td>
+      <td><span class="chip">${esc(hiReason(e.reason))}</span></td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+function hiDetailHtml(){
+  if(HIEL==null) return '<div class="empty">从左边选一代，看它与「现在」的字段级差异。</div>';
+  if(HIDERR) return `<div class="empty" style="color:var(--err)">${esc(HIDERR)}</div>`;
+  if(!HID) return '<div class="empty">正在读取…</div>';
+  const d=HID, df=d.diff||{}, c=df.channels||{};
+  const added=c.added||[], removed=c.removed||[], changed=c.changed||[], groups=df.groups||[];
+  const chips=arr=>arr.length?arr.map(x=>`<span class="chip">${esc(x)}</span>`).join(' '):'<span class="muted">—</span>';
+  const sec=(t,body)=>`<div style="margin-top:16px"><div class="micro" style="margin-bottom:7px">${esc(t)}</div>${body}</div>`;
+  const none=!added.length&&!removed.length&&!changed.length;
+  return `
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px">
+    <div style="min-width:0">
+      <div class="cell-name">第 ${Number(d.seq)} 代 · ${esc(hiReason(d.reason))}</div>
+      <div class="cell-sub mono">${esc(fmtTs(d.at))} · ${(Number(d.bytes||0)/1024).toFixed(1)} KB · ${nf(d.channels||0)} 个渠道 · hash ${esc(String(d.hash||'').slice(0,12))}</div>
+    </div>
+    <button class="btn danger" id="hiRb" title="把整份配置换回这一代（两步确认；不会改密钥）">${svg('arrowUp',13)}回滚到这一代</button>
+  </div>
+  ${none?`<div class="empty" style="padding:20px 0">这一代与当前配置<b>逐字段相同</b>——没有需要回滚的差异。</div>`:''}
+  ${changed.length?sec(`被改动 / 被抹掉的渠道（${changed.length}）`, `<table class="tbl"><thead><tr><th>渠道</th><th>差异字段</th></tr></thead><tbody>${changed.map(x=>`
+      <tr><td><div class="cell-main"><div style="min-width:0"><div class="cell-name">${esc(hiName(x.id))}</div><div class="cell-sub mono">${esc(x.id)}</div></div></div></td>
+      <td>${chips(x.fields||[])}</td></tr>`).join('')}</tbody></table>`):''}
+  ${added.length?sec(`当前有、那一代没有（回滚后会删除，${added.length}）`, chips(added)):''}
+  ${removed.length?sec(`那一代有、当前没有（回滚后会加回，${removed.length}）`, chips(removed)):''}
+  ${groups.length?sec('设置组差异', chips(groups)):''}
+  <div class="help" style="margin-top:16px">
+    <b>回滚会做什么</b>：渠道 · 五组运行期设置（会话粘性 / 限流 / metrics / thinking 回放 / 自动权重）· 封禁表
+    <b>立即生效</b>；<span class="mono">port</span> / <span class="mono">health</span> /
+    <span class="mono">retries</span> / <span class="mono">cooldown</span> 只写进文件，<b>重启容器后才生效</b>（回滚响应里会点名列出来）。<br>
+    <b>不会动密钥</b>：<span class="mono">auth</span> / <span class="mono">adminKey</span> /
+    <span class="mono">gatewayKey</span> 一律保持当前值${df.keysIgnored?'（这一代与当前在密钥段上确实不同，已<b>忽略</b>）':''}——
+    否则一次回滚就能把你锁在门外，或让刚做的密钥轮换白做。<br>
+    <b>点错了也别慌</b>：回滚前网关会先把「现在」存成一代（触发原因 <span class="mono">回滚前</span>），所以回滚本身可以再回滚回去。</div>`;
+}
+
+function drawHi(){
+  const box=$('#hiList'), det=$('#hiDetail');
+  if(box) box.innerHTML=hiListHtml();
+  if(det) det.innerHTML=hiDetailHtml();
+  if(box) $$('#hiList tr[data-seq]',box).forEach(tr=>tr.onclick=()=>hiOpen(Number(tr.dataset.seq)));
+  const cnt=$('#hiCnt'); if(cnt) cnt.textContent=HI?(`${(HI.entries||[]).length} / ${HI.max||'?'} 代`):'';
+  const rb=$('#hiRb'); if(rb) rb.onclick=()=>hiRollback(Number(HIEL),rb);
+}
+
+async function loadHistory(){
+  HILERR='';
+  try{ HI=await api('/admin/api/config/history'); }
+  catch(e){ HI=null; HILERR='读取代际失败：'+String((e&&e.body&&e.body.error)||(e&&e.message)||e); }
+  drawHi();
+}
+
+async function hiOpen(seq){
+  if(!Number.isFinite(seq)) return;
+  HIEL=seq; HID=HIHIT[seq]||null; HIDERR='';
+  drawHi();
+  if(HID) return;
+  try{ const d=await api('/admin/api/config/history/'+seq); HIHIT[seq]=d; if(HIEL===seq) HID=d; }
+  catch(e){ if(HIEL===seq) HIDERR=String((e&&e.body&&e.body.error)||(e&&e.message)||e); }
+  drawHi();
+}
+
+async function hiRollback(seq,btn){
+  if(HIBUSY||!Number.isFinite(seq)) return;
+  if(!armConfirm(btn,'回滚到 #'+seq)) return;      /* 第一下只变文案：确认回滚到 #N */
+  HIBUSY=true;
+  const old=btn?btn.innerHTML:null;
+  if(btn){btn.disabled=true;btn.innerHTML=svg('arrowUp',13)+'回滚中…'}
+  try{
+    const r=await api('/admin/api/config/rollback',{method:'POST',body:JSON.stringify({seq})});
+    const nr=Array.isArray(r.needsRestart)?r.needsRestart:[];
+    toast(`✓ 已回滚到第 ${r.rolledBackTo} 代（${nf(r.channels)} 个渠道已按那一代重建）`
+      +(nr.length?` · 重启后生效：${nr.join(' / ')}`:''),'ok');
+    HIEL=null;HID=null;HIDERR='';HILERR='';HI=null;
+    for(const k of Object.keys(HIHIT)) delete HIHIT[k];
+    await loadHistory();
+    await loadAll().catch(()=>null);                /* 渠道与运行期设置都被重建过，整页数据必须重拉 */
+    render();
+  }catch(e){ /* api() 已经 toast 过原文（如 snapshot not found / missing apiKey） */ }
+  finally{
+    HIBUSY=false;
+    if(btn&&btn.isConnected){btn.disabled=false;btn.innerHTML=old||svg('arrowUp',13)+'回滚到这一代'}
+  }
+}
+
+function vHistory(v){
+  v.innerHTML=`
+  <div class="page-hd">
+    <div><h1 class="page-title">配置历史</h1>
+      <div class="page-sub">每次真正改写 <span class="mono">config.json</span> 前自动存一代 · 看字段级差异 · 一键回滚</div></div>
+    <div class="page-actions"><button class="btn" id="hiReload">${svg('test',14)}重新读取</button></div>
+  </div>
+  <div class="card" style="margin-bottom:16px"><div class="card-bd row" style="gap:9px;align-items:flex-start">
+    <span style="color:var(--accent);flex:none">${svg('warn',15)}</span>
+    <span class="help" style="margin:0">这是<b>配置代际</b>的补救入口（设计说明见仓库里的 <span class="mono">docs/config-history.md</span>）：
+    网关写 <span class="mono">config.json</span> 用的是<b>显式字段白名单</b>，没登记的新字段会在"保存任意渠道"时被静默抹掉，
+    而 <span class="mono">config.json.bak</span> 只留上一次、一次批量保存就把它也覆盖。所以每次落盘前都先存一代——
+    <b>丢了之后至少还能拿回来</b>。左列选一代即可看它与现在差在哪几个字段。</span>
+  </div></div>
+  <div class="grid" style="grid-template-columns:minmax(0,.95fr) minmax(0,1.15fr)">
+    <div class="card"><div class="card-hd"><h3>代际</h3><span class="sub" id="hiCnt"></span></div>
+      <div class="card-bd" id="hiList"></div></div>
+    <div class="card"><div class="card-hd"><h3>那一代 → 现在</h3><span class="sub">字段级差异</span></div>
+      <div class="card-bd" id="hiDetail"></div></div>
+  </div>
+  <div class="card" style="margin-top:16px"><div class="card-bd"><div class="help" style="margin:0">
+    <b>代际文件里是整份配置原文</b>（含各渠道 apiKey）——目录 <span class="mono">config-history/</span> 已在
+    <span class="mono">.gitignore</span> 里，<b>别把它静态暴露、别提交、别贴进截图</b>；接口侧只下发掩码视图。<br>
+    这一页是<b>补救</b>不是修复：白名单本身没变，下次保存仍然会抹掉没登记的字段——遇上"字段凭空消失"，先来这里回滚，
+    再来提"把它加进白名单"。</div></div></div>`;
+  const rl=$('#hiReload',v); if(rl) rl.onclick=()=>{HILERR='';loadHistory()};
+  drawHi();
+  if(!HI&&!HILERR) loadHistory();
 }
 
 </script>

@@ -1,4 +1,4 @@
-# 运行期设置（四组开关）
+# 运行期设置（五组开关）
 
 > 本文从 README 拆出（v1.18.8）：README 特性列表里各有一行摘要，本文收全量语义——
 > 会话粘性、客户端限流、`/metrics` 指标端点、thinking 回放，以及 `GET/POST /admin/api/settings` 怎么改它们。
@@ -37,6 +37,12 @@
 
 - 默认要 admin key（`Authorization: Bearer <ADMIN_KEY>`）；放进 Prometheus 抓取就配 `"metrics": { "public": true }`（此时匿名可抓，正文里依然**没有任何密钥**——有专门断言守着）。
 - 指标：`zzcsapi_requests_total{route,status}`、`zzcsapi_channel_requests_total{channel,ok}`、`zzcsapi_channel_tokens_total{channel,direction}`、`zzcsapi_channel_latency_ms_{sum,count}`、`zzcsapi_channels{state}`（ok/down/cooldown/probation/disabled 五档）、`zzcsapi_affinity_entries` 与 `zzcsapi_affinity_events_total`、`zzcsapi_rate_limit_events_total`、`zzcsapi_thinking_replay_entries` 与 `zzcsapi_thinking_replay_events_total{event}`（learned/hits/misses/evicted/expired/stale 六事件，v1.18.8）、`zzcsapi_inflight_requests`、`zzcsapi_uptime_seconds`、`zzcsapi_process_resident_memory_bytes`、`zzcsapi_swrr_hits_total`。
+- **两个直方图（v1.18.88）**：`zzcsapi_channel_duration_seconds{channel}` 与 `zzcsapi_request_duration_seconds{route}`，都是标准 Prometheus histogram（`_bucket{le=}` + `_sum` + `_count`）。
+  - 为什么加：上面那条 `zzcsapi_channel_latency_ms` 是 **summary**，只能给出 sum/count，**算不出分位数**（P95/P99 在服务端不存在）。本网关的耗时分布本来就是两峰——本地 `openai` 渠道 200~800ms，而 `hark` / `notion` 这类"网页会话反代 + 伪流式"动辄 10~60 秒——平均值毫无意义，只有分桶看得出两峰。
+  - 桶边界是**常量**（秒）：`0.05 / 0.1 / 0.25 / 0.5 / 1 / 2.5 / 5 / 10 / 30 / 60 / 120 / 300 / +Inf`。**改不动、也别去改**：桶一变，同一指标的历史序列就不可比（Prometheus 侧还会把新旧桶当成同一条序列混起来）。
+  - 语义三条：① **累计**——观测值落进**所有** `le ≥ v` 的桶（不是只落进一个）；② `le="+Inf"` 恒等于 `_count`（Prometheus 硬要求，写错会被判格式错）；③ 单位是**秒**，与既有的 `*_latency_ms` summary（毫秒）**并存不混用**——两者同源（都来自 `recordUsage` 的那次耗时），所以 `_sum × 1000` 应等于 `zzcsapi_channel_latency_ms_sum`。
+  - `zzcsapi_request_duration_seconds` 是**端到端**（进网关 → 响应收尾，含换家与同渠道重试），`zzcsapi_channel_duration_seconds` 是**单渠道单次尝试**。端到端偏高而渠道不高，说明问题在"链太长 / 冷却不够"，不在上游慢。
+- `zzcsapi_retry_budget_exhausted_total{reason}`（v1.18.88，counter）：重试预算命中次数，`reason` 只有两个取值——`attempts`（次数用尽，通常该调 `retries.budgetAttempts`）/ `elapsed`（耗时用尽，该查是哪家慢）。两者**分开**记，混在一起就看不出是哪一条先到的。
 - 渠道标签用**渠道 id**（控制台里显示的是 name）；token/耗时来自 `recordUsage`，与用量统计**同一处收口**，不会出现"指标好看、用量难看"的分叉。
 - 诚实边界：这是**进程内**计数（重启清零，不是持久化时间序列）；单机自用够用，要长期趋势请让 Prometheus 去拉。
 
@@ -82,6 +88,6 @@
 
 容器里直接改 `config.json` 仍然可以（`/admin/api/status` 里能看到生效后的实时状态：
 `affinity` / `rateLimit` / `metrics` / `thinkingReplay` 四段）；也可以**运行期改、立即生效、立即落库**——`GET/POST /admin/api/settings`
-（窄口：只认这四组，字段白名单 + 严格类型，写错字段名/类型一律 400 并点名字段）。
+（窄口：只认这五组，字段白名单 + 严格类型，写错字段名/类型一律 400 并点名字段）。
 控制台页面按 [docs/console-settings-spec.md](console-settings-spec.md) 的规格实现（该规格已交付前端侧，后端契约已冻结并有测试守着）。
 会话粘性、客户端限流的**设计边界与验收标准**写在测试里（`test/session-affinity-e2e.test.js` / `test/rate-limit-e2e.test.js`），改调度或网关入口时请先跑它们。

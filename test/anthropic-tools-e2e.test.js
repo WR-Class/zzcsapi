@@ -262,7 +262,9 @@ const cleanup = () => {
       messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: IMG } }] }] }],
     }, { 'x-api-key': GW_KEY });
     check('★ 工具结果里的图也算"含图请求" → 400（不是静默丢图作答）', r.status === 400, r.status + ' ' + r.txt.slice(0, 140));
-    check('错误文案说明原因', !!(r.txt || '').includes('only openai / anthropic / gemini protocol channels'), (r.txt || '').slice(0, 160));
+    // v1.18.82：文案里的协议清单从 `IMAGE_CAPABLE_PROTOCOLS.join(' / ')` 拼出来，
+    // 所以这里**别写死整串**（写死的那次一加 workbuddy 就红）——断言"说了原因"+"名单是当前的"两件事。
+    check('错误文案说明原因', !!(r.txt || '').includes('protocol channels can carry images') && !!(r.txt || '').includes('workbuddy'), (r.txt || '').slice(0, 160));
 
     console.log('\n5. 无工具请求不受影响（回归）');
     lastBody = null;

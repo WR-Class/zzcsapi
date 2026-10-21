@@ -156,6 +156,36 @@ function makeGensparkFake(tag) {
       }).messages).includes('晴 26℃'));
   }
 
+  console.log('\n2b. 一个块里并排多个调用（v1.18.79 现场回归）');
+  {
+    // 现场（2026-10-20，opencode + minimax-m3.1-flash-free）：
+    //   [TOOL_CALL] {"name":"read",…} {"name":"glob",…} [/TOOL_CALL]
+    // 旧实现把整块 JSON.parse → 抛错 → 判成"不是工具调用" → **标记原样透传给客户端**。
+    const TWO = '[TOOL_CALL] {"name":"read","arguments":{"file_path":"D:\\\\agent"}} {"name":"glob","arguments":{"pattern":"**/*.md"}} [/TOOL_CALL]';
+    const p2 = toolEmu.parseEmulatedToolCalls(TWO);
+    check('★ 两个调用并排挤一个块 → 解析出 2 个（旧实现是 0 个）',
+      !!p2 && p2.calls.length === 2 && p2.calls[0].name === 'read' && p2.calls[1].name === 'glob');
+    check('★ 标记不再泄漏进正文', !!p2 && !p2.text.includes('[TOOL_CALL]'), p2 && p2.text);
+    const p3 = toolEmu.parseEmulatedToolCalls('[TOOL_CALL]\n{"name":"read","arguments":{"file_path":"D:\\\\a"}}\n{"name":"glob","arguments":{"pattern":"**/*.md"}}\n[/TOOL_CALL]');
+    check('换行分隔的两个调用同样解析出来', !!p3 && p3.calls.length === 2);
+    const p4 = toolEmu.parseEmulatedToolCalls('[TOOL_CALL]\n[{"name":"read","arguments":{"file_path":"D:\\\\a"}},{"name":"glob","arguments":{"pattern":"**/*.md"}}]\n[/TOOL_CALL]');
+    check('顶层数组形态也解析出来', !!p4 && p4.calls.length === 2);
+    const p5 = toolEmu.parseEmulatedToolCalls('[TOOL_CALL]\n{"name":"read","arguments":{"file_path":"D:\\\\a}b{c.txt"}}\n[/TOOL_CALL]');
+    check('参数里的花括号不会把平衡扫描带偏', !!p5 && p5.calls.length === 1 && p5.calls[0].arguments.file_path === 'D:\\a}b{c.txt');
+    const p6 = toolEmu.parseEmulatedToolCalls('[TOOL_CALL]\n{"port":8080,"name":"config"}\n[/TOOL_CALL]');
+    check('非工具 JSON 仍判成"不是调用"（不误伤普通 JSON）', p6 === null);
+    // 流式：同一个块分片喂进去，也要产出 2 个调用且正文不残留标记
+    const deltas = [], scalls = [];
+    const sc = toolEmu.createToolStreamScanner((d) => deltas.push(d), (c) => scalls.push(...c));
+    const whole = '我先查一下。\n' + TWO + '\n好了。';
+    for (let i = 0; i < whole.length; i += 5) sc.push(whole.slice(i, i + 5));
+    sc.end();
+    const joined = deltas.join('');
+    check('★ 流式扫描器也解析出 2 个调用（分片喂）', scalls.length === 2 && scalls[1].name === 'glob', scalls.map((c) => c.name));
+    check('★ 流式正文无标记残留，前后文字都保留',
+      !joined.includes('[TOOL_CALL]') && joined.includes('我先查一下') && joined.includes('好了'), joined.slice(0, 80));
+  }
+
   /* ══════════ 3. 真链路 ══════════ */
   const PROXY = await freePort(), GW = await freePort();
   const fake = makeGensparkFake('gs');
