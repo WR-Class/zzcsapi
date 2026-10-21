@@ -305,6 +305,51 @@ const corruptFiles = (dir) => { try { return fs.readdirSync(dir).filter((f) => /
       out.slice(0, 400));
   }
 
+  /* ══════════ 5. 主配置**读不动** → 仍从 .bak 恢复（不是带着裸栈崩） ══════════ */
+  console.log('\n5. 主配置读不动（EISDIR/权限）→ 仍从 .bak 恢复');
+  {
+    /* 为什么单独测这一节（v1.18.88）：`readConfigWithFallback` 里读正主那行原先**不在 try 里**，
+       `existsSync` 为真但 `readFileSync` 抛错时异常直接穿出模块初始化 ⇒ 进程带裸栈退出，
+       注释里承诺的"（或读不到）也走退路"其实一次都没执行过。
+       触发场景都很实在：bind mount 属主/权限配错、以非 root 跑而 config.json 是 600 root、
+       路径被占成目录。**"读不动"与"内容坏"是两种病**，前者没有内容可留档、也不该让人去查 JSON 语法。 */
+    const d = makeDir('unreadable');
+    const port = await freePort();
+    writeCfg(d.cfgPath, { port, health: { intervalSec: 3600, timeoutMs: 8000 }, channels: [mkChannel('alpha'), mkChannel('beta')] });
+    const first = await boot(d, port);
+    await adminCall(first.base, 'POST', '/admin/api/channels', mkChannel('alpha', { priority: 8 })); // 顺手生成 .bak
+    await stop(first.gw);
+    check('前置：.bak 已生成（它是这一节唯一的退路）', fs.existsSync(d.cfgPath + '.bak'));
+
+    // 把正主换成**同名目录**：existsSync 为真、readFileSync 抛 EISDIR —— Windows 与 Linux 都抛，可移植地模拟"读不动"
+    fs.rmSync(d.cfgPath, { force: true });
+    fs.mkdirSync(d.cfgPath);
+
+    let out = '';
+    const gw2 = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: envOf(d), stdio: ['ignore', 'pipe', 'pipe'] });
+    gw2.stdout.on('data', (b) => { out += String(b); });
+    gw2.stderr.on('data', (b) => { out += String(b); });
+    const base = `http://127.0.0.1:${port}`;
+    let up = false;
+    for (let i = 0; i < 60; i++) {
+      try { if ((await fetch(base + '/healthz')).ok) { up = true; break; } } catch { }
+      await sleep(150);
+    }
+    let ids = [];
+    if (up) {
+      const r = await adminCall(base, 'GET', '/admin/api/channels');
+      try { ids = (JSON.parse(r.text).channels || []).map((c) => c.id).sort(); } catch { }
+    }
+    await stop(gw2);
+
+    check('★ 主配置读不动（EISDIR）时仍能启动 —— 不是带着裸栈退出', up, { exited: gw2.exitCode, tail: out.slice(-300) });
+    check('★ 恢复到的是 .bak 里那份（alpha+beta 都在，而不是回落到 config.example.json）',
+      ids.join(',') === 'alpha,beta', ids);
+    check('日志点明"读不动"并带系统错误码，不会把人引去查 JSON 语法',
+      /读不动/.test(out) && /EISDIR/.test(out), out.split('\n').filter((l) => /读不动|EISDIR/.test(l)).slice(0, 3));
+    check('读不动时**不**留 .corrupt-（没有内容可留档，别造一个 0 字节的假现场）', corruptFiles(d.dir).length === 0, corruptFiles(d.dir));
+  }
+
   /* ══════════ 收尾 ══════════ */
   try { up.close(); } catch { }
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { }

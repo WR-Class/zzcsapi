@@ -512,16 +512,25 @@ function parseConfigText(text) {
      · badText —— 正主文件**存在但解析失败**时的原文（用于留档 .corrupt-<ts>），否则 null。
    全部失败则返回 { cfg: null, ... }，由 loadConfig 抛出原来那句错误（保持旧行为）。 */
 function readConfigWithFallback() {
-  const raw = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf8') : null;
+  /* v1.18.88：主配置**读不动**也必须走退路（`existsSync` 为真、`readFileSync` 抛错）。
+     原来这一行不在 try 里：`existsSync` 为真时异常直接穿出模块初始化，进程带着裸栈退出，
+     **下面的 .bak 与代际快照一次都不会试**——而 L520 那句注释「正主坏了（或读不到）」
+     从来没实现过"读不到"这一半。触发场景都很实在：bind mount 属主/权限配错、
+     以非 root 跑而 config.json 是 `600 root`、路径被占成目录（EISDIR）。
+     （这正是不把镜像改成非 root 的原因之一：真出问题时的形态是"启动即崩 + 裸栈"，
+      而不是"读不到就回落"——两者对使用者的可诊断性差一个数量级。） */
+  let raw = null, mainErr = null;
+  try { raw = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf8') : null; }
+  catch (e) { mainErr = e; }
   if (raw !== null) {
     const cfg = parseConfigText(raw);
-    if (cfg) return { cfg, from: 'main', badText: null };
+    if (cfg) return { cfg, from: 'main', badText: null, mainErr: null };
   }
   // ① 正主坏了（或读不到）：先试 .bak —— persistConfig 每次写前都会复制一份，它就是"上一个好版本"
   try {
     if (fs.existsSync(CONFIG_PATH + '.bak')) {
       const cfg = parseConfigText(fs.readFileSync(CONFIG_PATH + '.bak', 'utf8'));
-      if (cfg) return { cfg, from: 'bak', badText: raw };
+      if (cfg) return { cfg, from: 'bak', badText: raw, mainErr };
     }
   } catch { }
   // ② 再试最新的代际快照（v1.18.83 起每代都是整份 config.json 原文，按 seq 从大到小）
@@ -536,12 +545,12 @@ function readConfigWithFallback() {
         try {
           if (!fs.existsSync(p)) continue;
           const cfg = parseConfigText(fs.readFileSync(p, 'utf8'));
-          if (cfg) return { cfg, from: 'gen:' + e.seq, badText: raw };
+          if (cfg) return { cfg, from: 'gen:' + e.seq, badText: raw, mainErr };
         } catch { }
       }
     }
   } catch { }
-  return { cfg: null, from: null, badText: raw };
+  return { cfg: null, from: null, badText: raw, mainErr };
 }
 
 function loadConfig() {
@@ -556,10 +565,15 @@ function loadConfig() {
       throw new Error(`配置文件不存在: ${CONFIG_PATH}`);
     }
   }
-  const { cfg, from, badText } = readConfigWithFallback();
+  const { cfg, from, badText, mainErr } = readConfigWithFallback();
   if (!cfg) {
     // 保持旧错误文案（有测试按它断言），但补一句"已经试过哪些退路"，别让人再去猜
-    const raw = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '') : '';
+    let raw = '';
+    try { raw = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '') : ''; } catch { }
+    // 读不动（EACCES/EISDIR…）与"读得到但坏了"是两种病，报错必须分开——否则人只会去查 JSON 语法
+    if (mainErr) {
+      throw new Error(`config.json 读不动（${(mainErr && mainErr.code) || ''} ${(mainErr && mainErr.message) || ''}）——已尝试 config.json.bak 与 ${CONFIG_HISTORY_DIR} 下的代际快照，均不可用；先查权限/属主/路径是否被占成目录`);
+    }
     let parsed = null; try { parsed = JSON.parse(raw); } catch (e) {
       throw new Error(`config.json 解析失败（已尝试 config.json.bak 与 ${CONFIG_HISTORY_DIR} 下的代际快照，均不可用）: ${e && e.message}`);
     }
@@ -572,6 +586,8 @@ function loadConfig() {
     console.log('');
     console.log('════════════════════ 配置自愈 ════════════════════');
     console.log(`  config.json 不可用，已从 ${from === 'bak' ? 'config.json.bak' : '代际快照 ' + from} 恢复`);
+    // 读不动 ≠ 内容坏：前者没有"内容"可留档，得把系统错误码直接说出来（EACCES=权限/属主，EISDIR=路径被占成目录）
+    if (mainErr) console.log(`  ↳ 原因是**读不动**：${(mainErr && mainErr.code) || ''} ${(mainErr && mainErr.message) || ''}（不是 JSON 写坏，别去查语法）`);
     if (badText !== null) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const badPath = CONFIG_PATH + '.corrupt-' + stamp;
