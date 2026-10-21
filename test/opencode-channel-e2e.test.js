@@ -44,6 +44,13 @@ const ALIAS = 'oc-free';
 const UPSTREAM = 'deepseek-v4.1-flash-free';
 const ORG_SENTINEL = 'org_SENTINEL_MUST_NOT_LEAK_12345';
 const CATALOG = [UPSTREAM, 'nemotron-3.5-lightning-free', 'space-bunny-free', 'gpt-6-astra', 'glm-5.3'];
+// v1.18.89：边车 1.0+ 换了生成路由（`POST /session/{id}/message`）。这里放两个哨兵钉住两件事：
+//   · `REASONING_SENTINEL` 只出现在 `reasoning` part 里 ⇒ 它**绝不许**混进给客户端的正文；
+//   · `SPA_SENTINEL` 是"路由不存在的 200 + text/html 兜底页"⇒ 收到它必须判失败，不能当回答。
+const REASONING_SENTINEL = 'REASONING_THOUGHTS_MUST_NOT_LEAK_777';
+const SPA_SENTINEL = '<!doctype html><html><body>SPA_FALLBACK_MUST_NOT_BE_ANSWER</body></html>';
+const NEW_TEXT = '新路由答复（POST /session/{id}/message）';
+const NEW_IN = 4321, NEW_OUT = 7;
 
 let pass = 0, fail = 0;
 const check = (label, cond, extra) => {
@@ -57,7 +64,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 只实现网关真正会用到的那四个端点，够用即可（过多实现反而会让守卫失去分辨力）。
 function startFakeSidecar(opts) {
   const o = opts || {};
-  const seen = { catalog: 0, creates: [], generates: [], deletes: [] };
+  const seen = { catalog: 0, creates: [], generates: [], deletes: [], news: [] };
   let n = 0;
   const srv = http.createServer((req, res) => {
     let body = '';
@@ -65,6 +72,8 @@ function startFakeSidecar(opts) {
     req.on('end', () => {
       const p = (req.url || '').split('?')[0];
       const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(obj === undefined ? '' : JSON.stringify(obj)); };
+      // 真边车是 SPA：**任何不存在的路径都回 200 + text/html**（这正是老路由换版后的失败形态）
+      const sendHtml = () => { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(SPA_SENTINEL); };
       // 鉴权：HTTP Basic，用户名必须 opencode、密码必须 PW（否则 401 —— 与真边车一致）
       const auth = String(req.headers.authorization || '');
       const ok = auth === 'Basic ' + Buffer.from('opencode:' + PW, 'utf8').toString('base64');
@@ -80,9 +89,21 @@ function startFakeSidecar(opts) {
         seen.creates.push({ id, body });
         return send(200, { data: { id, tokens: { input: 0, output: 0 }, cost: 0 } });
       }
+      // ★ v1.18.89 新版路由（无 /api 前缀）：同步返回 {info:{tokens}, parts:[…]}
+      const nm = p.match(/^\/session\/([^/]+)\/message$/);
+      if (nm && req.method === 'POST' && /^(new|reasoning|html)$/.test(String(o.mode || ''))) {   // 只有这三档模拟新版；其余档（empty/paid503/freetier）走老路径，§3/§4 的守卫原样保留
+        seen.news.push({ id: nm[1], body });
+        if (o.mode === 'html') return sendHtml();
+        const parts = [{ type: 'step-start' }];
+        if (o.mode === 'reasoning') parts.push({ type: 'reasoning', text: REASONING_SENTINEL });
+        parts.push({ type: 'text', text: o.newReply || NEW_TEXT });
+        parts.push({ type: 'step-finish' });
+        return send(200, { info: { tokens: { input: NEW_IN, output: NEW_OUT, cache: { read: 96 }, reasoning: 0 }, cost: 0 }, parts });
+      }
       const gm = p.match(/^\/api\/session\/([^/]+)\/generate$/);
       if (gm && req.method === 'POST') {
         seen.generates.push({ id: gm[1], body });
+        if (o.mode === 'html') return sendHtml();   // 老路由在 1.4.2 上回的就是这个
         if (o.mode === 'empty') return send(200, { data: { text: '' } });
         if (o.mode === 'paid503') return send(503, { _tag: 'ServiceUnavailableError', message: 'Upstream request failed: Insufficient account funds' });
         if (o.mode === 'freetier') return send(503, { _tag: 'ServiceUnavailableError', message: "OpenCode's free tier can only be used from within OpenCode." });
@@ -93,6 +114,7 @@ function startFakeSidecar(opts) {
         seen.deletes.push(dm[1]);
         res.writeHead(204); return res.end();
       }
+      // 'new' 模式：老路由在 1.4.2 上其实是 200+HTML；这里用 404 也行（网关两条都覆盖）
       send(404, { _tag: 'NotFoundError', message: 'no route ' + p });
     });
   });
@@ -306,6 +328,53 @@ function chDef(sidecarPort, extra) {
     await g.stop();
   }
 
+  // ─────────────── §5b 边车版本兼容（v1.18.89）：新路由 / 200 HTML 陷阱 / reasoning 隔离 ───────────────
+  // 为什么单开一节：边车升到 1.0+ 之后**老生成路由消失**，而 SPA 把"路由不存在"回成 **200 + text/html**。
+  // 按老写法（只认 data.text、不看 content-type）网关会把一张网页当模型的回答发给客户端——
+  // 那是一种"看起来成功、内容全错"的坏法，比报错难查得多。三条断言各钉一个：走新路由、只拼 text part、HTML 必判失败。
+  console.log('\n══ §5b 边车版本兼容（新路由 + 200 HTML 陷阱 + reasoning 隔离）══');
+  {
+    const chat = (base) => fetch(base + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + GW_KEY },
+      body: JSON.stringify({ model: ALIAS, messages: [{ role: 'user', content: '你好' }] }),
+    });
+
+    // 5b-1 新路由优先，且用上游真 token
+    const fNew = await startFakeSidecar({ mode: 'new' });
+    const gNew = await startGateway([chDef(fNew.port)]);
+    let rr = await chat(gNew.base);
+    let jj = null; try { jj = await rr.json(); } catch {}
+    check('★ 新版路由被用上（POST /session/{id}/message）', fNew.seen.news.length === 1, fNew.seen.news.length);
+    check('★ 新版优先时不再白打一发老路由（/api/session/{id}/generate）', fNew.seen.generates.length === 0, fNew.seen.generates.length);
+    check('正文取自 parts 里的 text part', rr.status === 200 && String((jj && jj.choices && jj.choices[0] && jj.choices[0].message && jj.choices[0].message.content) || '').includes(NEW_TEXT), jj);
+    check('★ 上游真 token 进 usage（不是 estimateTokens 按字符估的）',
+      !!(jj && jj.usage) && jj.usage.prompt_tokens === NEW_IN && jj.usage.completion_tokens === NEW_OUT, jj && jj.usage);
+    check('★ 新路由下会话照样被删（建/删配平——这条纪律换路由也不许丢）',
+      fNew.seen.creates.length === fNew.seen.deletes.length, { creates: fNew.seen.creates.length, deletes: fNew.seen.deletes.length });
+    await gNew.stop(); await fNew.close();
+
+    // 5b-2 reasoning part 不许混进正文
+    const fRe = await startFakeSidecar({ mode: 'reasoning' });
+    const gRe = await startGateway([chDef(fRe.port)]);
+    rr = await chat(gRe.base);
+    jj = null; try { jj = await rr.json(); } catch {}
+    const content = String((jj && jj.choices && jj.choices[0] && jj.choices[0].message && jj.choices[0].message.content) || '');
+    check('★ reasoning part 的正文绝不混进回答（它也带 text 字段，不过滤就是把思维链当答案）',
+      !content.includes(REASONING_SENTINEL) && content.includes(NEW_TEXT), { len: content.length });
+    await gRe.stop(); await fRe.close();
+
+    // 5b-3 200 + text/html 必须判失败
+    const fH = await startFakeSidecar({ mode: 'html' });
+    const gH = await startGateway([chDef(fH.port)]);
+    rr = await chat(gH.base);
+    const body = await rr.text();
+    check('★ 边车回 200 + HTML（路由不存在的 SPA 兜底页）→ 网关判失败，绝不把网页当回答发给客户端',
+      rr.status >= 400 && !body.includes('SPA_FALLBACK_MUST_NOT_BE_ANSWER'), { status: rr.status, head: body.slice(0, 140) });
+    check('错误文案点明"回了 HTML / 路由不存在"（把人直接引到版本问题，而不是去猜模型）',
+      /HTML/.test(body), body.slice(0, 220));
+    await gH.stop(); await fH.close();
+  }
   // ─────────────── §6 与 hark 的分野：opencode **有**目录，不适用"无目录协议"硬要求 ───────────────
   console.log('\n══ §6 与 hark 的分野（有目录 vs 无目录）══');
   check('★ opencode 探测分支**不**套"无目录协议"的默认别名建议（它有 GET /api/model）',

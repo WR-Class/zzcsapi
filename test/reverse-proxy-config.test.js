@@ -171,6 +171,36 @@ check('★ 四个写盘常量全部从 CONFIG_PATH / env 派生（CONFIG_PATH / 
   /const USAGE_PATH = process\.env\.ZZCSAPI_USAGE \|\| path\.join\(path\.dirname\(CONFIG_PATH\), 'usage\.json'\)/.test(SRV) &&
   /const DUMP_DIR = process\.env\.ZZCSAPI_DUMP_BODIES \|\| ''/.test(SRV));
 
+/* ── opencode 专职边车（v1.18.89）：deploy/opencode-sidecar.ps1 ──
+   为什么守：这条边车是"蹭别人的"换成"自己起"的产物，而它三个关键决定都属于
+   "删掉照样能跑、但坑会回来"的类型——端口一漂就是 87 次 AggregateError（每 5 分钟一次，0 成功），
+   口令一上命令行就进 shell 历史，cwd 一回到仓库就把整个项目的源码塞给免费层（实测 input 50627 vs 8136）。 */
+console.log('\nopencode 专职边车（deploy/opencode-sidecar.ps1 + 默认端口一致性）');
+const SIDECAR = fs.readFileSync(path.join(ROOT, 'deploy', 'opencode-sidecar.ps1'), 'utf8');
+// 口令相关判定要在**去掉注释**之后做：脚本头刻意写着"`serve` 没有 --password 这个参数"，
+// 直接扫全文会把这句说明本身判成违规（第一版就是这么假红的）。
+const SIDECAR_CODE = SIDECAR.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
+check('★ 边车脚本纯 ASCII（与自启脚本同一条：PowerShell 5.1 按 ANSI 读无 BOM 的 .ps1，中文注释当场语法错）',
+  !/[^\x00-\x7F]/.test(SIDECAR));
+check('端口写死 4666 且幂等（已在监听就 exit 0，重启安全）',
+  /\$Port\s*=\s*4666/.test(SIDECAR) && SIDECAR.includes('Get-NetTCPConnection -LocalPort') && SIDECAR.includes('exit 0'));
+check('口令只从 .env 读、不进命令行（serve 没有 --password；不设它边车会自造一个并打进 stdout＝泄露面）',
+  SIDECAR_CODE.includes('OPENCODE_SIDECAR_PASSWORD') && SIDECAR_CODE.includes('$env:OPENCODE_SERVER_PASSWORD = $pw') &&
+  !/--password/.test(SIDECAR_CODE) && !/-ArgumentList[^\n]*\$pw/.test(SIDECAR_CODE));
+check('★ 工作目录是专用空目录、绝不是仓库（边车把 cwd 当项目根，会把源码塞进每一发请求）',
+  SIDECAR.includes("-WorkingDirectory $WorkDir") && /\$WorkDir\s*=\s*Join-Path \$LogDir 'work'/.test(SIDECAR) &&
+  !/-WorkingDirectory\s+(\.|\$PWD|\.\.)/.test(SIDECAR));
+check('起完自检 GET /api/model 必须 2xx，否则非零退出（"起了"≠"能用"）',
+  SIDECAR.includes('/api/model') && /throw|exit 1/.test(SIDECAR));
+check('★ 文档接线：README 与 docs/protocols.md 都写了这个脚本（换端口/换口令时人找得到真源）',
+  README.includes('deploy/opencode-sidecar.ps1') &&
+  /deploy[\\/]opencode-sidecar\.ps1/.test(fs.readFileSync(path.join(ROOT, 'docs', 'protocols.md'), 'utf8')));
+check('★ opencode.js 的默认端口与脚本一致（4666）——两处漂移就是下一个"连不上边车"',
+  /const DEFAULT_BASE = 'http:\/\/host\.docker\.internal:4666';/.test(fs.readFileSync(path.join(ROOT, 'opencode.js'), 'utf8')));
+check('★ opencode.js 硬拒 HTML 响应（SPA 兜底页是 200，只认 data.text 会把它当模型回答）',
+  /function isHtmlBody\(/.test(fs.readFileSync(path.join(ROOT, 'opencode.js'), 'utf8')) &&
+  /if \(isHtmlBody\(gen\.text\)\)/.test(fs.readFileSync(path.join(ROOT, 'opencode.js'), 'utf8')));
+
 console.log('──────────────────────────────────────────────────────');
 if (fails) { console.log('✗ 失败 ' + fails + ' / ' + n + ' 项'); process.exit(1); }
 console.log('✓ 全部通过（' + n + ' 项断言）');

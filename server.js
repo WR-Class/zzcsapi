@@ -8495,10 +8495,14 @@ async function tryOpencodeChannel(opts) {
   markTrafficOk(ch);
   ch.latencyMs = Date.now() - t0;
   const respId = 'chatcmpl-oc-' + Date.now().toString(36);
-  // 边车不下发 token/费用（tokens 与 cost 在 generate 之后恒为 0，实测）→ 按估算记账，
-  // 与 hark / genspark / workbuddy 同口径（不写 realUsage = 没有上游真值，不假装有）
-  const inTok = estimateTokens(flat);
-  const outTok = estimateTokens(replyOut || replyText);
+  // token 记账看边车版本（v1.18.89）：1.4.2 的 `POST /session/{id}/message` **给真值**
+  // （info.tokens.input/output，还带 cache.read），老版的 `/api/session/{id}/generate` 恒为 0。
+  // 有真值就用真值、没有才按字符估——**估算与真值不混着标**，账本里看得出这一条是哪一种。
+  const realTok = gen.usage && (gen.usage.input || gen.usage.output) ? gen.usage : null;
+  const inTok = realTok ? realTok.input : estimateTokens(flat);
+  const outTok = realTok ? realTok.output : estimateTokens(replyOut || replyText);
+  // 提示：1.4.2 的 input 含边车注入的系统提示与工具定义，可能远大于"用户这段话"的估算值
+  const usageNote = 'opencode sidecar' + (realTok ? '（上游真值 token' + (realTok.cacheRead ? ' · 缓存命中 ' + realTok.cacheRead : '') + '）' : '');
 
   if (isStream) {
     specialStreamHead(opts, candidate);
@@ -8520,7 +8524,7 @@ async function tryOpencodeChannel(opts) {
     }
     specialStreamLine(opts, candidate, 'data: [DONE]\n\n');
     specialStreamEnd(opts);
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: 'opencode sidecar', statsCtx: opts.statsCtx });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: usageNote, statsCtx: opts.statsCtx });
     return 'success';
   }
 
@@ -8528,11 +8532,11 @@ async function tryOpencodeChannel(opts) {
   if (replyTools) {
     const payloadOut = toolEmu.openaiToolCallsPayload(respId, displayModel, replyTools, replyOut || null);
     payloadOut.usage = usage;
-    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: 'opencode sidecar', statsCtx: opts.statsCtx });
+    recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: usageNote, statsCtx: opts.statsCtx });
     await specialNonStreamOut(opts, candidate, payloadOut);
     return 'success';
   }
-  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: 'opencode sidecar', statsCtx: opts.statsCtx });
+  recordUsage({ model: displayModel, channelId: candidate.channelId, kind, inputTokens: inTok, outputTokens: outTok, ok: true, latencyMs: Date.now() - t0, note: usageNote, statsCtx: opts.statsCtx });
   await specialNonStreamOut(opts, candidate, {
     id: respId,
     object: 'chat.completion',

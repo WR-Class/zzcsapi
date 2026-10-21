@@ -522,7 +522,7 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
 - **回归**：`node test/hark-channel.test.js`（真网关 + 真 curl + 假上游兼 HTTP 代理，零外网零额度）+
   `node test/channel-default-alias-e2e.test.js`（无模型目录协议的默认别名与空别名拦截）。
 
-## opencode（本机 `opencode serve` 边车的免费模型，v1.18.72）
+## opencode（本机 `opencode serve` 边车的免费模型，v1.18.72；边车 API 两代兼容 v1.18.89）
 
 把**本机那个已登录的 `opencode serve`** 当上游用（逆向过程、两次更正与逐条证据见
 [docs/opencode-reverse-proxy-research.md](opencode-reverse-proxy-research.md) §3/§5/§13）。
@@ -535,14 +535,31 @@ Gemini 这条路的两个细节（都与"Gemini 认函数名不认 id"有关）�
 
 **怎么配**：
 
+> **★ v1.18.89 起：边车由网关自己起，别再蹭别的应用的。** 2026-10-21 的事故就是"蹭"的代价——渠道原指
+> `host.docker.internal:49551`，那个端口属于 omnirush desktop 自己拉起的边车，它一重启**端口和口令两个都漂**了，
+> 于是网关对着一个死端口按 **5 分钟一次**（`health.intervalSec=300`）敲了 **87 次、0 次成功**，
+> 错误文案是一句看不出所以然的 `opencode: 连不上边车：AggregateError`
+> （`AggregateError` = IPv4 与 IPv6 两个地址**都**拒连，实测子错误
+> `ECONNREFUSED@192.168.65.254:49551` + `ENETUNREACH@fdc4:…::254:49551`）。
+
 ```powershell
-# ① 在跑着 opencode 的机器上起边车（自带的管理服务不接受自选密码，必须自己起一个）
-$env:OPENCODE_SERVER_PASSWORD = 'REPLACE_WITH_YOUR_OWN_PASSWORD'      # ← 口令在这里"定"下来；内容随你，记住它
-opencode serve --port 49551 --hostname 127.0.0.1
+# ① 起**我们自己的**边车：固定端口 4666 + 固定口令（口令读 .env 的 OPENCODE_SIDECAR_PASSWORD，不上命令行）
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\opencode-sidecar.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File deploy\opencode-sidecar.ps1 -Stop
 ```
 
-- **Base URL**：`http://host.docker.internal:49551`（**容器里**的写法；本机直跑 `node server.js` 就填
-  `http://127.0.0.1:49551`）。⚠️ **不要**给它配 `proxy` —— 边车是**本地上游**，`proxy` 是给"出公网"用的。
+脚本**刻意做了三件事**，每件都对应一次踩过的坑：
+① 口令只从 `.env` 读（`serve` 没有 `--password`，不设它边车会自造一个并打进 stdout ＝泄露面）；
+② 端口写死 4666、起之前先查端口是否已占（占着就直接退出 ⇒ **幂等**，重启安全），不再让端口随别人漂；
+③ **工作目录设成空目录**（`%LOCALAPPDATA%\zzcsapi\opencode-sidecar\work`）——边车把 **cwd 当项目根**，
+从仓库目录起会把整个项目的文件塞进每一发请求：同一句俏皮话实测 `tokens.input=50627`（仓库 cwd）vs `8136`（空 cwd）
+⇒ 既白烧额度，也把源码递给免费层。
+
+- **Base URL**：`http://host.docker.internal:4666`（**容器里**的写法；本机直跑 `node server.js` 就填
+  `http://127.0.0.1:4666`）。⚠️ **不要**给它配 `proxy` —— 边车是**本地上游**，`proxy` 是给"出公网"用的。
+  ⚠️ 边车绑 `127.0.0.1` **也够**——Docker Desktop 会把 `host.docker.internal` 转发到**宿主回环**，
+  所以容器连得到（实测：容器内 `fetch('http://host.docker.internal:4666/api/model')` 回 **401**＝连上了只是没带凭据，
+  而不是连接错误）。不必为了容器访问把边车暴露到 `0.0.0.0`。
 - **API Key**：**边车口令**（即 `OPENCODE_SERVER_PASSWORD` 的值），**与 ① 里那串一字不差**——它不是给
   网关自己起的名，而是**两处必须同值的共享秘密**。鉴权是 HTTP Basic，用户名默认
   `opencode`；只有当你给边车设了 `OPENCODE_SERVER_USERNAME` 时才需要写成 `用户名:口令`（所以**口令里别带
@@ -554,8 +571,8 @@ opencode serve --port 49551 --hostname 127.0.0.1
   [研究文档 §5.2.1](opencode-reverse-proxy-research.md)。
 - **模型别名**：**不用手配**。边车**有**目录（`GET /api/model`）⇒ 它**不属于**"无目录协议"那一族
   （hark/workbuddy/genspark/codex 才需要默认别名建议 + 零别名拦截），点「获取模型」即可，`autoAlias` 照常工作。
-- **只列免费模型**：目录里有 41~42 个（带凭据时，**会随上游漂移**；2026-10-15 实测 41 个 / 9 个免费，
-  建档时是 42 / 10），其中三十来个付费模型在这台机器上必定
+- **只列免费模型**：目录里有 41~45 个（带凭据时，**会随上游漂移**；2026-10-21 实测 **45 个 / 43 个 `-free`**，
+  2026-10-15 是 41 个 / 9 个免费、建档时是 42 / 10），其余付费模型在这台机器上必定
   `503 Insufficient account funds`——列进别名表就是塞一批"存得下、永远失败"的渠道（v1.18.49 那一类现场），
   所以探测只回 `-free` 那批，并在 `account.note` 里说明。
 
@@ -567,20 +584,36 @@ opencode serve --port 49551 --hostname 127.0.0.1
 | 2 | **每请求拍平 `messages`** | 边车**不保留多轮记忆**（实测）；复用会话看着省事，实际丢上下文 |
 | 3 | **不给边车传 `stream`** | 该端点没有 stream 参数；真流式由网关**伪流式**伪造 |
 | 4 | **200 + 空正文 = 失败** | 与 v1.18.26/32 同一条纪律 |
+| 5 | **收到 HTML 一律判失败**（v1.18.89） | 边车是 SPA：**不存在的路由回 200 + `text/html` 兜底页**。只认 `data.text` 的老写法会把一张网页当成模型的回答发给客户端——"看起来成功、内容全错" |
+| 6 | **正文只拼 `type==="text"` 的 part**（v1.18.89） | 新版响应里还有 `reasoning` part，它**也带 `text` 字段**；不过滤就把思维链拼进回答里（很容易被读成"模型在胡说"） |
 
-**出站形状**（`opencode.js`）：
+**出站形状**（`opencode.js`）——**两条路由并存，谁在跑边车谁说了算**：
 
 ```
-POST /api/session      {model:{id:<上游模型>, providerID:"opencode"}}  → 200 {data:{id:"ses_…"}}
-POST /api/session/{id}/generate  {prompt:"<拍平后的整段文本>"}          → 200 {data:{text:"…"}}
-DELETE /api/session/{id}                                               → 204（成功失败都删）
+① 建会话（两版同）：POST /api/session {model:{id:<上游模型>, providerID:"opencode"}}  → 200 {data:{id:"ses_…"}}
+
+② 生成·新版（边车 ≥1.0，2026-10-21 实测 1.4.2）：
+   POST /session/{id}/message  {parts:[{type:"text",text:"<拍平后的整段文本>"}]}
+     → 200 {"info":{…tokens…},"parts":[{"type":"step-start"},…,{"type":"reasoning",…},{"type":"text",…},{"type":"step-finish"}]}   ← 同步整段
+
+② 生成·老版（0.x，v1.18.72 当时那批）：
+   POST /api/session/{id}/generate  {prompt:"<拍平后的整段文本>"}   → 200 {data:{text:"…"}}
+
+④ 清理（两版同）：DELETE /api/session/{id}   → 204（成功失败都删）
 ```
 
-三个形状陷阱（写错都会静默失败或撞 400）：
+网关**先打②新版，失败（404/400/HTML 兜底页）再退②老版**，两条都不通就如实失败——
+这样一份代码同时接得住 0.x 与 1.4.2 两代边车，不用用户自己判断"我这份是哪代"。
 
-- 会话 id 在 **`data.id`**，**顶层没有 `id`**。
-- `generate` 的 body **只有 `prompt`**（`additionalProperties:false`，多传一个字段就 400）。
-- 返回正文在 **`data.text`**，不是 OpenAI 形状。
+形状陷阱（写错都会静默失败或撞 400）：
+
+- 会话 id 在 **`data.id`**，**顶层没有 `id`**（两版都如此）。
+- **老版** `generate` 的 body **只有 `prompt`**（`additionalProperties:false`，多传一个字段就 400）。
+- **新版** `/session/{id}/message`（**没有 `/api` 前缀**）的 body 是 `{parts:[…]}`；而 `/api/session/{id}/message` 只有 **GET**
+  ⇒ 用 POST 打 `/api/…` 那条只会拿到 **SPA 兜底页**（1.4.2 现场实测）。
+- **新版正文在 `parts[].text`**（只取 `type==="text"`），老版正文在 **`data.text`**，都不是 OpenAI 形状。
+- **新版顺手给真 token**：`info.tokens.{input,output,cache.read,reasoning}`、`info.cost`——账本**优先用真值**，
+  只有老版那条路才退回按字符估。注意 `input` 里含边车注入的系统提示与工具定义，量级远大于用户这段话本身。
 
 **token/费用**：边车**不下发**（`Session.Info.tokens` 与 `cost` 在 `generate` 之后**恒为 0**，
 `/message` 也是空数组，本机实测）⇒ 账本按 `estimateTokens` 估算，**不假装有上游真值**。

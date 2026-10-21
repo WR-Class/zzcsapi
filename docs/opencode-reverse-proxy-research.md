@@ -323,6 +323,53 @@ POST /api/session/{id}/generate   {"prompt":"What is 17*23? Reply with only the 
 `host.docker.internal:7897` 的既有做法同型。**边车必须在网关之外**：
 容器里没有你的登录态，装进去也没用。
 
+### 5.6 ★ 边车 1.0+ 换了生成 API（2026-10-21，边车 1.4.2 实测）
+
+§5.2–§5.5 的所有结论都是在 **0.x 那代边车**上测的。omnirush desktop 自带的这份已经升到 **1.4.2**，
+**生成路由消失了**，而且失败形态极其安静——这一节是全部现场记录，别再用"老写法为什么不行"重新走一遍。
+
+**① 老路由不存在，但服务端不会告诉你**。`POST /api/session/{id}/generate` 在 1.4.2 上回的是
+**`200` + `text/html`（2884 字节的 SPA 兜底页）**——因为边车是个 SPA，**任何不存在的路径都吐 index.html**。
+只认 `data.text` 的代码会走到 `safeJson()` 拿到 `null`，于是失败原因被写成"形状不对"；
+而如果哪天有人"顺手"放宽成"拿不到 `data.text` 就用原文"，那就更糟：**一张网页会被当成模型的回答发给客户端**。
+⇒ 处置：`opencode.js` 新增 `isHtmlBody()`，**任何一处收到 HTML 一律判失败**，错误文案直接点明"回了 HTML＝路由不存在"。
+
+**② 正确的新路由**（用边车自带的 OpenAPI 文档 `GET /doc` 查到 162 条路由，权威）：
+
+```
+POST /session/{id}/message   {"parts":[{"type":"text","text":"…"}]}
+  → 200 {"info":{…,"tokens":{total,input,output,reasoning,cache:{read,write}},"cost":0,"finish":"stop"},
+         "parts":[{"type":"step-start"},{"type":"reasoning","text":"…"},{"type":"text","text":"…"},{"type":"step-finish"}]}
+```
+
+同步返回，本机实测 **7.1–9.1 s**（比 0.x 的 1.8–4.1 s 慢，见④）。三个坑：
+
+| 坑 | 现象 | 处置 |
+| --- | --- | --- |
+| **没有 `/api` 前缀** | `/api/session/{id}/message` 只有 **GET**；对它 POST 拿到的是 SPA 兜底页 | 打 `/session/{id}/message` |
+| **`reasoning` part 也带 `text` 字段** | 把所有 `parts[].text` 拼起来 = 把**思维链**当回答 | 只拼 `type==="text"` |
+| **`/session/{id}/wait` 不可用** | `503 {"message":"Session wait is not available yet"}` | 别指望 wait；`/message` 本身就是同步的 |
+| **`/api/session/{id}/prompt` 是异步受理** | 200 只回 `{data:{admittedSeq,…}}`，之后 60 s 内 `GET /api/session/{id}/message` **始终只有 user 那条** | 那条路要自己轮询/订阅，别用 |
+
+**③ token 现在有真值了**：`info.tokens.{input,output,reasoning,cache.read}` + `info.cost`（免费模型 `cost=0`）。
+网关账本改成"**有真值用真值、没有才按字符估**"，并在 `note` 里写明这一条是哪种口径。
+
+**④ ★ 边车把 cwd 当项目根，会把整个项目塞进每一发请求**（这条最贵）：同一个边车，从**仓库目录**起时
+一发"回个口令"的输入是 **`tokens.input=50627`**；把 cwd 换成**空目录**后同样的请求是 **8136**
+（剩下的是边车自己的系统提示 + 工具定义）。⇒ 既白烧额度、又**把源码递给免费层**、还多花 1–2 s。
+`deploy/opencode-sidecar.ps1` 因此强制 `-WorkingDirectory <空目录>`。
+
+**⑤ 边车要由网关自己起，不能蹭别的应用的**（v1.18.89）。事故现场：渠道指 `host.docker.internal:49551`，
+那是 omnirush desktop 自己拉起的边车；它重启后**端口与口令两个都漂了**，网关于是按
+`health.intervalSec=300` 每 5 分钟敲一次，8.7 小时里落下 **87 条 `opencode: 连不上边车：AggregateError`、0 条成功**
+（`AggregateError` ＝ `fetch` 双栈都被拒：`ECONNREFUSED@192.168.65.254:49551` + `ENETUNREACH@fdc4:…::254:49551`；
+同一时间窗里其它渠道 **411 条成功** ⇒ 这不是"网关坏了"，是一条渠道孤零零地在敲死端口）。
+⇒ `deploy/opencode-sidecar.ps1`：端口写死 4666、口令只从 `.env` 的 `OPENCODE_SIDECAR_PASSWORD` 来、
+启动前查端口（幂等）、起完自检 `GET /api/model` 必须 2xx 否则大声失败。
+⚠️ 两个边车**共用同一个数据目录**（`~/.local/share/opencode/opencode.db`，凭据在 `credential` 表里）：
+好处是 omnirush 重启不再影响网关；代价是**两个进程共用一个 SQLite**（锁竞争面），
+所以**不要**为了让它们互不干扰去复制 db——复制会让 OAuth refresh token 分叉，两边互相踢下线。
+
 ## 6. 其它探过的面
 
 | 尝试 | 结果 | 读法 |

@@ -146,6 +146,14 @@ node server.js          # 1) 首次运行自动从 config.example.json 生成 co
 # 2) 编辑 config.json 填入真实渠道，再重启
 ```
 
+> **要用 `opencode` 渠道？先起它自己的专职边车**（v1.18.89）：
+> `powershell -NoProfile -ExecutionPolicy Bypass -File deploy/opencode-sidecar.ps1`（`-Stop` 停）。
+> 固定端口 **4666**、口令取 `.env` 的 `OPENCODE_SIDECAR_PASSWORD`、**工作目录设成空目录**（边车把 cwd 当项目根，
+> 从仓库起会把整个项目塞进每一发请求）；脚本幂等、可挂到 HKCU `Run` 自启（`zzcsapi-opencode`）。
+> 别再指向别的应用（如 omnirush desktop）拉起的边车——它一重启**端口和口令两个都漂**，
+> 实测网关按 5 分钟一次敲了 **87 次全失败、0 次成功**。细节见
+> [docs/protocols.md](docs/protocols.md) 的 opencode 一节与[研究文档 §5.6](docs/opencode-reverse-proxy-research.md)。
+
 可选环境变量：
 
 ```bash
@@ -263,7 +271,7 @@ http://127.0.0.1:8787/console
 | [运行期设置（五组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放 / 自动权重的语义与 `GET/POST /admin/api/settings` 用法 |
 | [配置代际与回滚](docs/config-history.md) | **为什么需要**（`persistConfig` 的显式白名单会静默吞字段，PT29 一族连发四例）、快照目录与 hash 去重、三个端点、回滚语义（哪些热生效 / 哪些要重启 / **为什么不动密钥段**）、**原子写与启动三跳自愈**（v1.18.85）、运维与边界（v1.18.83） |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 64 个测试文件 · 3096 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 64 个测试文件 · 3112 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -290,7 +298,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**64 个文件 · 3096 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**64 个文件 · 3112 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 跑全量：`node _run_all_tests.js`（仓库根，零依赖，逐个跑 `test/*.test.js` 并汇总文件数与断言数）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
@@ -415,7 +423,7 @@ http://127.0.0.1:8787/console
 | `codex` | 一次令牌刷新 | `Bearer <AT>` + `account_id` | ChatGPT/Codex 订阅反代（AT 约 10 天有效） |
 | `genspark` | `GET /api/is_login` | `Cookie: session_id=...` | Genspark 网页会话反代（**必须配代理**；工具调用靠文本仿真） |
 | `hark` | `GET /api/auth/get-session` | `Cookie: __Secure-hark.session_token=...` | hark.com 网页会话反代（**本机必须配代理**，云端直连；建会话 + REST 发消息 + SSE 收 patch；伪流式、工具靠文本仿真）。**别名至少要配一条**（上游没有 `/v1/models`，推荐 `hark-agent`）——控制台点「获取模型」会拿到这条默认建议；别名表空 = 这个渠道永远不会被请求命中 |
-| `opencode` | `GET /api/model` | `Authorization: Basic`（用户名 `opencode`，密码=边车口令） | **本机 `opencode serve` 边车的免费模型**（v1.18.72，[研究](docs/opencode-reverse-proxy-research.md)）。上游是**宿主机上那个已登录的边车**，不是 `opencode.ai`——直连面永远 403（判据是客户端身份）。建会话 + `generate` + **用完即删**；伪流式、估算 token、**没有多轮记忆**（每请求把 messages 拍平成一段）⇒ 工具靠文本仿真。baseUrl 填容器能访问的边车地址（宿主机上用 `host.docker.internal:<port>`），**不要给它配代理**（本地跳，不是出公网）。⚠️ 免费层条款是「can only be used from within OpenCode」，中继第三方流量**有封号风险** |
+| `opencode` | `GET /api/model` | `Authorization: Basic`（用户名 `opencode`，密码=边车口令） | **本机 `opencode serve` 边车的免费模型**（v1.18.72，[研究](docs/opencode-reverse-proxy-research.md)）。上游是**宿主机上那个已登录的边车**，不是 `opencode.ai`——直连面永远 403（判据是客户端身份）。**★ v1.18.89 起边车由网关自己起**：`deploy/opencode-sidecar.ps1`（固定端口 **4666** + 口令取 `.env` 的 `OPENCODE_SIDECAR_PASSWORD` + **工作目录设成空目录**）——蹭别的应用拉起的边车会**端口与口令双漂**，实测按 5 分钟一次敲出 **87 次全失败 / 0 次成功**。生成路由**两代兼容**（新版 `POST /session/{id}/message` → `parts[].text`，老版 `/api/session/{id}/generate` → `data.text`），**收到 HTML 一律判失败**（边车是 SPA，不存在的路由回 200 + 兜底页）。建会话 + 生成 + **用完即删**；伪流式、**新版给真 token**（老版估算）、**没有多轮记忆**（每请求把 messages 拍平成一段）⇒ 工具靠文本仿真。baseUrl 填容器能访问的边车地址（容器里用 `host.docker.internal:4666`；边车绑 `127.0.0.1` 就够，Docker Desktop 会转发到宿主回环），**不要给它配代理**（本地跳，不是出公网）。⚠️ 免费层条款是「can only be used from within OpenCode」，中继第三方流量**有封号风险** |
 
 `arena` 协议已撤（[留档](docs/arena-protocol.md)）。
 
