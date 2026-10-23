@@ -139,10 +139,14 @@ function opencodeUsageOf(j) {
   };
 }
 
-// 边车把错误放在 `_tag` + `message`（不是 OpenAI 的 error.message）→ 归一成一句人能读的话
+// 边车把错误放在 `_tag` + `message`（不是 OpenAI 的 error.message）→ 归一成一句人能读的话。
+// v1.18.90：有的版本把 message 再嵌一层在 `data.message` 里
+// （实测 1.18.x：`{"name":"UnknownError","data":{"message":"Only OmniRush models are available."}}`）
+// ——不认这一层，报给用户的就是一整坨 JSON，真因被埋掉。
 function ocErrorText(status, body) {
   const j = safeJson(body);
-  const msg = (j && (j.message || (j.error && j.error.message))) || String(body || '').slice(0, 200);
+  const msg = (j && (j.message || (j.error && j.error.message) || (j.data && j.data.message)))
+    || String(body || '').slice(0, 200);
   return `HTTP ${status}: ${String(msg).replace(/\s+/g, ' ').slice(0, 180)}`;
 }
 
@@ -222,13 +226,19 @@ async function opencodeGenerate(def, fetchFn, model, prompt, timeoutMs) {
   let gen = await ocRequest(def, fetchFn, 'POST', `/session/${sid}/message`,
     { parts: [{ type: 'text', text: String(prompt) }] }, tmo);
   let via = 'message';
-  // 新版路由不存在时会有三种长相：404 / 400（形状不认）/ 200+HTML（SPA 兜底）⇒ 退回老版再来一次。
-  // 老版若也失败，**保留新版的错误**（它更能说明"版本对不上"）。
-  if (!gen.ok || isHtmlBody(gen.text)) {
+  // ⚠️ **只在"这个路由不存在"时才退老版**（404 / 405 / 200+HTML 的 SPA 兜底页）。
+  //    第一版写成"新版只要不 ok 就退老版"，结果 2026-10-23 现场把真因丢了：新版明明回了
+  //    `400 {"name":"UnknownError","data":{"message":"Only OmniRush models are available."}}`，
+  //    老版回 404「Not Found」，最后报给用户的是 **404 Not Found** —— 真因（模型被边车锁住）一个字都不剩。
+  //    错误归因错误比没有错误更贵：下一个人会照着 404 去查路由。
+  if (isHtmlBody(gen.text) || gen.status === 404 || gen.status === 405) {
     const legacy = await ocRequest(def, fetchFn, 'POST', `/api/session/${sid}/generate`,
       { prompt: String(prompt) }, tmo);
-    if (legacy.ok && !isHtmlBody(legacy.text)) { gen = legacy; via = 'generate'; }
-    else if (!gen.ok) { gen = legacy; via = 'generate'; }
+    const legacyUsable = !isHtmlBody(legacy.text) && legacy.status !== 404 && legacy.status !== 405 && legacy.status !== 0;
+    // 老版成功、或老版给了一个**比"路由不存在"更有信息量**的答复（如 503 余额/免费层墙），就用老版的；
+    // 两边都"路由不存在"就保留新版的（它至少说明新版确实在，只是这条路不通）。
+    if (legacy.ok && legacyUsable) { gen = legacy; via = 'generate'; }
+    else if (!gen.ok && legacyUsable) { gen = legacy; via = 'generate'; }
   }
 
   // 先删会话再返回：文本已经在手里，先清理能保证"客户端中途断开"也不留垃圾会话

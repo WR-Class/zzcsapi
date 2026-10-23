@@ -51,6 +51,7 @@ const REASONING_SENTINEL = 'REASONING_THOUGHTS_MUST_NOT_LEAK_777';
 const SPA_SENTINEL = '<!doctype html><html><body>SPA_FALLBACK_MUST_NOT_BE_ANSWER</body></html>';
 const NEW_TEXT = '新路由答复（POST /session/{id}/message）';
 const NEW_IN = 4321, NEW_OUT = 7;
+const BLOCKED_MSG = 'Only OmniRush models are available.';
 
 let pass = 0, fail = 0;
 const check = (label, cond, extra) => {
@@ -91,9 +92,10 @@ function startFakeSidecar(opts) {
       }
       // ★ v1.18.89 新版路由（无 /api 前缀）：同步返回 {info:{tokens}, parts:[…]}
       const nm = p.match(/^\/session\/([^/]+)\/message$/);
-      if (nm && req.method === 'POST' && /^(new|reasoning|html)$/.test(String(o.mode || ''))) {   // 只有这三档模拟新版；其余档（empty/paid503/freetier）走老路径，§3/§4 的守卫原样保留
+      if (nm && req.method === 'POST' && /^(new|reasoning|html|blocked)$/.test(String(o.mode || ''))) {   // 只有这三档模拟新版；其余档（empty/paid503/freetier）走老路径，§3/§4 的守卫原样保留
         seen.news.push({ id: nm[1], body });
         if (o.mode === 'html') return sendHtml();
+        if (o.mode === 'blocked') return send(400, { name: 'UnknownError', data: { message: BLOCKED_MSG } });
         const parts = [{ type: 'step-start' }];
         if (o.mode === 'reasoning') parts.push({ type: 'reasoning', text: REASONING_SENTINEL });
         parts.push({ type: 'text', text: o.newReply || NEW_TEXT });
@@ -374,6 +376,16 @@ function chDef(sidecarPort, extra) {
     check('错误文案点明"回了 HTML / 路由不存在"（把人直接引到版本问题，而不是去猜模型）',
       /HTML/.test(body), body.slice(0, 220));
     await gH.stop(); await fH.close();
+
+    // 5b-4 错误归因：新版路由回的是**带原因的 400**时，不许退老路由、更不许把老路由的 404 报给用户
+    //   2026-10-23 现场：真因是"边车只允许 OmniRush 自有模型"，报出来的却是 404 Not Found。
+    const fB = await startFakeSidecar({ mode: 'blocked' });
+    const gB = await startGateway([chDef(fB.port)]);
+    rr = await chat(gB.base);
+    const bodyB = await rr.text();
+    check('★ 边车 400 带真因时，报的是那句真因（不是老路由的 404）', bodyB.includes(BLOCKED_MSG), bodyB.slice(0, 200));
+    check('★ 已有明确答复时不再白打老路由（否则真因被 Not Found 覆盖）', fB.seen.generates.length === 0, fB.seen.generates.length);
+    await gB.stop(); await fB.close();
   }
   // ─────────────── §6 与 hark 的分野：opencode **有**目录，不适用"无目录协议"硬要求 ───────────────
   console.log('\n══ §6 与 hark 的分野（有目录 vs 无目录）══');
