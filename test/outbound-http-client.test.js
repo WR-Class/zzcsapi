@@ -315,6 +315,14 @@ function makeAnthropicUpstream() {
     const rec = (usageJ.recent || [])[0] || {};
     check('★ 字节直传的同时，真实 usage 仍被记录（11 / 7）', rec.in === 11 && rec.out === 7, { in: rec.in, out: rec.out });
 
+    // 超时口径（v1.18.91）：慢上游 13 秒才回 /v1/models，10 秒探测必被 abort（现场 2026-10-26）
+    check('★ 控制台「获取模型」探测上限 30s（默认也是 30s——前端不传 timeoutMs 时不能退回 10s）',
+      /Math\.min\(30000, Number\(body\.timeoutMs\) \|\| 30000\)/.test(SRC));
+    check('★ 后台健康探测默认 15s（8s 会把慢站每轮都判红）',
+      /const HEALTH = config\.health \|\| \{ intervalSec: 300, timeoutMs: 15000 \}/.test(SRC));
+    check('探测路径上不留 8000 兜底（改一处漏一处 = 同一症状复发）',
+      !/HEALTH\.timeoutMs \|\| 8000/.test(SRC));
+
     try { gw.kill(); } catch { }
   }
 

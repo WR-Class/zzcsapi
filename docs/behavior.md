@@ -89,6 +89,11 @@
   `400` 的文案把「0 不是不超时、留空才是回默认」写进去，让语义随报错一起回显。② 落库清单与 `GET` 各补一行；③ POST 走**三态语义**
   （显式给值/空串 → 以本次为准；字段缺省 → 沿用 `prevDef`），与 `weight`/`dropParams`/`headers` 同款。④ 顺带堵一个被这次值域放大的地雷：
   notion-agent 路径的 `timeoutMs - 20000` 在 `timeoutMs < 20000` 时会把**负数**当超时传进 `runAgentTurn`，现改为 `Math.max(5000, …)`。
+- **探测超时（v1.18.91）**：两个探测的超时**不是同一个数**，别混：
+  ① 控制台「获取模型」= `POST /admin/api/probe`，上限 **30s**、默认也是 **30s**（`Math.min(30000, body.timeoutMs || 30000)`）——
+  现场 2026-10-26：某站 `GET /v1/models` 要 **13.1 s**，旧默认 10s 直接把「加渠道」打成 `✗ The operation was aborted`（那是 `AbortController` 的文案，不是 key 错）。
+  ② 后台健康探测 = `config.health.timeoutMs`，默认 **15s**（8s 会把慢站每轮判红、`probeFail` 一直涨，最后排到最后）。
+  它是**启动期**读入的，改 `config.json` 要重启才生效。两个数都不影响真实对话（对话走渠道自己的 `timeoutMs`）。
   回归：`test/channel-timeout-attribution-e2e.test.js` §E（落库往返 + 保存别的渠道后仍在 + 三态 + 非法值 400 且不落库 + 四处结构守卫）。
 - **手动测试的预算与判据（v1.18.29）**：`/admin/api/test`（控制台「测试模型」）原本只发 `max_tokens: 16`——推理型模型 16 个 token **全被思考吃光**，上游回 200 + `finish_reason=length` + 可见正文 0，控制台按「2xx 但空 = 空回复」判**不过**，而渠道其实完全健康（现场：用户报「我在咱们站点点击测试都不过」，但该渠道自己的 new-api 游乐场与我们的直连都正常）。处置：① 预算 16 → `TEST_MAX_TOKENS=512`（cap 不是消费，健康模型会提前停）；② 无可见正文但**有思考**时，回一个带 `[输出仅含思考，渠道可用]` 标记的预览并标 `reasoningOnly`，好渠道不再被判死；③ 真·空回复（无正文也无思考）仍如实显示「空回复」，5xx 仍带上游原文。回归：`test/channel-test-reasoning-e2e.test.js`。
 - **失败行也带模型名（v1.18.26）**：`recordFailure()` 记账时带上**请求的模型名**（`tryChannel` 的 `failModel` = 客户端请求体里的 `model`）。此前写死 `model:'—'`，实测近 200 行用量里 **88% 的失败行看不出在调哪个模型**（用户报「有的显示失败但没显示调用的哪个模型」）。后台探测/无请求上下文的路径仍落 `—`——那是"本就没有模型"，不是"我们没记"。

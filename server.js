@@ -616,7 +616,7 @@ function loadConfig() {
 
 const config = loadConfig();
 const PORT = config.port || 8787;
-const HEALTH = config.health || { intervalSec: 300, timeoutMs: 8000 };
+const HEALTH = config.health || { intervalSec: 300, timeoutMs: 15000 };
 const RETRIES = config.retries || { perChannel: 0, maxModelFallbacks: 99 };
 
 // ★ perChannel（v1.9.3 起真正接线，此前只读不用）＝ **同一个渠道**失败后原地再试几次，试完才换下一家。
@@ -1772,14 +1772,14 @@ async function probeChannel(ch) {
   }
   const t0 = Date.now();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), HEALTH.timeoutMs || 8000);
+  const timer = setTimeout(() => ctrl.abort(), HEALTH.timeoutMs || 15000);
   const probeUrl = probeUrlForDef(ch.def);
   let resp;
   let usedFallback = false;
   try {
     if (ch.def.proxy) {
       // PT02：渠道配了代理 → 探测同样必须走代理（undici fetch 无代理支持），curl -x
-      const out = await wbCurlRequest('GET', probeUrl, probeHeadersForDef(ch.def), null, HEALTH.timeoutMs || 8000, ch.def.proxy);
+      const out = await wbCurlRequest('GET', probeUrl, probeHeadersForDef(ch.def), null, HEALTH.timeoutMs || 15000, ch.def.proxy);
       if (out.status > 0) {
         usedFallback = true;
         resp = { ok: out.status >= 200 && out.status < 300, status: out.status, text: async () => out.body };
@@ -1798,7 +1798,7 @@ async function probeChannel(ch) {
       let body = '';
       try { body = await resp.text(); } catch {}
       if (isCloudflareBlock(403, body)) {
-        const ps = await psHttpRequest('GET', probeUrl, probeHeadersForDef(ch.def), null, HEALTH.timeoutMs || 8000);
+        const ps = await psHttpRequest('GET', probeUrl, probeHeadersForDef(ch.def), null, HEALTH.timeoutMs || 15000);
         if (ps.status > 0) {
           usedFallback = true;
           resp = { ok: ps.status >= 200 && ps.status < 300, status: ps.status, text: async () => ps.body };
@@ -1978,7 +1978,7 @@ async function probeDef(def, timeoutMs) {
     }
   }
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs || HEALTH.timeoutMs || 8000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || HEALTH.timeoutMs || 15000);
   const t0 = Date.now();
   try {
     if (def.proxy) {
@@ -5330,7 +5330,7 @@ async function handleAdminApi(req, res, url) {
       // 指纹的上游，探测必须带同款 UA，否则 401 unauthorized client detected
       headers: body.headers ? body.headers : undefined,
     };
-    const r = await probeDef(def, Math.min(15000, Number(body.timeoutMs) || 10000));
+    const r = await probeDef(def, Math.min(30000, Number(body.timeoutMs) || 30000));
     return sendJson(res, 200, r);
   }
   // 真模型测试：发一个最小 chat 请求，返回首字延迟 / 总耗时 / 错误
