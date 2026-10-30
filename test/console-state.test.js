@@ -2053,6 +2053,22 @@ function testConfigHistory() {
       bad.length === 0 && rendered === pages.length, { rendered, total: pages.length, bad });
   }
 
+  /* ── §22 总览两块「渠道健康 / 渠道流量与健康」的口径守卫（v1.18.92）───────────────
+     现场：页头写「9/78 正常 · 不可用 57」（78 里有 54 个是停用的、从不探测），而
+     表头写「按请求量排序」却一行都没排（前 7 行常年是零请求渠道）——两个都是**假话**，
+     且都只在有停用渠道 / 有流量的线上数据里才暴露，桩数据里看不出来。所以这里扫源码。 */
+  {
+    const SRC_UI = fs.readFileSync(require('path').join(__dirname, '..', 'build', 'app.js'), 'utf8');
+    check('★ 健康分布只统计启用渠道（停用渠道从不探测 → 状态必为 unknown，算进去就是「没开=挂了」）',
+      /for \(const c of chans\) if \(c\.on\) cnt\[c\.status\]/.test(SRC_UI));
+    check('★ donut 有「未探测」这一档，且不再把 unknown 并进「不可用」',
+      /k:'未探测'/.test(SRC_UI) && !/v:cnt\.down \+ \(cnt\.unknown/.test(SRC_UI));
+    check('★ 页头分母是启用渠道数（不是全量条数）',
+      /const ok=\(DATA\.donut\[0\]\|\|\{\}\)\.v\|\|0, total=DATA\.meta\.enabled\|\|DATA\.meta\.channels/.test(SRC_UI));
+    check('★ 「渠道流量与健康」真按请求量排序（表头承诺了什么就必须做到——别再 slice(0,7) 直接切配置顺序）',
+      /\[\.\.\.DATA\.channels\]\.sort\(\(a,b\)=>b\.req-a\.req/.test(SRC_UI) && !/DATA\.channels\.slice\(0,7\)\.map\(c=>/.test(SRC_UI));
+  }
+
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
   process.exit(fail ? 1 : 0);

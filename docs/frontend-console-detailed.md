@@ -2023,6 +2023,21 @@ const params = (f && (f.parameters || f.input_schema || f.inputSchema))
 
 **边界**：这一页是**补救**，不是修复。白名单本身没变，下次保存仍会抹掉没登记的字段——遇上"字段凭空消失"，先回滚，再来把它加进白名单（`persistConfig` 与 `docs/config-history.md` 五条纪律）。
 
+### 8.59 v1.18.92 总览两块「渠道健康 / 渠道流量与健康」在说假话：分母混了停用渠道、排序根本没排（2026-10-30，对象 `build/app.js` + `console-redesign.html` + 产物 `console.html`）
+
+> 用户原话：「渠道流量与健康 显示不正确吧」。查下来是三个独立的显示缺陷叠在同一屏上。
+
+**问题一：健康分布把「停用」当成「挂了」。** 线上 78 个渠道里 54 个是停用的；`probeAll()` 刻意跳过停用渠道（不消耗它们的配额），所以停用渠道的 `status` 永远是 `unknown`。而 `adapt()` 统计 `cnt` 时不过滤 `c.on`，`donut` 又把 `unknown` 并进「不可用」——于是页头写「9/78 正常 · 不可用 57」，读起来像全网崩了，实际启用的 24 个里只有 4 个真不可用。
+
+处置：`cnt` 只统计启用渠道；`donut` 拆成四档（正常 / 降级 / 不可用 / **未探测**，最后一档用 `--tx-3` 灰而不是 `--err` 红）；页头分母改 `DATA.meta.enabled`（文案「x/y 启用渠道正常」）；「已停用」那一行仍用全量条数（新增 `allChan` 变量），不误导。
+
+**问题二：表头写「按请求量排序」，实际一行都没排。** 表格取的是 `DATA.channels.slice(0,7)` —— 配置顺序。于是前 7 行常年是被 4 个零请求渠道占着的随机样本，真正的流量前几名（`77625` 5469 次、`乐子` 5282 次、`novai` 4165 次）根本不出现。**表头承诺了什么就必须做到什么**，这不是排版问题：用户拿它判断"哪些渠道在扛量"。
+
+处置：`[...DATA.channels].sort((a,b)=>b.req-a.req||a.name.localeCompare(b.name)).slice(0,7)`（与「热门模型」同一口径，同量按名次）。副标题补一句「延迟取最近成功请求均值」——延迟来自最近 200 条成功请求，而请求数/成功率是**累计**，三种口径混在一张表里，不写清楚就等着被问第二次。
+
+**同步与守它的地方：** `console-redesign.html`（设计稿，不参与构建但被 `channel-headers-roundtrip-e2e` 与 `console-state` 双向比对）同步这 6 处 + mock `donut` 补第四档；`node build/build.js` 重建产物；`docs/frontend-code-map.md` 的函数索引 7 个行号（+5/+7）与文件规模表（app.js 2948→2956、console.html 3662→3670、build.js 54→55）一并按实测改。回归 `console-state` 310 项、`channel-headers-roundtrip-e2e` 38 项、`hark-channel` 103 项全绿。
+
+**没动的（刻意）：** 成功率条仍用累计 req/err（历史口径，和"总览 KPI 累计请求"一致）；`probeAll` 跳过停用渠道的行为不变——要改的是**显示**，不是探测策略。
 ## 9. 后续可做（未实现）
 
 - 密钥明文显示加"仅本次会话"提示或二次确认

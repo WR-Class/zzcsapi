@@ -925,7 +925,7 @@ const DATA = {
     {t:'09-24 20:22:19',m:'demo-notion-gpt',c:'demo-notion',p:'notion',ok:true,ms:1820,i:1204,o:356,id:'req_c31e77ab'},
     {t:'09-24 20:21:05',m:'demo-deepseek-chat',c:'demo-workbuddy',p:'workbuddy',ok:true,ms:1404,i:892,o:214,id:'req_e0b45d19'}
   ],
-  donut:[{k:'正常',v:5,c:'var(--ok)'},{k:'降级',v:1,c:'var(--warn)'},{k:'不可用',v:3,c:'var(--err)'}]
+  donut:[{k:'正常',v:5,c:'var(--ok)'},{k:'降级',v:1,c:'var(--warn)'},{k:'不可用',v:3,c:'var(--err)'},{k:'未探测',v:2,c:'var(--tx-3)'}]
 };
 
 /* ═══════════════════════════ 工具 ═══════════════════════════ */
@@ -1063,7 +1063,7 @@ function kpiCard(o){
   </div>`;
 }
 function vOverview(v){
-  const ok=DATA.donut[0].v, total=DATA.meta.channels;
+  const ok=DATA.donut[0].v, total=DATA.meta.enabled||DATA.meta.channels, allChan=DATA.meta.channels;
   v.innerHTML=`
   <div class="page-hd">
     <div>
@@ -1097,14 +1097,14 @@ function vOverview(v){
       <div class="card-bd" style="padding:18px 20px 10px">${areaChart(DATA.trend,760,238)}</div>
     </div>
     <div class="card c4">
-      <div class="card-hd"><h3>渠道健康</h3><span class="sub">${ok}/${total} 正常</span></div>
+      <div class="card-hd"><h3>渠道健康</h3><span class="sub">${ok}/${total} 启用渠道正常</span></div>
       <div class="card-bd" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
         ${donut(DATA.donut)}
         <div class="legend" style="flex:1;min-width:120px">
-          ${DATA.donut.map(d=>`<div class="legend-row"><span class="dot ${d.k==='正常'?'ok':d.k==='降级'?'degraded':'down'}"></span><span>${d.k}</span><span class="v">${d.v}</span></div>`).join('')}
+          ${DATA.donut.filter(d=>d.v>0||d.k==='正常').map(d=>`<div class="legend-row"><span class="dot ${d.k==='正常'?'ok':d.k==='降级'?'degraded':d.k==='未探测'?'unknown':'down'}"></span><span>${d.k}</span><span class="v">${d.v}</span></div>`).join('')}
           <div class="divider" style="margin:6px 0"></div>
           <div class="legend-row"><span class="muted">已启用</span><span class="v">${DATA.meta.enabled}</span></div>
-          <div class="legend-row"><span class="muted">已停用</span><span class="v">${total-DATA.meta.enabled}</span></div>
+          <div class="legend-row"><span class="muted">已停用</span><span class="v">${allChan-DATA.meta.enabled}</span></div>
         </div>
       </div>
     </div>
@@ -1112,13 +1112,13 @@ function vOverview(v){
 
   <div class="grid g12">
     <div class="card c7">
-      <div class="card-hd"><h3>渠道流量与健康</h3><span class="sub">按请求量排序</span>
+      <div class="card-hd"><h3>渠道流量与健康</h3><span class="sub">按请求量排序 · 延迟取最近成功请求均值</span>
         <div class="r"><button class="btn ghost sm" onclick="go('channels')">全部渠道 ${svg('arrowUp',12)}</button></div>
       </div>
       <div class="card-bd tight tbl-wrap">
         <table class="tbl">
           <thead><tr><th>渠道</th><th>状态</th><th class="t-r">延迟</th><th class="t-r">请求</th><th>成功率</th><th class="t-r">趋势</th></tr></thead>
-          <tbody>${DATA.channels.slice(0,7).map(c=>{
+          <tbody>${[...DATA.channels].sort((a,b)=>b.req-a.req||a.name.localeCompare(b.name)).slice(0,7).map(c=>{
             const rate=pct(c.req-c.err,c.req);
             return `<tr class="clickable" onclick="openChannel('${c.id}')">
               <td><div class="cell-main"><span class="avatar">${c.name.slice(0,2)}</span>

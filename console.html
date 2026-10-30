@@ -826,8 +826,11 @@ function adapt() {
     i:r.in || 0, o:r.out || 0, note:r.note || '', cl:r.client || '',
   }));
   const tot = (us && us.total) || {};
+  /* v1.18.92 修：健康分布只统计**已启用**渠道。停用渠道不参与探测（probeAll 跳过它们），
+     状态必为 unknown；把它们算进 donut 等于把「没开」当成「挂了」——线上 78 条里 54 条停用，
+     于是页头显示「9/78 正常 · 不可用 57」，而启用 24 条里只有 4 条真不可用。 */
   const cnt = { ok:0, degraded:0, down:0, unknown:0 };
-  for (const c of chans) cnt[c.status] = (cnt[c.status] || 0) + 1;
+  for (const c of chans) if (c.on) cnt[c.status] = (cnt[c.status] || 0) + 1;
   DATA = {
     meta:{
       total:tot.requests || 0, errors:tot.errors || 0,
@@ -849,7 +852,9 @@ function adapt() {
     donut:[
       { k:'正常', v:cnt.ok, c:'var(--ok)' },
       { k:'降级', v:cnt.degraded, c:'var(--warn)' },
-      { k:'不可用', v:cnt.down + (cnt.unknown || 0), c:'var(--err)' },
+      { k:'不可用', v:cnt.down, c:'var(--err)' },
+      /* 未探测单独一档：启用但还没探测过（刚启动 / 本轮没跑到），不是「不可用」 */
+      { k:'未探测', v:cnt.unknown, c:'var(--tx-3)' },
     ],
   };
 }
@@ -1227,8 +1232,10 @@ async function copyModels(){
   }catch(e){toast('复制失败：'+(e&&e.message||e),'bad')}
 }
 function vOverview(v){
-  /* 首屏是无数据先渲染骨架，donut 可能还是空数组，这里不能直接取 [0] */
-  const ok=(DATA.donut[0]||{}).v||0, total=DATA.meta.channels;
+  /* 首屏是无数据先渲染骨架，donut 可能还是空数组，这里不能直接取 [0]。
+     v1.18.92：分母改用**已启用**渠道数（donut 只统计启用中的），全量条数留给「已停用」那一行。 */
+  const ok=(DATA.donut[0]||{}).v||0, total=DATA.meta.enabled||DATA.meta.channels;
+  const allChan=DATA.meta.channels;
   const rc=ovRangeCfg(), series=ovSeries();
   const s=winStats(rc.days);
   /* 24 小时走小时桶，没有「日期 → 日期」区间可讲，用范围名代替 */
@@ -1268,14 +1275,14 @@ function vOverview(v){
       <div class="card-bd" style="padding:18px 20px 10px">${series.length?areaChart(series,760,238):'<div class="empty">暂无用量数据</div>'}</div>
     </div>
     <div class="card c4">
-      <div class="card-hd"><h3>渠道健康</h3><span class="sub">${ok}/${total} 正常</span></div>
+      <div class="card-hd"><h3>渠道健康</h3><span class="sub">${ok}/${total} 启用渠道正常</span></div>
       <div class="card-bd" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
         ${donut(DATA.donut)}
         <div class="legend" style="flex:1;min-width:120px">
-          ${DATA.donut.map(d=>`<div class="legend-row"><span class="dot ${d.k==='正常'?'ok':d.k==='降级'?'degraded':'down'}"></span><span>${d.k}</span><span class="v">${d.v}</span></div>`).join('')}
+          ${DATA.donut.filter(d=>d.v>0||d.k==='正常').map(d=>`<div class="legend-row"><span class="dot ${d.k==='正常'?'ok':d.k==='降级'?'degraded':d.k==='未探测'?'unknown':'down'}"></span><span>${d.k}</span><span class="v">${d.v}</span></div>`).join('')}
           <div class="divider" style="margin:6px 0"></div>
           <div class="legend-row"><span class="muted">已启用</span><span class="v">${DATA.meta.enabled}</span></div>
-          <div class="legend-row"><span class="muted">已停用</span><span class="v">${total-DATA.meta.enabled}</span></div>
+          <div class="legend-row"><span class="muted">已停用</span><span class="v">${allChan-DATA.meta.enabled}</span></div>
         </div>
       </div>
     </div>
@@ -1283,13 +1290,13 @@ function vOverview(v){
 
   <div class="grid g12">
     <div class="card c7">
-      <div class="card-hd"><h3>渠道流量与健康</h3><span class="sub">按请求量排序</span>
+      <div class="card-hd"><h3>渠道流量与健康</h3><span class="sub">按请求量排序 · 延迟取最近成功请求均值</span>
         <div class="r"><button class="btn ghost sm" data-act="go" data-page="channels">全部渠道 ${svg('arrowUp',12)}</button></div>
       </div>
       <div class="card-bd tight tbl-wrap">
         <table class="tbl">
           <thead><tr><th>渠道</th><th>状态</th><th class="t-r">延迟</th><th class="t-r">请求</th><th>成功率</th><th class="t-r">趋势</th></tr></thead>
-          <tbody>${DATA.channels.slice(0,7).map(c=>{
+          <tbody>${[...DATA.channels].sort((a,b)=>b.req-a.req||a.name.localeCompare(b.name)).slice(0,7).map(c=>{
             const rate=pct(c.req-c.err,c.req);
             return `<tr class="clickable" data-act="open-channel" data-id="${esc(c.id)}">
               <td><div class="cell-main"><span class="avatar">${esc(c.name.slice(0,2))}</span>

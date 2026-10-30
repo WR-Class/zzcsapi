@@ -32,9 +32,9 @@
 | `build/fonts.js` | 工具 | 字体资产工具（`dump` / `rename` / `merge`），**改名必须在切分之前**做。见 `docs/fonts.md` | — |
 | `build/shell.html` | 47 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 105 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**、**数据统计页 `.st-*` / 占位符 `.t-c-ph`**） | ✅ §0.2 |
-| `build/app.js` | 2948 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
-| `build/build.js` | 54 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
-| `console.html` | 3662 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
+| `build/app.js` | 2956 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/build.js` | 55 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
+| `console.html` | 3670 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~9031 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import`、`/admin/api/session`（登录 / 退出，v1.18.6）、`/admin/api/settings`（四组，v1.18.8）、`/admin/api/stats` 与 `/admin/api/bans`（来源 IP 态势与封禁，v1.18.11）等；含首启密钥生成、会话表与双层鉴权、thinking 回放块（v1.18.8）、来源 IP 统计与封禁块（v1.18.11） | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
@@ -136,20 +136,20 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | --- | --- | --- |
 | 3 | `IC` | 内联 SVG path 字典 |
 | 59 | `adapt()` | **适配层**：把 `/admin/api/status` 的真实响应转成渲染层期望的 `DATA` 结构（含渠道的 `weight`/`weightedHits`/`weightedShare` → `w`/`wHits`/`wShare`；日志条目解析进 `n` + **`cl`（客户端标签，v1.18.11）**；顶层 `stats: RAW.stats`（v1.18.11）） |
-| 147 | `loadAll()` | 并发拉取 status / usage / config / **settings** / **keys** / **stats（v1.18.11）**，写 `RAW` → `adapt()`。**settings 与 keys（v1.18.5 密钥管理页数据）与 stats 各自单独 `.catch(()=>null)` 兜底**：这几个端点挂了不能把整页拉取拖垮（其余照常刷新） |
+| 152 | `loadAll()` | 并发拉取 status / usage / config / **settings** / **keys** / **stats（v1.18.11）**，写 `RAW` → `adapt()`。**settings 与 keys（v1.18.5 密钥管理页数据）与 stats 各自单独 `.catch(()=>null)` 兜底**：这几个端点挂了不能把整页拉取拖垮（其余照常刷新） |
 | 192 / 212 | `render()` / `reload()` | 重绘当前页（**保留滚动位置 + 焦点/光标**；筛选状态由各页 JS 变量回填，见下方「状态回填」约定）/ 重新拉数并重绘 |
-| 215 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
+| 220 | `recheckAll(btn)` | 全量重探测（带按钮 loading） |
 | 232–246 | `$` `$$` `esc`(234) `nf` `pct` `fTok` `fMs` `stTxt` `protoLabel` `errMsgOf`(246) | DOM/格式化小工具 + **错误显示统一口（v1.18.17，公网部署实测抓到）**：网关错误体是 `{error:{message,type}}`，`errMsgOf` 对象取 `message`、字符串透传、`j.message` 兜底——`api()` 错误 toast 与登录门共用（直接拼 `j.error` 会显示 `[object Object]`、吞掉真实原因） |
-| 247 | `api(path,opts)` | **统一请求封装**：错误 toast 走 `errMsgOf`（v1.18.17，错误体是对象时不再显示 `[object Object]`）；**v1.18.6 起不注入任何 `Authorization` 头**——管理面鉴权交给登录门换来的会话 cookie（同源自动随行，`HttpOnly`，JS 读不到）；**401 → 弹登录门**（会话过期 / 被轮换清掉时自动闭环）。**v1.18.1 起把 `status`/`body` 挂到抛出的 Error 上**，供运行期设置页显示后端 400 原文 |
+| 252 | `api(path,opts)` | **统一请求封装**：错误 toast 走 `errMsgOf`（v1.18.17，错误体是对象时不再显示 `[object Object]`）；**v1.18.6 起不注入任何 `Authorization` 头**——管理面鉴权交给登录门换来的会话 cookie（同源自动随行，`HttpOnly`，JS 读不到）；**401 → 弹登录门**（会话过期 / 被轮换清掉时自动闭环）。**v1.18.1 起把 `status`/`body` 挂到抛出的 Error 上**，供运行期设置页显示后端 400 原文 |
 | 255 / 257 / 266 / 276 | `CFG`(255) `downloadCsv`(257) `toast`(266) `copyText`(276) | 端点配置缓存 / 导出 / 提示 / **复制（含 `execCommand` 兜底）** |
 | 292 / 334 / 352 | `areaChart` / `sparkline` / `donut` | 内联 SVG 图表。**v1.18.1 起两个折线函数对空数据返回占位图而不是抛错**（全新部署 `usage` 为空时，详情抽屉曾在 `pts[0][0]` 处崩掉 → 表现是"点详情没反应"） |
 | 371 | `NAV` | 侧栏导航定义（「资源」组含 渠道管理 / 聚合模型 / 自动权重；「监控」组含 **调用日志 / 数据统计（v1.18.11 新增，`zap` 图标）**；「工具」组含 Playground / 运行期设置 / 密钥管理 / 接入信息） |
 | 387 / 395 | `renderRail()` / `go(p)` | 侧栏重绘 / **唯一路由**（切页后 `viewport.scrollTop=0`；路由表含 `autoweight:vAutoWeight`、`settings:vSettings`、`keys:vKeys` 与 **`stats:vStats`（v1.18.11，`render()` 的分发表同加了这一项——只加 `go()` 一张会出现"能进页但 8 秒轮询不刷新"）**） |
-| 408 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
+| 413 | `kpiCard(o)` | KPI 卡（值 / 脚注 / 独立曲线带） |
 | 428–464 | `winStats`(428) `avgLatency`(444) `avgLatencyDelta`(450) `dPct`(458) `dChip`(459) `OV_RANGE`(462) `ovRange`(463) `ovRangeCfg`(464) | 窗口统计 / 平均延迟 / **延迟环比**（样本 <40 返回 null）/ 涨跌小工具 / **时间范围配置** |
 | 465 / 473 | `ovSeries()` / `chSpark(id)` | 按当前范围取序列 / 单渠道曲线 |
 | 484–510 | `exportUsage`(484) `exportLogs`(496) `exportModels`(503) `copyModels`(510) | 导出与复制 |
-| 519 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
+| 524 | `vOverview(v)` | 总览页（含 `24h/7d/30d` 真实切换） |
 | 636 / 637 / 940 / 977 / 1024 | `chTab`/`chQ`(636) `vChannels`(637) / `drawChTable`(940) / `toggleCh`(977) / `openChannel`(1024) | 渠道页（v1.9 起**只剩页签 + 搜索 + 表格**，观测卡已迁出）/ 排序渲染（含**权重 / 分流**列）/ 启停 / 详情抽屉（含权重与分流占比角标 + 自动权重观测一节） |
 | 993–1014 | **渠道级「不发这些参数」（`dropParams`，v1.18.33）**：`dropWhitelist()`(993) / `dropParamsOf()`(998) / **`msTextOf()`(1003，v1.18.46)** / `dropChipsHtml()`(1008) / `addDropParam(k)`(1014) | 出站参数剔除的 4 个辅助函数，夹在 `toggleCh` 与 `openChannel` 之间。**合法参数名清单只从 `GET /admin/api/config` 的 `dropParamWhitelist` 取**（前端不抄第二份，抄了会漂移）；`dropChipsHtml` 把清单渲染成可点 chip（`data-act="fill-drop-param"` + `data-k`，外部可控值一律 `esc()`），点一下把名字填进表单的 `#f-drop` 输入框（逗号/空格分隔）；抽屉里显示已配清单。**框空 = 显式提交 `[]` = 清空**（与 `weight` 的"留空 = 不动"刻意不同）。后端语义与边界（哪些协议不生效、白名单外 400）见 `test/channel-drop-params-e2e.test.js`。**v1.18.46 增 `msTextOf(c,k)`**：渠道表单「首字死线 / 总超时」两框的回填助手（`c.fcMs`/`c.toMs` → 输入框文本；没配 = 空框 = 回默认），与 `headersTextOf` 同一族——**不回填的输入框就是保存按钮旁的删除键** |
 | 682 / 696 | **`vAutoWeight()`** / **`autoWeightCard()`** | **自动权重页**（v1.9，资源 → 自动权重）：`vAutoWeight` 只出页头 + 挂卡；`autoWeightCard` 把 `/admin/api/status` 的 `autoWeight.models[]` 画成各候选的分配（**生没生效由 `effective` 决定**：关着是预测、开着就是真实路由在用的那份）。份额改成**一候选一列**（`.aw-col`，列宽 = 份额，色带段与名字/百分比同列，见 `build/extra.css` 10–57），份额为 0 的候选不进列、单独一行 `未参与分流：`。列标签**只留渠道显示名**（v1.9.1 起不再拼 id 小片） |
@@ -170,8 +170,8 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 2651–2709 | **事件委托块**：`ACTS`(2651) + click(2703) / change(2709) 两个 `document` 委托监听 | **全站唯一事件入口（v1.18.7）**：内联 `onclick=`/`onchange=`/`onkeydown=` 属性已全部清零（含 `build/shell.html` 的抽屉遮罩，改 `data-act`）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`），两个委托监听统一分发：`ACTS` 表 **49** 个动作与模板**双向一一对应**（v1.18.11 增 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip` 四个；**v1.18.33 增 `fill-drop-param` 一个**——点合法参数名 chip 填进「不发这些参数」输入框）；8 秒轮询整页重绘**不用重挂监听**；点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，`stopPropagation` 成为历史）。登录门的 Enter 改为 `showKeyGate` 内程序化挂接（非内联属性）。**新增交互：先在 `ACTS` 注册 + 模板写 `data-act`，禁止写内联属性**（`test/security-headers-e2e.test.js` 内联清零 + 双向覆盖守卫、`test/console-state.test.js` 真实委托块桩上真跑，都会拦回潮） |
 | 2719 / 2748 / 2767 | `showKeyGate()` `logout()` `__ZZ_BOOTED__`(2767) | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；**v1.18.17：提交前 `trim()`（终端 cat 复制带尾随换行/空格不再被打成 401）、失败原因走 `errMsgOf`（看得见「密钥不对」而不是 `[object Object]`）**；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
 | 2807–2920 | **配置历史页（v1.18.84）**：`HI`(2807) `hiReason`(2816) `hiName`(2818) `hiListHtml`(2820) `hiDetailHtml`(2837) `drawHi`(2871) `loadHistory`(2880) `hiOpen`(2887) `hiRollback`(2897) `vHistory`(2920) | **配置历史页**（工具 → 配置历史，插在密钥管理与接入信息之间；`clock` 图标）：`persistConfig` 白名单静默吞字段的**补救入口**——列代际（只有元信息）/ 看某一代与「现在」的**字段级 `diff`**（`diff.channels.changed[].fields` 直接点名少了哪个字段）/ 一键回滚（复用 `armConfirm` 两步确认，6 秒不点自动还原）。四条纪律写在该块文件头：列表只给元信息、详情只给掩码（**密钥原文永不出现在这一页**）、**回滚不动 `auth` / `adminKey` / `gatewayKey`**、**代际按需拉取不进 8 秒轮询**（进页一次 /「重新读取」/ 回滚后自动重拉）。状态回填：`HI` / `HILERR` / `HIEL` / `HID` / `HIDERR` / `HIBUSY` / `HIHIT`（seq → 详情缓存，来回点不重复打接口）。⚠️ 页面 id 是 `history`：`render()` 与 `go()` **两张分发表都要注册**（只加一张 = 能进页但 8 秒轮询不刷新）。界面与交互见 `docs/frontend-console-detailed.md` §5.12，后端与回滚语义见 `docs/config-history.md` |
-| 2758 | `tick()` | 时钟 |
-| 2768 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 2765 | `tick()` | 时钟 |
+| 2775 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。
