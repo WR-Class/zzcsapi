@@ -513,7 +513,7 @@ function exportModels(){
 }
 /* 复制网关真实的 /v1/models 响应，而不是前端自己拼的清单 */
 async function copyModels(){
-  const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
+  const base=gwBase();
   try{
     const r=await fetch(base+'/models',{headers:{'Authorization':'Bearer '+(await gwKeyLive())}});
     const j=await r.json();
@@ -816,6 +816,21 @@ const SET_FIELDS={
 };
 function setGroupCfg(g){const s=RAW.settings||{};return {cfg:((s.config||{})[g])||{},eff:((s.effective||{})[g])||{}};}
 function metricsUrl(){return (typeof location!=='undefined'&&location.origin?location.origin:'')+'/metrics';}
+/* ── 浏览器自己发请求时用的 /v1 基址（v1.18.93）─────────────────────────────────
+   原来这里取 `CFG.urls.openai`，而服务端把它硬编码成 `http://127.0.0.1:${PORT}`
+   （server.js `/admin/api/config`）。于是**只要你不从 127.0.0.1 打开控制台**
+   （局域网 IP、反代域名、别的机器），Playground 就会去敲「浏览器自己那台机器」的
+   127.0.0.1:8787 —— 而 CSP 是 `connect-src 'self'`，跨源也被拦 ⇒ fetch 抛
+   `TypeError: Failed to fetch`，用户只看到"请求失败：Failed to fetch"，看不出是地址错了。
+   同源优先：`location.origin` 就是这段页面被打开时的 origin，请求它一定过 CSP。
+   服务端那份 `CFG.urls.openai` 仍然有用——但它属于**展示给外部客户端抄的地址**
+   （见 vAccess 的端点清单、copyCurl），不是浏览器自己发请求用的地址，别混。 */
+function gwBase(){
+  const o=(typeof location!=='undefined'&&location.origin)?location.origin:'';
+  if(o) return o+'/v1';
+  /* 没有 location（非浏览器环境/测试桩）才退回服务端下发的值 */
+  return (CFG&&CFG.urls&&CFG.urls.openai)||'/v1';
+}
 function syncSettingsDraft(force){
   const s=RAW.settings; if(!s||!s.config) return;
   if(force||!setDraft||!setDirty) setDraft=JSON.parse(JSON.stringify(s.config));
@@ -1640,7 +1655,7 @@ async function pgSend(){
   const msgs=[];
   if(sys)msgs.push({role:'system',content:sys});
   for(const m of PG)msgs.push({role:m.role==='user'?'user':'assistant',content:m.text});
-  const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
+  const base=gwBase();
   const key=await gwKeyLive();
   const t0=performance.now();
   let ttfb=0, answer='', usage='', channel='', err='';
@@ -1679,7 +1694,15 @@ async function pgSend(){
       answer=(ch.message&&ch.message.content)||'';
       if(j.usage)usage=fmtUsage(j.usage,ttfb);
     }
-  }catch(e){ err=String(e&&e.message||e); }
+  }catch(e){
+    /* v1.18.93：`Failed to fetch` 是浏览器自己的话（连不上 / 被 CSP 拦 / 跨源），
+       不是网关回的错。光给这句话等于什么都没说——把**请求打到哪个地址**一起报出来，
+       否则用户只能猜到"网关挂了"这一种解释（真因常常是地址不对）。 */
+    const m=String(e&&e.message||e);
+    err=(/failed to fetch|networkerror|load failed/i.test(m))
+      ? m+'（浏览器连不上 '+base+' —— 地址错、网关没起、或被 CSP/跨源拦下；这不是网关回的错误）'
+      : m;
+  }
   pgBusy=false;
 
   const total=performance.now()-t0;

@@ -2069,6 +2069,29 @@ function testConfigHistory() {
       /\[\.\.\.DATA\.channels\]\.sort\(\(a,b\)=>b\.req-a\.req/.test(SRC_UI) && !/DATA\.channels\.slice\(0,7\)\.map\(c=>/.test(SRC_UI));
   }
 
+  /* ── §23 浏览器自己发请求时的 /v1 基址必须同源（v1.18.93）────────────────────────
+     现场：「Playground 里发送消息提示请求失败：Failed to fetch」。
+     真因：`pgSend` 原来取 `CFG.urls.openai`，而服务端 /admin/api/config 把它硬编码成
+     `http://127.0.0.1:${PORT}`。只要不从 127.0.0.1 打开控制台（局域网 IP / 反代域名 /
+     别的机器），浏览器就会去敲**自己那台机器**的 127.0.0.1:8787 —— 加上 CSP
+     `connect-src 'self'`，跨源也被拦 ⇒ TypeError: Failed to fetch。
+     两件事都只在"不是从 127.0.0.1 打开"时才炸，桩里 origin 就是 127.0.0.1，测不出来，
+     所以扫源码：① 发请求的两处必须走同源辅助函数；② 服务端那份地址只许用于**展示/复制**；
+     ③ 网络类错误必须把目标地址一起报出来（否则用户只能猜到"网关挂了"这一种解释）。 */
+  {
+    const SRC_UI = fs.readFileSync(require('path').join(__dirname, '..', 'build', 'app.js'), 'utf8');
+    check('★ 有同源的 gwBase() 辅助函数，且 location.origin 优先于服务端下发的地址',
+      /function gwBase\(\)\{/.test(SRC_UI)
+      && /const o=\(typeof location!=='undefined'&&location\.origin\)\?location\.origin:''/.test(SRC_UI)
+      && /if\(o\) return o\+'\/v1';/.test(SRC_UI));
+    check('★ Playground 发送真的走同源基址（别再拿 CFG.urls.openai 去 fetch）',
+      /const base=gwBase\(\);\s*\n\s*const key=await gwKeyLive\(\);/.test(SRC_UI));
+    check('★ 复制模型清单也走同源基址',
+      /async function copyModels\(\)\{\s*\n\s*const base=gwBase\(\);/.test(SRC_UI));
+    check('★ 网络类失败要把请求地址报出来（Failed to fetch 是浏览器的话，不是网关回的错）',
+      /failed to fetch\|networkerror\|load failed/i.test(SRC_UI) && /浏览器连不上 '\+base\+'/.test(SRC_UI));
+  }
+
   console.log('\n' + '─'.repeat(58));
   console.log(fail ? `✗ ${pass} 通过 / ${fail} 失败` : `✓ 全部通过（${pass} 项断言）`);
   process.exit(fail ? 1 : 0);

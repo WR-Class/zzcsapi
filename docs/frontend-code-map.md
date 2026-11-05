@@ -32,9 +32,9 @@
 | `build/fonts.js` | 工具 | 字体资产工具（`dump` / `rename` / `merge`），**改名必须在切分之前**做。见 `docs/fonts.md` | — |
 | `build/shell.html` | 47 | 生产 body 骨架：背景层 / rail / topbar / viewport / drawer / mask / toasts | ✅ §0.2 |
 | `build/extra.css` | 105 | 设计稿快照里没有的生产独有组件（codex chip、抽屉密钥行等宽字、**自动权重观测卡 `.aw-*`**、**运行期设置页 `.set-*`**、**数据统计页 `.st-*` / 占位符 `.t-c-ph`**） | ✅ §0.2 |
-| `build/app.js` | 2956 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
+| `build/app.js` | 2979 | **生产逻辑主体**：数据层 + 动作层 + 9 个页面渲染 + 事件委托块（`ACTS`，v1.18.7 内联事件属性清零）+ 管理密钥登录门（会话化，v1.18.6）+ 数据统计页（v1.18.11），真实请求 `/admin/api/*` | ✅ §0.2 |
 | `build/build.js` | 55 | 组装脚本 + 构建期自检（`</style>` 唯一性 + head/shell 行数守卫） | ✅ §0.2 |
-| `console.html` | 3670 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
+| `console.html` | 3693 | **构建产物**（提交进仓库，`server.js` 直接读）。**不要手改** | 参考 |
 | `server.js` | ~9031 | 后端网关，提供 `/admin/api/status`、`/admin/api/channel`、`/admin/api/probe`、`/admin/api/test`、`/admin/api/codex-import`、`/admin/api/genspark-import`、`/admin/api/session`（登录 / 退出，v1.18.6）、`/admin/api/settings`（四组，v1.18.8）、`/admin/api/stats` 与 `/admin/api/bans`（来源 IP 态势与封禁，v1.18.11）等；含首启密钥生成、会话表与双层鉴权、thinking 回放块（v1.18.8）、来源 IP 统计与封禁块（v1.18.11） | 参考 |
 | `README.md` | — | 后端协议、渠道配置、端点总表、调度顺序 | 参考 |
 
@@ -170,8 +170,8 @@ HTML 解析 `<style>` 是**裸文本模式**：只要遇到 `</style>` 字面量
 | 2651–2709 | **事件委托块**：`ACTS`(2651) + click(2703) / change(2709) 两个 `document` 委托监听 | **全站唯一事件入口（v1.18.7）**：内联 `onclick=`/`onchange=`/`onkeydown=` 属性已全部清零（含 `build/shell.html` 的抽屉遮罩，改 `data-act`）——动作进 `data-act`（change 走 `data-change`）、参数走 `data-*`（外部可控 ID 一律 `esc()`），两个委托监听统一分发：`ACTS` 表 **49** 个动作与模板**双向一一对应**（v1.18.11 增 `stats-refresh`/`clear-st-filter`/`ban-ip`/`unban-ip` 四个；**v1.18.33 增 `fill-drop-param` 一个**——点合法参数名 chip 填进「不发这些参数」输入框）；8 秒轮询整页重绘**不用重挂监听**；点击从目标向上找最近的 `[data-act]`，嵌套按钮天然只触发自己（行/卡片的动作不再被按钮冒泡触发，`stopPropagation` 成为历史）。登录门的 Enter 改为 `showKeyGate` 内程序化挂接（非内联属性）。**新增交互：先在 `ACTS` 注册 + 模板写 `data-act`，禁止写内联属性**（`test/security-headers-e2e.test.js` 内联清零 + 双向覆盖守卫、`test/console-state.test.js` 真实委托块桩上真跑，都会拦回潮） |
 | 2719 / 2748 / 2767 | `showKeyGate()` `logout()` `__ZZ_BOOTED__`(2767) | **管理密钥登录门（v1.18.6 会话化）**：`?key=` 三源合流已整体拆除（渗透报告点名"密钥进浏览器历史"）——`showKeyGate` 把粘贴的密钥 POST 给 `/admin/api/session` **一次**，换回 `HttpOnly + SameSite=Strict` 会话 cookie（12 小时）后密钥即弃（输入框清空、不落任何存储、JS 读不到）；**v1.18.17：提交前 `trim()`（终端 cat 复制带尾随换行/空格不再被打成 401）、失败原因走 `errMsgOf`（看得见「密钥不对」而不是 `[object Object]`）**；`logout()`（密钥管理页「退出登录」）DELETE 自己那枚会话并整页重载；**启动探针**不问本地存储直接敲一发 `/admin/api/status`——200 = 活会话直接 `boot()`，401/网络错 = 弹门 |
 | 2807–2920 | **配置历史页（v1.18.84）**：`HI`(2807) `hiReason`(2816) `hiName`(2818) `hiListHtml`(2820) `hiDetailHtml`(2837) `drawHi`(2871) `loadHistory`(2880) `hiOpen`(2887) `hiRollback`(2897) `vHistory`(2920) | **配置历史页**（工具 → 配置历史，插在密钥管理与接入信息之间；`clock` 图标）：`persistConfig` 白名单静默吞字段的**补救入口**——列代际（只有元信息）/ 看某一代与「现在」的**字段级 `diff`**（`diff.channels.changed[].fields` 直接点名少了哪个字段）/ 一键回滚（复用 `armConfirm` 两步确认，6 秒不点自动还原）。四条纪律写在该块文件头：列表只给元信息、详情只给掩码（**密钥原文永不出现在这一页**）、**回滚不动 `auth` / `adminKey` / `gatewayKey`**、**代际按需拉取不进 8 秒轮询**（进页一次 /「重新读取」/ 回滚后自动重拉）。状态回填：`HI` / `HILERR` / `HIEL` / `HID` / `HIDERR` / `HIBUSY` / `HIHIT`（seq → 详情缓存，来回点不重复打接口）。⚠️ 页面 id 是 `history`：`render()` 与 `go()` **两张分发表都要注册**（只加一张 = 能进页但 8 秒轮询不刷新）。界面与交互见 `docs/frontend-console-detailed.md` §5.12，后端与回滚语义见 `docs/config-history.md` |
-| 2765 | `tick()` | 时钟 |
-| 2775 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
+| 2788 | `tick()` | 时钟 |
+| 2798 | `boot()` | 首屏骨架 → `go('overview')` → 8 秒静默刷新（原 `init()`，改名为 `boot` 以配合登录门：有活会话直接启动，无会话先弹门再启动——启动与否由启动探针决定，见上）。**轮询护栏**：流式中（`pgBusy`）或用户正在视口内输入框编辑时跳过这一拍 |
 
 > **状态回填约定（v1.0.1 起，全页统一）**：8 秒轮询会重绘当前页的整个 DOM，**任何输入控件的值都必须存在 JS 变量里并在模板中回填**，
 > 且 `oninput` 要把值写回变量。否则重绘后输入框被重建为空 —— 表现就是「搜索/草稿一会儿自己没了」。

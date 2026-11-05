@@ -2038,6 +2038,34 @@ const params = (f && (f.parameters || f.input_schema || f.inputSchema))
 **同步与守它的地方：** `console-redesign.html`（设计稿，不参与构建但被 `channel-headers-roundtrip-e2e` 与 `console-state` 双向比对）同步这 6 处 + mock `donut` 补第四档；`node build/build.js` 重建产物；`docs/frontend-code-map.md` 的函数索引 7 个行号（+5/+7）与文件规模表（app.js 2948→2956、console.html 3662→3670、build.js 54→55）一并按实测改。回归 `console-state` 310 项、`channel-headers-roundtrip-e2e` 38 项、`hark-channel` 103 项全绿。
 
 **没动的（刻意）：** 成功率条仍用累计 req/err（历史口径，和"总览 KPI 累计请求"一致）；`probeAll` 跳过停用渠道的行为不变——要改的是**显示**，不是探测策略。
+### 8.60 v1.18.93 Playground 发不出请求（`Failed to fetch`）：前端拿服务端硬编码的 `127.0.0.1` 当请求地址（2026-11-05，对象 `build/app.js` + 产物 `console.html` + `test/console-state.test.js` §23）
+
+> 用户原话：「Playground 里发送消息提示请求失败：Failed to fetch」。
+
+**根因不是网关挂了，是地址发错了。** `pgSend()` 里那句
+
+```js
+const base=(CFG&&CFG.urls&&CFG.urls.openai)||(location.origin+'/v1');
+```
+
+看起来"有兜底"，但兜底永远走不到——服务端 `/admin/api/config` 把它拼好了：
+
+```js
+const base = `http://127.0.0.1:${PORT}`;   // server.js
+urls: { openai: `${base}/v1`, ... }
+```
+
+于是**只要不是从 `127.0.0.1:8787` 打开控制台**（局域网 IP、反代域名、另一台机器），浏览器就会去打**它自己那台机器**的 `127.0.0.1:8787`。再叠一层 CSP `connect-src 'self'`：跨源也被拦。两条路径都让 `fetch` 抛 `TypeError: Failed to fetch`——而 UI 只把这句原样贴出来（`请求失败：Failed to fetch`），看不出是地址错了。
+
+**处置（两件事分开）：**
+
+1. **新增 `gwBase()`（`build/app.js`）**：`location.origin + '/v1'` **优先**，没有 `location`（非浏览器 / 测试桩）才退回 `CFG.urls.openai`。同源就一定能过 CSP，这是唯一不会错的锚点。`pgSend()` 与 `copyModels()` 两处**真发请求**的调用点切过去。
+2. **`CFG.urls.openai` 保留原用途，不许混**：它是**展示给外部客户端抄的地址**（「接入信息」页端点清单、`copyCurl` / `pgCopyCurl` 生成的命令要贴到别处跑）。那些地方换成页面 origin 才是错的——把 `127.0.0.1` 抄给远端和在页面上点发送是两件事。所以 1393 / 1633 两处**刻意不动**。
+3. **错误文案带上目标地址**：网络类异常（`failed to fetch` / `networkerror` / `load failed`）追加「浏览器连不上 `<base>` —— 地址错、网关没起、或被 CSP/跨源拦下；这不是网关回的错误」。否则用户只能猜到"网关挂了"这一种解释，而真因常常是地址。
+
+**守它的四条**（`test/console-state.test.js` §23，源码扫）：`gwBase()` 存在且 `location.origin` 优先；`pgSend` 走 `gwBase()`；`copyModels` 走 `gwBase()`；网络类失败带地址。这四条桩里测不出来——桩的 `location.origin` 恰好就是 `http://127.0.0.1:8787`，跟服务端下发的一样，**故障只在"不是从 127.0.0.1 打开"时才出现**。
+
+**一句边界**：这只治"地址错"。上游真的全挂时（例如 `opencode` 渠道恒回 `Only OmniRush models are available`、`121628` 上游排队 `first byte timeout`）Playground 照样失败，但那时报的是网关回的 `HTTP 502 + all channels failed`，不是 `Failed to fetch`。两句话指向的是两层，别混。
 ## 9. 后续可做（未实现）
 
 - 密钥明文显示加"仅本次会话"提示或二次确认
