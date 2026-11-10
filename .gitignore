@@ -60,3 +60,6 @@ config-history/
 # 带后缀的兄弟文件一个都不盖 ⇒ 手动 `Copy-Item config.json config.json.pre-vX` 得到的备份是明文全量渠道 key。
 # 用 `config.json.*` 一并盖住 .bak / .corrupt-<时间戳> / .pre-<版本> 全族，免得下次再漏。
 config.json.*
+
+data/inbox/
+

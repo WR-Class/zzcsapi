@@ -5245,8 +5245,28 @@ async function handleAdminApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/admin/api/workbuddy-import') {
     const body = await safeReadJson(req);
     if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'invalid json body' });
-    const entries = Array.isArray(body.accounts) ? body.accounts : null;
-    if (!entries) return sendJson(res, 400, { error: 'accounts 必须是数组（每个元素是一份账号 JSON 的内容）' });
+    /* ★ 「直接把账号丢进中转」：`{fromInbox:true}` 时扫 <config 目录>/inbox/*.json。
+       为什么是 config 目录下的 inbox：容器根 fs 是 **只读**（v1.18.87 加固），
+       唯一可写的是 `./data:/app/data` 这个挂载卷，而 config.json 就在它里面
+       （`ZZCSAPI_CONFIG` 指进被挂目录，见 compose 那段注释）。所以 inbox 必须落在这里，
+       否则宿主机丢进去的文件容器里根本看不见。
+       ⚠ 只**读**这个目录，**读完不删**——删文件是不可逆操作，而重复导入本来就是幂等的
+       （令牌指纹去重），没有"必须移走"的理由。要清理请用户自己删。 */
+    let entries = Array.isArray(body.accounts) ? body.accounts : null;
+    if (!entries && body.fromInbox === true) {
+      const inboxDir = path.join(path.dirname(CONFIG_PATH), 'inbox');
+      if (!fs.existsSync(inboxDir)) {
+        return sendJson(res, 400, { error: '收件目录不存在：' + inboxDir + '（在宿主机上建这个目录，把账号 JSON 丢进去再调一次）', inboxDir });
+      }
+      const names = fs.readdirSync(inboxDir).filter((f) => /\.json$/i.test(f)).sort();
+      if (!names.length) return sendJson(res, 400, { error: '收件目录里没有 .json 文件', inboxDir });
+      if (names.length > 500) return sendJson(res, 400, { error: `收件目录里一次最多 500 个文件，本次 ${names.length} 个`, inboxDir });
+      entries = names.map((f) => {
+        try { return fs.readFileSync(path.join(inboxDir, f), 'utf8'); }
+        catch (e) { return JSON.stringify({ __readError: f + ': ' + String(e && e.message || e) }); }
+      });
+    }
+    if (!entries) return sendJson(res, 400, { error: 'accounts 必须是数组（每个元素是一份账号 JSON 的内容），或传 fromInbox:true 扫收件目录' });
     if (!entries.length) return sendJson(res, 400, { error: 'accounts 为空' });
     if (entries.length > 500) return sendJson(res, 400, { error: `accounts 一次最多 500 条，本次 ${entries.length} 条` });
 
@@ -5341,6 +5361,13 @@ async function handleAdminApi(req, res, url) {
       /* 探活不过 → 建但停用。**不删**：限流（429）会随时间恢复，删了就是永久丢掉。 */
       def.enabled = doProbe ? alive : (body.enabled !== false);
       const ch = upsertChannel(def);
+      /* ★ 把探活失败的原因**写进渠道状态**，不能只留在这一次的响应里 ——
+         否则用户事后在控制台只看到"停用"，看不到"为什么"、也不知道什么时候能恢复
+         （429 的正文里带明确重置时间，那是唯一能判断"要不要等"的依据）。 */
+      if (probeNote) {
+        ch.lastError = probeNote;
+        ch.status = 'down';
+      }
       if (def.enabled) enabledCount++;
 
       const notes = [];

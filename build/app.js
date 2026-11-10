@@ -657,6 +657,10 @@ function vChannels(v){
           <div class="hd">Genspark</div>
           <button data-act="open-import" data-kind="gs-session">${svg('cookie',14)}Genspark 会话<span class="d">粘贴</span></button>
           <button data-act="open-import" data-kind="gs-json">${svg('file',14)}Genspark JSON<span class="d">文件</span></button>
+          <div class="sep"></div>
+          <div class="hd">WorkBuddy / CodeBuddy</div>
+          <button data-act="open-import" data-kind="wb-accounts">${svg('file',14)}账号文件<span class="d">多选</span></button>
+          <button data-act="wb-import-inbox">${svg('download',14)}收件目录<span class="d">data/inbox</span></button>
         </div>
       </div>
       <button class="btn" data-act="open-test-models">${svg('test',14)}测试模型</button>
@@ -2408,7 +2412,14 @@ const IMPORT_META={
     bad:v=>parseGsSessionId(v)?'':'没找到 sessionId（uuid:hex 格式）'},
   'gs-json':{ico:'file',title:'导入 Genspark JSON',mode:'file',accept:'.json,.txt,application/json,text/plain',
     hint:'选择 genspark 会话 JSON 文件，支持多选批量：每个新会话自动建一个新渠道（多号 = 多份每日积分）。',
-    warn:'同一 key 视为刷新会话，不会重复建渠道。'}
+    warn:'同一 key 视为刷新会话，不会重复建渠道。'},
+  /* WorkBuddy / CodeBuddy 账号文件（v1.18.91）：一次提交**全部文件的正文**（不是逐个发）——
+     因为服务端在同一个请求里做令牌指纹去重 + 逐条探活，拆成多次反而会重复建渠道。
+     `baseUrl` 由服务端按每份文件里的 `auth.domain` 推（.cn / .ai 两个入口，令牌分域）。 */
+  'wb-accounts':{ico:'file',title:'导入 WorkBuddy / CodeBuddy 账号',mode:'file',accept:'.json,application/json',
+    hint:'选择 scrapped 出来的账号 JSON（含 auth.accessToken），可多选批量。也可以直接把文件丢进服务器的 data/inbox/ 再用「收件目录」导。',
+    warn:'服务端会逐条探活：额度耗尽 / 频率限制 / 账号受限的会建渠道但**停用**并写明原因，不删除——限流恢复后重导一次即可转正。同一份文件重复导入不会产生重复渠道。',
+    batch:true}
 };
 function parseCodexUnits(j){
   const has=o=>o&&(o.access_token||o.refresh_token);
@@ -2496,6 +2507,38 @@ async function importFiles(kind,input){
   input.value='';
   if(!files.length)return;
   const st=$('#impStatus'), out=$('#impFiles'), wrap=$('#impFilesWrap');
+  /* ★ v1.18.91 批量模式（WorkBuddy/CodeBuddy）：把所有文件正文**一次**提交。
+     为什么不逐个发：服务端在**同一个请求里**做令牌指纹去重 + 逐条探活；拆成多次会互相看不见，
+     同一份文件里若有重复账号就会各建一条。 */
+  if(IMPORT_META[kind]&&IMPORT_META[kind].batch){
+    wrap.style.display=''; out.innerHTML='';
+    setStatus(st,`⏳ 读取 ${files.length} 个文件…`,'wait');
+    const accounts=[];
+    const readFails=[];
+    for(const f of files){
+      try{ accounts.push(await f.text()); }
+      catch(e){ readFails.push(f.name+': '+String((e&&e.message)||e)); }
+    }
+    if(!accounts.length){ setStatus(st,'✗ 一个文件都没读出来','bad'); return; }
+    setStatus(st,`⏳ 提交 ${accounts.length} 个账号（服务端要逐条探活，可能要几分钟）…`,'wait');
+    try{
+      const r=await api('/admin/api/workbuddy-import',{method:'POST',body:JSON.stringify({accounts,probe:true,idPrefix:'wb'})});
+      const rows=[];
+      for(const x of (r.results||[])){
+        const okCls=x.ok?(x.enabled?'ok':'warn'):'fail';
+        const icon=x.ok?(x.enabled?'check':'warn'):'warn';
+        rows.push(`<div class="r ${okCls}"><span>${svg(icon,12)}</span><span>${esc(x.id||'(未建)')}</span><span class="e">${esc(x.enabled?'已启用':(x.note||x.action||''))}</span></div>`);
+      }
+      for(const f of readFails) rows.push(`<div class="r fail"><span>${svg('warn',12)}</span><span>读取失败</span><span class="e">${esc(f)}</span></div>`);
+      out.innerHTML=rows.join('');
+      setStatus(st,`✓ 共 ${r.total} 条：新建 ${r.created} / 复用 ${r.reused} / 跳过 ${r.skipped} · **启用 ${r.enabled}**`,'ok');
+      toast(`导入完成：启用 ${r.enabled} / 共 ${r.total}`,'ok');
+      await loadAll();
+    }catch(e){
+      setStatus(st,'✗ '+String((e&&e.message)||e),'bad');
+    }
+    return;
+  }
   const isGs=kind==='gs-json';
   wrap.style.display=''; out.innerHTML='';
   let ok=0,bad=0;
@@ -2726,6 +2769,28 @@ const ACTS={
   'probe-clear-sel':()=>probeClearSel(),
   'probe-add-selected':()=>probeAddSelected(),
   'import-files':el=>importFiles(el.dataset.kind,el),
+  /* 收件目录导入（v1.18.91）：宿主机把账号 JSON 丢进 data/inbox/，这里一键扫。
+     容器根 fs 只读，唯一可写挂载是 ./data —— 所以收件箱只能是 <config目录>/inbox。
+     ⚠ 刻意**不弹原生 confirm**：动作层要在桩里被真跑（console-state 会逐个调用每个动作），
+     而桩里没有 confirm。改成两步按钮（第一次点变成"确认导入"，再点才执行），
+     既守得住误触，也不给测试引入一个"必须 mock 的全局"。 */
+  'wb-import-inbox':async(el)=>{
+    if(el&&el.dataset.armed!=='1'){
+      if(el.dataset.orig===undefined)el.dataset.orig=el.innerHTML;
+      el.dataset.armed='1';
+      el.innerHTML='确认导入';
+      setTimeout(()=>{ if(el&&el.dataset.armed==='1'){el.dataset.armed='';el.innerHTML=el.dataset.orig;} },4000);
+      return;
+    }
+    if(el)el.dataset.armed='';
+    toast('正在从收件目录导入…','wait');
+    try{
+      const r=await api('/admin/api/workbuddy-import',{method:'POST',body:JSON.stringify({fromInbox:true,probe:true,idPrefix:'wb'})});
+      toast('导入完成：启用 '+r.enabled+' / 共 '+r.total,'ok');
+      await loadAll();
+    }catch(e){ toast('导入失败：'+String((e&&e.message)||e),'bad'); }
+    if(el&&el.dataset.orig!==undefined)el.innerHTML=el.dataset.orig;
+  },
   'pick-import-file':()=>document.getElementById('impFile').click(),
   'do-import':el=>doImport(el.dataset.kind),
   'run-tests':()=>runTests(),

@@ -1405,7 +1405,7 @@ function testDelegation() {
 
   check('委托块给 document 挂了 click 与 change 两个监听',
     typeof doc.listeners.click === 'function' && typeof doc.listeners.change === 'function');
-  check('ACTS 注册了 49 个动作（与模板用到的动作种类数一致）', Object.keys(ACTS).length === 49,
+  check('ACTS 注册了 50 个动作（与模板用到的动作种类数一致；v1.18.91 加 wb-import-inbox）', Object.keys(ACTS).length === 50,
     Object.keys(ACTS).length);
 
   /* 逐个真调：每个注册动作都解析得到底层函数（引用了列表外的函数名会当场炸） */
