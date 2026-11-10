@@ -486,6 +486,15 @@ function maskSecret(k) {
   return s.slice(0, 4) + '…' + s.slice(-4);
 }
 
+/* 凭据指纹：只用于**判重**（"同一把令牌别建第二条渠道"），不可逆、不进日志、不下发。
+   为什么不用 `===` 直接比对：那需要把两条明文放在同一个表达式里，容易在调试时被打出来；
+   哈希后即使泄漏也只暴露"两条是否相同"。 */
+function fingerprintSecret(k) {
+  const s = String(k == null ? '' : k);
+  if (!s) return '';
+  return crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
+}
+
 // ─────────────────────────── 加载配置 ───────────────────────────
 const CONFIG_PATH = process.env.ZZCSAPI_CONFIG || path.join(__dirname, 'config.json');
 const EXAMPLE_PATH = path.join(__dirname, 'config.example.json');
@@ -5219,6 +5228,145 @@ async function handleAdminApi(req, res, url) {
     probeChannel(ch).catch(() => {});
     return sendJson(res, 200, { ok: true, id: def.id, existed, channel: { id: def.id, name: def.name, baseUrl: def.baseUrl, protocol: def.protocol, priority: def.priority, enabled: def.enabled, autoAlias: def.autoAlias, models: def.models } });
   }
+  // WorkBuddy / CodeBuddy 账号文件批量导入（v1.18.91）。
+  //
+  // 现场：用户手里有一批 scrapped 出来的账号 JSON（`{account:{uid,nickname}, auth:{accessToken,refreshToken,expiresAt,domain,realm}}`），
+  // 198 个实测分四档：good 81 / 429 限流 89 / 11140 受限 22 / 401 失效 6。
+  // 所以**导入必须逐条探活**——把 89 个限流的塞进候选链，等于给每次请求加一次 5 秒的无效等待。
+  //
+  // 三条纪律：
+  //  ① **baseUrl 从文件里的 `auth.domain` 推**，绝不写死：同一家服务有 `.ai` 与 `.cn` 两个入口，
+  //     而令牌是分域的——拿 `.cn` 的令牌打 `.ai` 直接 401（实测），渠道默认值只对其中一个有效。
+  //  ② **凭据只取 `auth.accessToken`（明文 JWT）**。文件里也可能是 CodeBuddy 新版那种加密 envelope，
+  //     那时 `wbEncryptedKeyHint()` 会给出能照做的提示，这里直接把它记进失败原因、不猜。
+  //  ③ **去重按 accessToken 的哈希**，且**绝不覆盖已有渠道的 apiKey**（本仓硬纪律：一次误写就把用户的 key 抹掉）。
+  //     已存在的按 id 复用、只更新非敏感字段；探活失败的 `enabled:false` + 写明原因，**不删**——
+  //     429 会随时间恢复，删了就是永久丢掉（实测 198 个里 89 个是这个状态）。
+  if (req.method === 'POST' && url.pathname === '/admin/api/workbuddy-import') {
+    const body = await safeReadJson(req);
+    if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'invalid json body' });
+    const entries = Array.isArray(body.accounts) ? body.accounts : null;
+    if (!entries) return sendJson(res, 400, { error: 'accounts 必须是数组（每个元素是一份账号 JSON 的内容）' });
+    if (!entries.length) return sendJson(res, 400, { error: 'accounts 为空' });
+    if (entries.length > 500) return sendJson(res, 400, { error: `accounts 一次最多 500 条，本次 ${entries.length} 条` });
+
+    const doProbe = body.probe !== false;               // 默认探活；显式 false 才跳过（给批量重导用）
+    const prefix = String(body.idPrefix || 'wb').replace(/[^\w-]/g, '') || 'wb';
+    const model = String(body.model || 'deepseek-v4.1-flash');
+    /* ★ 可选：把所有条目的 baseUrl 强制指向这里（`{baseUrl}`）。两个真实用途：
+       ① **自建/第三方中转**——用户手里有账号文件，但想打自己的中转而不是官方入口；
+       ② 测试夹具——用假上游验导入链路时，不能让请求真的出网打官方站点。
+       缺省（不传）= 按每条文件里的 `auth.domain` 推。 */
+    const forceBase = body.baseUrl ? String(body.baseUrl).replace(/\/+$/, '') : '';
+
+    /* 域名 → 渠道 baseUrl。/v2 是协议路径，渠道存到 /v2 这一级（joinUrl 会拼 /chat/completions）。
+       ⚠ 不认识的域名**照样建渠道但写明**，而不是拒绝——用户手里的域名可能比我见过的多。 */
+    const DOMAIN_BASE = {
+      'www.workbuddy.ai': 'https://www.workbuddy.ai/v2',
+      'workbuddy.ai': 'https://www.workbuddy.ai/v2',
+      'www.codebuddy.cn': 'https://www.codebuddy.cn/v2',
+      'codebuddy.cn': 'https://www.codebuddy.cn/v2',
+    };
+    const baseUrlOf = (domain) => {
+      if (forceBase) return { baseUrl: forceBase, assumed: false };
+      const d = String(domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      if (!d) return { baseUrl: 'https://www.workbuddy.ai/v2', assumed: true };
+      if (DOMAIN_BASE[d]) return { baseUrl: DOMAIN_BASE[d], assumed: false };
+      return { baseUrl: `https://${d}/v2`, assumed: true };
+    };
+
+    /* 已在用的凭据指纹 → 渠道 id（用于"同一把令牌别建第二次"） */
+    const usedFp = new Map();
+    for (const ch of channels.values()) {
+      const k = String((ch.def && ch.def.apiKey) || '');
+      if (k) usedFp.set(fingerprintSecret(k), ch.def.id);
+    }
+
+    const results = [];
+    let created = 0, reused = 0, skipped = 0, enabledCount = 0;
+    for (const raw of entries) {
+      const r = { ok: false, id: '', action: '', enabled: false, note: '' };
+      /* 条目既可以是对象，也可以是 JSON 字符串（前端多选文件时拿到的是字符串） */
+      let j = raw;
+      if (typeof raw === 'string') { try { j = JSON.parse(raw); } catch { results.push({ ...r, note: '这一条不是合法 JSON' }); skipped++; continue; } }
+      if (!j || typeof j !== 'object') { results.push({ ...r, note: '这一条不是对象' }); skipped++; continue; }
+
+      const auth = j.auth || {};
+      const acct = j.account || {};
+      const token = String(auth.accessToken || '').trim();
+      if (!token) { results.push({ ...r, note: '这条没有 auth.accessToken' }); skipped++; continue; }
+      const encHint = wbEncryptedKeyHint(token);
+      if (encHint) { results.push({ ...r, note: encHint }); skipped++; continue; }
+
+      const { baseUrl, assumed } = baseUrlOf(auth.domain);
+      const uid = String(acct.uid || '').trim();
+      const fp = fingerprintSecret(token);
+      /* 同一把令牌已存在 → 复用那条渠道（不新建、不覆盖密码） */
+      let id = `${prefix}-${(uid || fp).slice(0, 12)}`.replace(/[^\w-]/g, '');
+      if (usedFp.has(fp)) { id = usedFp.get(fp); r.action = 'reuse'; reused++; }
+      else if (channels.has(id)) { r.action = 'reuse'; reused++; }
+      else { r.action = 'create'; created++; }
+
+      const prev = channels.get(id)?.def;
+      const def = {
+        id,
+        name: prev?.name || (acct.nickname ? `${prefix} ${String(acct.nickname).slice(0, 24)}` : id),
+        baseUrl,
+        /* ★ 已有渠道的密钥**原样保留**：这类账号文件的令牌会轮换，但覆盖别人的 key 是数据损失，
+           而这个端点的用途是"把新账号加进来"，不是"换掉旧的"。 */
+        apiKey: prev?.apiKey || token,
+        protocol: 'workbuddy',
+        priority: prev?.priority ?? 0,
+        weight: prev?.weight,
+        enabled: true,
+        autoAlias: false,
+        models: prev?.models && Object.keys(prev.models).length ? prev.models : { [model]: model },
+        proxy: prev?.proxy,
+        headers: prev?.headers,
+        dropParams: prev?.dropParams,
+        notionAttachments: prev?.notionAttachments,
+        firstChunkTimeoutMs: prev?.firstChunkTimeoutMs,
+        timeoutMs: prev?.timeoutMs,
+      };
+
+      let probeNote = '';
+      let alive = true;
+      if (doProbe) {
+        try {
+          const pr = await workbuddyChatProbe(def, 25000);
+          alive = !!pr.ok;
+          probeNote = pr.ok ? '' : String(pr.error || '探活失败').replace(/\s+/g, ' ').slice(0, 160);
+        } catch (e) { alive = false; probeNote = '探活异常: ' + String(e && e.message || e).slice(0, 120); }
+      }
+      /* 探活不过 → 建但停用。**不删**：限流（429）会随时间恢复，删了就是永久丢掉。 */
+      def.enabled = doProbe ? alive : (body.enabled !== false);
+      const ch = upsertChannel(def);
+      if (def.enabled) enabledCount++;
+
+      const notes = [];
+      if (probeNote) notes.push('探活失败，已停用（' + probeNote + '）');
+      if (assumed) notes.push('域名 ' + JSON.stringify(auth.domain || '') + ' 不在已知表里，baseUrl 是按它推的，请核对');
+      if (auth.expiresAt) {
+        const left = Number(auth.expiresAt) * 1000 - Date.now();
+        if (left <= 0) notes.push('accessToken 已过期');
+        else if (left < 3 * 86400e3) notes.push('accessToken 只剩 ' + Math.floor(left / 86400e3) + ' 天');
+      }
+      results.push({ ok: true, id, action: r.action, enabled: def.enabled, baseUrl, alive, note: notes.join('；') });
+      void ch;
+    }
+    persistConfig();
+    const createdIds = results.filter((x) => x.ok).map((x) => x.id);
+    console.log(`[wb-import] 新建 ${created} / 复用 ${reused} / 跳过 ${skipped}，探活通过并启用 ${enabledCount} 条`);
+    return sendJson(res, 200, {
+      ok: true,
+      total: entries.length,
+      created, reused, skipped, enabled: enabledCount,
+      /* 逐条明细：只报一句总数等于把"哪几个不能用"留给用户自己猜 */
+      results,
+      ids: createdIds,
+    });
+  }
+
   // codex 一键导入：支持两种输入（自动识别）——
   //   A) sub2api 导出的完整 JSON（含 access_token/refresh_token/account_id，AT 10 天有效直接可用，不消耗 RT）
   //   B) 裸 refresh_token（rt.1. 开头，立即换一次令牌）

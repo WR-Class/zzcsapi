@@ -1,4 +1,4 @@
-# ZZCSAPI — 本地多渠道 AI 聚合网关
+﻿# ZZCSAPI — 本地多渠道 AI 聚合网关
 
 类似 new-api / sub2-api / one-api 的轻量自部署版，**零依赖，仅 Node 18+**。
 把所有中转 API key 集中在一处，对外同时暴露 **OpenAI / Anthropic / Gemini** 三种兼容端点。
@@ -271,7 +271,7 @@ http://127.0.0.1:8787/console
 | [运行期设置（五组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放 / 自动权重的语义与 `GET/POST /admin/api/settings` 用法 |
 | [配置代际与回滚](docs/config-history.md) | **为什么需要**（`persistConfig` 的显式白名单会静默吞字段，PT29 一族连发四例）、快照目录与 hash 去重、三个端点、回滚语义（哪些热生效 / 哪些要重启 / **为什么不动密钥段**）、**原子写与启动三跳自愈**（v1.18.85）、运维与边界（v1.18.83） |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 65 个测试文件 · 3167 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 66 个测试文件 · 3191 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -299,7 +299,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**65 个文件 · 3167 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**66 个文件 · 3191 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 跑全量：`node _run_all_tests.js`（仓库根，零依赖，逐个跑 `test/*.test.js` 并汇总文件数与断言数）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
@@ -500,6 +500,7 @@ thinking 回放修复）。**七条**专用报文渠道（`notion` / `notion-age
 | `/admin/api/probe` | POST | admin | 临时探测上游模型清单（不落库） |
 | `/admin/api/test` | POST | admin | 真发一次最小 chat 请求；带 `channelId` 时**只打该渠道且不看 `enabled`**；**`stream:true`（v1.18.40）= 按真实客户端姿势发流式请求**并按真实链路同一套判据（`classifyStreamFrame`）判定（流内 error 帧 / 200 零正文流 / 上游无视 `stream` 回整段 JSON 都算失败），结果回带 `stream`、`streamFrames`、`streamIgnored`、`ttfbMs`；**测试成功只"半愈合"**（放开冷却 + 清 `probeFail`），**不清真实流量的连败计数**（见[调度详解](docs/scheduling.md)） |
 | `/admin/api/codex-import` | POST | admin | 导入 codex 凭据（完整 JSON 或裸 RT） |
+| `/admin/api/workbuddy-import` | POST | admin | **批量导入 WorkBuddy / CodeBuddy 账号文件**（v1.18.91）。body `{accounts:[…], probe?:true, idPrefix?:'wb', model?}`。`accounts` 每项是一份账号 JSON 的**内容**（对象或字符串，**不收路径**——网关在容器里，宿主路径不成立）。凭据取 `auth.accessToken`（明文 JWT），`baseUrl` **从 `auth.domain` 推**（`.ai` 与 `.cn` 是两个入口，令牌分域，写死会 401）。按令牌指纹**去重**、**绝不覆盖已有渠道的 apiKey**；`probe`（默认开）逐条探活，失败者 **`enabled:false` + 写明原因但不删**（429 会随时间恢复）。返回**逐条明细** `results[]`，不只一句总数 |
 | `/admin/api/codex-quota` | GET | admin | 查询 codex 配额（5h/7d 窗口、计划类型、重置时间） |
 | `/admin/api/genspark-import` | POST | admin | 导入 genspark 网页会话（提取 sessionId → 换 key 并免费验证登录） |
 | `/admin/api/config` | GET | admin | 接入信息（URL / 端口 + 密钥**掩码** + `keysInsecure`；不交任何密钥原文）+ `dropParamWhitelist`（渠道 `dropParams` 的合法参数名，控制台照用） |

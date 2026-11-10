@@ -1,4 +1,4 @@
-# 测试清单（65 个文件 · 3167 项断言，零依赖）
+﻿# 测试清单（66 个文件 · 3191 项断言，零依赖）
 
 > **断言总数怎么来的（v1.18.55 校正）**：等于 `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须与合计相等**。
 > 该运行器原先认不出 `hark-channel.test.js` 的收尾格式（`通过 97 · 失败 0`，中点分隔），把它记成
@@ -247,6 +247,7 @@
 > 现场动机：`Retry-After` 头只是上游**愿意说**的那一种。实测库里 429 **大多不带它**，却把恢复时刻写在正文里（`resets_in_seconds` / `resets_at` / 自由文本 `reset at … UTC+8`），而正文本来就在 `recordFailure` 的 `msg` 里、一个字都没用上 ⇒ 冷却只能按自己的曲线瞎猜：**要么额度早恢复了还在空等，要么提早去撞墙被反复判失败（streak 越滚越高，冷却反而更长——死锁）**。
 > 处置：新增 `resetMsFromBody()` + `parseLooseStamp()`，`cooldownMsFor` 变成四层优先级链（`Retry-After` 头 > 体/头里的 reset > 指数曲线，全部过 `hardMaxMs`）。
 > 校验式 **3125 + 42 = 3167** ✓。
+> **⚠ 2026-11-10 第二十四次校正（v1.18.91：WorkBuddy/CodeBuddy 账号批量导入）**：实测 **66 / 3191**（新增 `channel-import-e2e` 24 项），校验式 **3167 + 24 = 3191** ✓。
 > ★ 本次还修了**两条守卫的脆度**（都是真误报，不是实现错）：① `cooldown-grading-e2e` 现抠函数时没带上新依赖（`resetMsFromBody`/`parseLooseStamp`/`RESET_TEXT_RE`）→ 改成把依赖清单一起抠；② `channel-test-stream-and-streak-e2e` 把 `cooldownMsFor` 的**整套形参原文**写进正则，加两个形参就误报 → 改成只锚"签名开头 + 函数体读 `effFailStreak`"，不锁死形参个数。**守的是"读 effFailStreak"，不是"形参永远三个"。**
 > ★ 另一条守卫（`Math.min(COOLDOWN.` 全仓只许 1 次）**没有放宽**，而是反过来改实现：`resetMsFromBody` 不再自己钳上限，钳制统一收进 `cooldownMsFor` 的同一个 return（"冷却时长只有一个真源"照旧成立）。
 
@@ -363,6 +364,7 @@
 | 渠道级出站参数剔除（`dropParams` 白名单 / 出站副本不串味 / 直通路径 / 落库与清空语义） | `channel-drop-params-e2e` + `console-state`（§3b 表单回填与"总是提交"） + `same-protocol-passthrough`（直通路径） |
 | 运行期五组开关（粘性 / 限流 / metrics / 回放 / 自动权重） | `settings-api-e2e` + 对应开关的 e2e；改 `renderMetrics` / 加指标 → 另跑 `metrics-e2e`（格式合法性 + 直方图累计语义 + `+Inf == _count`） |
 | **配置代际 / 回滚**（`persistConfig` 字段白名单、新增管理面"写配置"端点、快照目录与下发掩码） | `config-history-e2e`（★ 两条硬断言：被白名单吞掉的字段回滚后**真的回到 config.json 且运行期也认**；列表/详情响应里**绝不出现明文 key**、回滚后密钥仍是新值）+ `security-headers-e2e`（管理面掩码纪律）+ **改控制台「配置历史」页时另跑 `console-state`（§21：差异点名到字段 / 掩码不进 DOM / 两步确认第一下不发请求）** + 改渠道字段清单时另跑 `channel-drop-params-e2e` / `channel-headers-roundtrip-e2e` |
+| **批量导入账号文件建渠道**（`/admin/api/workbuddy-import`：baseUrl 从 `auth.domain` 推、令牌指纹去重、探活失败停用但不删、加密 envelope 拒收、逐条明细） | `channel-import-e2e`（24 项：真起假上游 + 临时网关，断言"停用的渠道真的还存在于网关里"与"重复导入不产生第二条"） |
 | **配置落盘的原子性与启动自愈**（`writeFileAtomic`、`loadConfig` 的三跳退路、`.corrupt-*` 留档） | `config-atomic-write-e2e`（★ 五条硬断言：保存后**无 `.tmp` 残留**；正主写坏 → 从 `.bak` 恢复且坏文件留档；正主与 `.bak` 都坏 → 从**代际快照**恢复；三跳全坏 → **非 0 退出**，不许静默用空配置起来）+ `config-history-e2e`（§0 顺序判据）|
 | **新增/修改根目录只读探针**（`*-probe.js` / `sec-audit.js` 的判别逻辑与"未作判定"纪律） | 该探针自己的用例（`opencode-probe` 守**两种 403 不许混为一谈**、撞地区门/连不上必须记「未作判定」而不是失败；`opencode-sidecar-probe` 守**"直连死 / 边车活"不许混为一谈**、测不到 ≠ 不通、口令必须逐字命中、密码绝不打印）+ `sec-audit`（探针类改动后跑一遍确认没把密钥泄露面带出来） |
 | 密钥 / 鉴权 / 会话 / 响应头 | `security-headers-e2e` + `key-rotation-e2e` + `admin-session-e2e`；加/改**客户端面响应头** → 另跑 `route-header-budget-e2e`（流式路径也要带头） |
