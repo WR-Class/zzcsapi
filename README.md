@@ -271,7 +271,7 @@ http://127.0.0.1:8787/console
 | [运行期设置（五组开关）](docs/runtime-settings.md) | 会话粘性 / 客户端限流 / `/metrics` / thinking 回放 / 自动权重的语义与 `GET/POST /admin/api/settings` 用法 |
 | [配置代际与回滚](docs/config-history.md) | **为什么需要**（`persistConfig` 的显式白名单会静默吞字段，PT29 一族连发四例）、快照目录与 hash 去重、三个端点、回滚语义（哪些热生效 / 哪些要重启 / **为什么不动密钥段**）、**原子写与启动三跳自愈**（v1.18.85）、运维与边界（v1.18.83） |
 | [行为细节](docs/behavior.md) | 4xx 兜底判据、流式失败、协议转换有损点、thinking 边界与回放、工具调用映射、密钥轮换、管理面会话、鉴权写法、v1.16 出站与流式写路径实测 |
-| [测试清单](docs/tests.md) | 66 个测试文件 · 3191 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
+| [测试清单](docs/tests.md) | 67 个测试文件 · 3214 项断言：每条守的是什么、「改什么 → 必跑什么」速查、测试哲学 |
 | [安全整改记录](docs/security-hardening.md) | 渗透测试六批整改（v1.18.3–v1.18.10）逐批内容与守卫测试、11 项发现全量处置台账、复查记录 |
 | [前端代码地图](docs/frontend-code-map.md) | **快速定位**：行号锚点表、构建管线与行号换算、CSS/z-index 全景、JS 函数索引、数据契约、修改路由表、坑位清单 |
 | [控制台前端详细设计](docs/frontend-console-detailed.md) | **理解与扩展**：设计系统（主题变量/字体/配色取向）、布局骨架、组件规范、页面与交互流程、变更日志 |
@@ -299,7 +299,7 @@ http://127.0.0.1:8787/console
 
 ### 测试（一句话版）
 
-**66 个文件 · 3191 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
+**67 个文件 · 3214 项断言，全部零依赖**（e2e 真起「假上游 + 临时网关」，动态端口 + 临时目录，不碰仓库运行文件，不出网）。
 跑全量：`node _run_all_tests.js`（仓库根，零依赖，逐个跑 `test/*.test.js` 并汇总文件数与断言数）。
 全量清单、每条守的是什么、改什么必跑什么：[测试清单](docs/tests.md)。新增测试时登记进该文档与 `AGENTS.md` §3。
 
@@ -495,7 +495,7 @@ thinking 回放修复）。**七条**专用报文渠道（`notion` / `notion-age
 | `/admin/api/recheck` | POST | admin | 立即重探测（body 可传 `{id}`）；**不带 id = 全部重探测，含停用渠道** |
 | `/admin/api/channel` | POST | admin | 改渠道（`{id, priority?, enabled?, weight?}`，立即生效并持久化） |
 | `/admin/api/channels` | GET | admin | 渠道列表（`apiKey` 只下发掩码 + `apiKeySet` 布尔） |
-| `/admin/api/channels` | POST | admin | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥**；`dropParams` 显式空数组 = 清空、不传 = 沿用旧值（v1.18.33）；`headers` 同款语义（显式值含 `""` 优先、`""` 清空、不传 = 沿用旧值，v1.18.44）；请求体不是 JSON 对象 → **400 `invalid json body`**（v1.18.57：此前 `safeReadJson` 返回 `null` 时直接取 `body.id`，畸形报文会把**整个网关进程打退出**，靠容器 restart 自愈） |
+| `/admin/api/channels` | POST | admin | 新增 / 覆盖渠道（upsert，落库并立即探测一次）；**`apiKey` 留空 = 保持原密钥**；`dropIfBodyContains`（v1.18.95）= 正文命中这些串就判失败（见下）；`dropParams` 显式空数组 = 清空、不传 = 沿用旧值（v1.18.33）；`headers` 同款语义（显式值含 `""` 优先、`""` 清空、不传 = 沿用旧值，v1.18.44）；请求体不是 JSON 对象 → **400 `invalid json body`**（v1.18.57：此前 `safeReadJson` 返回 `null` 时直接取 `body.id`，畸形报文会把**整个网关进程打退出**，靠容器 restart 自愈） |
 | `/admin/api/channels` | DELETE | admin | 删除渠道（body `{id}`） |
 | `/admin/api/probe` | POST | admin | 临时探测上游模型清单（不落库） |
 | `/admin/api/test` | POST | admin | 真发一次最小 chat 请求；带 `channelId` 时**只打该渠道且不看 `enabled`**；**`stream:true`（v1.18.40）= 按真实客户端姿势发流式请求**并按真实链路同一套判据（`classifyStreamFrame`）判定（流内 error 帧 / 200 零正文流 / 上游无视 `stream` 回整段 JSON 都算失败），结果回带 `stream`、`streamFrames`、`streamIgnored`、`ttfbMs`；**测试成功只"半愈合"**（放开冷却 + 清 `probeFail`），**不清真实流量的连败计数**（见[调度详解](docs/scheduling.md)） |

@@ -2938,6 +2938,40 @@ function normDropParams(v) {
   }
   return out.length ? out : undefined;
 }
+
+/* ── 渠道级「正文命中某串就判失败」（v1.18.95）────────────────────────────────
+ * 现场（free.hiyo.top）：它按 User-Agent 做客户端白名单，不认就回
+ *   **HTTP 200 + 正常结构 + 正文只有一句固定话术**（`usage.prompt_tokens:0, completion_tokens:1`）。
+ * 于是网关把它记成**成功**、不换家、账本标 ok —— 客户端只拿到一句废话。
+ * 这正是本项目 v1.18.26 / v1.18.32 修过的同一族"幽灵成功"，只是这次判据是**正文内容**。
+ *
+ * 为什么做成**渠道级**而不是全局：全局猜"200 + 0进1出 + 短正文 = 假成功"会误伤
+ *   （真有上游对极短请求就这么回）。而现场是"只有这家这么玩"，
+ *   让用户在**那一条渠道**上写明它要拒的那句话，最准确、也最不容易牵连别家。
+ *
+ * 语义与 dropParams / headers 同款（三态）：显式给（含空数组）= 以本次为准；字段缺省 = 沿用旧值。
+ */
+const DROP_IF_MAX = 8;            // 最多 8 条，够用且不至于让匹配变慢
+const DROP_IF_LEN = 200;          // 单条最长 200 字符——它就是拿来认一句话的，不是全文匹配
+function normDropIfBodyContains(v) {
+  const raw = Array.isArray(v) ? v : String(v == null ? '' : v).split(/\r?\n/);
+  const out = [];
+  for (const x of raw) {
+    const s = String(x).trim();
+    if (s && s.length <= DROP_IF_LEN && !out.includes(s)) out.push(s);
+    if (out.length >= DROP_IF_MAX) break;
+  }
+  return out.length ? out : undefined;
+}
+/* 判据：正文（拼成一条字符串）里命中任一串 ⇒ 这一发是假成功。
+ * 空列表 / 没配 = 永不判假（默认零影响）。 */
+function bodyHitsDropIf(text, ch) {
+  const list = (ch && ch.def && ch.def.dropIfBodyContains) || null;
+  if (!Array.isArray(list) || !list.length) return '';
+  const s = String(text || '');
+  for (const needle of list) if (s.includes(needle)) return needle;
+  return '';
+}
 // ── 渠道级超时字段（v1.18.46）：`firstChunkTimeoutMs`（首字死线）/ `timeoutMs`（每渠道总超时）
 //   这两个字段**运行期一直在读**（`FIRST_BYTE_MS` 与各路径的 `ch.def.timeoutMs`），但此前"三处一起加"
 //   一处都没加：persistConfig 的显式字段清单漏了它们 → **保存任意一个渠道就把它们从 config.json 里
@@ -3995,6 +4029,8 @@ function persistConfig() {
       //   漏一行就会在下一次任意渠道保存时被静默抹掉。加渠道字段必须三处一起加：
       //   这里 + /admin/api/channels 的 GET + POST 的 def 构造。
       dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
+      /* v1.18.95 渠道级「正文命中就判失败」：不进白名单 = 保存任意渠道就抹掉（PT29 一族第五例） */
+      dropIfBodyContains: ch.def.dropIfBodyContains && ch.def.dropIfBodyContains.length ? ch.def.dropIfBodyContains : undefined,
       // v1.18.41 notion 内联附件（opt-in）：与 dropParams 同一个坑，漏一行就被下一次渠道保存抹掉
       notionAttachments: ch.def.notionAttachments === true ? true : undefined,
       // v1.18.46 渠道级超时字段（首字死线 / 每渠道总超时）：**同一族的下一例**——这两个字段
@@ -4780,6 +4816,15 @@ function validateChannelDef(def, opts) {
     const bad = raw.map((x) => String(x).trim()).filter(Boolean).filter((x) => !DROP_PARAM_WHITELIST.includes(x));
     if (bad.length) return `dropParams 只接受这些参数名：${DROP_PARAM_WHITELIST.join(', ')}（不认识：${bad.join(', ')}）`;
   }
+  // v1.18.95 渠道级「正文命中就判失败」：条数与单条长度都挡在保存前。
+  //   超长不静默截断——截断后那句话就永远匹配不上了，而用户以为配好了。
+  if (def.dropIfBodyContains !== undefined && def.dropIfBodyContains !== null && def.dropIfBodyContains !== '') {
+    const raw = Array.isArray(def.dropIfBodyContains) ? def.dropIfBodyContains : String(def.dropIfBodyContains).split(/\r?\n/);
+    const list = raw.map((x) => String(x).trim()).filter(Boolean);
+    if (list.length > DROP_IF_MAX) return `dropIfBodyContains 最多 ${DROP_IF_MAX} 条，本次 ${list.length} 条`;
+    const tooLong = list.filter((x) => x.length > DROP_IF_LEN);
+    if (tooLong.length) return `dropIfBodyContains 单条最长 ${DROP_IF_LEN} 字符（拿来认一句话，不是整段匹配）；超长的 ${tooLong.length} 条`;
+  }
   // v1.18.46 渠道级超时字段：非法值一律 400（值域见 CH_MS_FIELDS/normChMsField）。
   //   **必须在这里挡下**：这两个值会直接进 setTimeout / AbortSignal 的死线，一个手滑的 0 或负数
   //   会让"这家慢"变成"这家每次都瞬间失败"（比不配更糟），而 NaN 会让死线永不触发。
@@ -5150,6 +5195,9 @@ async function handleAdminApi(req, res, url) {
       weight: ch.def.weight ?? undefined,
       // v1.18.33 渠道级「不发这些参数」：控制台表单要回填它（见 POST 的 def 构造与 persistConfig）
       dropParams: ch.def.dropParams && ch.def.dropParams.length ? ch.def.dropParams : undefined,
+      /* v1.18.95 渠道级「正文命中就判失败」：同样要回填——不回填的输入框旁边的保存按钮
+         就是一把删除键（v1.18.44 现场教训）。 */
+      dropIfBodyContains: ch.def.dropIfBodyContains && ch.def.dropIfBodyContains.length ? ch.def.dropIfBodyContains : undefined,
       // v1.18.41 notion 内联附件（opt-in）：同样要回填
       notionAttachments: ch.def.notionAttachments === true ? true : undefined,
       // v1.18.46 渠道级超时字段：控制台表单要回填它们（值缺省 = 用默认，空框不是"没配"而是"回默认"）
@@ -5213,6 +5261,8 @@ async function handleAdminApi(req, res, url) {
       // v1.18.33 渠道级「不发这些参数」：显式传空数组 = 清空（用户就是要恢复"原样转发"）；
       // 只有那些压根不传这个字段的老客户端/导入流程才沿用旧值（与 weight 同款语义）
       dropParams: body.dropParams !== undefined ? normDropParams(body.dropParams) : (prevDef ? prevDef.dropParams : undefined),
+      /* v1.18.95：三态同款——显式给（含空数组 = 清空）以本次为准，字段缺省才沿用旧值 */
+      dropIfBodyContains: body.dropIfBodyContains !== undefined ? normDropIfBodyContains(body.dropIfBodyContains) : (prevDef ? prevDef.dropIfBodyContains : undefined),
       // v1.18.41 notion 内联附件（opt-in，默认关）：显式传 false 就是关掉；不传则沿用旧值
       notionAttachments: body.notionAttachments !== undefined ? (body.notionAttachments === true || body.notionAttachments === 'true') : (prevDef ? prevDef.notionAttachments : undefined),
       // v1.18.46 渠道级超时字段：**三态语义**与 dropParams/weight 同款——显式给（含空串 = 清空回默认）
@@ -5354,6 +5404,7 @@ async function handleAdminApi(req, res, url) {
         proxy: prev?.proxy,
         headers: prev?.headers,
         dropParams: prev?.dropParams,
+        dropIfBodyContains: prev?.dropIfBodyContains,
         notionAttachments: prev?.notionAttachments,
         firstChunkTimeoutMs: prev?.firstChunkTimeoutMs,
         timeoutMs: prev?.timeoutMs,
@@ -7525,6 +7576,34 @@ async function tryChannel(opts) {
       recordFailure(ch, `stream idle: 上游 ${FIRST_CHUNK_MS / 1000 | 0}s 未出首字节（挂起/排队）`, undefined, { model: failModel, statsCtx: opts.statsCtx });
       return `stream idle ${FIRST_CHUNK_MS}ms`;
     }
+    /* ★ v1.18.95 渠道级「正文命中就判失败」——**在首块、响应尚未提交时**检查。
+       为什么必须在这里（而不是流结束后的 `stream empty` 判据里）：
+         现场（free.hiyo.top）对 `stream:true` 回的是**整段 JSON**（不是 SSE），正文是
+         "本站仅限主流 Coding 客户端/CLI 使用……当前客户端不支持。"，并带
+         `usage:{prompt_tokens:0,completion_tokens:1}`。
+         那段 JSON 会被当作 SSE 逐行处理、**原样写给客户端**（非 `data:` 行也照写），
+         等流结束再判就已经写出去了（`headCommitted` 已真），**无法切家**。
+       判据只在**配了 dropIfBodyContains 的渠道**上生效——没配的零影响。 */
+    if (isStream && ch && Array.isArray(ch.def.dropIfBodyContains) && ch.def.dropIfBodyContains.length) {
+      let headProbe = '';
+      try {
+        headProbe = firstVal ? new TextDecoder().decode(firstVal, { stream: true }) : '';
+      } catch { /* 解码失败就不判，落回原逻辑 */ }
+      const hitNeedle = bodyHitsDropIf(headProbe, ch);
+      if (hitNeedle) {
+        try { reader.cancel(); } catch {}
+        recordFailure(ch, 'body-matched: 上游 200 但正文命中「' + hitNeedle.slice(0, 60) + '」（假成功，按渠道配置判失败）', undefined, { model: failModel, statsCtx: opts.statsCtx });
+        try {
+          recordUsage({
+            model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
+            inputTokens: estimateTokens(messagesText(body && body.messages)),
+            outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+            note: 'body-matched（流式首块）：' + hitNeedle.slice(0, 120), statsCtx: opts.statsCtx,
+          });
+        } catch { /* 记账失败不影响切换 */ }
+        return 'stream_error: body-matched fake success (' + hitNeedle.slice(0, 80) + ')';
+      }
+    }
     // v1.18.21 懒提交（预检期可切换的前提）：writeHead/开场事件推迟到"确实要写出第一段字节"时。
     //   预检期（正文未出）扫到流内错误帧时要能安全返回让候选链切下一家——提前 writeHead 会让
     //   下一候选的 writeHead 撞 ERR_HTTP_HEADERS_SENT，客户端也会先看到一个空的 200 壳。
@@ -7740,6 +7819,27 @@ async function tryChannel(opts) {
     //   `sawStreamContent` 由 noteStreamLine 在**正文/工具调用/思考**任一帧上置位，故"真·空流"才命中。
     if (!passthrough && !nativeStream && streamError === null && !sawStreamContent && !headCommitted) {
       try { reader.cancel(); } catch {}
+      /* ★ v1.18.95 渠道级「正文命中就判失败」——**放在空流判据之前**。
+         现场（free.hiyo.top）：它对 `stream:true` 也回**普通 JSON**（不是 SSE），正文是
+         "本站仅限主流 Coding 客户端/CLI 使用……当前客户端不支持。"，并带
+         `usage:{prompt_tokens:0,completion_tokens:1}`。
+         此时 `noteStreamLine` 只认 `data:` 开头的行 → 一帧都不认 → `sawStreamContent` 起不来
+         → 旧逻辑把它判成 `stream empty`。**行为上碰巧也切了家，但归因是错的**
+         （账本/控制台写的是"零正文"，用户会去查额度而不是查客户端身份）。
+         这里先用累积的原始文本做一次字符串匹配，命中就如实报 `body-matched`。 */
+      const hitNeedle = bodyHitsDropIf(buf, ch);
+      if (hitNeedle) {
+        recordFailure(ch, 'body-matched: 上游 200 但正文命中「' + hitNeedle.slice(0, 60) + '」（假成功，按渠道配置判失败）', undefined, { model: failModel, statsCtx: opts.statsCtx });
+        try {
+          recordUsage({
+            model: (body && body.model) || '—', channelId: candidate.channelId, kind: opts.kind,
+            inputTokens: estimateTokens(messagesText(body && body.messages)),
+            outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+            note: 'body-matched（流式）：' + hitNeedle.slice(0, 120), statsCtx: opts.statsCtx,
+          });
+        } catch { /* 记账失败不影响切换 */ }
+        return 'stream_error: body-matched fake success (' + hitNeedle.slice(0, 80) + ')';
+      }
       recordFailure(ch, 'stream empty: 上游 200 但零正文（无 error 帧、无内容帧；额度耗尽/过载常见）', undefined, { model: failModel, statsCtx: opts.statsCtx });
       try {
         recordUsage({
@@ -7965,6 +8065,28 @@ async function tryChannel(opts) {
     //   判据只在"上游报文确实是一份 OpenAI 补全"（有 `choices[0].message`）时才下结论，避免误伤
     //   被 translateResponse 转成别的形态的报文；`tool_calls` / 思考都算内容（工具调用帧可以不带正文）。
     if (resp.ok) {
+      /* ★ v1.18.95 渠道级「正文命中就判失败」——放在空回复判据**之前**：
+         这类响应正文不是空的（它有一句固定话术），空回复判据抓不到它。
+         现场（free.hiyo.top）：UA 不在白名单时回 `HTTP 200` + 正文
+         "本站仅限主流 Coding 客户端/CLI 使用……当前客户端不支持。"
+         并带 `usage:{prompt_tokens:0,completion_tokens:1}` —— 网关会把它记成**成功**、
+         不换家、账本一片绿，而客户端只拿到一句废话。
+         非流式的好处与下面空回复判据同款：**响应尚未提交，判失败后能直接切下一家**。 */
+      const hitNeedle = bodyHitsDropIf(text, ch);
+      if (hitNeedle) {
+        recordFailure(ch, 'body-matched: 上游 200 但正文命中「' + hitNeedle.slice(0, 60) + '」（假成功，按渠道配置判失败）', undefined, { model: failModel, statsCtx: opts.statsCtx });
+        try {
+          recordUsage({
+            model: body && body.model, channelId: candidate.channelId, kind: opts.kind,
+            inputTokens: estimateTokens(messagesText(body && body.messages)),
+            outputTokens: 0, ok: false, latencyMs: Date.now() - t0,
+            note: 'body-matched（非流式）：' + hitNeedle.slice(0, 120), statsCtx: opts.statsCtx,
+          });
+        } catch { /* ignore */ }
+        /* 返回值形态要与相邻的 `emptyCompletion` 判据**一致**（那是字符串，
+           调度层按 `stream_error:` 前缀识别"可换家"）。练成对象会被当成"成功但没内容"漏过去。 */
+        return 'stream_error: body-matched fake success (' + hitNeedle.slice(0, 80) + ')';
+      }
       let emptyCompletion = false;
       try {
         const j0 = JSON.parse(text);
