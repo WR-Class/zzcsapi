@@ -3128,7 +3128,7 @@ const IMPORT_META={
      `baseUrl` 由服务端按每份文件里的 `auth.domain` 推（.cn / .ai 两个入口，令牌分域）。 */
   'wb-accounts':{ico:'file',title:'导入 WorkBuddy / CodeBuddy 账号',mode:'file',accept:'.json,application/json',
     hint:'选择 scrapped 出来的账号 JSON（含 auth.accessToken），可多选批量。也可以直接把文件丢进服务器的 data/inbox/ 再用「收件目录」导。',
-    warn:'服务端会逐条探活：额度耗尽 / 频率限制 / 账号受限的会建渠道但**停用**并写明原因，不删除——限流恢复后重导一次即可转正。同一份文件重复导入不会产生重复渠道。',
+    warn:'服务端会逐条探活，**探活失败的不会建渠道**（只在结果里列出原因），所以你拿到的都是能用的。同一份文件重复导入不会产生重复渠道。想连失败的也留下（限流会恢复、以后重导能转正）请用 API 传 skipFailed:false。',
     batch:true}
 };
 function parseCodexUnits(j){
@@ -3232,7 +3232,7 @@ async function importFiles(kind,input){
     if(!accounts.length){ setStatus(st,'✗ 一个文件都没读出来','bad'); return; }
     setStatus(st,`⏳ 提交 ${accounts.length} 个账号（服务端要逐条探活，可能要几分钟）…`,'wait');
     try{
-      const r=await api('/admin/api/workbuddy-import',{method:'POST',body:JSON.stringify({accounts,probe:true,idPrefix:'wb'})});
+      const r=await api('/admin/api/workbuddy-import',{method:'POST',body:JSON.stringify({accounts,probe:true,idPrefix:'wb',skipFailed:true})});
       const rows=[];
       for(const x of (r.results||[])){
         const okCls=x.ok?(x.enabled?'ok':'warn'):'fail';
@@ -3495,7 +3495,7 @@ const ACTS={
     if(el)el.dataset.armed='';
     toast('正在从收件目录导入…','wait');
     try{
-      const r=await api('/admin/api/workbuddy-import',{method:'POST',body:JSON.stringify({fromInbox:true,probe:true,idPrefix:'wb'})});
+      const r=await api('/admin/api/workbuddy-import',{method:'POST',body:JSON.stringify({fromInbox:true,probe:true,idPrefix:'wb',skipFailed:true})});
       toast('导入完成：启用 '+r.enabled+' / 共 '+r.total,'ok');
       await loadAll();
     }catch(e){ toast('导入失败：'+String((e&&e.message)||e),'bad'); }

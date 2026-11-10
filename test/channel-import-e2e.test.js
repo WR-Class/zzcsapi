@@ -155,8 +155,8 @@ console.log('\nWorkBuddy 账号批量导入');
       void cn;
     }
 
-    /* ── 3. 探活分档：好的启用、429/11140 停用但都保留 ── */
-    console.log('\n3. 探活分档（启用/停用，但一条都不许丢）');
+    /* ── 3. 探活分档（v1.18.94 起默认**失败不建**）── */
+    console.log('\n3. 探活分档：失败默认不建渠道');
     {
       const good = acct('uid-good-001', 'www.codebuddy.cn');
       const slow = acct('uid-slow-001', 'www.codebuddy.cn');
@@ -168,17 +168,36 @@ console.log('\nWorkBuddy 账号批量导入');
         return JSON.stringify(j);
       };
       const r = await imp({ probe: true, idPrefix: 'pv', accounts: [good, withMark(slow, 'slow'), withMark(banned, 'banned')] });
-      check('三条都被收下（探活失败也不丢）', r.status === 200 && r.body.results.length === 3, r.body);
-      check('至少有一条被启用', r.body.enabled >= 1, { enabled: r.body.enabled });
-      const disabled = r.body.results.filter((x) => x.ok && !x.enabled);
-      check('★ 探活失败的那几条是**停用**而不是删除，且写明原因',
-        disabled.every((x) => /探活失败/.test(x.note || '')), disabled.map((x) => x.note));
-      /* 直接查网关：这些渠道真的在列表里（存在即"没被删"） */
+      check('三条都进了响应（成/败都给交代）', r.status === 200 && r.body.results.length === 3, r.body);
+      check('一条被启用（假上游对它回 200）', r.body.enabled === 1, { enabled: r.body.enabled });
+      /* ★ v1.18.94 的核心：默认 skipFailed → 失败的两条**根本没建**
+         （现场动机：一次导入 198 个账号，旧行为在配置里留了 192 条死渠道，用户得手工删） */
+      const skippedOnes = r.body.results.filter((x) => !x.ok);
+      check('★ 探活失败的两条被计入 skipped（默认 skipFailed）', r.body.skipped === 2, { skipped: r.body.skipped });
+      /* ★ 计数必须自洽：created + reused + skipped === total。
+         守的是"计数在探活之前就跑"那类顺序错误 —— 实测出现过
+         「新建 80 / 跳过 81 / 总计 81」这种自相矛盾的汇总。 */
+      check('★ 计数自洽：新建+复用+跳过 === 总计（跳过的绝不能还算进新建）',
+        r.body.created + r.body.reused + r.body.skipped === r.body.total,
+        { created: r.body.created, reused: r.body.reused, skipped: r.body.skipped, total: r.body.total });
+      check('★ 且写明"未建渠道"与原因（不是静默丢弃）',
+        skippedOnes.every((x) => /未建渠道/.test(x.note || '') && /探活失败/.test(x.note || '')),
+        skippedOnes.map((x) => x.note));
       const list = await (await fetch(base + '/admin/api/channels')).json();
       const ids = new Set((list.channels || list || []).map((c) => c.id));
-      const wantIds = r.body.results.map((x) => x.id);
-      check('★ 停用的渠道**确实存在于网关里**（不是只在响应里说一下）',
-        wantIds.every((id) => ids.has(id)), { want: wantIds.length, found: [...ids].filter((i) => wantIds.includes(i)).length });
+      check('★ 失败的那两条**确实不在网关里**（配置里不留死渠道）',
+        skippedOnes.every((x) => !x.id || !ids.has(x.id)), { ids: [...ids].filter((i) => /^pv-/.test(i)) });
+
+      /* 显式 skipFailed:false → 回到"建但停用 + 写原因，不删"（限流会恢复，留着能转正） */
+      const r2 = await imp({ probe: true, skipFailed: false, idPrefix: 'pv2', accounts: [withMark(slow, 'slow'), withMark(banned, 'banned')] });
+      const disabled = r2.body.results.filter((x) => x.ok && !x.enabled);
+      check('★ skipFailed:false 时失败的两条**建但停用**，且写明原因',
+        r2.body.skipped === 0 && disabled.length === 2 && disabled.every((x) => /探活失败/.test(x.note || '')),
+        { skipped: r2.body.skipped, disabled: disabled.map((x) => x.note) });
+      const list2 = await (await fetch(base + '/admin/api/channels')).json();
+      const ids2 = new Set((list2.channels || list2 || []).map((c) => c.id));
+      check('★ 且它们**确实存在于网关里**（skipFailed:false 的语义就是"留着"）',
+        r2.body.results.every((x) => ids2.has(x.id)), { want: r2.body.results.length });
     }
 
     /* ── 3b. probe:false 不许无条件启用（v1.18.93）── */

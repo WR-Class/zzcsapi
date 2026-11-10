@@ -5271,6 +5271,13 @@ async function handleAdminApi(req, res, url) {
     if (entries.length > 500) return sendJson(res, 400, { error: `accounts 一次最多 500 条，本次 ${entries.length} 条` });
 
     const doProbe = body.probe !== false;               // 默认探活；显式 false 才跳过（给批量重导用）
+    /* ★ v1.18.94：探活失败的**默认不建渠道**（`skipFailed` 缺省 true）。
+       现场：一次导入 198 个账号，探活后 81 个可用、其余全是 429/额度耗尽 ——
+       旧行为"建但停用"会在配置里留下一百多条死渠道，用户还得手工去删（实测删了 192 条）。
+       默认丢弃才符合"导入 = 我要能用的"这个直觉。
+       想看/保留失败条目的（限流会随时间恢复，留着以后重导能自动转正）显式传
+       `{skipFailed:false}`——那时行为回到"建但停用 + 写明原因"，且不删。 */
+    const skipFailed = body.skipFailed !== false;
     const prefix = String(body.idPrefix || 'wb').replace(/[^\w-]/g, '') || 'wb';
     const model = String(body.model || 'deepseek-v4.1-flash');
     /* ★ 可选：把所有条目的 baseUrl 强制指向这里（`{baseUrl}`）。两个真实用途：
@@ -5323,9 +5330,12 @@ async function handleAdminApi(req, res, url) {
       const fp = fingerprintSecret(token);
       /* 同一把令牌已存在 → 复用那条渠道（不新建、不覆盖密码） */
       let id = `${prefix}-${(uid || fp).slice(0, 12)}`.replace(/[^\w-]/g, '');
-      if (usedFp.has(fp)) { id = usedFp.get(fp); r.action = 'reuse'; reused++; }
-      else if (channels.has(id)) { r.action = 'reuse'; reused++; }
-      else { r.action = 'create'; created++; }
+      /* ★ 这里只**定 action**，不计数：计数必须发生在"真的落进配置"之后。
+         否则 `skipFailed`（探活失败不建）会报出"新建 80 / 跳过 81"这种自相矛盾的汇总
+         —— 实测就是这么冒出来的：created 在探活前就 ++ 了，失败后又 skipped++。 */
+      if (usedFp.has(fp)) { id = usedFp.get(fp); r.action = 'reuse'; }
+      else if (channels.has(id)) { r.action = 'reuse'; }
+      else { r.action = 'create'; }
 
       const prev = channels.get(id)?.def;
       const def = {
@@ -5358,13 +5368,24 @@ async function handleAdminApi(req, res, url) {
           probeNote = pr.ok ? '' : String(pr.error || '探活失败').replace(/\s+/g, ' ').slice(0, 160);
         } catch (e) { alive = false; probeNote = '探活异常: ' + String(e && e.message || e).slice(0, 120); }
       }
-      /* 探活不过 → 建但停用。**不删**：限流（429）会随时间恢复，删了就是永久丢掉。
-       * ★ v1.18.93 修：`probe:false`（不探活）时**不能无条件启用**——那等于把没验证过的渠道
-       *   塞进候选链，而实测中存在"账号文件看着正常、实际额度已用尽（code 14018）"这种状态，
-       *   启用它只是让每次请求多撞一次失败。改成：
-       *     · 已存在的渠道 → **保持原状**（重导不该悄悄改它的启停）
-       *     · 新建的 → 只认显式的 `body.enabled === true`，缺省 **false**（保守起步，让用户自己开）
-       *   想要"不探活但直接启用"的人可以显式传 `{probe:false, enabled:true}`——那是一个明说的选择。 */
+      /* 探活不过的处理，两条路（v1.18.94）：
+         · `skipFailed`（缺省）→ **根本不建**，把原因写进 results 的 note，计入 `skipped`。
+           用户要的是"导入 = 拿到能用的"，不是"配置里多一百条停用的"。
+         · `skipFailed:false` → 建但停用（`enabled:false`）+ 把原因写进渠道状态，**不删**。
+           适合"限流会随时间恢复、想留着以后再重导转正"的场景。 */
+      if (doProbe && !alive && skipFailed) {
+        results.push({
+          ok: false, id: '', action: 'skip', enabled: false, baseUrl,
+          note: '探活失败，未建渠道（' + (probeNote || '原因未知') + '）'
+                 + '；确需保留可传 skipFailed:false',
+        });
+        skipped++;
+        continue;
+      }
+      /* probe:false（不探活）时**不能无条件启用**——那等于把没验证过的渠道塞进候选链，
+         而实测中存在"账号文件看着正常、实际额度已用尽"这种状态。
+            · 已存在的 → 保持原状（重导不该悄悄改启停）
+            · 新建的 → 只认显式 `enabled:true`，缺省 false（保守起步） */
       if (doProbe) def.enabled = alive;
       else def.enabled = prev ? prev.enabled : (body.enabled === true);
       const ch = upsertChannel(def);
@@ -5375,6 +5396,8 @@ async function handleAdminApi(req, res, url) {
         ch.lastError = probeNote;
         ch.status = 'down';
       }
+      /* 到了这里才算真的落进了配置 —— 计数在这里（见上面 action 那段的注释）。 */
+      if (r.action === 'reuse') reused++; else created++;
       if (def.enabled) enabledCount++;
 
       const notes = [];
