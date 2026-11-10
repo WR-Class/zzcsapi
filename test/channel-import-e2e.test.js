@@ -181,6 +181,17 @@ console.log('\nWorkBuddy 账号批量导入');
         wantIds.every((id) => ids.has(id)), { want: wantIds.length, found: [...ids].filter((i) => wantIds.includes(i)).length });
     }
 
+    /* ── 3b. probe:false 不许无条件启用（v1.18.93）── */
+    console.log('\n3b. 不探活 ≠ 可以启用');
+    {
+      const one = acct('uid-noprobe-1', 'www.codebuddy.cn');
+      const r = await imp({ probe: false, idPrefix: 'np', accounts: [one] });
+      check('★ probe:false 新建的渠道默认**停用**（没验证过就进候选链，等于每请求多撞一次失败）',
+        r.status === 200 && r.body.enabled === 0, { enabled: r.body.enabled });
+      const r2 = await imp({ probe: false, enabled: true, idPrefix: 'np2', accounts: [acct('uid-noprobe-2', 'www.codebuddy.cn')] });
+      check('显式 enabled:true 时才启用（那是一个明说的选择）', r2.body.enabled === 1, { enabled: r2.body.enabled });
+    }
+
     /* ── 4. 去重 + 不覆盖已有密钥 ── */
     console.log('\n4. 去重 与 不覆盖已有密钥');
     {

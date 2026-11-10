@@ -5358,8 +5358,15 @@ async function handleAdminApi(req, res, url) {
           probeNote = pr.ok ? '' : String(pr.error || '探活失败').replace(/\s+/g, ' ').slice(0, 160);
         } catch (e) { alive = false; probeNote = '探活异常: ' + String(e && e.message || e).slice(0, 120); }
       }
-      /* 探活不过 → 建但停用。**不删**：限流（429）会随时间恢复，删了就是永久丢掉。 */
-      def.enabled = doProbe ? alive : (body.enabled !== false);
+      /* 探活不过 → 建但停用。**不删**：限流（429）会随时间恢复，删了就是永久丢掉。
+       * ★ v1.18.93 修：`probe:false`（不探活）时**不能无条件启用**——那等于把没验证过的渠道
+       *   塞进候选链，而实测中存在"账号文件看着正常、实际额度已用尽（code 14018）"这种状态，
+       *   启用它只是让每次请求多撞一次失败。改成：
+       *     · 已存在的渠道 → **保持原状**（重导不该悄悄改它的启停）
+       *     · 新建的 → 只认显式的 `body.enabled === true`，缺省 **false**（保守起步，让用户自己开）
+       *   想要"不探活但直接启用"的人可以显式传 `{probe:false, enabled:true}`——那是一个明说的选择。 */
+      if (doProbe) def.enabled = alive;
+      else def.enabled = prev ? prev.enabled : (body.enabled === true);
       const ch = upsertChannel(def);
       /* ★ 把探活失败的原因**写进渠道状态**，不能只留在这一次的响应里 ——
          否则用户事后在控制台只看到"停用"，看不到"为什么"、也不知道什么时候能恢复
