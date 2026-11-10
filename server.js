@@ -1234,14 +1234,102 @@ function effFailStreak(ch) {
   return Math.max(Number(ch.consecutiveFail) || 0, Number(ch.probeFail) || 0);
 }
 
-function cooldownMsFor(ch, kind, retryAfterMs) {
+/* 从上游**响应体**里抠「额度/限流什么时候恢复」→ 距现在的毫秒数（抠不到返回 0）。
+   为什么需要这一层（v1.18.95，抄 magpie 的 creditBackoff 思路）：
+     头部 `Retry-After` 只是上游**愿意说**的那一种；实测我们库里的 429 大多**不带**这个头，
+     却把重置时刻写在正文里（OpenAI 系是 `"resets_at"` / `"resets_in_seconds"`，各家还有
+     `"retry_after"`、`reset at 2026-… UTC+8`、ISO 时间戳等等）。这些正文本来就在手里
+     （recordFailure 的 msg 就是 `HTTP 429: {…body…}`），此前一个字都没用上，
+     于是冷却只能按自己的指数曲线瞎猜：**要么额度早恢复了还在空等，要么提早去撞墙被反复判失败**。
+   ——这和 wbQuotaResetMs 是同一件事，但那个只认 workbuddy 一家的固定格式；
+      这里是通用层：先试结构化字段，再试自由文本里的 ISO / "reset at" 写法。
+   纪律：① 只认**未来**的时刻（解析出来是过去 = 上游报文过期，退化为「没解析到」）；
+        ② 结果仍由 cooldownMsFor 钳到 hardMaxMs，坏上游没法用一个大数字把我们钉住一天；
+        ③ 解析失败一律返回 0（让曲线说话），**绝不猜**。 */
+var RESET_TEXT_RE = /(?:resets?|reset|renew|restore|expire[sd]?|recover|available)\s*(?:at|in|on)?\s*[:\s]\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\s*(?:Z|UTC)?\s*(?:[+-][0-9]{1,2}(?::?[0-9]{2})?)?)?)/i;
+/* 「2026-09-28 10:00:39 UTC+8」/「… UTC」/「… Z」这类时间戳 → 毫秒；拆不出返回 NaN。
+   为什么手写而不用 Date.parse：带空格 + `UTC+8` 的写法在 Node 里是 NaN（`UTC+8` 常被当成时区名），
+   而它正是上游额度提示最常见的样子——当年 workbuddy 那条正则就是这么绕过来的。 */
+function parseLooseStamp(s) {
+  const t = String(s || '').trim();
+  const m = t.match(/^([0-9]{4})-([0-9]{2})-([0-9]{2})[ T]([0-9]{2}):([0-9]{2}):([0-9]{2})\s*(?:UTC|GMT)?\s*([+-][0-9]{1,2}(?::?[0-9]{2})?|Z)?$/i);
+  if (!m) {
+    const d = Date.parse(t);
+    return Number.isNaN(d) ? NaN : d;
+  }
+  const [y, mo, d, h, mi, se] = [+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]];
+  let offH = 0, offM = 0;
+  const tz = m[7];
+  if (tz === 'Z') { offH = 0; }
+  else if (tz) {
+    const neg = tz[0] === '-', rest = tz.slice(1), parts = rest.split(':');
+    offH = Number(parts[0] || 0);
+    offM = Number(parts[1] || rest.slice(2) || 0);
+    if (neg) { offH = -offH; offM = -offM; }
+  }
+  return Date.UTC(y, mo, d, h - offH, mi - offM, se);
+}
+
+function resetMsFromBody(text, headers, now) {
+  const t0 = Number.isFinite(now) ? now : Date.now();
+  const raw = String(text || '');
+  if (!raw) return 0;
+  /* ★ 本函数**只负责"解析出上游说多久"**，不钳上限。
+     钳制统一由 cooldownMsFor 做（冷却时长只有一处实现——见 test/cooldown-grading-e2e.test.js
+     那条装配守卫）。这里先钳一次也能跑，但会让"冷却上限"出现第二个真源。 */
+  const cap = (ms) => (Number.isFinite(ms) && ms > t0 + 1000 ? ms - t0 : 0);
+
+  /* ① 结构化字段（JSON 体里的）：相对秒数优先，其次是绝对时刻。
+        名字来源于实测到的上游方言，宁多认几个，反正解析不到就退化成 0。 */
+  const numField = raw.match(/"(resets?_?in_?seconds|resets?_?in_?ms|retry_?after(?:_?seconds|_?ms)?|reset_?after|retry_?after_?ms)"\s*:\s*"?(\d+(?:\.\d+)?)"?/i);
+  if (numField) {
+    const v = Number(numField[2]);
+    if (Number.isFinite(v) && v > 0) {
+      // 字段名里带 ms 的按毫秒，其余按秒（看**字段名本身**，不看周围的文字）
+      const ms = /ms$/i.test(numField[1]) ? v : v * 1000;
+      if (ms >= 1000) return ms;
+    }
+  }
+  const dateField = raw.match(/"(?:resets?_?at|reset_?at|reset_?time|next_?reset|renews?_?at|expires?_?at|available_?at)"\s*:\s*"([^"]+)"/i);
+  if (dateField) {
+    const at = Date.parse(dateField[1]);
+    const ms = cap(at);
+    if (ms) return ms;
+  }
+  /* ② 自由文本里的 "reset at 2026-… UTC+8" 之类（workbuddy 就是这种带时区偏移的写法）。
+        不能交给 Date.parse 硬啃：`2026-09-28 10:00:39 UTC+8` 在 Node 里返回 NaN，
+        带空格的 `UTC+8` 尤其不可靠。所以自己拆字，时区偏移自己算。 */
+  const m = raw.match(RESET_TEXT_RE);
+  if (m) {
+    const at = parseLooseStamp(m[1]);
+    const ms = cap(at);
+    if (ms) return ms;
+  }
+  /* ③ 头部：有些上游把重置时刻放在自定义头里（x-ratelimit-reset 是 Unix 秒） */
+  const hdr = headers && typeof headers.get === 'function' ? headers.get('x-ratelimit-reset') : null;
+  if (hdr) {
+    const v = Number(String(hdr).trim());
+    if (Number.isFinite(v) && v > 0) {
+      const at = v > 1e12 ? v : v * 1000;   // 毫秒时间戳 vs 秒时间戳
+      const ms = cap(at);
+      if (ms) return ms;
+    }
+  }
+  return 0;
+}
+
+function cooldownMsFor(ch, kind, retryAfterMs, bodyText, headers) {
   const n = Math.max(1, effFailStreak(ch) || 1);
   const cred = kind === 'credential', rate = kind === 'rate_limit';
   const base = cred ? COOLDOWN.hardBaseMs : rate ? COOLDOWN.rateLimitBaseMs : COOLDOWN.transientBaseMs;
   const max = cred ? COOLDOWN.hardMaxMs : COOLDOWN.transientMaxMs;
-  // Retry-After 是上游明确的意图，优先于我们的曲线；但仍不许超过硬上限（别被一个坏上游钉住一天）
+  /* 优先级：Retry-After 头（上游最明确的意图）> 响应体/自定义头里的 reset 时刻 > 自己的退避曲线。
+     前两者都叫"上游明确说了多久"，收进 told 一个变量里，好让**钳制只有一处**——
+     冷却时长只有一个真源，正是 test/cooldown-grading-e2e.test.js 那条装配守卫守的东西。 */
   const ra = Number(retryAfterMs);
-  if (Number.isFinite(ra) && ra > 0) return Math.min(COOLDOWN.hardMaxMs, Math.max(1000, ra));
+  const told = Number.isFinite(ra) && ra > 0 ? ra : resetMsFromBody(bodyText, headers);
+  // 上游说多久就多久，但不许超过硬上限（别被一个坏上游钉住一天）
+  if (told > 0) return Math.min(COOLDOWN.hardMaxMs, Math.max(1000, told));
   return Math.min(max, base * Math.pow(2, n - 1));
 }
 
@@ -9307,7 +9395,10 @@ function recordFailure(ch, msg, kind, opts) {
   if (fromProbe) ch.probeFail = (Number(ch.probeFail) || 0) + 1;
   else ch.consecutiveFail++;
   ch.lastError = msg;
-  ch.cooldownUntil = Date.now() + cooldownMsFor(ch, k, o.retryAfterMs);
+  /* v1.18.95：除了 Retry-After 头，再把**响应体与自定义头**交给冷却计算——
+     实测 429 常常不带 Retry-After，却把重置时刻写在正文里（见 resetMsFromBody）。
+     msg 本身就是 `HTTP 429: {…body…}`（或原始异常文案），所以不用改任何调用点。 */
+  ch.cooldownUntil = Date.now() + cooldownMsFor(ch, k, o.retryAfterMs, o.bodyText != null ? o.bodyText : msg, o.headers);
   if (effFailStreak(ch) >= 3) ch.status = 'down';
   // 失败也进用量统计（ok:false），便于排查"哪个渠道在挂"。
   // v1.18.26：带上请求的模型名（o.model，由 tryChannel 的 failModel 提供）。此前写死 '—'，

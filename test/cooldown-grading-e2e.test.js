@@ -169,7 +169,19 @@ function makeUpstream(state) {
         return src.slice(at, end);
       };
       // v1.18.40：cooldownMsFor 现在读 effFailStreak（两条 streak 取大者），healAfterProbe 会调 markTrafficOk
+      // v1.18.95：cooldownMsFor 又多了一层「从响应体解析 reset 时刻」→ 它依赖 resetMsFromBody，
+      //   而后者又依赖 parseLooseStamp 与模块级的 RESET_TEXT_RE。抠取清单必须跟着长，
+      //   否则 cooldownMsFor 一被调用就 'resetMsFromBody is not defined'（本用例当场这么红过一次）。
+      //   取 RESET_TEXT_RE 用整行切片（它是一条 var 声明，不是函数）。
+      const grabDecl = (needle) => {
+        const at = src.indexOf(needle);
+        if (at < 0) throw new Error('server.js 里找不到 ' + needle);
+        return src.slice(at, src.indexOf('\n', at));
+      };
       const F = (name) => new Function('COOLDOWN',
+        grabDecl('var RESET_TEXT_RE') + ';' +
+        grabFn('function parseLooseStamp') + ';' +
+        grabFn('function resetMsFromBody') + ';' +
         grabFn('function effFailStreak') + ';' + grabFn('function markTrafficOk') + ';' + grabFn('function ' + name) + `;return ${name};`)(CD);
 
       const cooldownMsFor = F('cooldownMsFor');

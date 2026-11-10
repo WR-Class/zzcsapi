@@ -211,7 +211,11 @@ function assemblyGuards() {
     && /function markTrafficOk\(ch, ms\) \{[\s\S]{0,200}?ch\.consecutiveFail = 0;/.test(src));
   check('★ ② 冷却分级读的是两条 streak 的较大者（effFailStreak 唯一实现，cooldownMsFor 里不许再直读 consecutiveFail）',
     (src.match(/function effFailStreak\(ch\)/g) || []).length === 1
-    && /function cooldownMsFor\(ch, kind, retryAfterMs\) \{\s*const n = Math\.max\(1, effFailStreak\(ch\) \|\| 1\);/.test(src));
+    /* 只锚"签名开头 + 函数体第一句读 effFailStreak"，**不锁死形参列表**：
+       v1.18.95 给 cooldownMsFor 加了 bodyText/headers 两个形参（要从响应体解析 reset 时刻），
+       而把整套形参原文写进正则的守卫当时就误报了——它守的是"读 effFailStreak"，
+       不是"形参永远只有三个"。 */
+    && /function cooldownMsFor\(ch, kind, retryAfterMs[^)]*\) \{\s*const n = Math\.max\(1, effFailStreak\(ch\) \|\| 1\);/.test(src));
   check('★ ② 探测/测试失败分别标了来源（probe ≥6 处、test ≥5 处）',
     (src.match(/source: 'probe'/g) || []).length >= 6 && (src.match(/source: 'test'/g) || []).length >= 5);
   check('② 状态接口下发了 probeFail（控制台才分得清两条欠账）',

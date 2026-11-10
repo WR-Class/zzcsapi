@@ -1,4 +1,4 @@
-# 测试清单（64 个文件 · 3125 项断言，零依赖）
+# 测试清单（65 个文件 · 3167 项断言，零依赖）
 
 > **断言总数怎么来的（v1.18.55 校正）**：等于 `node _run_all_tests.js` 逐文件汇总的合计，**逐文件行相加必须与合计相等**。
 > 该运行器原先认不出 `hark-channel.test.js` 的收尾格式（`通过 97 · 失败 0`，中点分隔），把它记成
@@ -217,7 +217,7 @@
 > ③ `ocErrorText` 认 `data.message` 那一层（1.18.x 把 message 又嵌了一层）。
 > 校验式 **3112 + 2 = 3114** ✓。
 >
-> **⚠ 2026-10-26 第二十次校正（v1.18.91：探测超时口径）**：实测 **64 / 3125**（无新增文件）——`outbound-http-client` 33→36（+3）。
+> **⚠ 2026-10-26 第二十次校正（v1.18.91：探测超时口径）**：实测 **64 / 3117**（无新增文件）——`outbound-http-client` 33→36（+3）。
 > 现场：加渠道时控制台报 `✗ The operation was aborted`。真因不是 key，是**探测超时太短**：
 > 该站 `GET /v1/models` 实测 **13.1 s**（容器内）/ 13.7 s（宿主直连），而 `/admin/api/probe` 的超时是
 > `Math.min(15000, Number(body.timeoutMs) || 10000)` ——**前端根本不传 timeoutMs，所以实际只有 10 秒**，必然先 abort。
@@ -226,22 +226,29 @@
 > ② 后台健康探测默认 8s→**15s**（常量 + 四处 `|| 8000` 兜底一起改，改一处漏一处＝同一症状复发）；
 > ③ 线上 `data/config.json` 的 `health.timeoutMs` 一并改 15000（它是启动期读入的，改文件要重启才生效）。
 > 三条守卫进 `outbound-http-client`（上限 30s / 默认 15s / 不留 8000 兜底）。
-> 校验式 **3114 + 3 = 3125** ✓。
+> 校验式 **3114 + 3 = 3117** ✓。
 >
-> **⚠ 2026-10-30 第二十一次校正（v1.18.92：总览两块渠道面板在说假话）**：实测 **64 / 3125**（无新增文件）——`console-state` 310→314（+4，新增 §22「总览口径守卫」）。
+> **⚠ 2026-10-30 第二十一次校正（v1.18.92：总览两块渠道面板在说假话）**：实测 **64 / 3121**（无新增文件）——`console-state` 310→314（+4，新增 §22「总览口径守卫」）。
 > 现场：「渠道流量与健康 显示不正确吧」。三个独立缺陷叠在一屏：
 > ① 健康分布把**停用**渠道当**挂了**——线上 78 个渠道里 54 个停用，`probeAll()` 刻意跳过它们，故状态恒 `unknown`；`adapt()` 统计 `cnt` 时没过滤 `c.on`，`donut` 又把 `unknown` 并进「不可用」，于是页头写「9/78 正常 · 不可用 57」，实际启用 24 个里只有 4 个真不可用。
 > ② 表头写「按请求量排序」，代码是 `DATA.channels.slice(0,7)` —— **配置顺序，一行没排**；真流量前七（`77625` 5469 / `乐子` 5282 / `novai` 4165 …）根本不出现。
 > ③ 三种口径混在一张表（请求/成功率=累计 `byChannel`，延迟=最近 200 条成功均值）却没写明。
 > 处置：`cnt` 只统计启用；`donut` 拆四档（正常/降级/不可用/**未探测**，末档用 `--tx-3` 灰不是 `--err` 红）；页头分母改 `DATA.meta.enabled`（文案「x/y 启用渠道正常」），「已停用」行仍用全量（新增 `allChan`）；流量表 `[...DATA.channels].sort((a,b)=>b.req-a.req||a.name.localeCompare(b.name)).slice(0,7)`；副标题补「延迟取最近成功请求均值」。
 > 四条源码守卫进 `console-state` §22（这四条都只在**线上有停用渠道/有流量**时才说谎，桩数据看不出来，所以扫源码）。
-> 校验式 **3117 + 4 = 3125** ✓。
+> 校验式 **3117 + 4 = 3121** ✓。
 >
 > **⚠ 2026-11-05 第二十二次校正（v1.18.93：Playground `Failed to fetch`）**：实测 **64 / 3125**（无新增文件）——`console-state` 314→318（+4，新增 §23「同源基址守卫」）。
 > 现场：「Playground 里发送消息提示请求失败：Failed to fetch」。真因是前端拿 `CFG.urls.openai` 当**发请求**的地址，而服务端把它硬编码成 `http://127.0.0.1:${PORT}`；不从 `127.0.0.1` 打开控制台时，浏览器去打自己的 127.0.0.1，叠上 CSP `connect-src 'self'` ⇒ `TypeError: Failed to fetch`。
 > 处置：新增 `gwBase()`（`location.origin` 优先，无 `location` 才退回服务端值），`pgSend` / `copyModels` 两处真发请求的切过去；`copyCurl` / `pgCopyCurl` 与服务页端点清单**刻意保留**服务端地址（那是给外部客户端抄的）；网络类异常追加目标地址。
 > 四条守卫是**源码扫描**：桩里 `location.origin` 恰好等于 `127.0.0.1:8787`，与故障条件重合，跑桩测不出来。
 > 校验式 **3121 + 4 = 3125** ✓。
+>
+> **⚠ 2026-11-10 第二十三次校正（v1.18.95：冷却贴着上游真实 reset）**：实测 **65 / 3167**（**新增 1 个文件**）——`upstream-reset-cooldown` 42 项；另 `cooldown-grading-e2e` 抠取清单 +3 行（仍 57 项）、`channel-test-stream-and-streak-e2e` 正则放宽（仍 50 项，不增断言）。
+> 现场动机：`Retry-After` 头只是上游**愿意说**的那一种。实测库里 429 **大多不带它**，却把恢复时刻写在正文里（`resets_in_seconds` / `resets_at` / 自由文本 `reset at … UTC+8`），而正文本来就在 `recordFailure` 的 `msg` 里、一个字都没用上 ⇒ 冷却只能按自己的曲线瞎猜：**要么额度早恢复了还在空等，要么提早去撞墙被反复判失败（streak 越滚越高，冷却反而更长——死锁）**。
+> 处置：新增 `resetMsFromBody()` + `parseLooseStamp()`，`cooldownMsFor` 变成四层优先级链（`Retry-After` 头 > 体/头里的 reset > 指数曲线，全部过 `hardMaxMs`）。
+> 校验式 **3125 + 42 = 3167** ✓。
+> ★ 本次还修了**两条守卫的脆度**（都是真误报，不是实现错）：① `cooldown-grading-e2e` 现抠函数时没带上新依赖（`resetMsFromBody`/`parseLooseStamp`/`RESET_TEXT_RE`）→ 改成把依赖清单一起抠；② `channel-test-stream-and-streak-e2e` 把 `cooldownMsFor` 的**整套形参原文**写进正则，加两个形参就误报 → 改成只锚"签名开头 + 函数体读 `effFailStreak`"，不锁死形参个数。**守的是"读 effFailStreak"，不是"形参永远三个"。**
+> ★ 另一条守卫（`Math.min(COOLDOWN.` 全仓只许 1 次）**没有放宽**，而是反过来改实现：`resetMsFromBody` 不再自己钳上限，钳制统一收进 `cooldownMsFor` 的同一个 return（"冷却时长只有一个真源"照旧成立）。
 
 > **✅ 运行器已入库（v1.18.74 处置）**：`node _run_all_tests.js` 一度是**本机工具**——
 > `.gitignore:6` 的 `_*.js` 约定把它挡在库外（v1.18.67 实测 `git log --all -- _run_all_tests.js` 是 **0 条提交**）。
@@ -371,6 +378,7 @@
 | **notion 出站通道链**（curl 主 / 软墙换 h2 / 三处推理调用点必须走 `notionFetch` / 超时与取消） | `notion-transport` + `notion-attachment-inline-e2e` + `notion-refetch-fallback-e2e` |
 | 流式提交时机 / 扣帧窗口 / 思考吃光（reasoning-only） | `reasoning-only-fallback-e2e` + `stream-error-frame-e2e` + `streaming-e2e` |
 | 渠道超时（首字/总超时）/ 挂死换家 / 失败行归因 / **两个超时字段的落库往返与三态语义** | `channel-timeout-attribution-e2e` + `cooldown-grading-e2e` + `console-state`（§3c 表单回填与"总是提交"） |
+| **冷却时长（曲线 / Retry-After / 响应体里的 reset 时刻 / 优先级链 / 假阳性）** | `cooldown-grading-e2e`（曲线与半愈合）+ **`upstream-reset-cooldown`**（从响应体解析 reset、四层优先级、硬上限、真实失败文案反例） |
 | **重试链路的前进性**（客户端断开即停链 / 同报文续候选游标而报文变了归零 / 每渠道上限 90s / 失败行记真实 in·out·耗时） | `retry-chain-progress` + `channel-timeout-attribution-e2e` + `per-channel-retry-e2e` + `weighted-rr-e2e`（候选表会被加权轮询重排，游标必须与顺序无关） |
 | **自动权重生效**（`enabled:true` 时健康系数乘进权重、真影响分流；关闭时逐字节回旧行为；运行期可开关 + 落库） | `auto-weight-apply-e2e` + `auto-weight-e2e` + `auto-weight` + `weighted-rr*` + `settings-api-e2e` |
 | **手动测试的判据**（流式模式 / 与非流式刻意不同的"只有思考"判定 / 测试成功只半愈合） | `channel-test-stream-and-streak-e2e` + `channel-test-reasoning-e2e` + `disabled-channel-manual-test-e2e` |
@@ -416,6 +424,7 @@ node test/weighted-rr-e2e.test.js         # 18 项断言：真 HTTP 数落点，
 node test/native-channels.test.js         # 78 项断言：原生出站双向转换（请求/响应/流式状态机/URL 鉴权头/错误体不翻译）
 node test/native-channels-e2e.test.js     # 34 项断言：原生假上游 × 三条客户端路由，验证上游真的收到原生报文
 node test/cooldown-grading-e2e.test.js    # 57 项断言：熔断冷却分级（三曲线 + 半愈合 + Retry-After + 503/502 带原因；v1.18.40 起半愈合不再减半、探测失败不再把 3 变 1）
+node test/upstream-reset-cooldown.test.js # 42 项断言（v1.18.95）：**冷却贴着上游真实 reset**（思路抄 magpie 的 creditBackoff）。这门测试存在的理由：`Retry-After` 头只是上游**愿意说**的那一种，实测库里 429 大多不带它，却把恢复时刻写在正文里（此前正文就在 `recordFailure` 的 msg 里、却一个字没用上）。§1 该解析的九种写法（`resets_in_seconds` / `resets_in_ms`（毫秒字段不许当秒）/ `retry_after` / `resets_at` ISO / `next_reset` / 自由文本 `reset at … UTC+8`、`UTC-5`、无时区按 UTC）；§2 **假阳性必须为 0**（★ 反例直接取自线上真实失败文案：免费模型限流、积分不足、TLS 断连、首字节超时、400 模型不存在、过期时刻、空正文、HTML 错误页——假阳性比不解析更糟，会让冷却乱跳）；§3 `x-ratelimit-reset` 秒/毫秒按大小判别；§4 **四层优先级链**（头 > 体 > 曲线，且头与体都有时头赢；上游说 99h 也被 `hardMaxMs` 钳到 6h；解析失败必须**退回原曲线**而不是 0/NaN）；§5 **旧曲线逐格回归**（transient/rate_limit/credential 各 n=1..2 + 两个封顶，本次改动只加一层、一格都不许变）；§6 **接线守卫**（源码扫描：`recordFailure` 真把响应体传下去、`cooldownMsFor` 签名带 bodyText/headers、解析出的时长与 Retry-After 收进**同一处**钳制）。★ 全文件**现抠 server.js 的真函数**（`parseLooseStamp`/`resetMsFromBody`/`cooldownMsFor`），不复制一份逻辑——抄一遍就等于有了第二份真值
 node test/opencode-probe.test.js          # 34 项断言：opencode 免费层**直连面**判决探针的装配守卫 + 离线 e2e（★两种 403 必须分开读：撞 RegionError 记「未作判定」而不是失败；形态 A/B 判词必须不同才是真有分辨力；代理分支必须带 Accept-Encoding: identity；★v1.18.72 改判据：文件头必须说清"缺条件才 403、路其实能通"且**不许**再出现"没有收敛点"——v1.18.71 那句已被实测推翻，只加肯定断言挡不住旧话复发）
 node test/opencode-channel-e2e.test.js    # 63 项断言（v1.18.72；同日补 3 项；v1.18.89 +8 增 §5b；v1.18.90 +2 增错误归因）：**opencode 渠道接入**的装配守卫 + 真链路 e2e（假边车 + 临时网关，零外网、不起真 opencode、不需要凭据）。§1 装配（require / Dockerfile COPY / 协议允许清单 / 探测与聊天分支 / 候选链 / 管理面测试 / aliasedProto / 会话 id 读 data.id / 删除会话 / 三份前端字典 + console.html 产物 / 合规风险写明 / ★ 目录只取 id——`x-opencode-org-id` 在模块里**只许出现在注释里做警示**）。§2 探测（只列 `-free`、付费模型不列；★ 假边车在目录里放 org id 哨兵，断言它不进探测响应；密码错时文案要点明是"边车密码"）。§3 非流式真链路（★ 发给边车的报文**只有 `prompt`**——该端点没有 stream 参数；★ messages 被拍平且【系统设定】在【用户】之前；`{model:{id,providerID}}` 形状；★ 用掉的会话真被删、建/删计数配平）。§4 流式（伪流式：role 首帧 + 正文帧 + finish_reason=stop + `[DONE]`，且这条也删干净）。§5 失败面（★200+空正文判失败、503 余额不足如实失败、撞免费层墙要把上游原话带出来、边车没起要失败而非 200 空回复；★ **generate 失败时建出来的会话也被删**）。§6 与 hark 的分野（opencode 有目录 ⇒ 不套"无目录协议"的默认别名建议，四家仍是四家，零别名守卫只 scoped 到 hark）。★ 同日补的 3 项守的是**渠道钥匙框里那个值不是"给渠道起的名"、而是两处必须同值的共享秘密**：`basicAuth` 真值（普通口令 → `Basic base64("opencode:<口令>")`）、`user:pass` 按**第一个冒号**拆 ⇒ **口令里带冒号会被静默当成"改用户名"**、以及模块头必须留住"不设口令 ≠ 不用口令"这条实测（`serve` 没有 `--password`，不设则边车自造一个并打进日志 = 泄露面）。这一段是被真实提问逼出来的——连问三次"这个变量在哪 / 随便填行不行"，所以钉住它，别让那个误解回来
 node test/opencode-sidecar-probe.test.js  # 33 项断言（v1.18.72 补 1 项）：opencode **边车面**判决探针的装配守卫 + 离线 e2e（★"直连死 / 边车活"必须分得开——本仓库 v1.18.70 那一版就是被"未登录的真客户端被拒"读成"真客户端被拒"而把结论写反的）。三形态：A 边车真答→passed/退出码0、B 生成 503→blocked/退出码1、C 连不上→undecided/**退出码仍为 0**（测不到 ≠ 不通）；另守口令逐字命中（200 但答非所问判 blocked）、付费对照存在、密码只从环境变量读且绝不打印、收尾不许硬 process.exit（Windows 会竞态成 0xC0000409）；★ v1.18.72 补 1 项：探针**必须自己设** `OPENCODE_SERVER_PASSWORD` 起边车，不许指望"不设 = 无鉴权"（不设则边车自造口令并打进 stdout 日志，探针会吃 401 而误报成 blocked——与"两种 403 分不清"同族的误判）
